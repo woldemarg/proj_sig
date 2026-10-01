@@ -1,9 +1,11 @@
 """Evidence builder (SDD 11): traversal result -> structured, citable evidence.
 
 The LLM receives *only* this object's ``to_prompt()`` rendering; ``summary()`` is the
-deterministic evidence-only answer used when no LLM answer is available. Every item
-has a citation key ``[P#]`` that maps back to a Pattern id, its dataset, batch and
-exact EDA selector, so answers are traceable to table slices.
+deterministic evidence-only answer used when no LLM answer is available. Both are plain
+ASCII built from the readable-text helpers in ``ltir.canonical`` (SDD 17): rounded numbers,
+p-value buckets, shifts in robust standard deviations, prose scopes. Every item has a
+citation key ``[P#]`` that maps back to a Pattern id, its dataset, batch and exact EDA
+selector, so answers are traceable to table slices.
 """
 
 from __future__ import annotations
@@ -11,9 +13,18 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from ltir.canonical import humanize
+from ltir.canonical import (
+    describe_covariance,
+    describe_scope,
+    describe_shift,
+    format_p,
+    format_value,
+    has_material_covariance,
+    humanize,
+    phenomenon_shifts,
+)
 from ltir.config import Config
-from ltir.graph import DualGraph
+from ltir.graph import DualGraph, describe_components
 from ltir.models import dataset_node_id, metric_node_id
 from ltir.query import ParsedQuery
 from ltir.traversal import PathStep, TraversalResult
@@ -29,9 +40,11 @@ class EvidenceItem:
     target: str
     phenomenon_type: str
     statistics: dict[str, Any]
+    scope_text: str  # readable scope ("category is phones and region is US")
+    shift_text: list[str]  # phenomenon shifts as phrases (target + |z| >= MIN_COMPONENT_Z)
+    relationship: str  # material correlation change as a phrase, or ""
     path: list[dict[str, Any]]
     path_text: str
-    rationale: str
     attractors: list[dict[str, Any]]
     transversal_only: bool
     provenance: dict[str, Any]
@@ -68,6 +81,9 @@ class Evidence:
         if p.get("conditions"):
             parsed_bits.append("scope=" + ",".join(p["conditions"]))
         lines.append("PARSED: " + (" | ".join(parsed_bits) or "no explicit metric/scope recognised"))
+        lines.append(
+            "UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset."
+        )
         lines.append("")
         lines.append("DATASETS:")
         for d in self.datasets:
@@ -75,30 +91,25 @@ class Evidence:
         lines.append("")
         lines.append("METRIC BASELINES (whole dataset):")
         for m in self.metrics:
-            lines.append(f"- {m['metric']}: median {m['global_median']:.4g}, MAD {m['global_mad']:.4g}")
+            lines.append(f"- {humanize(m['metric'])}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         if self.attractors:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
             for a in self.attractors:
                 rel = ", ".join(f"{r['id']} ({r['weight']:.2f})" for r in a["related"]) or "none"
-                lines.append(f'- {a["id"]} "{a["label"]}": {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes; related: {rel}')
+                lines.append(
+                    f'- {a["id"]} "{a["description"]}": {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes; related: {rel}'
+                )
         lines.append("")
-        lines.append("EVIDENCE — verified statistical observations (cite as [P#]):")
+        lines.append("EVIDENCE (verified statistical observations; cite as [P#]):")
         for it in self.items:
             s = it.statistics
-            lines.append(f"[{it.key}] role={it.role} | scope: {' AND '.join(it.scope)} | support {s['support']} rows ({s['support_fraction']:.1%})")
-            shift_txt = "; ".join(
-                f"{humanize(x['metric'])}: median {x['local_median']:.4g} vs {x['global_median']:.4g} (robust z {x['robust_z']:+.2f})"
-                for x in s["shifts"]
-            )
-            lines.append(f"     shifts: {shift_txt}")
-            if s.get("covariance"):
-                c = s["covariance"]
-                lines.append(
-                    f"     correlation {humanize(c['pair'][0])}~{humanize(c['pair'][1])}: {c['local_corr']:+.2f} in subgroup vs {c['global_corr']:+.2f} overall (EMM {s['emm_score']:.2f})"
-                )
+            lines.append(f"[{it.key}] role={it.role} | scope: {it.scope_text} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
+            lines.append(f"     shifts: {'; '.join(it.shift_text) or 'no material median shift'}")
+            if it.relationship:
+                lines.append(f"     relationship: {it.relationship} (divergence {s['emm_score']:.2f})")
             lines.append(
-                f"     bootstrap stability {s['stability']:.2f} | adjusted p {s['p_adjusted']:.2g} | insight weight {s['weight']:.2f}"
+                f"     validation: bootstrap stability {s['stability']:.2f} | adjusted p {format_p(s['p_adjusted'])} | insight weight {s['weight']:.2f}"
                 f" | confounders: {', '.join(s['drivers']) or 'none detected'}"
             )
             lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
@@ -111,13 +122,12 @@ class Evidence:
         """Evidence-only answer: the verified observations, cited, without interpretation."""
         lines = ["Observations:"]
         for it in self.items:
-            s = it.statistics
-            shifts = ", ".join(f"{x['metric']} {x['local_median']:.4g} vs {x['global_median']:.4g} (z {x['robust_z']:+.2f})" for x in s["shifts"][:2])
-            tag = " — scope-disjoint from the seed, linked via a latent anchor" if it.transversal_only else ""
-            lines.append(f"- {' AND '.join(it.scope)}: {shifts}; n={s['support']} [{it.key}]{tag}")
+            observed = "; ".join(it.shift_text[:2] or [it.relationship])
+            tag = " (scope-disjoint from the seed, linked via a latent anchor)" if it.transversal_only else ""
+            lines.append(f"- {it.scope_text} | {observed} | n={it.statistics['support']:,} [{it.key}]{tag}")
         if not self.items:
             lines.append("- No matching evidence in the graph.")
-        lines.append("Interpretation (hypotheses): not generated — no language-model answer is available.")
+        lines.append("Interpretation (hypotheses): not generated (no language-model answer is available).")
         return "\n".join(lines)
 
 
@@ -126,7 +136,8 @@ def _path_text(path: list[PathStep], role: str) -> str:
         return "seed (matched the question)"
     parts = [path[0].source]
     for st in path:
-        parts.append(f"-{st.edge_type}{'⁻¹' if st.reverse else ''}({st.weight:.2f})-> {st.target}")
+        arrow = f"<-{st.edge_type}({st.weight:.2f})-" if st.reverse else f"-{st.edge_type}({st.weight:.2f})->"
+        parts.append(f"{arrow} {st.target}")
     return " ".join(parts)
 
 
@@ -136,6 +147,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
     for idx, r in enumerate(chosen, start=1):
         node = graph.nodes[r.node_id]
         ins = graph.insight(r.node_id)
+        material = has_material_covariance(ins, config)
         acts = [
             {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
             for e, _ in graph.incident(r.node_id, ["ACTIVATES"])
@@ -165,9 +177,11 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                     "drivers": list(ins.drivers),
                     "covariance": ins.covariance,
                 },
+                scope_text=describe_scope(ins.conditions),
+                shift_text=[describe_shift(s) for s in phenomenon_shifts(ins, config)],
+                relationship=describe_covariance(ins.covariance) if material else "",
                 path=[asdict(st) for st in r.path],
                 path_text=_path_text(r.path, r.route),
-                rationale=r.rationale,
                 attractors=acts,
                 transversal_only=r.transversal_only,
                 provenance={**ins.provenance, "pattern_id": r.node_id},
@@ -182,6 +196,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
             {
                 "id": a.node_id,
                 "label": node["label"],
+                "description": describe_components(node["props"]["signature"]) or node["label"],
                 "n_patterns": node["props"]["n_patterns"],
                 "distinct_scopes": node["props"]["distinct_scopes"],
                 "related": related,
@@ -196,14 +211,18 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
         batch = next((it.provenance["batch_id"] for it in items if it.provenance["dataset_id"] == ds), None)
         datasets.append({"dataset_id": ds, "filename": dnode["props"].get("filename"), "rows": dnode["props"].get("rows"), "batch_id": batch})
-    for it in items:
-        for sh in it.statistics["shifts"]:
-            nid = metric_node_id(it.provenance["dataset_id"], sh["metric"])
-            if nid in graph.nodes and (it.provenance["dataset_id"], sh["metric"]) not in metrics:
+    for r in chosen:  # baselines of the metrics the prompt actually mentions
+        ins = graph.insight(r.node_id)
+        named = [s.metric for s in phenomenon_shifts(ins, config)]
+        if has_material_covariance(ins, config):
+            named += ins.covariance["pair"]
+        for metric in named:
+            nid = metric_node_id(ins.dataset_id, metric)
+            if nid in graph.nodes and (ins.dataset_id, metric) not in metrics:
                 mp = graph.nodes[nid]["props"]
-                metrics[(it.provenance["dataset_id"], sh["metric"])] = {
-                    "metric": sh["metric"],
-                    "dataset_id": it.provenance["dataset_id"],
+                metrics[(ins.dataset_id, metric)] = {
+                    "metric": metric,
+                    "dataset_id": ins.dataset_id,
                     "global_median": mp["global_median"],
                     "global_mad": mp["global_mad"],
                 }

@@ -323,7 +323,7 @@ function renderTable() {
   const maxW = Math.max(...S.nodes.map((d) => d.weight || 0), 0.01);
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
-    const effect = d.ptype === "covariance" ? "corr. change" : `${d.direction > 0 ? "↑" : "↓"} ${signed(d.effect)}σ`;
+    const effect = d.ptype === "covariance" ? "corr. change" : `${signed(d.effect)} sd`;
     return `<tr data-id="${esc(d.id)}"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
       `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
@@ -389,7 +389,7 @@ function shiftRows(shifts) {
   return shifts.map((s) => {
     const dir = s.robust_z >= 0 ? "up" : "down";
     return `<div class="shift-row"><span>${esc(human(s.metric))} <span class="muted">${num(s.local_median, 4)} vs ${num(s.global_median, 4)}</span></span>` +
-      `<b class="effect ${dir}">${s.robust_z >= 0 ? "↑" : "↓"} ${signed(s.robust_z)}σ</b>` +
+      `<b class="effect ${dir}">${signed(s.robust_z)} sd</b>` +
       `<div class="meter"><i class="${dir}" style="width:${Math.min(100, Math.round((Math.abs(s.robust_z) / max) * 100))}%"></i></div></div>`;
   }).join("");
 }
@@ -407,7 +407,7 @@ async function inspect(id) {
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;
     const lead = p.phenomenon_type === "covariance" && cov
       ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b> in this subgroup.`
-      : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)}σ).`;
+      : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
     html += `<p class="lead">${lead}</p>`;
     html += `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
     html += `<h4>Evidence</h4>` + kv([
@@ -506,7 +506,7 @@ function botCard(turn) {
   ].join("");
   const evid = items.map((it, i) => {
     const s = it.statistics;
-    const sh = s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)}σ`).join(" · ");
+    const sh = s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
     return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +

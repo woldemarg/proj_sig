@@ -66,41 +66,25 @@ def test_rules_record_reasons():
         make_insight("unsig", (("a", "4"),), p=0.5, emm=0.0),
         make_insight("unstable", (("a", "5"),), stability=0.2, emm=0.0),
     ]
-    covers = {i.expression: np.arange(10) + k * 100 for k, i in enumerate(items)}
-    res = select_insights(items, covers, cfg)
+    res = select_insights(items, cfg)
     reasons = {r.expression: r.reason for r in res.rejections}
     assert [i.expression for i in res.kept] == ["ok"]
     assert reasons == {"small": "min_support", "weak": "weak_effect", "unsig": "not_significant", "unstable": "unstable"}
     assert res.stats["kept"] == 1 and res.stats["min_support"] == 1
 
 
-def test_cover_equivalence_keeps_closed_pattern():
-    cfg = load_config()
-    gen = make_insight("gen", (("a", "1"), ("b", "1")), row_hash="same")
-    closed = make_insight("closed", (("a", "1"), ("b", "1"), ("c", "1")), row_hash="same")
-    covers = {"gen": np.arange(50), "closed": np.arange(50)}
-    res = select_insights([gen, closed], covers, cfg)
-    assert [i.expression for i in res.kept] == ["closed"]
-    assert res.kept[0].aliases == ("gen",)
-    assert res.rejections[0].reason == "cover_equivalent"
-
-
-def test_near_duplicate_collapse_same_target_and_direction():
-    cfg = load_config()
-    a = make_insight("a", (("a", "1"),), z=2.5)
-    b = make_insight("b", (("b", "1"),), z=2.0)
-    c = make_insight("c", (("c", "1"),), z=-2.0)  # opposite direction: not a duplicate
-    covers = {"a": np.arange(100), "b": np.arange(97), "c": np.arange(99)}
-    res = select_insights([a, b, c], covers, cfg)
-    assert sorted(i.expression for i in res.kept) == ["a", "c"]
-    assert next(i for i in res.kept if i.expression == "a").aliases == ("b",)
+def test_budget_keeps_heaviest():
+    cfg = load_config(max_insights_per_batch=1)
+    strong, weak = make_insight("strong", (("a", "1"),), z=3.0), make_insight("weak", (("a", "2"),), z=1.0)
+    res = select_insights([weak, strong], cfg)
+    assert [i.expression for i in res.kept] == ["strong"] and res.rejections[0].reason == "budget"
 
 
 def test_emm_only_insight_becomes_covariance():
     cfg = load_config()
     ins = make_insight("cov", z=0.1, emm=0.4, p=0.5)
     ins = replace(ins, shifts=(Shift("m", 0.1, 0, 0, 1), Shift("n", 0.3, 0, 0, 1)))
-    res = select_insights([ins], {"cov": np.arange(40)}, cfg)
+    res = select_insights([ins], cfg)
     kept = res.kept[0]
     assert kept.phenomenon_type == "covariance" and kept.target == "n"  # pair metric with larger |shift|
     assert kept.weight_factors["confidence"] is None and kept.weight_factors["stability"] is None  # unmeasured: left out

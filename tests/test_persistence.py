@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 
 import pytest
 from conftest import FakeLLM, make_config
@@ -129,6 +130,25 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path):
     fresh = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
     after = fresh.ws.load_batch(rec["batch_id"])
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
+
+
+def test_migrate_rebuilds_an_outdated_workspace(tmp_path, demo_csv):
+    from ltir.migrate import migrate_workspace
+    from ltir.store import RepresentationMismatch, atomic_write_json
+
+    cfg = make_config(tmp_path / "ws")
+    old = Engine(cfg, llm=FakeLLM())
+    rec = old.ingest_file(demo_csv)
+    rep_path = old.ws.state_dir / "representation.json"
+    atomic_write_json(rep_path, {**old.ws.representation(), "canonical_version": "ltir-canon-0"})  # an older build
+    with pytest.raises(RepresentationMismatch):
+        old.rebuild_graph()
+    report = migrate_workspace(cfg)
+    assert [b["status"] for b in report["batches"]] == ["READY"] and report["batches"][0]["dataset_id"] == rec["dataset_id"]
+    fresh = Engine(cfg, llm=FakeLLM())
+    assert fresh.ws.representation()["canonical_version"] != "ltir-canon-0" and fresh.rebuild_graph()["stats"]["patterns"] > 0
+    backup = Path(report["backup"])
+    assert json.loads((backup / "state" / "representation.json").read_text(encoding="utf-8"))["canonical_version"] == "ltir-canon-0"
 
 
 def test_ingestion_failure_states(engine, tmp_path):

@@ -10,6 +10,7 @@ sphere               write the 3D latent sphere HTML (-o FILE, --dataset ID)
 neo4j-sync           publish the snapshot to Neo4j (NEO4J_* settings)
 llm-check            probe the local Gemma 4 endpoint
 reset                delete the SIG workspace (--yes)
+migrate              re-ingest every READY batch with the current code; old workspace kept as a backup (--yes)
 serve                start the web UI
 """
 
@@ -68,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("llm-check")
     p = sub.add_parser("reset")
     p.add_argument("--yes", action="store_true")
+    p = sub.add_parser("migrate")
+    p.add_argument("--yes", action="store_true")
     sub.add_parser("serve")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -89,6 +92,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0 if resp.ok else 1
+    if args.cmd == "migrate":
+        from ltir.migrate import migrate_workspace
+
+        cfg = load_config()
+        if not args.yes:
+            print(
+                f"This re-ingests every READY batch of {cfg.workspace_dir} with the current code; the old workspace is kept as a backup. Re-run with --yes.",
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps(migrate_workspace(cfg), indent=1))
+        return 0
 
     engine = _engine(writer=args.cmd in {"demo", "ingest", "reset", "rebuild-graph"})
     if args.cmd == "demo":

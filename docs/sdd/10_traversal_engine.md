@@ -13,7 +13,7 @@ Question text, `DualGraph`, `InsightEncoder`, pattern vectors (`Engine.frame().p
 * `ParsedQuery(text, targets, direction ∈ {−1, 0, +1}, conditions[(attr, value)], covariance)`
 * `list[SeedMatch(pattern_id, score, matched{target, scope, direction, semantic, weight, scope_conflicts})]`
 * `TraversalResult(seeds, patterns: list[Retrieved], attractors: list[Retrieved], used_edges, traversed_nodes, visited_count, max_depth, baselines)`
-* `Retrieved(node_id, kind, score, hop, route ∈ {seed, structural, transversal, latent}, seed_id, path: list[PathStep], rationale, structural_distance, scope_overlap, transversal_only)`
+* `Retrieved(node_id, kind, score, hop, route ∈ {seed, structural, transversal, latent}, seed_id, path: list[PathStep], structural_distance, scope_overlap, transversal_only)`
 * `PathStep(source, target, edge_type, weight, hop, edge_id, reverse)`: source node, target node, edge type, edge weight, hop number.
 
 ## Algorithms
@@ -34,7 +34,7 @@ Non-lexical queries use `0.7·semantic + 0.3·w`. Seeds are the top `SEED_TOP_K`
 
 **Transversal traversal**: best-first search over the regular path grammar
 ```text
-P0 (lattice){0,h} --ACTIVATES[≥act]--> A (RELATED_TO[≥rel]){0,L} --ACTIVATES⁻¹[≥act]--> P1 (lattice){0,h}
+P0 (lattice){0,h} --ACTIVATES[>=act]--> A (RELATED_TO[>=rel]){0,L} <--ACTIVATES[>=act]-- P1 (lattice){0,h}
 ```
 with h = `STRUCTURAL_HOPS`, L = `MAX_LATENT_HOPS`, total length ≤ `TRAVERSAL_MAX_DEPTH`. Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (SPECIALIZES/GENERALIZES followed along stored out-edges, CONTRASTS both ways). Edge factors: ACTIVATES = alignment, RELATED_TO = weight, lattice = `STRUCTURAL_EDGE_DECAY` (× overlap for CONTRASTS). Path score = seed score × Π factors (seed scores are floored at 1e-3: every factor is ≤ 1, so best-first order needs positive scores). The search state is (node, phase, structural hops used, latent hops used) — Dijkstra over the budgeted grammar, so a higher-scoring arrival with less remaining budget cannot shadow one that can still expand; the best path per node is reported. Node rank = path score × insight_weight; seeds keep their seed score. Seeds are never re-entered in phase P1. Result: seeds + top `MAX_RETRIEVED`; `used_edges` / `traversed_nodes` are the union of the selected paths.
 

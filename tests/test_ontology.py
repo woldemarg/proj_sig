@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from ltir.config import load_config
+from ltir.engines.lac.observability import density_threshold
 from ltir.engines.lac.ontology_engine import repair_extraction
 from ltir.ontology import LatentOntology
 
@@ -107,6 +108,53 @@ def test_insight_weight_scales_centroid_pull(tmp_path, toy):
         moves.append(float(np.linalg.norm(ont.store.embeddings[idx] - before[idx])))
         assert up.activations[0]["strength"] == pytest.approx(up.activations[0]["alignment"] * w)
     assert moves[0] > 3 * moves[1] > 0  # evidence-magnitude encoding: w scales the EMA step
+
+
+def test_density_threshold_scales_with_attractor_count():
+    cfg = load_config()
+    assert density_threshold(3, cfg) == 1.0  # three themes: no single one is a hub by share alone
+    assert density_threshold(7, cfg) == pytest.approx(3 / 7)  # the demo's 32 % theme is below it
+    assert density_threshold(40, cfg) == cfg.density_floor and density_threshold(0, cfg) == 1.0
+
+
+def _skewed_ontology(path, rng, centers, cfg):
+    """Cold start where cluster 0 holds 12 of 18 rows; returns the ontology and cluster 0's attractor id."""
+    ont = LatentOntology(cfg, path)
+    x = np.vstack([clusters(rng, centers[:1], 12)[0], clusters(rng, centers[1:], 3)[0]])
+    ingest(ont, x)
+    hub = max(ont.attractor_ids, key=lambda a: float(ont.centroid(a) @ centers[0]))
+    return ont, hub
+
+
+def test_damping_slows_an_over_represented_attractor(tmp_path, toy):
+    rng, dim, centers = toy
+    probe = clusters(np.random.RandomState(5), [unit(centers[0] + 0.6 * unit(rng.normal(size=dim)))], 4, noise=0.02)[0]
+    moves, sources = {}, {}
+    for name, cfg in (("free", load_config()), ("damped", load_config(density_multiple=1.0))):
+        ont, hub = _skewed_ontology(tmp_path / name, np.random.RandomState(1), centers, cfg)
+        before = ont.centroid(hub).copy()
+        up, _ = ingest(ont, probe, seq=1)
+        moves[name] = float(np.linalg.norm(ont.centroid(hub) - before))
+        sources[name] = sorted((a["pattern_id"], a["attractor_id"]) for a in up.activations)
+        assert up.metrics["damped_attractors"] == (0 if name == "free" else 1)
+    assert sources["free"] == sources["damped"]  # damping never changes membership
+    assert 0 < moves["damped"] < 0.8 * moves["free"]
+
+
+def test_trust_region_caps_a_batch_move(tmp_path, toy):
+    rng, dim, centers = toy
+    cfg = load_config(max_centroid_step=0.002)
+    ont = LatentOntology(cfg, tmp_path)
+    ingest(ont, clusters(rng, centers, 4)[0])
+    before = ont.store.embeddings.copy()
+    shifted = clusters(rng, [unit(centers[0] + 0.5 * unit(rng.normal(size=dim)))], 6, noise=0.02)[0]
+    up, _ = ingest(ont, shifted, seq=1)
+    steps = np.linalg.norm(ont.store.embeddings[: len(before)] - before, axis=1)
+    assert up.metrics["clamped_attractors"] >= 1 and up.metrics["max_centroid_step"] > 0.002
+    assert steps.max() <= 0.002 + 1e-6 and np.allclose(np.linalg.norm(ont.store.embeddings, axis=1), 1.0, atol=1e-5)
+    assert any("clamped" in w for w in up.metrics["warnings"])
+    header = (tmp_path / "ontology_metrics.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert header[-5:] == ["density_threshold", "damped_attractors", "max_centroid_step", "clamped_attractors", "warnings"]
 
 
 def test_sign_repair_flips_anti_aligned_atoms(toy):

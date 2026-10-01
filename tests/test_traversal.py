@@ -67,8 +67,22 @@ def toy():
         pattern("P4", ["region=US", "channel=online"], z=-1.0),
         pattern("P5", ["region=APAC", "category=tv"]),
         pattern("P6", ["region=LATAM", "category=tv"]),
-        {"id": "A1", "kind": "Attractor", "label": "margin ↓", "props": {"n_patterns": 3, "distinct_scopes": 3, "signature": []}},
-        {"id": "A2", "kind": "Attractor", "label": "margin ↓ · discount ↑", "props": {"n_patterns": 1, "distinct_scopes": 1, "signature": []}},
+        {
+            "id": "A1",
+            "kind": "Attractor",
+            "label": "margin ↓",
+            "props": {"n_patterns": 3, "distinct_scopes": 3, "signature": [{"component": "margin", "value": -1.0}]},
+        },
+        {
+            "id": "A2",
+            "kind": "Attractor",
+            "label": "margin ↓ · discount ↑",
+            "props": {
+                "n_patterns": 1,
+                "distinct_scopes": 1,
+                "signature": [{"component": "margin", "value": -1.0}, {"component": "discount", "value": 0.8}],
+            },
+        },
         {"id": "A3", "kind": "Attractor", "label": "unrelated", "props": {"n_patterns": 1, "distinct_scopes": 1, "signature": []}},
         {"id": "M:ds1:margin", "kind": "Metric", "label": "margin", "props": {"name": "margin", "global_median": 12.0, "global_mad": 2.0}},
         {"id": "D:ds1:region", "kind": "Dimension", "label": "region", "props": {"name": "region"}},
@@ -105,7 +119,6 @@ def test_transversal_path_pattern_attractor_attractor_pattern(toy):
     assert p3.path[2].reverse and not p3.path[0].reverse
     assert [s.weight for s in p3.path] == [0.9, 0.7, 0.95]
     assert p3.score == pytest.approx(1.0 * 0.9 * 0.7 * 0.95 * 0.8)  # path product x insight_weight
-    assert "RELATED_TO" in p3.rationale and "A2" in p3.rationale
     # same-anchor neighbour, then lattice expansion after descending
     assert [s.edge_type for s in got["P2"].path] == ["ACTIVATES", "ACTIVATES"] and not got["P2"].transversal_only
     assert [s.edge_type for s in got["P4"].path] == ["ACTIVATES", "RELATED_TO", "ACTIVATES", "SPECIALIZES"]
@@ -137,7 +150,7 @@ def test_evidence_object_is_structured_and_traceable(toy):
     ev = build_evidence(q, res, toy, cfg)
     assert ev.items[0].key == "P1" and ev.items[0].role == "seed" and ev.seed_patterns == ["P1"]
     p3 = next(i for i in ev.items if i.pattern_id == "P3")
-    assert p3.transversal_only and p3.path and "-ACTIVATES(0.90)-> A1" in p3.path_text
+    assert p3.transversal_only and p3.path and "-ACTIVATES(0.90)-> A1" in p3.path_text and "<-ACTIVATES(0.95)- P3" in p3.path_text
     for it in ev.items:
         assert {"dataset_id", "batch_id", "expression", "pattern_id"} <= set(it.provenance)
         assert {"support", "shifts", "p_adjusted", "stability", "weight"} <= set(it.statistics)
@@ -145,5 +158,7 @@ def test_evidence_object_is_structured_and_traceable(toy):
         assert "insight_weight" not in it.statistics
     prompt = ev.to_prompt()
     assert "[P1] role=seed" in prompt and "LATENT ANCHORS VISITED" in prompt and "margin: median 12" in prompt
+    assert prompt.isascii() and 'A1 "margin down"' in prompt and "adjusted p < 0.001" in prompt
+    assert "scope: region is EU and category is phones" in prompt
     assert any("latent anchors" in n for n in ev.notes)
     assert ev.key_to_pattern["P1"] == "P1"

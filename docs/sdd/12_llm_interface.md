@@ -24,7 +24,7 @@ Question, `Engine` (graph, encoder, vectors, config, LLM client).
 6. Log the query to `logs/queries.jsonl` (question, mode, metrics, seeds, evidence, citations).
 
 ## Configuration
-`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_PROVIDER_ORDER` (""), `LLM_APP_TITLE` (`SIG LTIR`), `LLM_TIMEOUT_S` (120), `LLM_TEMPERATURE` (0.1), `LLM_MAX_TOKENS` (1200), `LLM_REASONING_EFFORT` (unset; `none` disables Gemma "thinking" on endpoints that support it).
+The model runs outside SIG (OpenRouter, or a local server with CPU/partial offload): SIG never loads it in-process, so it does not compete with the embedder for the 8 GB GPU (SDD 06). `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_PROVIDER_ORDER` (""), `LLM_APP_TITLE` (`SIG LTIR`), `LLM_TIMEOUT_S` (120), `LLM_TEMPERATURE` (0.1), `LLM_MAX_TOKENS` (1200), `LLM_REASONING_EFFORT` (unset; `none` disables Gemma "thinking" on endpoints that support it).
 
 ## Failure modes
 LLM unavailable, HTTP error or empty completion → fallback answer; statistics and graph are untouched. Empty graph → `answer_mode=empty`. A workspace built with another representation (fingerprint ≠ the encoder's spec) → `RepresentationMismatch` before retrieval (HTTP 409 with the reset hint), never a silent cross-frame comparison.
@@ -39,4 +39,12 @@ The LLM never receives raw data or the whole graph, only `Evidence.to_prompt()`.
 `POST /api/query` (SDD 13), `python -m ltir query`, `python -m ltir llm-check`.
 
 ## Current implementation status
-Implemented and **validated live** against `google/gemma-4-26b-a4b-it` on OpenRouter: `llm-check` returns in 1.4 s, and the demo question gets a grounded answer in 7–11 s. That answer has separate Observations / Interpretation (hypotheses) sections and cites 7 evidence keys, including the scope-disjoint analogues reached via anchor A-4. Gemma writes grouped citations (`[P4, P7]`); these are parsed and linked.
+Implemented and **validated live** against `google/gemma-4-26b-a4b-it` on OpenRouter. `scripts/eval_answers.py` (5 fixed demo questions, Gemma's own token counts):
+
+| run | grounded | unknown citations | citations | prompt tokens | completion tokens | mean latency |
+|---|---|---|---|---|---|---|
+| before (symbol prompt, MiniLM) | 5/5 | 0 | 34 | 14,983 | 1,881 | 9.0 s |
+| ASCII prompt (`ltir-canon-3`), MiniLM | 5/5 | 0 | 38 | 11,705 | 1,668 | 6.0 s |
+| ASCII prompt + Qwen3 embedder (current) | 5/5 | 0 | 40 | 11,099 | 1,728 | 6.6 s |
+
+Latency is OpenRouter-dependent (noisy). Answers keep the planted directions (lower margin, higher discount for US phones; the EU∧phones correlation −0.57 → +0.09). Earlier manual checks: `llm-check` returns in 1.4 s, and the demo question gets a grounded answer in 7–11 s. That answer has separate Observations / Interpretation (hypotheses) sections and cites 7 evidence keys, including the scope-disjoint analogues reached via anchor A-4. Gemma writes grouped citations (`[P4, P7]`); these are parsed and linked.

@@ -43,6 +43,18 @@ def _component_word(label: str, value: float) -> str:
     return f"{label} {'↑' if value > 0 else '↓'}"
 
 
+def describe_component(label: str, value: float) -> str:
+    """Readable signature entry: 'discount up', 'delivery days down', 'correlation between a and b weakens'."""
+    if label.startswith("correlation between"):
+        return f"{label} {'strengthens' if value > 0 else 'weakens'}"
+    return f"{label} {'up' if value > 0 else 'down'}"
+
+
+def describe_components(signature: list[dict[str, Any]]) -> str:
+    """Two strongest entries of a stored signature as prose (how the LLM prompt names an anchor)."""
+    return " and ".join(describe_component(e["component"], e["value"]) for e in signature[:2])
+
+
 def attractor_signature(members: list[tuple[dict[str, Any], float]]) -> list[tuple[str, float]]:
     """Aggregate signed phenomenon components of member patterns, weighted by strength."""
     agg: dict[str, float] = defaultdict(float)
@@ -61,6 +73,9 @@ def _schema_plane(
     """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them."""
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
+    scope_attributes: dict[str, set[str]] = defaultdict(set)  # closed intents may use non-selected columns
+    for ins in insights:
+        scope_attributes[ins.dataset_id].update(c.attribute for c in ins.conditions)
     for bid, b in batches.items():
         if b.get("status") != "READY":
             continue
@@ -79,7 +94,8 @@ def _schema_plane(
             {"batch_id": bid, "batch_seq": b.get("batch_seq"), "created_at": b.get("created_at"), "status": b.get("status")},
         )
         edges.append(GraphEdge(batch_node_id(bid), dataset_node_id(ds), EdgeType.OF_DATASET))
-        for name in profile.get("selected_dimensions", []):
+        selected = profile.get("selected_dimensions", [])
+        for name in [*selected, *sorted(scope_attributes[ds] - set(selected))]:
             nid = dimension_node_id(ds, name)
             nodes[nid] = GraphNode(
                 nid,

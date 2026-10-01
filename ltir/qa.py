@@ -60,7 +60,7 @@ def compute_baselines(engine: Engine, graph: DualGraph, question: str, seeds: li
     ids = [n["id"] for n in graph.of_kind("Pattern")]
     embed = engine.encoder.embedder.embed
     doc_vecs = dict(zip(ids, embed([graph.canonical_document(i) for i in ids])))
-    naive = naive_nearest(embed([question])[0], doc_vecs, config.max_retrieved)
+    naive = naive_nearest(engine.encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved)
     retrieved = {r.node_id for r in result.patterns}
     return {
         "structural_only": sorted(closure),

@@ -78,7 +78,9 @@ class Config:
     weight_floor: float = 0.05
 
     # embedding (SDD 06)
-    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"  # loaded from MODEL_DIR/<last path segment>
+    embedding_truncate_dim: int = 384  # Matryoshka: first 384 dims (re-normalised) keep dim = 3 x 384 = 1152; 0 = native
+    embedding_query_instruction: str = "Given a quantitative analysis question, retrieve relevant statistical subgroup patterns"
     model_dir: Path = PROJECT_ROOT / "models"  # holds <embedding_model>/ (sentence-transformers folder)
     embedding_device: str = "auto"  # auto | cpu | cuda
     embedding_backend: str = "sentence-transformers"  # or "hashing" (offline/test)
@@ -101,11 +103,19 @@ class Config:
     top_k_assign: int = 2
     mixture_ratio: float = 0.90
     adaptive_percentile: float = 85.0
-    min_assign_threshold: float = 0.55
+    # cosine thresholds are embedder-specific (SDD 07 §Calibration): Qwen3 -> 0.75; MiniLM -> 0.55
+    min_assign_threshold: float = 0.75
     max_assign_threshold: float = 0.80
     soft_merge_low: float = 0.85
     orphan_buffer_min_factor: int = 3
     min_activation_alignment: float = 0.20  # ACTIVATES edges below this are dropped/rerouted
+    # stability guards (SDD 07 §Guards): adaptive hub threshold, per-attractor damping, trust region
+    density_floor: float = 0.25  # hub threshold never below this share
+    density_multiple: float = 3.0  # hub = more than this multiple of the uniform share 1/N_attractors
+    max_centroid_step: float = 0.10  # max L2 move of one centroid per batch (measured healthy max 0.023)
+    warn_orphan_rate: float = 0.50
+    warn_min_extraction_yield: float = 0.10
+    warn_avg_degree: tuple = (1.0, 8.0)  # mutual k-NN degree envelope
     # OMP input scale s: lac fits codes with lasso alpha=1; scaling inputs by s is alpha/s
     # (OMP directions and relative error are scale-invariant). EMA updates never see s.
     dictionary_input_scale: float = 10.0
@@ -172,15 +182,17 @@ class Config:
 def load_config(env_file: Path | None = None, **overrides: Any) -> Config:
     """Build Config from defaults ← environment (``NAME`` upper-case) ← overrides.
 
-    ``LTIR_NO_DOTENV=1`` skips ``sig/.env`` (the test suite sets it so developer
-    credentials — OpenRouter key, Neo4j — never leak into tests).
+    An empty value clears a string field (``EMBEDDING_QUERY_INSTRUCTION=`` for MiniLM) and
+    leaves any other field at its default. ``LTIR_NO_DOTENV=1`` skips ``sig/.env`` (the test
+    suite sets it so developer credentials — OpenRouter key, Neo4j — never leak into tests).
     """
     if env_file is not None or not os.environ.get("LTIR_NO_DOTENV"):
         _load_dotenv(env_file or PROJECT_ROOT / ".env")
     values: dict[str, Any] = {}
     for f in fields(Config):
         raw = os.environ.get(f.name.upper())
-        if raw is not None and raw != "":
-            values[f.name] = _coerce(raw, f.default)
+        if raw is None or (raw == "" and not isinstance(f.default, str)):
+            continue
+        values[f.name] = _coerce(raw, f.default)
     values.update(overrides)
     return Config(**values)

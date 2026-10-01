@@ -6,7 +6,12 @@ Per candidate: (a) contract cosines on synthetic insights — direction (same sc
 opposite shift; must be < 0), cross-scope (same phenomenon, disjoint scopes; high) and
 entity (same scope, different phenomenon; must be below cross-scope), plus the raw label
 cosine ``E(discount)·E(margin)``; (b) the demo hypothesis benchmark (``ltir.experiment``);
-(c) load time, ingest embedding time, peak CUDA memory.
+(c) domain separation: a same-domain second batch (demo, seed 8) must be assigned, an
+unrelated batch (``data/housing.csv``) must not join the retail attractors — the smallest
+same-domain and the largest cross-domain assignment alignment show where
+``MIN_ASSIGN_THRESHOLD`` separates them; then the RELATED_TO edges between a retail and a
+housing attractor, and the evidence items from the other domain over ``DOMAIN_QUESTIONS``
+(no-LLM answers); (d) load time, ingest embedding time, peak CUDA memory.
 """
 
 from __future__ import annotations
@@ -20,13 +25,35 @@ import numpy as np
 from scratch import build_engine, ingest_quietly, save_result, scratch_dir, write_demo_csv
 
 from ltir.canonical import canonicalize
-from ltir.config import load_config
+from ltir.config import PROJECT_ROOT, load_config
 from ltir.encoder import InsightEncoder, make_text_embedder
 from ltir.experiment import run_experiment
 from ltir.models import Condition, Insight, Shift
+from ltir.qa import answer_question
 
-CANDIDATES: dict[str, dict] = {
-    "minilm": {"embedding_model": "paraphrase-multilingual-MiniLM-L12-v2"},
+QWEN3 = {
+    "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+    "embedding_truncate_dim": 384,
+    "embedding_query_instruction": "Given a quantitative analysis question, retrieve relevant statistical subgroup patterns",
+}
+CANDIDATES: dict[str, dict] = {  # each with its own calibrated MIN_ASSIGN_THRESHOLD (SDD 07 §Calibration)
+    "minilm": {
+        "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+        "embedding_truncate_dim": 0,
+        "embedding_query_instruction": "",
+        "min_assign_threshold": 0.55,
+    },
+    "qwen3": {**QWEN3, "min_assign_threshold": 0.75},
+    "qwen3-uncalibrated": {**QWEN3, "min_assign_threshold": 0.55},  # MiniLM's threshold: shows why calibration is needed
+    "qwen3-1024": {**QWEN3, "embedding_truncate_dim": 0, "min_assign_threshold": 0.75},
+}
+DOMAIN_QUESTIONS = {  # question -> the domain its evidence must come from
+    "Why is margin lower for phones in the US?": "retail",
+    "What drives higher return rates?": "retail",
+    "Where does margin decrease?": "retail",
+    "When does the correlation between discount and margin weaken?": "retail",
+    "Why is median house value lower?": "housing",
+    "What drives total rooms down?": "housing",
 }
 
 
@@ -78,6 +105,32 @@ def contract_cosines(encoder: InsightEncoder) -> dict[str, float]:
     }
 
 
+def domain_separation(engine, root) -> dict[str, float | None]:
+    """Assignment alignments of a same-domain and a cross-domain batch after the demo."""
+    out: dict[str, float | None] = {}
+    batches = (
+        ("same_domain", write_demo_csv(root, 8), {"bins": "", "categories": ""}),
+        ("cross_domain", PROJECT_ROOT / "data" / "housing.csv", {"bins": "median_income:4,housing_median_age:4", "categories": ""}),
+    )
+    for label, path, options in batches:
+        record = ingest_quietly(engine, path, **options)
+        assigned = [a["alignment"] for a in engine.ws.activations() if a["batch_id"] == record["batch_id"] and a["source"] == "assign"]
+        out[f"{label}_orphan_rate"] = round(record["metrics"]["orphan_rate"], 2)
+        out[f"{label}_{'min' if label == 'same_domain' else 'max'}_alignment"] = (
+            round(min(assigned) if label == "same_domain" else max(assigned), 3) if assigned else None
+        )
+    housing = record["dataset_id"]
+    graph = engine.graph()
+    is_housing = {n["id"]: housing in n["props"]["datasets"] for n in graph.of_kind("Attractor")}
+    out["cross_domain_links"] = sum(e["type"] == "RELATED_TO" and is_housing[e["source"]] != is_housing[e["target"]] for e in graph.edges)
+    foreign = 0
+    for question, domain in DOMAIN_QUESTIONS.items():
+        items = answer_question(engine, question, use_llm=False).evidence.get("items", [])
+        foreign += sum((graph.insight(i["pattern_id"]).dataset_id == housing) != (domain == "housing") for i in items)
+    out["cross_domain_evidence"] = foreign
+    return out
+
+
 def evaluate(name: str, overrides: dict, k: int) -> dict:
     """Contract, benchmark and cost figures for one embedder configuration."""
     try:
@@ -108,11 +161,13 @@ def evaluate(name: str, overrides: dict, k: int) -> dict:
         "attractors": record["metrics"]["attractors_total"],
         "load_s": round(load_s, 1),
         "embed_s": round(record["metrics"]["timings"]["embed_s"], 2),
+        **domain_separation(engine, root),
         "peak_cuda_mb": round(torch.cuda.max_memory_allocated() / 2**20) if cuda else None,
         "model_id": encoder.spec.model_id,
         "dim": encoder.spec.dim,
     }
     row["contract_ok"] = row["cos_direction"] < 0 and row["cos_cross_scope"] > 0.7 and row["cos_entity"] < row["cos_cross_scope"]
+    row["domains_separated"] = row["same_domain_orphan_rate"] == 0 and row["cross_domain_orphan_rate"] == 1.0
     return row
 
 

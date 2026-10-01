@@ -53,6 +53,9 @@ class _Extraction:
     soft_merged: int = 0
     orphaned: int = 0
     adaptive_thresh: float | None = None
+    damped: int = 0  # attractors whose EMA step was damped (hub guard)
+    max_step: float | None = None  # largest raw centroid move of the batch
+    clamped: int = 0  # attractors pulled back by the trust region
 
 
 class OntologyError(RuntimeError):
@@ -92,14 +95,19 @@ class LatentOntology:
             raise OntologyError(f"vector dim {vectors.shape[1]} != ontology dim {st.embeddings.shape[1]}")
         emb_before = observability.snapshot_embeddings(st)
         n_before = len(st.concept_ids)
+        damping = self._damping()  # from the shares before this batch
         x_unit = l2_normalize(vectors)
         w = np.clip(np.asarray(weights, dtype=np.float64), 1e-3, 1.0)
         x_in = (x_unit * w[:, None]).astype(np.float32)
         row_ids = list(range(st.next_chunk_id, st.next_chunk_id + len(vectors)))
         st.next_chunk_id += len(vectors)
 
-        run = self._cold_start if st.is_empty else self._stream
-        acts, ext = run(x_in, x_unit, row_ids, batch_seq)
+        if st.is_empty:
+            acts, ext = self._cold_start(x_in, x_unit, row_ids, batch_seq)
+        else:
+            acts, ext = self._stream(x_in, x_unit, row_ids, batch_seq, damping)
+            ext.damped = int(np.sum(damping < 1.0))
+        ext.max_step, ext.clamped = self._clamp_steps(emb_before)
 
         records = self._activation_records(acts, x_unit, row_ids, w, pattern_ids, batch_id)
         errors = self.check_invariants(records, pattern_ids)
@@ -121,11 +129,37 @@ class LatentOntology:
         acts = _tag(eng.remap_activation_edges(local, chunk_id_map=row_ids, concept_id_map=gids), "cold_start")
         return acts, _Extraction(extracted=len(cents), kept=len(cents))
 
-    def _stream(self, x_in: np.ndarray, x_unit: np.ndarray, row_ids: list[int], batch_seq: int) -> tuple[Activations, _Extraction]:
+    def _damping(self) -> np.ndarray:
+        """Per-attractor EMA multiplier d_j = min(1, tau / share_j): an over-represented attractor
+        keeps its members but moves less (SDD 07 §Guards); all ones before any share exists."""
+        st = self.store
+        if st.is_empty or st.next_chunk_id == 0:
+            return np.ones(len(st.concept_ids))
+        tau = observability.density_threshold(len(st.concept_ids), self.config)
+        share = st.chunk_counts.astype(np.float64) / st.next_chunk_id
+        return np.minimum(1.0, tau / np.maximum(share, 1e-12))
+
+    def _clamp_steps(self, before: np.ndarray | None) -> tuple[float | None, int]:
+        """Trust region: a pre-existing centroid that moved more than MAX_CENTROID_STEP in this
+        batch is pulled back onto that radius; returns (largest raw move, attractors clamped)."""
+        if before is None or not len(before):
+            return None, 0
+        st, limit = self.store, self.config.max_centroid_step
+        delta = st.embeddings[: len(before)].astype(np.float64) - before.astype(np.float64)
+        steps = np.linalg.norm(delta, axis=1)
+        over = np.flatnonzero(steps > limit)
+        for i in over:
+            moved = before[i] + delta[i] * (limit / steps[i])
+            st.embeddings[i] = (moved / np.linalg.norm(moved)).astype(np.float32)
+        return float(steps.max()), len(over)
+
+    def _stream(
+        self, x_in: np.ndarray, x_unit: np.ndarray, row_ids: list[int], batch_seq: int, damping: np.ndarray
+    ) -> tuple[Activations, _Extraction]:
         """Later batches: assign (EMA update), buffer orphans, then extract or wire them."""
         st, cfg = self.store, self.config
         ext = _Extraction(adaptive_thresh=eng.compute_adaptive_threshold(st, cfg))
-        assigned, orphan_embs, orphan_ids = eng.assign_and_update(x_in, row_ids, st, cfg, ext.adaptive_thresh, batch_seq)
+        assigned, orphan_embs, orphan_ids = eng.assign_and_update(x_in, row_ids, st, cfg, ext.adaptive_thresh, batch_seq, damping)
         acts = _tag(assigned, "assign")
         ext.orphaned = len(orphan_ids)
         if orphan_embs:
@@ -135,7 +169,7 @@ class LatentOntology:
             new_c, counts, local = eng.extract_attractors(buf, l2_normalize(buf), cfg)
             kept, absorptions = eng.soft_merge_orphans(new_c, st, cfg)
             ext.extracted, ext.soft_merged, ext.kept = len(new_c), len(absorptions), len(kept)
-            acts += _tag(eng.route_absorbed_activations(local, absorptions, buf_ids, buf, st, cfg, batch_seq), "absorbed")
+            acts += _tag(eng.route_absorbed_activations(local, absorptions, buf_ids, buf, st, cfg, batch_seq, damping), "absorbed")
             if len(kept):
                 kept_counts = [int(counts[i]) for i in range(len(new_c)) if i not in absorptions]
                 gids = st.append_concepts(kept, chunk_counts=kept_counts, batch_id=batch_seq)
@@ -146,7 +180,7 @@ class LatentOntology:
                 )
             st.clear_orphan_buffer()
         elif orphan_ids:
-            acts += _tag(eng.assign_orphans_nearest(np.stack(orphan_embs), orphan_ids, st, cfg, batch_seq), "nearest")
+            acts += _tag(eng.assign_orphans_nearest(np.stack(orphan_embs), orphan_ids, st, cfg, batch_seq, damping), "nearest")
             st.clear_orphan_buffer()
         return acts, ext
 
@@ -175,8 +209,12 @@ class LatentOntology:
             max_concept_density_pct=observability.max_concept_density_pct(st),
             centroid_drift=observability.mean_centroid_drift(emb_before, st.embeddings, dirty),
             adaptive_thresh=ext.adaptive_thresh,
+            density_threshold=observability.density_threshold(len(st.concept_ids), self.config),
+            damped_attractors=ext.damped,
+            max_centroid_step=ext.max_step,
+            clamped_attractors=ext.clamped,
         )
-        observability.apply_health_warnings(metrics)
+        observability.apply_health_warnings(metrics, self.config)
         observability.MetricsRecorder(self.state_dir / "ontology_metrics.csv").append(metrics)
         return metrics
 

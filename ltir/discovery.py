@@ -274,7 +274,9 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
         cand.drivers = list(row["root_cause_drivers"])
         validated.append(cand)
 
-    return DiscoveryResult(prof, candidates, validated, data, n_tests=len(candidates) * len(numerics), pass1_subgroups=len(pass1), rejections=rejections)
+    return DiscoveryResult(
+        prof, candidates, validated, data, n_tests=len(candidates) * len(numerics), pass1_subgroups=len(pass1), rejections=rejections
+    )
 
 
 def _median_test(values: np.ndarray, global_median: float, global_mad: float) -> float:
