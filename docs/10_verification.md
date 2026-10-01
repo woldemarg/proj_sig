@@ -8,7 +8,7 @@
 
 ## 10.1 Test map
 
-74 collected tests (73 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
+75 collected tests (74 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
@@ -17,7 +17,7 @@
 | canonical → embedding | `test_canonical_embedding.py` (9) | embedding inputs vs document (sections, ASCII); labels without numbers; number rules; covariance component; shape, dtype, unit norms, stability, direction separation and cross-scope similarity for the hashing backend **and the real model**; fingerprint sensitivity; query instruction only on free question text; the MiniLM env block applies verbatim |
 | insight → ontology | `test_ontology.py` (9) | cold start coverage, at least three anchors, each planted cluster within one anchor; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
 | structural plane | `test_structural.py` (5) | covering relation only, GENERALIZES inverse, SIBLING rule, CONTRASTS rule and relation type, no embedding dependency |
-| persistence | `test_persistence.py` (11) | write → reload → rebuild identical; idempotent re-ingest; graph consistency (incl. every membership below the alignment floor is weak); rollback; representation mismatch; crash recovery; a second writer process refused while the first keeps its queue; migration with backup; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; the Neo4j mirror equals the snapshot |
+| persistence | `test_persistence.py` (12) | write → reload → rebuild identical; a record rewritten under a concurrent reader (no sharing violation on either side); idempotent re-ingest; graph consistency (incl. every membership below the alignment floor is weak); rollback; representation mismatch; crash recovery; a second writer process refused while the first keeps its queue; migration with backup; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; the Neo4j mirror equals the snapshot |
 | traversal and evidence | `test_traversal.py` (4) | the exact pattern → anchor → anchor → pattern path with hops, weights, reversal and score; a weak membership is not walked while a kept 0.35 link is; hop and depth budgets; parsing against the graph vocabulary; the evidence object |
 | LLM client | `test_llm_client.py` (4) | the real HTTP client against an OpenAI-compatible stub (payload, provider pinning, health, reasoning flag); fail-fast on an unreachable endpoint; citation validation incl. grouped citations |
 | end to end | `test_e2e.py` (7) | upload → … → grounded answer with provenance and cross-scope analogues (hashing and real model); the benchmark ordering (`test_hypothesis_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; LLM failure keeps knowledge; empty graph |

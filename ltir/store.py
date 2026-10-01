@@ -36,6 +36,7 @@ import numpy as np
 
 from ltir.config import Config
 from ltir.engines.lac.chunk_journal import ChunkJournal
+from ltir.fileio import replace_file, retry_sharing
 from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, EmbeddingSpec
 
 
@@ -48,13 +49,13 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=1, default=str)
-    os.replace(tmp, path)
+    replace_file(tmp, path)  # waits out a reader of the old file (Windows)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.is_file():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(retry_sharing(lambda: path.read_text(encoding="utf-8")))  # waits out a replace (Windows)
 
 
 class WorkspaceBusy(RuntimeError):
@@ -212,7 +213,7 @@ class Workspace:
             path = self.journal_dir / "blocks" / f"{batch_id}.npz"
             if not path.is_file():
                 continue
-            with np.load(path) as data:
+            with retry_sharing(lambda path=path: np.load(path)) as data:
                 if "document" in data.files and "pattern_ids" in data.files:
                     out.update(zip(data["pattern_ids"].tolist(), data["document"]))
         return out
@@ -223,14 +224,14 @@ class Workspace:
         path = self.journal_dir / "blocks" / f"{batch_id}.npz"
         arrays: dict[str, np.ndarray] = {}
         if path.is_file():
-            with np.load(path) as data:
+            with retry_sharing(lambda: np.load(path)) as data:
                 arrays = {k: data[k] for k in data.files}
         arrays["document"] = np.asarray(vectors, dtype=np.float32)
         arrays["pattern_ids"] = np.array(pattern_ids)
         tmp = path.with_name(path.name + ".tmp")
         with tmp.open("wb") as handle:
             np.savez_compressed(handle, **arrays)
-        os.replace(tmp, path)
+        replace_file(tmp, path)
 
     def activations(self) -> list[dict[str, Any]]:
         return self.journal.load_activations()

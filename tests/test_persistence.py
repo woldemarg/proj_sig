@@ -135,6 +135,43 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path):
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
 
 
+def test_records_survive_a_concurrent_reader(tmp_path):
+    """A record rewritten while another thread reads it (the UI polls batch records): neither side fails.
+
+    On Windows a plain ``os.replace`` over an open file, and a read during the replace, both raise
+    PermissionError (WinError 5); a batch then failed with that message."""
+    import threading
+    import time
+
+    from ltir.store import atomic_write_json, read_json
+
+    target = tmp_path / "B-test.json"
+    atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
+    stop, errors = threading.Event(), []
+
+    def reader():
+        while not stop.is_set():
+            try:
+                assert read_json(target)["pad"]
+            except Exception as exc:
+                errors.append(f"read: {exc!r}")
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    try:
+        while time.monotonic() < deadline:
+            try:
+                atomic_write_json(target, {"status": "PROFILING", "pad": "x" * 20000})
+            except Exception as exc:
+                errors.append(f"write: {exc!r}")
+    finally:
+        stop.set()
+        thread.join()
+    assert errors == []
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     """One writer per workspace: a CLI writer started while the web app holds the lock is refused
     and leaves the web app's queued upload alone; readers stay allowed."""
