@@ -1,6 +1,6 @@
 """3D latent sphere: insight vectors + attractors projected on a sphere (SDD 13 §Sphere).
 
-Reuses lac's visualisation stack unchanged (vendored as ``ltir/engines/lac/projector.py``:
+Reuses lac's visualisation stack (vendored as ``ltir/engines/lac/projector.py``, rendering unchanged:
 prosphera ``KernelPCA(cosine)`` -> sphere scaling, dark Plotly figure, ACTIVATES
 lines, ``save_html``), the way lac's ``v2_orchestrator/viz_export.py`` feeds it chunks
 + concepts. SIG feeds Pattern vectors (the 1152-d journal rows) +

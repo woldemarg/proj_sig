@@ -176,34 +176,3 @@ class OntologyProjector(Projector):
             ),
         )
         return fig
-
-    def project_ontology(
-        self,
-        chunk_embeddings: np.ndarray,
-        concept_embeddings: np.ndarray,
-        activations: list[dict[str, Any]],
-        *,
-        chunk_labels: list[str],
-        chunk_hovertext: list[str],
-        concept_hovertext: list[str],
-        draw_edges: bool = True,
-        output_path: Path | str | None = None,
-    ) -> go.Figure:
-        combined = np.vstack([chunk_embeddings, concept_embeddings])
-        n_chunks = len(chunk_embeddings)
-        sphere_coords, _ = self._scale_vectors_on_sphere(self._apply_pca(combined))
-
-        fig = self._build_figure(
-            sphere_coords[:n_chunks],
-            sphere_coords[n_chunks:],
-            activations,
-            chunk_labels=chunk_labels,
-            chunk_hovertext=chunk_hovertext,
-            concept_hovertext=concept_hovertext,
-            draw_edges=draw_edges,
-        )
-        if output_path is not None:
-            save_html(fig, output_path)
-        else:
-            fig.show(renderer=self.renderer)
-        return fig
