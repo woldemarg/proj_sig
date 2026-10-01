@@ -3,10 +3,12 @@ __pycache__/
 *.py[cod]
 .env
 .env.*
+!.env.sample
 workspace/
 .pytest_tmp/
 .pytest_cache/
 .ruff_cache/
+.scratch/
 
 # keep directories, drop local artifacts
 models/**

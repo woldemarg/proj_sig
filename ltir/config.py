@@ -68,7 +68,7 @@ class Config:
     min_stability: float = 0.5
     max_p_adjusted: float = 0.05
     min_insight_weight: float = 0.2
-    redundancy_jaccard: float = 0.90
+    redundancy_jaccard: float = 0.88  # pre-validation near-duplicate threshold (same primary metric and sign)
     max_insights_per_batch: int = 200
     min_component_z: float = 0.5  # secondary shifts kept in the phenomenon
     weight_effect_ref: float = 1.5

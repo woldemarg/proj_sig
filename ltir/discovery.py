@@ -25,9 +25,10 @@ from scipy.stats import norm, zscore
 
 import ltir.engines.eda.main_upd as eda
 from ltir.config import Config
-from ltir.models import Condition, Insight, Shift, pattern_id
+from ltir.models import Condition, Insight, Rejection, Shift, pattern_id
 
 EDA_SOURCE = "ltir/engines/eda/main_upd.py"
+NULL_LEVELS = frozenset({"nan", "<NA>", "None"})  # never a condition (same literals as EDA step 3)
 # asymptotic s.e. of the median: 1.2533 * sigma / sqrt(n); sigma ~= 1.4826 * MAD
 _MEDIAN_SE_FACTOR = 1.2533 * 1.4826
 
@@ -60,10 +61,10 @@ class DatasetProfile:
 
 @dataclass
 class Candidate:
-    """One pass-1 subgroup, optionally enriched with pass-2 validation."""
+    """One distinct pass-1 cohort (closed intent), optionally enriched with pass-2 validation."""
 
-    expression: str
-    conditions: tuple[Condition, ...]
+    expression: str  # EDA selector kept as provenance (the member with most conditions)
+    conditions: tuple[Condition, ...]  # closed intent: every condition that holds on the whole extent
     row_indices: np.ndarray
     row_count: int
     volume_utility: float
@@ -74,15 +75,18 @@ class Candidate:
     validated: bool = False
     final_sd_score: float = 0.0
     drivers: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)  # selectors merged into this cohort
 
 
 @dataclass
 class DiscoveryResult:
     profile: DatasetProfile
-    candidates: list[Candidate]
+    candidates: list[Candidate]  # distinct cohorts (one per extent)
     validated: list[Candidate]
     data: pd.DataFrame  # EDA data_safe (row positions == source file rows)
-    n_tests: int  # multiple-testing family size (candidates x metrics)
+    n_tests: int  # multiple-testing family size (distinct cohorts x metrics)
+    pass1_subgroups: int  # pass-1 selectors before merging identical extents
+    rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate
 
 
 def emm_pair_scale(n_metrics: int) -> float:
@@ -105,8 +109,96 @@ def _conditions_of(selector: Any) -> tuple[Condition, ...]:
     return tuple(sorted(Condition(str(s.attribute_name), str(s.attribute_value)) for s in selectors))
 
 
+def closed_intent(data: pd.DataFrame, rows: np.ndarray, categoricals: list[str]) -> tuple[Condition, ...]:
+    """Galois closure int(ext(S)): every (attribute, value) that holds on all covered rows (SDD 16 §1)."""
+    covered = data.iloc[rows]
+    closed = []
+    for col in categoricals:
+        values = covered[col].unique()
+        if len(values) == 1 and str(values[0]) not in NULL_LEVELS:
+            closed.append(Condition(col, str(values[0])))
+    return tuple(sorted(closed))
+
+
+def merge_identical_extents(cands: list[Candidate], data: pd.DataFrame, categoricals: list[str]) -> tuple[list[Candidate], list[Rejection]]:
+    """One cohort per extent, described by its closed intent; the other selectors become aliases (R5)."""
+    groups: dict[bytes, list[Candidate]] = {}
+    for cand in cands:
+        groups.setdefault(np.sort(cand.row_indices).tobytes(), []).append(cand)
+    merged: list[Candidate] = []
+    rejections: list[Rejection] = []
+    for members in groups.values():
+        members.sort(key=lambda c: (-len(c.conditions), c.expression))
+        head, rest = members[0], members[1:]
+        closed = closed_intent(data, head.row_indices, categoricals)
+        enumerated = {cond for member in members for cond in member.conditions}
+        if not enumerated <= set(closed):  # a selector value that does not match the data string
+            raise DiscoveryError("internal_error", f"closure of {head.expression} misses {sorted(enumerated - set(closed))}")
+        head.conditions = closed
+        head.aliases = [m.expression for m in rest]
+        rejections += [Rejection(m.expression, "cover_equivalent", f"same rows as {head.expression}") for m in rest]
+        merged.append(head)
+    return merged, rejections
+
+
+def _primary_key(cand: Candidate, data: pd.DataFrame, global_medians: dict[str, float]) -> tuple[str, int] | None:
+    """(primary metric, shift sign) of a pass-1 cohort; None without shifts."""
+    if not cand.top_shifts:
+        return None
+    metric = cand.top_shifts[0][0]
+    local = float(np.median(data[metric].iloc[cand.row_indices].dropna()))
+    return metric, 1 if local >= global_medians[metric] else -1
+
+
+def prune_near_duplicates(
+    ranked: list[Candidate], data: pd.DataFrame, global_medians: dict[str, float], threshold: float
+) -> tuple[list[Candidate], list[Rejection]]:
+    """Greedy in rank order (R6): a cohort with the primary metric and sign of a higher-ranked kept
+    cohort and Jaccard(rows) >= ``threshold`` is absorbed as an alias of it."""
+    kept: list[tuple[Candidate, tuple[str, int] | None, np.ndarray]] = []
+    rejections: list[Rejection] = []
+    for cand in ranked:
+        key = _primary_key(cand, data, global_medians)
+        mask = np.zeros(len(data), dtype=bool)
+        mask[cand.row_indices] = True
+        size = int(mask.sum())
+        host = None
+        for other, other_key, other_mask in kept:
+            if key is None or key != other_key:
+                continue
+            inter = int(np.count_nonzero(mask & other_mask))
+            if inter / (size + int(other_mask.sum()) - inter) >= threshold:
+                host = other
+                break
+        if host is None:
+            kept.append((cand, key, mask))
+            continue
+        host.aliases += [cand.expression, *cand.aliases]
+        rejections.append(Rejection(cand.expression, "near_duplicate", f"Jaccard>={threshold} with {host.expression}"))
+    return [cand for cand, _, _ in kept], rejections
+
+
+def _validation_frame(cands: list[Candidate]) -> pd.DataFrame:
+    """The columns ``step4b_deep_validation`` reads; scope attributes include implied ones."""
+    return pd.DataFrame(
+        {
+            "dimensions": [c.expression for c in cands],
+            "dimension_attrs": [{cond.attribute for cond in c.conditions} for c in cands],
+            "row_indices": [c.row_indices for c in cands],
+            "row_count": [c.row_count for c in cands],
+            "volume_utility": [c.volume_utility for c in cands],
+            "top_shifts": [c.top_shifts for c in cands],
+            "sd_aggregate_score": [c.sd_aggregate_score for c in cands],
+            "emm_stabilized_score": [c.emm_stabilized_score for c in cands],
+        }
+    )
+
+
 def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], None] | None = None) -> DiscoveryResult:
-    """Run EDA pass 1 + pass 2 and return typed candidates (no filtering yet)."""
+    """EDA pass 1 -> distinct closed cohorts -> ranking -> near-duplicate pruning -> pass 2.
+
+    Deduplication runs *before* the validation budget is spent, so the bootstrap only
+    sees distinct cohorts (SDD 03)."""
     profile = eda.step1_profile_data(df)
     numerics: list[str] = list(profile["numerics"])
     categoricals: list[str] = list(profile["categoricals"])
@@ -130,8 +222,8 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
         search_space_size=len(space),
         global_medians=global_medians,
         global_mads=global_mads,
-        dimension_cardinality={c: int(data[c].nunique()) for c in dims},
-        dimension_entropy={c: _entropy(data[c]) for c in dims},
+        dimension_cardinality={c: int(data[c].nunique()) for c in categoricals},
+        dimension_entropy={c: _entropy(data[c]) for c in categoricals},
     )
     if not space:
         raise DiscoveryError("no_candidates", f"Search space is empty (dimensions selected: {dims}).")
@@ -146,10 +238,8 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
     # RMS correlation change per metric pair (in [0, 2]), which the thresholds refer to.
     raw["emm_stabilized_score"] = raw["emm_stabilized_score"] / emm_pair_scale(len(numerics))
 
-    # EDA workflow ranking (main_upd.py __main__): temp_index over pass-1 scores
-    raw["temp_index"] = _z_positive(raw["sd_aggregate_score"]) + _z_positive(raw["emm_stabilized_score"]) + _z_positive(raw["volume_utility"])
     by_expr = {str(sel): sel for sel in space}
-    candidates = [
+    pass1 = [
         Candidate(
             expression=row["dimensions"],
             conditions=_conditions_of(by_expr[row["dimensions"]]),
@@ -159,13 +249,21 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
             top_shifts=[(str(m), float(v)) for m, v in row["top_shifts"]],
             sd_aggregate_score=float(row["sd_aggregate_score"]),
             emm_stabilized_score=float(row["emm_stabilized_score"]),
-            temp_index=float(row["temp_index"]),
         )
         for _, row in raw.iterrows()
     ]
+    candidates, rejections = merge_identical_extents(pass1, data, categoricals)
 
-    top = raw.sort_values("temp_index", ascending=False, kind="stable").head(config.validation_budget)
+    # EDA workflow ranking (main_upd.py __main__): temp_index over the distinct cohorts
+    scores = pd.DataFrame([(c.sd_aggregate_score, c.emm_stabilized_score, c.volume_utility) for c in candidates], columns=["sd", "emm", "vol"])
+    for cand, index in zip(candidates, _z_positive(scores["sd"]) + _z_positive(scores["emm"]) + _z_positive(scores["vol"])):
+        cand.temp_index = float(index)
+    ranked = sorted(candidates, key=lambda c: -c.temp_index)  # stable: pass-1 order breaks ties
+    eligible, near = prune_near_duplicates(ranked, data, global_medians, config.redundancy_jaccard)
+    rejections += near
+
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG
+    top = _validation_frame(eligible[: config.validation_budget])
     validated_df = eda.step4b_deep_validation(data, top, numerics, categoricals, global_medians, global_mads)
     by_candidate = {c.expression: c for c in candidates}
     validated: list[Candidate] = []
@@ -176,7 +274,7 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
         cand.drivers = list(row["root_cause_drivers"])
         validated.append(cand)
 
-    return DiscoveryResult(prof, candidates, validated, data, n_tests=len(candidates) * len(numerics))
+    return DiscoveryResult(prof, candidates, validated, data, n_tests=len(candidates) * len(numerics), pass1_subgroups=len(pass1), rejections=rejections)
 
 
 def _median_test(values: np.ndarray, global_median: float, global_mad: float) -> float:
@@ -271,6 +369,7 @@ def build_insights(result: DiscoveryResult, config: Config, *, dataset_id: str, 
                 p_adjusted=min(1.0, p_value * result.n_tests),
                 drivers=tuple(cand.drivers),
                 row_hash=hashlib.sha1(np.sort(cand.row_indices).tobytes()).hexdigest()[:16],
+                aliases=tuple(cand.aliases),
                 covariance=covariance,
                 provenance={
                     "dataset_id": dataset_id,

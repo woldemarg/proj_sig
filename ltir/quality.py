@@ -81,14 +81,13 @@ def _as_covariance(ins: Insight) -> Insight:
     )
 
 
-def _jaccard(a: np.ndarray, b: np.ndarray) -> float:
-    inter = np.intersect1d(a, b, assume_unique=True).size
-    union = a.size + b.size - inter
-    return inter / union if union else 1.0
+def select_insights(insights: list[Insight], config: Config) -> SelectionResult:
+    """Apply the SDD 04 rules R1–R4 and R7 to validated insights.
 
-
-def select_insights(insights: list[Insight], covers: dict[str, np.ndarray], config: Config) -> SelectionResult:
-    """Apply the SDD 04 rules R1..R7 to validated insights."""
+    R5 (identical extents) and R6 (near duplicates) run in discovery, before the
+    validation budget is spent (``discovery.merge_identical_extents`` /
+    ``prune_near_duplicates``), so every validated insight is a distinct cohort.
+    """
     rejections: list[Rejection] = []
     survivors: list[Insight] = []
     for ins in insights:
@@ -116,41 +115,8 @@ def select_insights(insights: list[Insight], covers: dict[str, np.ndarray], conf
         else:
             survivors.append(ins)
 
-    # R5 cover equivalence: identical extents -> keep the closed pattern (maximal intent)
-    groups: dict[str, list[Insight]] = {}
-    for ins in survivors:
-        groups.setdefault(ins.row_hash, []).append(ins)
-    closed: list[Insight] = []
-    for members in groups.values():
-        members.sort(key=lambda i: (-len(i.conditions), -i.weight, i.expression))
-        head, rest = members[0], members[1:]
-        for other in rest:
-            rejections.append(Rejection(other.expression, "cover_equivalent", f"same rows as {head.expression}"))
-        closed.append(replace(head, aliases=head.aliases + tuple(o.expression for o in rest)))
-
-    # R6 near duplicates: same target + direction and Jaccard(rows) >= threshold -> keep heavier
-    closed.sort(key=lambda i: (-i.weight, i.expression))
-    kept: list[Insight] = []
-    for ins in closed:
-        rows = np.unique(covers[ins.expression])
-        dup = next(
-            (
-                k
-                for k in kept
-                if k.target == ins.target
-                and k.direction == ins.direction
-                and _jaccard(np.unique(covers[k.expression]), rows) >= config.redundancy_jaccard
-            ),
-            None,
-        )
-        if dup is None:
-            kept.append(ins)
-            continue
-        rejections.append(Rejection(ins.expression, "near_duplicate", f"Jaccard>={config.redundancy_jaccard} with {dup.expression}"))
-        idx = kept.index(dup)
-        kept[idx] = replace(dup, aliases=dup.aliases + (ins.expression,))
-
-    # R7 budget
+    # R7 budget, heaviest first
+    kept = sorted(survivors, key=lambda i: (-i.weight, i.expression))
     for ins in kept[config.max_insights_per_batch :]:
         rejections.append(Rejection(ins.expression, "budget", f"max_insights_per_batch={config.max_insights_per_batch}"))
     kept = kept[: config.max_insights_per_batch]

@@ -17,6 +17,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -138,18 +139,20 @@ def _batch_metrics(
     t0: float,
 ) -> dict[str, Any]:
     """Batch-record metrics (SDD 14 §Metrics)."""
-    kept, sel, om, graph = selection.kept, selection.stats, update.metrics, snapshot["stats"]
+    kept, om, graph = selection.kept, update.metrics, snapshot["stats"]
+    pruned = Counter(r.reason for r in [*result.rejections, *selection.rejections])
     return {
         "input_rows": result.profile.rows,
         "columns": result.profile.columns,
         "numeric_targets": len(result.profile.numerics),
         "dimensions": len(result.profile.selected_dimensions),
         "search_space": result.profile.search_space_size,
+        "pass1_subgroups": result.pass1_subgroups,
         "candidate_patterns": len(result.candidates),
         "validated_candidates": len(result.validated),
         "validated_insights": len(kept),
-        "pruned": {k: v for k, v in sel.items() if k not in {"input", "kept"}},
-        "pruned_total": sel["input"] - sel["kept"],
+        "pruned": dict(pruned),
+        "pruned_total": sum(pruned.values()),
         "avg_insight_support": float(np.mean([i.support for i in kept])),
         "avg_insight_weight": float(np.mean([i.weight for i in kept])),
         "embedding_count": len(kept),
@@ -320,8 +323,8 @@ class Engine:
                 with _clock(timings, "select_s"):
                     covers = covers_of(result)
                     insights = build_insights(result, self.config, dataset_id=loaded.dataset_id, batch_id=batch_id, filename=record["filename"])
-                    selection = select_insights(insights, covers, self.config)
-                    atomic_write_json(ds_dir / "rejections.json", [asdict(r) for r in selection.rejections])
+                    selection = select_insights(insights, self.config)
+                    atomic_write_json(ds_dir / "rejections.json", [asdict(r) for r in [*result.rejections, *selection.rejections]])
                     kept = selection.kept
                     if not kept:
                         raise PipelineError("no_viable_insights", f"No insight passed selection ({selection.stats})")
