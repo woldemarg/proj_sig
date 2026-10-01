@@ -1,4 +1,4 @@
-"""Traversal on a deterministic toy graph + query parsing + evidence (SDD 10, SDD 11)."""
+"""Traversal on a deterministic toy graph + query parsing + evidence (docs/07_question_answering.md)."""
 
 from __future__ import annotations
 

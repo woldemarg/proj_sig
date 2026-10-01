@@ -1,4 +1,4 @@
-"""Persistence: write, reload, idempotency, rollback, recovery, graph consistency (SDD 09)."""
+"""Persistence: write, reload, idempotency, rollback, recovery, graph consistency (docs/06_graph_and_storage.md)."""
 
 from __future__ import annotations
 

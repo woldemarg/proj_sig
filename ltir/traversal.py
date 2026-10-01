@@ -1,4 +1,4 @@
-"""Transversal traversal engine (SDD 10).
+"""Transversal traversal engine (docs/07_question_answering.md §7.3).
 
 Path grammar (regular), from each seed Pattern::
 
@@ -10,7 +10,7 @@ disjoint) patterns, then optional structural expansion there. Best-first search
 maximises the product of edge factors (alignment, relation weight, structural
 decay); node ranking multiplies by the pattern's Insight.weight.
 
-Two baselines make the research hypothesis inspectable (SDD 10 §Baselines):
+Two baselines make the research hypothesis inspectable (docs/07_question_answering.md §7.6):
 structural-only BFS and naive nearest-neighbour text retrieval.
 """
 

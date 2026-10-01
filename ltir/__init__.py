@@ -3,7 +3,7 @@
 Pipeline: tabular file -> EDA discovery (ltir/engines/eda) -> validated insights
 -> canonical tripartite vectors -> latent attractor ontology (ltir/engines/lac)
 -> dual-layer graph -> transversal traversal -> evidence -> local Gemma 4.
-See docs/sdd/01_project_architecture.md.
+See docs/README.md (reading guide) and docs/01_overview.md.
 """
 
 __version__ = "0.1.0"

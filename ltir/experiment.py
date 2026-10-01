@@ -1,4 +1,4 @@
-"""Hypothesis experiment (SDD 15 §Experiment): cross-dimensional analogue retrieval.
+"""Hypothesis experiment (docs/10_verification.md §10.3): cross-dimensional analogue retrieval.
 
 For every pattern S that expresses a planted phenomenon, the *analogues* of S are
 the other patterns expressing the same phenomenon whose scope shares no condition

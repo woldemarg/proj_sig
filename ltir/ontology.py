@@ -1,4 +1,4 @@
-"""Latent ontology over ``ltir.engines.lac`` (SDD 07).
+"""Latent ontology over ``ltir.engines.lac`` (docs/05_latent_anchors.md).
 
 Stage order matches ``v2_orchestrator.main.run_batch`` — cold start |
 assign -> EMA update -> orphans -> extract -> soft merge -> absorbed routing |
@@ -131,7 +131,7 @@ class LatentOntology:
 
     def _damping(self) -> np.ndarray:
         """Per-attractor EMA multiplier d_j = min(1, tau / share_j): an over-represented attractor
-        keeps its members but moves less (SDD 07 §Guards); all ones before any share exists."""
+        keeps its members but moves less (docs/05_latent_anchors.md §5.6); all ones before any share exists."""
         st = self.store
         if st.is_empty or st.next_chunk_id == 0:
             return np.ones(len(st.concept_ids))

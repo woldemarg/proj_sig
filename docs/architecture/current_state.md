@@ -1,6 +1,6 @@
 # Current state — repository reconnaissance (Phase 0)
 
-> **Update (2026-09-30):** the reused engines, the embedding model and `housing.csv` are now **vendored into `sig/`** (`ltir/engines/`, `models/`, `data/`; see `ltir/engines/PROVENANCE.md`). The paths and APIs below describe the *originals* at reconnaissance time, not runtime dependencies; the vendored copies have diverged (e.g. no running-mean centering, one `extract_attractors`, numerical repairs in `main_upd.py`), and PROVENANCE.md lists every difference. Terms: glossary in SDD 01.
+> **Update (2026-09-30):** the reused engines, the embedding model and `housing.csv` are now **vendored into `sig/`** (`ltir/engines/`, `models/`, `data/`; see `ltir/engines/PROVENANCE.md`). The paths and APIs below describe the *originals* at reconnaissance time, not runtime dependencies; the vendored copies have diverged (e.g. no running-mean centering, one `extract_attractors`, numerical repairs in `main_upd.py`), and PROVENANCE.md lists every difference. Terms: glossary in `docs/11_reference.md` §11.1.
 
 Snapshot of what existed **before** the LTIR integration work. It records what the integration reuses as-is, what gets an adapter, and what is new.
 Paths are relative to the workspace root `sig_proj/`.
@@ -59,7 +59,7 @@ lac docs: `lac/docs/v2-latent-semantic-attractor-graph/` (data-flow, concept ine
 |------|---------|-------------|
 | Python | No Python on PATH. Conda envs: `D:\conda_envs\env_eda` (py3.12, pysubgroup), `env_ont` (py3.12, torch 2.12+cu126, sentence-transformers 5.6, transformers 5.12, neo4j, sklearn), `env_ads` (FastAPI). | SIG uses a venv layered on `env_ont` (`--system-site-packages`) plus pysubgroup/FastAPI/uvicorn/pytest. No existing env is modified. |
 | env_ont defect | `transformers` fails to import (`regex` missing). | Installed `regex` in the SIG venv only. |
-| Embedding model | Cached at `lac/models/sentence-transformers/` (MiniLM-L12, 384-d). Loads offline. | Was the default SIG embedding model (`HF_HUB_OFFLINE=1`); since `ltir-rep-3` it is the documented alternative to `Qwen3-Embedding-0.6B` (SDD 06). |
+| Embedding model | Cached at `lac/models/sentence-transformers/` (MiniLM-L12, 384-d). Loads offline. | Was the default SIG embedding model (`HF_HUB_OFFLINE=1`); since `ltir-rep-3` it is the documented alternative to `Qwen3-Embedding-0.6B` (`docs/04_representation.md` §4.4). |
 | GPU | RTX 4060 Laptop, 8 GB. | Embedding on CUDA when available (configurable). |
 | Neo4j | Neo4j Desktop 2, Enterprise DBMS with databases `ontologyv1`, `ontologyv2`, …; **not running**. lac `.env` holds credentials. | Neo4j is an optional mirror (`NEO4J_ENABLED`); the local journal/state/snapshot is the source of truth. |
 | Local LLM | Machine convention (from another local project): OpenAI-compatible endpoints — Ollama `http://localhost:11434/v1` model `gemma4`, LM Studio `http://localhost:1234/v1` model `google/gemma-4-26b-a4b`. **Neither is installed or running.** | LLM client targets the OpenAI-compatible API (default Ollama `gemma4`); deterministic evidence-only fallback when unreachable. |
@@ -73,11 +73,11 @@ lac docs: `lac/docs/v2-latent-semantic-attractor-graph/` (data-flow, concept ine
 | `step2_evaluate_macro_groupings` | Keeps only categories with power **strictly above the median**. With ≤3 categoricals, ≤1 survives, and since `step3` builds only 2-/3-conjunctions the search space is empty (e.g. `housing.csv`). | Yes for narrow schemas. | Added optional `min_categories=0` (default preserves behaviour); the adapter passes `MIN_SEARCH_DIMENSIONS` (default 3), which backfills by power ranking. |
 | `step4b_deep_validation` | Bootstrap uses unseeded `DataFrame.sample`. | Reproducibility only. | Adapter seeds NumPy's global RNG (`EDA_RANDOM_SEED`) before calling it. |
 | `robust_z_score` | Returns `abs(...)`, so shift direction is lost. | Yes for CONTRASTS / phenomenon direction. | Adapter recomputes the sign from subgroup vs global medians (magnitude taken from the EDA). |
-| `lac/.../ontology_engine._omp_extract` | Activation weights use `abs(OMP coefficient)`, so an anti-aligned pattern can "activate" an atom. | Semantics only. | The vendored `extract_attractors` repairs atom sign and re-validates alignments after extraction (SDD 07). |
-| `eda/.../main_upd.py` (math audit) | MAD = 0 makes robust z infinite; the 95 %-mass rule drops a column's last level; η² favours high-cardinality columns; JS-only confounders fire on sampling noise; 5 × 90 % "bootstrap"; undefined correlations read as 0. | Wrong rankings and spurious insights. | Repaired in the vendored copy (PROVENANCE.md edits 4–9, SDD 03). |
-| `lac/.../storage.py` running-mean centering | Batch t is centred by the mean of batches < t (batch 0 uncentred), so the frame moves between batches and query vectors cannot share it. | Retrieval consistency. | Not used: SIG keeps one uncentred frame (since `ltir-rep-2`, SDD 06/07). |
+| `lac/.../ontology_engine._omp_extract` | Activation weights use `abs(OMP coefficient)`, so an anti-aligned pattern can "activate" an atom. | Semantics only. | The vendored `extract_attractors` repairs atom sign and re-validates alignments after extraction (`docs/05_latent_anchors.md` §5.3). |
+| `eda/.../main_upd.py` (math audit) | MAD = 0 makes robust z infinite; the 95 %-mass rule drops a column's last level; η² favours high-cardinality columns; JS-only confounders fire on sampling noise; 5 × 90 % "bootstrap"; undefined correlations read as 0. | Wrong rankings and spurious insights. | Repaired in the vendored copy (PROVENANCE.md edits 4–9, `docs/02_discovery.md` §2.2). |
+| `lac/.../storage.py` running-mean centering | Batch t is centred by the mean of batches < t (batch 0 uncentred), so the frame moves between batches and query vectors cannot share it. | Retrieval consistency. | Not used: SIG keeps one uncentred frame (since `ltir-rep-2`; `docs/04_representation.md`, `docs/05_latent_anchors.md`). |
 
 ## 5. What had to be built
 
 Nothing below existed: typed insight model, quality/redundancy policy, canonicalisation, tripartite encoder, insight weighting, adapter over the lac lifecycle for patterns, structural lattice edges, dual-layer graph + persistence for patterns, traversal engine, evidence builder, LLM interface, web UI, E2E pipeline with status tracking, synthetic dataset, and tests.
-See `docs/sdd/01_project_architecture.md` for the resulting architecture.
+See [`docs/01_overview.md`](../01_overview.md) for the resulting architecture.

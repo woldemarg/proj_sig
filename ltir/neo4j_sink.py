@@ -1,4 +1,4 @@
-"""Optional Neo4j mirror of the graph snapshot (SDD 09 §Neo4j).
+"""Optional Neo4j mirror of the graph snapshot (docs/06_graph_and_storage.md §6.6).
 
 Follows lac's publisher pattern (constraints + parameterised UNWIND/MERGE) with
 the SIG schema. The local journal/state is the source of truth; publishing is

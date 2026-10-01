@@ -1,4 +1,4 @@
-"""Embedder comparison (SDD 06, SDD 15): representation contract, benchmark, cost.
+"""Embedder comparison (docs/04_representation.md §4.5, docs/10_verification.md §10.4): representation contract, benchmark, cost.
 
     python scripts/compare_embedders.py --models minilm,qwen3 --k 5
 
@@ -36,7 +36,7 @@ QWEN3 = {
     "embedding_truncate_dim": 384,
     "embedding_query_instruction": "Given a quantitative analysis question, retrieve relevant statistical subgroup patterns",
 }
-CANDIDATES: dict[str, dict] = {  # each with its own calibrated MIN_ASSIGN_THRESHOLD (SDD 07 §Calibration)
+CANDIDATES: dict[str, dict] = {  # each with its own calibrated MIN_ASSIGN_THRESHOLD (docs/05_latent_anchors.md §5.10)
     "minilm": {
         "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
         "embedding_truncate_dim": 0,

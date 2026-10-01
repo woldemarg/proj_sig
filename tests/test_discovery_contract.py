@@ -1,4 +1,4 @@
-"""Statistical discovery -> canonical insight (SDD 03, SDD 04)."""
+"""Statistical discovery -> canonical insight (docs/02_discovery.md, docs/03_insights.md)."""
 
 from __future__ import annotations
 

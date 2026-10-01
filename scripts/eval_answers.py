@@ -1,4 +1,4 @@
-"""Live answer check against the configured LLM (SDD 12): grounding, citations, latency, tokens.
+"""Live answer check against the configured LLM (docs/07_question_answering.md §7.7): grounding, citations, latency, tokens.
 
     python scripts/eval_answers.py --label baseline
 

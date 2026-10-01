@@ -1,4 +1,4 @@
-"""Deterministic structural plane (SDD 08)."""
+"""Deterministic structural plane (docs/06_graph_and_storage.md §6.1)."""
 
 from __future__ import annotations
 

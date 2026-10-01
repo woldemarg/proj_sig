@@ -1,4 +1,4 @@
-"""Local persistence: journals, ontology state, dataset artifacts, batch registry (SDD 09).
+"""Local persistence: journals, ontology state, dataset artifacts, batch registry (docs/06_graph_and_storage.md §6.3–6.5).
 
 Layout under ``WORKSPACE_DIR``::
 
@@ -115,7 +115,7 @@ class Workspace:
             raise RepresentationMismatch(
                 f"workspace vectors use representation {stored.get('fingerprint')} "
                 f"({stored.get('model_id')}), current is {spec.fingerprint} ({spec.model_id}); "
-                "reset the workspace (python -m ltir reset --yes) and re-ingest"
+                "rebuild it with the current code: python -m ltir migrate --yes (the old workspace is kept as a backup)"
             )
 
     def check_versions(self) -> None:
@@ -127,7 +127,7 @@ class Workspace:
         if found != (CANONICAL_VERSION, REPRESENTATION_VERSION):
             raise RepresentationMismatch(
                 f"workspace was built with {found[0]} / {found[1]}, this code writes {CANONICAL_VERSION} / "
-                f"{REPRESENTATION_VERSION}; reset the workspace (python -m ltir reset --yes) and re-ingest"
+                f"{REPRESENTATION_VERSION}; rebuild it with the current code: python -m ltir migrate --yes (the old workspace is kept as a backup)"
             )
 
     def record_representation(self, spec: EmbeddingSpec) -> None:

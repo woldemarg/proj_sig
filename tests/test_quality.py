@@ -1,4 +1,4 @@
-"""Selection rules and insight_weight (SDD 04)."""
+"""Selection rules and insight_weight (docs/03_insights.md)."""
 
 from __future__ import annotations
 

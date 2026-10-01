@@ -1,4 +1,4 @@
-"""Canonical insight representation (SDD 05, SDD 17).
+"""Canonical insight representation (docs/04_representation.md §4.1–4.2).
 
 Two contracts live here and never mix:
 
@@ -36,7 +36,7 @@ def magnitude_word(z: float) -> str:
 
 
 def format_value(x: float) -> str:
-    """Metric values in text: 4 significant digits below 1,000, thousands separators above (no exponent)."""
+    """Metric values in text: 4 significant digits below 1,000 (exponent notation below 1e-4), rounded integers with thousands separators above."""
     return f"{x:,.0f}" if abs(x) >= 1000 else f"{x:.4g}"
 
 

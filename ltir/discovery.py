@@ -1,4 +1,4 @@
-"""Statistical discovery adapter over the vendored EDA engine ``ltir/engines/eda/main_upd.py`` (SDD 03).
+"""Statistical discovery adapter over the vendored EDA engine ``ltir/engines/eda/main_upd.py`` (docs/02_discovery.md).
 
 Calls the EDA steps unchanged, in the order of the EDA workflow:
 
@@ -34,7 +34,7 @@ _MEDIAN_SE_FACTOR = 1.2533 * 1.4826
 
 
 class DiscoveryError(RuntimeError):
-    """Raised with a stable ``code`` for the UI (SDD 03 §Failure modes)."""
+    """Raised with a stable ``code`` for the UI (docs/02_discovery.md §2.7)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -110,7 +110,7 @@ def _conditions_of(selector: Any) -> tuple[Condition, ...]:
 
 
 def closed_intent(data: pd.DataFrame, rows: np.ndarray, categoricals: list[str]) -> tuple[Condition, ...]:
-    """Galois closure int(ext(S)): every (attribute, value) that holds on all covered rows (SDD 16 §1)."""
+    """Galois closure int(ext(S)): every (attribute, value) that holds on all covered rows (docs/02_discovery.md §2.3)."""
     covered = data.iloc[rows]
     closed = []
     for col in categoricals:
@@ -198,7 +198,7 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
     """EDA pass 1 -> distinct closed cohorts -> ranking -> near-duplicate pruning -> pass 2.
 
     Deduplication runs *before* the validation budget is spent, so the bootstrap only
-    sees distinct cohorts (SDD 03)."""
+    sees distinct cohorts (docs/02_discovery.md §2.3)."""
     profile = eda.step1_profile_data(df)
     numerics: list[str] = list(profile["numerics"])
     categoricals: list[str] = list(profile["categoricals"])

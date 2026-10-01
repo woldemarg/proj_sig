@@ -1,4 +1,4 @@
-"""LLM interface over the OpenAI-compatible protocol used by Ollama / LM Studio (SDD 12).
+"""LLM interface over the OpenAI-compatible protocol used by Ollama / LM Studio (docs/07_question_answering.md §7.5).
 
 A stub server stands in for Gemma 4 so the real HTTP client code path is exercised.
 """

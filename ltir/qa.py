@@ -1,4 +1,4 @@
-"""Grounded question answering (SDD 12 §QA flow).
+"""Grounded question answering (docs/07_question_answering.md).
 
 question -> parse -> seed resolution -> transversal traversal -> evidence
 -> Gemma 4 (or the evidence-only summary) -> citation check -> highlight groups
@@ -54,7 +54,7 @@ def check_citations(answer: str, key_to_pattern: dict[str, str]) -> dict[str, An
 
 
 def compute_baselines(engine: Engine, graph: DualGraph, question: str, seeds: list[SeedMatch], result: TraversalResult) -> dict[str, Any]:
-    """What structural-only and naive text retrieval would have returned (SDD 10 §Baselines)."""
+    """What structural-only and naive text retrieval would have returned (docs/07_question_answering.md §7.6)."""
     config = engine.config
     closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, config.lattice_edges)
     ids = [n["id"] for n in graph.of_kind("Pattern")]

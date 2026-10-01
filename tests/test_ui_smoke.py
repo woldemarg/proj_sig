@@ -1,4 +1,4 @@
-"""UI smoke test: dataset loads through the API and the graph page renders (SDD 13)."""
+"""UI smoke test: dataset loads through the API and the graph page renders (docs/08_interface.md)."""
 
 from __future__ import annotations
 

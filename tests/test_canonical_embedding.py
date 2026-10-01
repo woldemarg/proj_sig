@@ -1,4 +1,4 @@
-"""Canonical insight -> embedding contract (SDD 05, SDD 06)."""
+"""Canonical insight -> embedding contract (docs/04_representation.md)."""
 
 from __future__ import annotations
 

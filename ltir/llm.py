@@ -1,4 +1,4 @@
-"""LLM interface (SDD 12): local Gemma 4 over an OpenAI-compatible endpoint.
+"""LLM interface (docs/07_question_answering.md §7.5): local Gemma 4 over an OpenAI-compatible endpoint.
 
 Works with any OpenAI-compatible endpoint: OpenRouter (``https://openrouter.ai/api/v1``,
 ``google/gemma-4-26b-a4b-it`` with ``LLM_PROVIDER_ORDER`` pinning, as in

@@ -1,4 +1,4 @@
-"""Embedding layer: text embedders + tripartite ``InsightEncoder`` (SDD 06).
+"""Embedding layer: text embedders + tripartite ``InsightEncoder`` (docs/04_representation.md).
 
 Composition (all blocks L2-normalised first):
 

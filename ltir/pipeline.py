@@ -1,4 +1,4 @@
-"""End-to-end dataset lifecycle (SDD 14).
+"""End-to-end dataset lifecycle (docs/09_operations.md).
 
 UPLOADED -> VALIDATING -> PROFILING -> DISCOVERING -> VALIDATING_INSIGHTS -> EMBEDDING
 -> UPDATING_ONTOLOGY -> BUILDING_GRAPH -> PERSISTING -> READY   (| FAILED | SKIPPED)
@@ -138,7 +138,7 @@ def _batch_metrics(
     timings: dict[str, float],
     t0: float,
 ) -> dict[str, Any]:
-    """Batch-record metrics (SDD 14 §Metrics)."""
+    """Batch-record metrics (docs/09_operations.md §9.5)."""
     kept, om, graph = selection.kept, update.metrics, snapshot["stats"]
     pruned = Counter(r.reason for r in [*result.rejections, *selection.rejections])
     return {

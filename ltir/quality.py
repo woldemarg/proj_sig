@@ -1,9 +1,9 @@
-"""Insight selection policy and insight_weight (SDD 04 §Selection, §Weight).
+"""Insight selection policy and insight_weight (docs/03_insights.md §3.2–3.3).
 
 Rules run in a fixed order; every rejected candidate records the rule that
 fired so pruning is observable. The weight is a weighted geometric mean of
-five normalised evidence factors; it is consumed by the ontology (SDD 07) and
-the traversal ranking (SDD 10).
+five normalised evidence factors; it is consumed by the ontology (docs/05_latent_anchors.md §5.5) and
+the traversal ranking (docs/07_question_answering.md §7.3).
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ def _as_covariance(ins: Insight) -> Insight:
 
 
 def select_insights(insights: list[Insight], config: Config) -> SelectionResult:
-    """Apply the SDD 04 rules R1–R4 and R7 to validated insights.
+    """Apply rules R1–R4 and R7 (docs/03_insights.md §3.2) to validated insights.
 
     R5 (identical extents) and R6 (near duplicates) run in discovery, before the
     validation budget is spent (``discovery.merge_identical_extents`` /
