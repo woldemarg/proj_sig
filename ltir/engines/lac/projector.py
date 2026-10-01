@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 import plotly.graph_objs as go
-import seaborn as sns
 from prosphera.projector import Projector
 
 HOVER = "%{hovertext}<extra></extra>"
@@ -39,10 +38,26 @@ def save_html(fig: go.Figure, filepath: Path | str) -> None:
     path.write_text(html_str.replace("<head>", f"<head>\n{css}", 1), encoding="utf-8")
 
 
+# ColorBrewer "Set3", the 12 colours lac took from seaborn.color_palette("Set3"); cycled beyond 12 labels like seaborn
+SET3 = (
+    "rgb(141, 211, 199)",
+    "rgb(255, 255, 179)",
+    "rgb(190, 186, 218)",
+    "rgb(251, 128, 114)",
+    "rgb(128, 177, 211)",
+    "rgb(253, 180, 98)",
+    "rgb(179, 222, 105)",
+    "rgb(252, 205, 229)",
+    "rgb(217, 217, 217)",
+    "rgb(188, 128, 189)",
+    "rgb(204, 235, 197)",
+    "rgb(255, 237, 111)",
+)
+
+
 def _chunk_colors(labels: list[str]) -> list[str]:
-    unique_labels = sorted(set(labels))
-    palette = sns.color_palette("Set3", n_colors=len(unique_labels))
-    color_map = {label: f"rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)})" for label, (r, g, b) in zip(unique_labels, palette)}
+    """One Set3 colour per distinct label, assigned in sorted label order."""
+    color_map = {label: SET3[i % len(SET3)] for i, label in enumerate(sorted(set(labels)))}
     return [color_map[label] for label in labels]
 
 
