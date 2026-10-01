@@ -104,13 +104,6 @@ class Workspace:
     def save_covers(self, dataset_id: str, covers: dict[str, np.ndarray]) -> None:
         np.savez_compressed(self.dataset_dir(dataset_id) / "covers.npz", **{k: np.asarray(v, dtype=np.int64) for k, v in covers.items()})
 
-    def load_covers(self, dataset_id: str) -> dict[str, np.ndarray]:
-        path = self.datasets_dir / dataset_id / "covers.npz"
-        if not path.is_file():
-            return {}
-        with np.load(path) as data:
-            return {k: data[k] for k in data.files}
-
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.
 
