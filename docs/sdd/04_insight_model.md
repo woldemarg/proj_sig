@@ -29,7 +29,6 @@ numpy only.
 | `sd_score`, `sd_raw_score` | EDA `final_sd_score` (bootstrap-penalised), pass-1 `sd_aggregate_score` |
 | `emm_score`, `volume_utility` | EDA `emm_stabilized_score / √(m(m−1))` (RMS correlation change per metric pair, SDD 03), `volume_utility` |
 | `stability` | `sd_score / sd_raw_score` ∈ [0.1, 1] |
-| `integrated_index` | EDA step-5 z-sum, computed by the adapter |
 | `p_value`, `p_adjusted` | adapter median test, Bonferroni-adjusted |
 | `drivers` | EDA `root_cause_drivers` (confounders) |
 | `row_hash` | sha1 of sorted covered row positions (cover identity) |

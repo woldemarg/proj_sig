@@ -7,9 +7,8 @@ Calls the EDA steps unchanged, in the order of the EDA workflow:
 
 and converts the resulting DataFrames into typed ``Insight`` objects. The adapter
 adds only what the EDA does not produce: shift *direction*, a significance
-estimate, the EDA workflow's ``temp_index`` ranking and ``integrated_index`` (the
-upstream standalone runner and its print-only step 5 are not vendored), and
-provenance.
+estimate, the EDA workflow's ``temp_index`` ranking into validation (the upstream
+standalone runner and its print-only step 5 are not vendored), and provenance.
 """
 
 from __future__ import annotations
@@ -319,18 +318,9 @@ def build_insights(result: DiscoveryResult, config: Config, *, dataset_id: str, 
     validated = result.validated
     if not validated:
         return []
-    frame = pd.DataFrame(
-        {
-            "sd": [c.final_sd_score for c in validated],
-            "emm": [c.emm_stabilized_score for c in validated],
-            "vol": [c.volume_utility for c in validated],
-        }
-    )
-    # EDA step-5 integrated index (upstream prints it; SIG stores it)
-    integrated = (_z_positive(frame["sd"]) + _z_positive(frame["emm"]) + _z_positive(frame["vol"])).tolist()
     prof = result.profile
     insights: list[Insight] = []
-    for cand, index in zip(validated, integrated):
+    for cand in validated:
         rows = result.data.iloc[cand.row_indices]
         shifts: list[Shift] = []
         for metric, magnitude in cand.top_shifts:
@@ -367,7 +357,6 @@ def build_insights(result: DiscoveryResult, config: Config, *, dataset_id: str, 
                 emm_score=cand.emm_stabilized_score,
                 volume_utility=cand.volume_utility,
                 stability=cand.final_sd_score / cand.sd_aggregate_score if cand.sd_aggregate_score > 0 else 0.0,
-                integrated_index=float(index),
                 p_value=p_value,
                 p_adjusted=min(1.0, p_value * result.n_tests),
                 drivers=tuple(cand.drivers),

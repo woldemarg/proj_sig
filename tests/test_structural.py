@@ -30,7 +30,6 @@ def ins(pid, scope, shifts, dataset="d"):
         emm_score=0,
         volume_utility=0.2,
         stability=1,
-        integrated_index=0,
         p_value=0,
         p_adjusted=0,
         drivers=(),

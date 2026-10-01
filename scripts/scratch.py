@@ -6,8 +6,6 @@ sphere export are always off here.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import shutil
 import sys
@@ -48,10 +46,9 @@ def build_engine(workspace: Path, *, llm: Any = None, embedder: Any = None, **ov
     return Engine(cfg, llm=llm, embedder=embedder)
 
 
-def ingest_quietly(engine: Engine, path: Path, **options: Any) -> dict[str, Any]:
-    """Run one batch with the vendored engines' prints suppressed; fails loudly unless READY."""
-    with contextlib.redirect_stdout(io.StringIO()):
-        record = engine.ingest_file(path, **options)
+def ingest_ready(engine: Engine, path: Path, **options: Any) -> dict[str, Any]:
+    """Run one batch; exits with the batch status and error unless it ends READY."""
+    record = engine.ingest_file(path, **options)
     if record["status"] != "READY":
         raise SystemExit(f"{path.name}: {record['status']} {record.get('error')}")
     return record
@@ -61,7 +58,7 @@ def demo_engine(name: str, *, llm: Any = None, **overrides: Any) -> Engine:
     """Fresh scratch workspace with the demo ingested."""
     root = scratch_dir(name, fresh=True)
     engine = build_engine(root / "ws", llm=llm, **overrides)
-    ingest_quietly(engine, write_demo_csv(root))
+    ingest_ready(engine, write_demo_csv(root))
     return engine
 
 

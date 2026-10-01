@@ -33,7 +33,6 @@ def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):
         emm_score=0.1,
         volume_utility=0.3,
         stability=0.9,
-        integrated_index=1.0,
         p_value=1e-6,
         p_adjusted=1e-4,
         drivers=(),
