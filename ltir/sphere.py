@@ -94,8 +94,6 @@ def sphere_figure(engine: Engine, *, dataset: str | None = None, highlight: dict
         pc,
         ac,
         activations,
-        chunk_labels=labels,
-        chunk_hovertext=hovers,
         concept_hovertext=[_attractor_hover(g.nodes[a]) for a in att_ids],
         draw_edges=draw_edges,
     )
@@ -106,8 +104,6 @@ def sphere_figure(engine: Engine, *, dataset: str | None = None, highlight: dict
     focus = set(hl.get("traversed", [])) | set(hl.get("evidence", [])) | set(hl.get("seeds", []))
     kept = []
     for tr in fig.data:
-        if tr.name == "Chunks":
-            continue  # replaced by one trace per latent anchor (legend-toggleable)
         if tr.name == "Concepts (L0)":
             tr.name = "Latent anchors (attractors)"
             tr.mode = "markers+text"
