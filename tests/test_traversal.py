@@ -52,13 +52,13 @@ def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):
     return {"id": pid, "kind": "Pattern", "label": f"{pid} {conds}", "props": props}
 
 
-def edge(s, t, etype, w=1.0):
-    return GraphEdge(s, t, EdgeType(etype), w).to_dict()
+def edge(s, t, etype, w=1.0, **props):
+    return GraphEdge(s, t, EdgeType(etype), w, props).to_dict()
 
 
 @pytest.fixture
 def toy():
-    """P1 -> A1 -RELATED_TO- A2 <- P3 ; P2 -> A1 ; P3 specialises P4 ; P5 weakly activates A1 ; A3 weakly related."""
+    """P1 -> A1 -RELATED_TO- A2 <- P3 ; P2 -> A1 ; P3 specialises P4 ; P5 a weak (coverage-only) member of A1 ; A3 a low-weight link."""
     nodes = [
         pattern("P1", ["region=EU", "category=phones"]),
         pattern("P2", ["region=EU", "category=tablets"]),
@@ -89,9 +89,9 @@ def toy():
     edges = [
         edge("P1", "A1", "ACTIVATES", 0.9),
         edge("P2", "A1", "ACTIVATES", 0.8),
-        edge("P5", "A1", "ACTIVATES", 0.2),  # below activation threshold
+        edge("P5", "A1", "ACTIVATES", 0.15, weak=True),  # rerouted below the alignment floor: coverage only
         edge("A1", "A2", "RELATED_TO", 0.7),
-        edge("A1", "A3", "RELATED_TO", 0.1),  # below relation threshold
+        edge("A1", "A3", "RELATED_TO", 0.35),  # kept by the ontology (> RELATED_TO_MIN_WEIGHT), so walked
         edge("P6", "A3", "ACTIVATES", 0.9),
         edge("P3", "A2", "ACTIVATES", 0.95),
         edge("P3", "P4", "SPECIALIZES"),
@@ -121,9 +121,11 @@ def test_transversal_path_pattern_attractor_attractor_pattern(toy):
     # same-anchor neighbour, then lattice expansion after descending
     assert [s.edge_type for s in got["P2"].path] == ["ACTIVATES", "ACTIVATES"] and not got["P2"].transversal_only
     assert [s.edge_type for s in got["P4"].path] == ["ACTIVATES", "RELATED_TO", "ACTIVATES", "SPECIALIZES"]
-    # thresholds prune weak bridges
-    assert "P5" not in got and "P6" not in got
-    assert {a.node_id for a in res.attractors} == {"A1", "A2"}
+    # the walk crosses exactly the edges the ontology kept: weak memberships are not walked,
+    # every kept RELATED_TO is, its weight discounting the path
+    assert "P5" not in got
+    assert got["P6"].score == pytest.approx(1.0 * 0.9 * 0.35 * 0.9 * 0.8)
+    assert {a.node_id for a in res.attractors} == {"A1", "A2", "A3"}  # A3 through its kept low-weight link
     assert set(res.used_edges) >= {e.edge_id for e in p3.path}
     assert res.patterns[0].node_id == "P1" and res.patterns[0].route == "seed"
 

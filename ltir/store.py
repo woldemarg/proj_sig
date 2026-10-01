@@ -10,7 +10,7 @@ Layout under ``WORKSPACE_DIR``::
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
     journal/embeddings.mmap (+ _meta.json) float32 unit insight vectors, row = row_id
-    journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks (tripartite parts)
+    journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks, document vectors, pattern ids
     state/                                 lac ConceptStore.save() + representation.json + sig_state.json
     graph/snapshot.json                    materialised dual-layer graph (derived, rebuildable)
     logs/queries.jsonl                     query observability
@@ -204,6 +204,18 @@ class Workspace:
 
     def patterns(self) -> list[dict[str, Any]]:
         return self.journal.load_chunks()
+
+    def document_vectors(self, batch_ids: set[str]) -> dict[str, np.ndarray]:
+        """Canonical-document embeddings stored at ingest (the naive text baseline), pattern id -> vector."""
+        out: dict[str, np.ndarray] = {}
+        for batch_id in batch_ids:
+            path = self.journal_dir / "blocks" / f"{batch_id}.npz"
+            if not path.is_file():
+                continue
+            with np.load(path) as data:
+                if "document" in data.files and "pattern_ids" in data.files:
+                    out.update(zip(data["pattern_ids"].tolist(), data["document"]))
+        return out
 
     def activations(self) -> list[dict[str, Any]]:
         return self.journal.load_activations()

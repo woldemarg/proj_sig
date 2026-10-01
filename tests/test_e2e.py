@@ -94,6 +94,20 @@ def test_llm_failure_keeps_knowledge(hashed_engine):
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
 
+def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch):
+    """Document vectors are stored at ingest: an answer (and its naive text baseline) embeds no document."""
+    graph = hashed_engine.graph()
+    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
+    embedder = hashed_engine.encoder.embedder
+    seen: list[str] = []
+    for name in ("embed", "embed_queries"):
+        original = getattr(embedder, name)
+        monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
+    qa = hashed_engine.ask("Why is margin lower for phones in the US?", use_llm=False)
+    assert qa.traversal["baselines"]["naive_nearest"]
+    assert seen and not documents & set(seen)
+
+
 def test_empty_graph_answer(tmp_path):
     from conftest import make_config
 

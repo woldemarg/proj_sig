@@ -68,6 +68,14 @@ emm_ok      = emm_score ≥ MIN_EMM_SCORE (0.08)  ∧  a covariance pair exists
 
 If nothing is kept, the batch fails with `no_viable_insights`: the journal and the ontology are untouched (the source copy, `profile.json` and `rejections.json` of the dataset folder are already written).
 
+**How the effect gate and the significance gate combine.** They measure different things on purpose. `MIN_EFFECT_Z` asks whether the shift is large against the spread of the whole table (practical relevance, global MAD). The median test asks whether the subgroup's median is pinned down well enough, given the subgroup's own spread and size, after correcting for every cohort and metric the screen looked at — the validated cohorts were chosen by those very shifts, so a family of only the validated primaries would understate the multiplicity, and a standard error on the global spread would overstate the precision of a dispersed subgroup's median. With the subgroup as spread as the table, the test needs
+
+```text
+|z| ≥ 0.6745 · z_crit · 1.2533 · 1.4826 / √n          z_crit = Φ̄⁻¹(MAX_P_ADJUSTED / (2 · n_tests))
+```
+
+On the demo (`n_tests` 336, `z_crit` 3.79) that is 0.87 sd at 30 rows and 0.5 sd at about 90 rows; above that the effect gate decides (housing: 612 tests, 98 rows). On both datasets every rejection is `weak_effect`: the significance gate removed nothing the effect gate would have kept. A dispersed subgroup needs a proportionally larger shift, because its median is genuinely less certain, and is rejected as `not_significant`.
+
 A covariance insight cites only its correlation change. Its median shifts stay in the record as measurements, but they are neither components nor phrases nor prompt lines ([4.2](04_representation.md#42-the-canonical-form)), and its validation is reported as the correlation change with no median test ([7.4](07_question_answering.md#74-the-evidence-object)).
 
 ## 3.3 Insight weight

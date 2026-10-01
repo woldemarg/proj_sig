@@ -90,7 +90,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 70 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 71 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -170,7 +170,7 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    synth, experiment, cli, web/, cypher/)
-  tests/           70 contract / integration / E2E / UI tests
+  tests/           71 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml) and the

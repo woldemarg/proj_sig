@@ -21,7 +21,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 | PROFILING | EDA steps 1–3 (an empty search space fails here) | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
 | DISCOVERING | pass 1, deduplication, pass 2 (the bootstrap) | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps), [2.3](02_discovery.md#23-deduplication-before-validation) |
 | VALIDATING_INSIGHTS | `build_insights` + `select_insights`; rejections persisted | [3](03_insights.md) |
-| EMBEDDING | canonicalise and encode; representation check | [4](04_representation.md) |
+| EMBEDDING | canonicalise and encode; embed the canonical documents for the text baseline; representation check | [4](04_representation.md) |
 | UPDATING_ONTOLOGY | **checkpoint**, batch sequence, `LatentOntology.ingest` | [5](05_latent_anchors.md) |
 | BUILDING_GRAPH | pattern records (+ canonical form, embedding metadata), covers | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | PERSISTING | duplicate guard, journal append, state save, representation record, batch sequence commit, snapshot | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
@@ -90,7 +90,7 @@ The UI maps every code to a plain-language title, cause and tip.
 
 `record["metrics"]`: `input_rows, columns, numeric_targets, dimensions, search_space, pass1_subgroups, candidate_patterns (distinct cohorts), validated_candidates, validated_insights, pruned {reason: n}, pruned_total, avg_insight_support, avg_insight_weight, embedding_count, embedding_dim, attractors_total, attractors_new, orphan_rate, activation_count, soft_merged, centroid_drift, adaptive_thresh, max_concept_density_pct, density_threshold, damped_attractors, max_centroid_step, clamped_attractors, avg_attractor_degree, graph_edges, edge_counts, graph_patterns, ontology_warnings, timings {validate_s, discover_s, select_s, embed_s, ontology_s, graph_s}, processing_duration_s`. The full lac metrics per batch are in `state/ontology_metrics.csv` ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); query-side metrics are in `QAResult.metrics` and `logs/queries.jsonl`.
 
-> **Running example.** The demo batch: 5,000 rows, 11 columns, 4 metrics, 3 dimensions, 88 conjunctions, 84 pass-1 subgroups and distinct cohorts, 50 validated, 28 insights, `pruned {weak_effect: 22}`, 4 anchors, 279 graph edges, READY in 12.1 s — of which 9.8 s embedding (including the one-off model load), 1.1 s discovery and 1.0 s ontology. `housing.csv` with two bands (20,640 rows) is READY in about 17 s from a cold CLI start.
+> **Running example.** The demo batch: 5,000 rows, 11 columns, 4 metrics, 3 dimensions, 88 conjunctions, 84 pass-1 subgroups and distinct cohorts, 50 validated, 28 insights, `pruned {weak_effect: 22}`, 4 anchors, 279 graph edges, READY in 13.1 s — of which 10.9 s embedding (the one-off model load, the three blocks and the documents), 1.1 s discovery and 0.9 s ontology. `housing.csv` with two bands (20,640 rows) is READY in about 17 s from a cold CLI start.
 
 ## 9.6 Guarantees
 

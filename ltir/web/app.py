@@ -100,6 +100,7 @@ def cytoscape_elements(engine: Engine, dataset: str | None = None) -> dict[str, 
                 "type": e["type"],
                 "plane": e["plane"],
                 "weight": round(float(e["weight"]), 3),
+                "weak": bool(e["props"].get("weak", False)),  # a coverage-only membership: drawn, not walked
             }
         }
         for e in graph.edges

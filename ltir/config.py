@@ -128,8 +128,6 @@ class Config:
     seed_top_k: int = 3
     seed_min_score: float = 0.25
     seed_relative_min: float = 0.75  # seeds must score >= this fraction of the best seed
-    activation_threshold: float = 0.40
-    relation_threshold: float = 0.40
     max_latent_hops: int = 1
     structural_hops: int = 1
     traversal_max_depth: int = 5
