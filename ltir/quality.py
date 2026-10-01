@@ -68,7 +68,11 @@ class SelectionResult:
 
 
 def _as_covariance(ins: Insight) -> Insight:
-    """Retarget an EMM-only insight on the divergent pair metric with the larger |shift|."""
+    """Retarget an EMM-only insight on the divergent pair metric with the larger |shift|.
+
+    Its median shift failed the shift test, so the tests of that shift (bootstrap
+    stability, median-test p-values) are dropped: they do not describe a correlation change.
+    """
     shifts = [ins.shift_for(m) for m in ins.covariance["pair"]]
     target = sorted((s for s in shifts if s is not None), key=lambda s: (-s.magnitude, s.metric))[0]
     return replace(
@@ -78,6 +82,9 @@ def _as_covariance(ins: Insight) -> Insight:
         effect_size=target.robust_z,
         baseline=target.global_median,
         local=target.local_median,
+        stability=None,
+        p_value=None,
+        p_adjusted=None,
     )
 
 

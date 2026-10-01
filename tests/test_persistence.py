@@ -10,7 +10,7 @@ import pytest
 from conftest import FakeLLM, make_config
 
 from ltir import pipeline as pipeline_mod
-from ltir.neo4j_sink import edge_query, flatten_props, publish_snapshot
+from ltir.neo4j_sink import EDGE_ENDPOINTS, LABELS, edge_query, flatten_props, node_query, publish_snapshot, stale_edge_query, stale_node_query
 from ltir.pipeline import Engine
 
 
@@ -132,6 +132,45 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path):
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
 
 
+def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
+    """One writer per workspace: a CLI writer started while the web app holds the lock is refused
+    and leaves the web app's queued upload alone; readers stay allowed."""
+    import os
+    import subprocess
+    import sys
+
+    from ltir.config import PROJECT_ROOT
+    from ltir.store import WorkspaceBusy
+
+    cfg = make_config(tmp_path / "ws")
+    queued = Engine(cfg, llm=FakeLLM(), recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
+    holder = subprocess.Popen(  # the web app: another process holding the writer lock
+        [
+            sys.executable,
+            "-c",
+            "import sys; from ltir.store import acquire_writer_lock; acquire_writer_lock(sys.argv[1]); print('locked', flush=True); sys.stdin.read()",
+            str(cfg.workspace_dir),
+        ],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "LTIR_NO_DOTENV": "1"},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        with pytest.raises(WorkspaceBusy, match="in use by another writer process"):
+            Engine(cfg, llm=FakeLLM())
+        reader = Engine(cfg, llm=FakeLLM(), recover=False)
+        assert reader.ws.load_batch(queued["batch_id"])["status"] == "UPLOADED"
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=30)
+    # the holder is gone: the next writer gets the lock and recovers the orphaned upload
+    Engine(cfg, llm=FakeLLM())
+    assert Engine(cfg, llm=FakeLLM(), recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
+
+
 def test_migrate_rebuilds_an_outdated_workspace(tmp_path, demo_csv):
     from ltir.migrate import migrate_workspace
     from ltir.store import RepresentationMismatch, atomic_write_json
@@ -200,7 +239,7 @@ class _Driver:
         return _Session(self.log)
 
 
-def test_neo4j_publish_is_merge_based(hashed_engine):
+def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     snap = hashed_engine.ws.load_graph()
     driver = _Driver()
     out = publish_snapshot(snap, hashed_engine.config, driver=driver)
@@ -209,6 +248,17 @@ def test_neo4j_publish_is_merge_based(hashed_engine):
     assert all("CREATE (" not in q for q in queries)  # idempotent: MERGE only
     assert out["nodes"]["Pattern"] == len(hashed_engine.graph().of_kind("Pattern"))
     assert "MERGE (s)-[r:ACTIVATES]->(t)" in edge_query("ACTIVATES")
+    # properties are replaced, not merged: a property that disappeared (or became None) is removed
+    assert "SET n = row.props, n.id = row.id" in node_query("Pattern") and "SET r = row.props" in edge_query("RELATED_TO")
+    # what the snapshot no longer holds is deleted: every label and every edge type, keyed by the snapshot ids
+    stale = {q: p for q, p in driver.log if "NOT" in q}
+    assert {q for q in stale if "DETACH DELETE" in q} == {stale_node_query(label) for label in LABELS}
+    assert sorted(stale[stale_node_query("Pattern")]["ids"]) == sorted(n["id"] for n in hashed_engine.graph().of_kind("Pattern"))
+    assert {q for q in stale if q.endswith("DELETE r")} == {stale_edge_query(t) for t in EDGE_ENDPOINTS}
+    # an empty snapshot (a reset) clears the mirror
+    empty = _Driver()
+    publish_snapshot({"nodes": [], "edges": []}, hashed_engine.config, driver=empty)
+    assert all(p["ids"] == [] for q, p in empty.log if "DETACH DELETE" in q)
     flat = flatten_props({"a": 1, "b": [1, 2], "c": {"x": 1}, "d": None, "e": [{"k": 1}]})
     assert flat == {
         "a": 1,

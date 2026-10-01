@@ -54,6 +54,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 
 | Path | Format | Content | Written by |
 |---|---|---|---|
+| `<workspace>.writer.lock` (beside the folder) | the writer's pid; one OS-locked byte | the exclusive writer lock ([6.4](#64-commit-rollback-and-recovery)) | `store.acquire_writer_lock` |
 | `registry/batches/<batch_id>.json` | JSON | the batch record ([9.1](09_operations.md#91-the-batch-lifecycle)) | `save_batch`, atomically at every stage |
 | `uploads/` | files | uploads waiting to be processed | web app |
 | `datasets/<ds>/source.<ext>` | the uploaded bytes | provenance, migration input | pipeline |
@@ -90,9 +91,11 @@ checkpoint → ontology ingest → duplicate guard (duplicate_patterns if a patt
 
 **Committed caches.** `Engine.graph()` and `Engine.frame()` (`LatentFrame`: pattern id → unit vector, anchor id → centroid) are rebuilt from committed state after READY, so readers never see a half-appended journal or a half-saved ontology. A reader that finds an outdated snapshot version rebuilds and writes the snapshot.
 
-**Recovery.** A *writer* engine (the web app; CLI `demo`, `ingest`, `reset`, `rebuild-graph`) starts by rolling back and failing (`interrupted`) every non-terminal batch that no live process owns — including batches still `UPLOADED` and therefore unowned. Read-only engines (`query`, `status`, `experiment`, `sphere`, `neo4j-sync`, `migrate`'s target) open with `recover=False` and never roll back. Batches run one at a time inside a process (a re-entrant lock; the web app uses a single worker thread), but there is no lock between processes: a CLI writer started while the web app has uploads queued fails those uploads, and two writer processes must not process batches in one workspace at the same time.
+**One writer per workspace.** A *writer* engine (the web app; CLI `demo`, `ingest`, `reset`, `rebuild-graph`; `migrate`) first takes the workspace's exclusive writer lock: an operating-system lock on one byte of `<workspace>.writer.lock`, a file beside the workspace folder (so a migration can rename the folder while it is held), which also records the holder's pid. The lock is held until the process exits and released by the operating system, also after a crash; it is re-entrant within a process. A second writer process gets `WorkspaceBusy` — the CLI prints it and exits with code 2, the web app refuses to start — instead of interleaving batches with the first or touching its queue. Read-only engines (`query`, `status`, `experiment`, `sphere`, `neo4j-sync`) take no lock. Within the writer, batches run one at a time (a re-entrant lock; the web app uses a single worker thread).
 
-**Idempotency.** The dataset id is content-addressed, so a READY batch for the same id makes a new upload `SKIPPED` (`duplicate_of`); pattern ids are deterministic; Neo4j writes are MERGE-only. A failed batch keeps its `batch_seq`, and the next batch reuses that number.
+**Recovery.** Holding the lock, the writer rolls back and fails (`interrupted`) every unfinished batch — with no other writer alive, any batch that is not terminal was left by a process that died, including uploads that were still queued.
+
+**Idempotency.** The dataset id is content-addressed, so a READY batch for the same id makes a new upload `SKIPPED` (`duplicate_of`); pattern ids are deterministic; a Neo4j publish is idempotent (MERGE on ids, then the same stale deletions). A failed batch keeps its `batch_seq`, and the next batch reuses that number.
 
 ## 6.5 Versions and migration
 
@@ -100,22 +103,22 @@ A workspace records the `EmbeddingSpec` of its first batch ([4.6](04_representat
 
 `python -m ltir migrate --yes` (`migrate.migrate_workspace`) rebuilds a workspace with the current code:
 
-1. refuses while any batch is non-terminal;
+1. takes the writer lock (refused while the web app or another writer runs) and refuses while any batch is unfinished;
 2. re-ingests every READY batch's stored `datasets/<id>/source.<ext>` with its recorded `bins` and `categories`, in `batch_seq` order, into `<workspace>.migrating` (Neo4j off);
-3. on success renames the old workspace to `<workspace>.bak-<UTC timestamp>` — never deleted — and the new one into place, and prints old → new batch ids and pattern counts.
+3. on success renames the old workspace to `<workspace>.bak-<UTC timestamp>` — never deleted — and the new one into place, syncs the Neo4j mirror when it is enabled, and prints old → new batch ids and pattern counts.
 
 Dataset ids stay stable (content + options); pattern ids change only where closure adds conditions. A failure leaves the old workspace untouched. `python -m ltir reset --yes` deletes a workspace instead; it is never needed for a version change.
 
 ## 6.6 Neo4j mirror
 
-With `NEO4J_ENABLED=true`, every READY batch is published to `NEO4J_DATABASE` (`neo4j_sink`):
+With `NEO4J_ENABLED=true`, every publish makes `NEO4J_DATABASE` equal to the snapshot (`neo4j_sink.publish_snapshot`, one write transaction):
 
 * `CREATE DATABASE <db> IF NOT EXISTS` (ignored on editions without multi-database support), unique constraints on all six labels;
-* parameterised `UNWIND … MERGE (n:Label {id}) SET n += props` and `MERGE (s)-[r:TYPE]->(t) SET r += props, r.weight = …`, batched by `NEO4J_LOAD_BATCH_SIZE`;
-* RELATED_TO deleted and rewritten in the same transaction on every publish (the topology is recomputed each batch);
-* nested properties stored as JSON strings in `<key>_json` (`conditions_json`, `shifts_json`, `canonical_json`, `signature_json`, `centroid_json`, …).
+* parameterised `UNWIND … MERGE (n:Label {id}) SET n = props, n.id = id` and `MERGE (s)-[r:TYPE]->(t) SET r = props, r.weight = …`, batched by `NEO4J_LOAD_BATCH_SIZE` — properties are **replaced**, so a property that disappeared or became `None` is removed;
+* then every node of the six labels whose id the snapshot does not hold is deleted with its relationships, and every relationship of the ten types whose (source, target) pair it does not hold is deleted — stale anchors, links and patterns never linger;
+* nested properties are stored as JSON strings in `<key>_json` (`conditions_json`, `shifts_json`, `canonical_json`, `signature_json`, `centroid_json`, …).
 
-`python -m ltir neo4j-sync` backfills from the snapshot (regardless of `NEO4J_ENABLED`). A Neo4j failure leaves the batch READY with `neo4j.status = failed` and the warning `graph persistence (Neo4j) failed`. The mirror only adds: nodes and relationships other than RELATED_TO are never deleted (also not after `reset`, `migrate` or `rebuild-graph`), `SET +=` never removes a property, and properties that become `None` keep their old value — clear the database when the workspace is rebuilt. `ltir/cypher/queries/transversal.cypher` is the Browser equivalent of the traversal of [7.3](07_question_answering.md#73-transversal-traversal). Validated against a live Neo4j Enterprise instance: the stored graph equalled the snapshot (counts per label and per relationship type) and republishing left the counts unchanged.
+Publishing happens after every READY batch, after `rebuild-graph` and after a migration; `reset` publishes an empty snapshot, which clears the mirror; `python -m ltir neo4j-sync` syncs on demand (regardless of `NEO4J_ENABLED`). SIG owns its six labels in that database: one workspace per database, and no other data under those labels. A Neo4j failure leaves the batch READY with `neo4j.status = failed` and the warning `graph persistence (Neo4j) failed`; `reset`, `rebuild-graph` and `migrate` report it and go on. `ltir/cypher/queries/transversal.cypher` is the Browser equivalent of the traversal of [7.3](07_question_answering.md#73-transversal-traversal).
 
 ## 6.7 Configuration and guarantees
 
@@ -125,7 +128,7 @@ With `NEO4J_ENABLED=true`, every READY batch is published to `NEO4J_DATABASE` (`
 | `CONTRAST_MIN_OVERLAP`, `CONTRAST_MIN_SHIFT` | 0.5, 0.5 |
 | `NEO4J_ENABLED`, `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`, `NEO4J_LOAD_BATCH_SIZE` | false, `bolt://localhost:7687`, `neo4j`, "", `sigv1`, 5000 |
 
-Guarantees (tests: `test_structural.py`; `test_persistence.py`: write → reload → rebuild equality, idempotent re-ingest, graph consistency, rollback after a simulated failure, representation mismatch, interrupted-batch recovery, migration with backup, a batch that stays READY when a post-commit save fails, MERGE-only Neo4j publish with property flattening against a fake driver):
+Guarantees (tests: `test_structural.py`; `test_persistence.py`: write → reload → rebuild equality, idempotent re-ingest, graph consistency, rollback after a simulated failure, representation mismatch, interrupted-batch recovery, a second writer process refused while the first keeps its queue, migration with backup, a batch that stays READY when a post-commit save fails, the Neo4j mirror equal to the snapshot — replaced properties, stale nodes and relationships deleted, an empty snapshot clearing it — against a fake driver):
 
 * GENERALIZES = inverse(SPECIALIZES); no transitive SPECIALIZES edges; structural edges connect patterns of one dataset; RELATED_TO connects only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` edges.
 * `journal rows == vector rows == ConceptStore.next_chunk_id`; snapshot ids are identical after reload and after rebuild.

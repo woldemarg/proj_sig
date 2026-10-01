@@ -7,7 +7,7 @@ status               batches + graph statistics
 experiment           cross-dimensional analogue retrieval benchmark (--k)
 rebuild-graph        regenerate graph/snapshot.json from journals + state
 sphere               write the 3D latent sphere HTML (-o FILE, --dataset ID)
-neo4j-sync           publish the snapshot to Neo4j (NEO4J_* settings)
+neo4j-sync           make the Neo4j mirror equal to the snapshot (NEO4J_* settings)
 llm-check            probe the local Gemma 4 endpoint
 reset                delete the SIG workspace (--yes)
 migrate              re-ingest every READY batch with the current code; old workspace kept as a backup (--yes)
@@ -47,6 +47,17 @@ def _print_batch(rec: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one command; a busy workspace (another writer holds its lock) is a clean error, exit code 2."""
+    from ltir.store import WorkspaceBusy
+
+    try:
+        return _run(argv)
+    except WorkspaceBusy as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(prog="ltir", description="Latent Transversal Insight Representation (SIG)")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("demo")
@@ -145,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         print(format_summary(run_experiment(engine, k=args.k)))
         return 0
     if args.cmd == "rebuild-graph":
-        print(json.dumps(engine.rebuild_graph()["stats"]))
+        snapshot = engine.rebuild_graph()
+        print(json.dumps({**snapshot["stats"], "neo4j": engine.sync_neo4j(snapshot)["status"]}))
         return 0
     if args.cmd == "sphere":
         from pathlib import Path
@@ -167,8 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.yes:
             print(f"This deletes {engine.config.workspace_dir}. Re-run with --yes.", file=sys.stderr)
             return 1
-        engine.reset()
-        print("workspace reset")
+        neo4j = engine.reset()["neo4j"]["status"]
+        print(f"workspace reset (Neo4j mirror: {neo4j})")
         return 0
     return 1
 

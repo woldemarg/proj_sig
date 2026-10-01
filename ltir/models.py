@@ -14,7 +14,7 @@ from typing import Any
 
 # Bumped when stored vectors would no longer be comparable with new ones; a workspace
 # built with another version is refused (``representation_mismatch``) instead of mixed.
-CANONICAL_VERSION = "ltir-canon-3"  # closed-intent scopes; ASCII Markdown document; p-value buckets
+CANONICAL_VERSION = "ltir-canon-4"  # closed-intent scopes; ASCII document; covariance insights cite only the correlation change
 REPRESENTATION_VERSION = "ltir-rep-3"  # Qwen3-Embedding-0.6B (MRL 384, re-normalised); single uncentred frame
 
 
@@ -82,9 +82,10 @@ class Insight:
     sd_raw_score: float  # EDA sd_aggregate_score (pass 1)
     emm_score: float  # EDA emm_stabilized_score / sqrt(m(m-1)): RMS correlation change per pair
     volume_utility: float
-    stability: float  # final_sd / sd_raw = 1 - min(bootstrap CV, 0.9)
-    p_value: float  # adapter: asymptotic median test on the target
-    p_adjusted: float  # Bonferroni over (distinct cohorts x metrics)
+    # tests of the median shift; None for covariance insights (the correlation change has neither)
+    stability: float | None  # final_sd / sd_raw = 1 - min(bootstrap CV, 0.9)
+    p_value: float | None  # adapter: asymptotic median test on the primary metric
+    p_adjusted: float | None  # Bonferroni over (distinct cohorts x metrics)
     drivers: tuple[str, ...]  # EDA root_cause_drivers (confounders)
     row_hash: str  # identity of the covered row set
     phenomenon_type: str = "shift"  # shift | covariance (correlation change, docs/03_insights.md §3.2)
@@ -178,14 +179,19 @@ class EmbeddingSpec:
     """Contract that makes a stored vector reproducible."""
 
     model_id: str
+    model_revision: str  # pinned checkpoint revision ("" = unknown)
     truncate_dim: int  # Matryoshka truncation (0 = native width)
     query_instruction: str  # prefix for free question text ("" = none)
     block_dim: int
     dim: int
-    dtype: str
+    dtype: str  # storage dtype of the vectors
+    compute_dtype: str  # dtype the model ran in (its checkpoint dtype: bf16 for Qwen3, fp32 for MiniLM)
     normalization: str
     block_weights: tuple[float, float, float]
     emm_component_weight: float
+    min_component_z: float  # which shifts become components
+    min_emm_score: float  # whether the correlation change is a component
+    weight_emm_ref: float  # scale of the correlation component
     canonical_version: str
     representation_version: str
 

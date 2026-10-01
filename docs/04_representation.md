@@ -20,7 +20,7 @@ Keeping the tiers apart is what lets the prompt be rewritten for readability wit
 
 ## 4.2 The canonical form
 
-`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)`, version `ltir-canon-3`.
+`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)`, version `ltir-canon-4`.
 
 **Embedding inputs.**
 
@@ -28,7 +28,7 @@ Keeping the tiers apart is what lets the prompt be rewritten for readability wit
 |---|---|---|
 | `scope` | `attribute = value` joined by `; `, raw column names, values verbatim, in closed-intent order | `category = phones; region = US` |
 | `target` | `humanize(target)` (underscores → spaces) | `discount` |
-| `components` | `(humanize(metric), signed robust z)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (0.5) — covariance insights keep only shifts with `|z| ≥ 0.5`; plus `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm_score / WEIGHT_EMM_REF)` when the correlation change is material | `[("discount", 2.21), ("margin", −1.10)]` |
+| `components` | `(humanize(metric), signed robust z)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (0.5) — none for a covariance insight, whose median shift failed the shift test; plus `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm_score / WEIGHT_EMM_REF)` when the correlation change is material | `[("discount", 2.21), ("margin", −1.10)]` |
 
 The correlation change is material for covariance-typed insights and whenever `emm_score ≥ MIN_EMM_SCORE` (`has_material_covariance`). Its sign is `−1` when the correlation reverses (both `|C_ij|` and `|C_S,ij|` above 0.1 with opposite signs — this test comes first, so `−0.2 → +0.9` is a reversal), otherwise `+1` when `|corr|` grows and `−1` when it does not. With `EMM_COMPONENT_WEIGHT = 0.5`, an EMM score of 0.14 becomes a component of 0.875, comparable to a 0.9 sd shift. The strings carry names and condition values only: no magnitude, median or p-value ever reaches an embedded string — the magnitude lives in the coefficient. (A column name or a condition value can itself contain digits: `Store = 12`, `median_income_band = q4`.) Structural predicates (scope) and statistical behaviour (phenomenon) never share a string.
 
@@ -37,10 +37,10 @@ The correlation change is material for covariance-typed insights and whenever `e
 | Field | Built by | Running example |
 |---|---|---|
 | `scope_sentence` | `describe_scope`: `a is x and b is y`; three or more: `a is x, b is y, and c is z` | `category is phones and region is US` |
-| `phenomenon` | `describe_shift` per phenomenon shift; the correlation phrase leads for covariance insights and closes otherwise; `no material median shift` when a covariance insight has none | `discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)` |
+| `phenomenon` | `describe_shift` per phenomenon shift, closed by the correlation phrase when material; for a covariance insight only the correlation phrase, followed by `no validated median shift` | `discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)` |
 | `covariance` | `strongest change: <describe_covariance> (divergence score x.xx)` or `no correlation pair (…)` | `strongest change: correlation between delivery days and return rate weakens from +0.88 overall to +0.73 in the subgroup (divergence score 0.02)` |
 | `confounders` | the EDA driver strings, or `none detected` | `none detected` |
-| `support` | `n rows (share of N); bootstrap stability s; adjusted p <bucket>` | `438 rows (8.8% of 5,000); bootstrap stability 0.97; adjusted p < 0.001` |
+| `support` | `n rows (share of N); <validation>` — `bootstrap stability s; adjusted p <bucket>`, or for a covariance insight `correlation change (divergence score x.xx >= MIN_EMM_SCORE); no median test` | `438 rows (8.8% of 5,000); bootstrap stability 0.97; adjusted p < 0.001` |
 
 `CanonicalInsight.document()` renders them as one Markdown block — the text people read in the UI drawer and the text the naive text-retrieval baseline embeds:
 
@@ -54,16 +54,16 @@ The correlation change is material for covariance-typed insights and whenever `e
 * Validation: 438 rows (8.8% of 5,000); bootstrap stability 0.97; adjusted p < 0.001
 ```
 
-A covariance insight reads differently — the correlation leads the observed shift:
+A covariance insight reads differently — it cites only the correlation change, and its validation is that change:
 
 ```text
 ### Subgroup finding P-7b083e5ffddc
 * Scope: category is tablets and channel is online
 * Target metric: delivery days
-* Observed shift: correlation between delivery days and discount strengthens from -0.01 overall to +0.65 in the subgroup; no material median shift
+* Observed shift: correlation between delivery days and discount strengthens from -0.01 overall to +0.65 in the subgroup; no validated median shift
 * Metric relationships: strongest change: correlation between delivery days and discount strengthens from -0.01 overall to +0.65 in the subgroup (divergence score 0.14)
 * Confounders: none detected
-* Validation: 515 rows (10.3% of 5,000); bootstrap stability 0.46; adjusted p 1.00
+* Validation: 515 rows (10.3% of 5,000); correlation change (divergence score 0.14 >= 0.08); no median test
 ```
 
 ## 4.3 The tripartite vector
@@ -107,7 +107,7 @@ The fallback fires whenever the component sum has a norm below `1e-9` — also w
 | folder rule | `model_folder(config) = MODEL_DIR / <last path segment of EMBEDDING_MODEL>`; if the folder is missing, the name is resolved through the Hugging Face cache under `MODEL_DIR` — offline (`HF_HUB_OFFLINE=1` is set by default), so only an existing cache resolves |
 | Matryoshka truncation | `EMBEDDING_TRUNCATE_DIM = 384` keeps the first 384 of 1024 dimensions; every row is then **re-normalised** (`E(x) = normalize(f(x)_{:384})`) — a slice of a unit vector is shorter than 1, and the decomposition above assumes unit blocks |
 | query instruction | `embed_queries` prefixes `Instruct: {EMBEDDING_QUERY_INSTRUCTION}\nQuery: `; `embed` (documents, labels, recognised query strings) does not |
-| dtype and batching | on CUDA the checkpoint dtype (`dtype="auto"`: bf16 for Qwen3, fp32 for MiniLM); fp32 on CPU; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the process |
+| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16 for Qwen3, fp32 for MiniLM), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the process |
 | device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0`); Qwen3 takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB |
 
 **Where the instruction goes.** Qwen3 is instruction-aware, but the prefix is applied **only** to free question text — the stand-in for an unrecognised scope or target block and for an empty component sum — and to the naive text baseline. Recognised scope and target strings and every component label are embedded exactly as for documents, because the signed composition needs the identical `E(label)` on both sides to keep its exact ±1 geometry. This forgoes the instruction gain on structured queries by design.
@@ -127,13 +127,13 @@ The hashing backend is a deterministic stand-in (word and character-trigram hash
 | entity (same scope, other phenomenon) | 0.490 | 0.575 | 0.533 |
 | label cosine `E(discount)·E(margin)` | 0.432 | 0.707 | 0.683 |
 | transversal MRR / recall@3 / recall@5 | 0.567 / 0.333 / 0.729 | **0.581 / 0.521 / 0.729** | 0.581 / – / 0.729 |
-| naive text-NN MRR | 0.194 | 0.319 | 0.310 |
+| naive text-NN MRR | 0.194 | 0.321 | 0.311 |
 | anchors on the demo | 7 | 4 | 4 |
 | `MIN_ASSIGN_THRESHOLD` | 0.55 | 0.75 | 0.75 |
 | same-domain batch: orphan rate / smallest alignment | 0 / 0.842 | 0 / 0.788 | 0 / 0.761 |
 | housing batch: orphan rate (Qwen3 at 0.55 in brackets) | 1.0 | 1.0 (0.53; largest alignment 0.71) | 1.0 |
 | RELATED_TO edges retail ↔ housing / evidence items from the other domain (6 questions) | 0 / 0 | 1 / 0 | 3 / 0 |
-| peak VRAM over the run | 493 MB | 1,720 MB | 1,721 MB |
+| peak VRAM over the run | 493 MB | 1,720 MB | 1,720 MB |
 
 Reading: the composition fixes the direction contract (−0.33 for any model). Qwen3 ranks analogues higher at small `k` and makes the naive baseline much stronger. Its cosines between unrelated texts sit higher (label cosine 0.71 vs 0.43), with two consequences: the two one-off phenomena of the demo share one anchor ([5.12](05_latent_anchors.md#512-guarantees-and-measured-behaviour)), and MiniLM's assignment threshold would let half of an unrelated dataset join retail anchors, so Qwen3 runs at 0.75 ([5.10](05_latent_anchors.md#510-calibration-per-embedder)). Truncation to 384 costs nothing measurable against 1024.
 
@@ -146,16 +146,18 @@ Switching to MiniLM: `EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2`, `E
 | Field | Default value |
 |---|---|
 | `model_id` | `Qwen/Qwen3-Embedding-0.6B` (or `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, `hashing-ngram-256`) |
+| `model_revision` | `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` — read from `models/<folder>/REVISION` (written by `scripts/download_model.py`); `""` when the folder has none |
 | `truncate_dim`, `query_instruction` | 384, `Instruct: Given a quantitative analysis question, retrieve relevant statistical subgroup patterns\nQuery: ` |
 | `block_dim`, `dim` | 384, 1152 |
-| `dtype`, `normalization` | `float32`, `l2(block) -> weighted concat -> l2` |
+| `dtype`, `compute_dtype`, `normalization` | `float32` (storage), `bfloat16` (the model's computation), `l2(block) -> weighted concat -> l2` |
 | `block_weights`, `emm_component_weight` | (0.45, 0.55, 1.0), 0.5 |
-| `canonical_version`, `representation_version` | `ltir-canon-3`, `ltir-rep-3` |
-| `fingerprint` | `sha1` of all of the above, first 10 hex (`0686d73c59` for the defaults) |
+| `min_component_z`, `min_emm_score`, `weight_emm_ref` | 0.5, 0.08, 0.08 — the canonicalisation settings that decide which components exist and how large the correlation component is |
+| `canonical_version`, `representation_version` | `ltir-canon-4`, `ltir-rep-3` |
+| `fingerprint` | `sha1` of all of the above, first 10 hex (`3d08cee697` for the defaults) |
 
 The spec is written to `state/representation.json` when the first batch commits; every pattern record carries `{fingerprint, model_id, dim, representation_version}`. Two checks refuse a mismatch instead of comparing vectors from different spaces: `check_representation` compares the fingerprint (ingestion and queries; HTTP 409 on `/api/query`), and `check_versions` compares the two version strings without loading a model (graph rebuilds). `CANONICAL_VERSION` covers [4.2](#42-the-canonical-form); `REPRESENTATION_VERSION` covers [4.3](#43-the-tripartite-vector). Renderings can change without a bump; anything that changes an embedded string, a coefficient or the composition must bump a version.
 
-**What the fingerprint does not see.** Three settings shape the components but are not part of the spec — `MIN_COMPONENT_Z` (which shifts become components), `MIN_EMM_SCORE` (whether the correlation change is a component) and `WEIGHT_EMM_REF` (its coefficient) — nor are the compute dtype (bf16 on CUDA, fp32 on CPU) and the model revision. Changing any of them through the environment on an existing workspace produces vectors that do not match the stored ones without a `representation_mismatch`; change them only together with a migration ([6.5](06_graph_and_storage.md#65-versions-and-migration)).
+**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in, the truncation, the query instruction, the block weights, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch` until the workspace is migrated ([6.5](06_graph_and_storage.md#65-versions-and-migration)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either.
 
 ## 4.7 Configuration
 
@@ -165,16 +167,16 @@ The spec is written to `state/representation.json` when the first batch commits;
 | `EMBEDDING_MODEL`, `MODEL_DIR` | `Qwen/Qwen3-Embedding-0.6B`, `models` | model: yes |
 | `EMBEDDING_TRUNCATE_DIM` | 384 | yes |
 | `EMBEDDING_QUERY_INSTRUCTION` | retrieval task sentence | yes |
-| `EMBEDDING_DEVICE` | `auto` | no |
+| `EMBEDDING_DEVICE` | `auto` | no (the model runs in its checkpoint dtype on every device) |
 | `BLOCK_WEIGHTS`, `EMM_COMPONENT_WEIGHT` | (0.45, 0.55, 1.0), 0.5 | yes |
-| `MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF` | 0.5, 0.08, 0.08 | **no** — they change the components; migrate after changing them |
+| `MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF` | 0.5, 0.08, 0.08 | yes (they decide the components) |
 
 ## 4.8 Guarantees and failure modes
 
 * Embedding inputs contain only conditions (scope) and metric names (target, labels): no measured numbers, no prose. The readable text is a pure function of the insight and the config, and ASCII for ASCII data.
 * Every row and every block is unit-norm, also after truncation (the hashing backend excepted for text without `[a-z0-9]`); `dim = 3 · block_dim`; identical input gives identical output.
 * The query instruction never reaches component labels or recognised scope/target strings.
-* The fingerprint changes whenever the model, the truncation, the instruction, the block weights, the EMM component weight or a version changes (not for the three component thresholds above).
+* The fingerprint changes whenever any input that shapes a stored vector changes ([4.6](#46-representation-identity-and-versions)).
 * Model load or encode errors become `embedding_failure` (the batch fails before any state change); a fingerprint change becomes `representation_mismatch`.
 
 Tests: `test_canonical_sections_are_separate`, `test_embedding_labels_carry_no_numbers`, `test_text_number_rules`, `test_covariance_canonical_component`, `test_embedding_contract` (hashing and the real model: shape, dtype, unit norms, stability, direction separation, cross-scope similarity), `test_fingerprint_changes_with_representation_choices`, `test_query_instruction_only_reaches_free_question_text`, `test_env_file_switches_to_the_minilm_block`.

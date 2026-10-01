@@ -22,8 +22,8 @@
 | `baseline`, `local`, `effect_size` | global median, subgroup median and signed robust z of the target |
 | `sd_score`, `sd_raw_score` | EDA bootstrap-penalised `final_sd_score`, pass-1 `sd_aggregate_score` |
 | `emm_score`, `volume_utility` | per-pair RMS correlation change, EDA volume utility |
-| `stability` | `sd_score / sd_raw_score` ∈ `[0.1, 1]` (0 when `sd_raw_score` is 0) |
-| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted |
+| `stability` | `sd_score / sd_raw_score` ∈ `[0.1, 1]` (0 when `sd_raw_score` is 0); `None` for a covariance insight |
+| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted; `None` for a covariance insight |
 | `drivers` | EDA confounder strings |
 | `row_hash` | 16 hex of `sha1` over the sorted covered row positions — the identity of the row set |
 | `phenomenon_type` | `"shift"` or `"covariance"` |
@@ -59,7 +59,7 @@ emm_ok      = emm_score ≥ MIN_EMM_SCORE (0.08)  ∧  a covariance pair exists
 
 | Step | Passes when | Rejection reason |
 |---|---|---|
-| retype | if `¬shift_ok ∧ emm_ok`, the insight becomes `covariance` and is retargeted on the pair metric with the larger shift (ties by metric name); its target, effect size and medians follow the new target, while `p_value`, `p_adjusted` and `stability` keep describing the original primary metric | — |
+| retype | if `¬shift_ok ∧ emm_ok`, the insight becomes `covariance` and is retargeted on the pair metric with the larger shift (ties by metric name); its target, effect size and medians follow the new target, and `p_value`, `p_adjusted` and `stability` become `None` — they tested the median shift that failed, not the correlation change | — |
 | R1 support | `support ≥ MIN_SUPPORT_ROWS` (30), on top of the EDA's own size floor | `min_support` |
 | R2/R3 strength and stability | `shift_ok ∨ emm_ok` | `unstable` (significant but not stable), `not_significant` (`|z|` large enough, `p` fails), `weak_effect` (otherwise) |
 | R4 weight | `weight ≥ MIN_INSIGHT_WEIGHT` (0.2) | `low_weight` |
@@ -68,7 +68,7 @@ emm_ok      = emm_score ≥ MIN_EMM_SCORE (0.08)  ∧  a covariance pair exists
 
 If nothing is kept, the batch fails with `no_viable_insights`: the journal and the ontology are untouched (the source copy, `profile.json` and `rejections.json` of the dataset folder are already written).
 
-A covariance insight's phenomenon still lists every shift with `|z| ≥ MIN_COMPONENT_Z` ([4.2](04_representation.md#42-the-canonical-form)). Because the shift test already requires `|z| ≥ MIN_EFFECT_Z` (0.5, the same value), a primary shift that failed only on stability or significance remains visible in the observed shift, the components and the prompt, next to the correlation change that qualified the insight.
+A covariance insight cites only its correlation change. Its median shifts stay in the record as measurements, but they are neither components nor phrases nor prompt lines ([4.2](04_representation.md#42-the-canonical-form)), and its validation is reported as the correlation change with no median test ([7.4](07_question_answering.md#74-the-evidence-object)).
 
 ## 3.3 Insight weight
 

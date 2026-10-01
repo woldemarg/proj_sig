@@ -409,12 +409,12 @@ async function inspect(id) {
       ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b> in this subgroup.`
       : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
     html += `<p class="lead">${lead}</p>`;
-    html += `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
+    html += p.phenomenon_type === "covariance" ? `<h4>Median differences (not validated)</h4>${shiftRows(p.shifts)}` : `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
     html += `<h4>Evidence</h4>` + kv([
       ["Rows", `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% of data)`],
       ["Evidence weight", `<b>${num(p.weight)}</b>`],
-      ["Adjusted p-value", Number(p.p_adjusted) > 0 ? Number(p.p_adjusted).toExponential(1) : "< 1e-300 (underflow)"],
-      ["Bootstrap stability", num(p.stability)],
+      ["Adjusted p-value", p.p_adjusted === null || p.p_adjusted === undefined ? "not tested (correlation change)" : Number(p.p_adjusted) > 0 ? Number(p.p_adjusted).toExponential(1) : "< 1e-300 (underflow)"],
+      ["Bootstrap stability", p.stability === null || p.stability === undefined ? "not measured (correlation change)" : num(p.stability)],
       ["Correlation change", cov ? `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}` + (cov.p_adjusted !== undefined ? ` (p ${Number(cov.p_adjusted).toExponential(1)})` : "") : ""],
       ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
       ["Also known as", esc((p.aliases || []).join("; "))],

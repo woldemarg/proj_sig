@@ -44,11 +44,22 @@ def model_folder(config: Config) -> Path:
     return Path(config.model_dir) / config.embedding_model.split("/")[-1]
 
 
+def read_revision(folder: Path) -> str:
+    """Checkpoint revision written by ``scripts/download_model.py`` (``repo@sha`` -> ``sha``); "" if unknown."""
+    path = folder / "REVISION"
+    return path.read_text(encoding="utf-8").strip().split("@")[-1] if path.is_file() else ""
+
+
 class TextEmbedder(Protocol):
     model_id: str
+    revision: str  # checkpoint revision, "" when unknown
     dim: int
     truncate_dim: int  # 0 = native width
     query_instruction: str  # full query prefix, "" when the model takes none
+
+    @property
+    def compute_dtype(self) -> str:
+        """Dtype the model computes in (part of the representation fingerprint)."""
 
     def embed(self, texts: list[str]) -> np.ndarray:
         """Return (n, dim) float32 rows with unit L2 norm."""
@@ -77,6 +88,7 @@ class SentenceTransformerEmbedder:
         self._lock = threading.Lock()
         self._memo: dict[tuple[str, str], np.ndarray] = {}
         self.model_id = self.model_name if "/" in self.model_name else f"sentence-transformers/{self.model_name}"
+        self.revision = read_revision(self.local)
         self.source = ""
         self.dim = 0
 
@@ -84,17 +96,18 @@ class SentenceTransformerEmbedder:
     def device(self) -> str:
         return str(self._model.device) if self._model is not None else f"{self.device_pref} (not loaded)"
 
+    @property
+    def compute_dtype(self) -> str:
+        return str(next(self._load().parameters()).dtype).removeprefix("torch.")
+
     def _load(self):
         if self._model is None:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            import torch
             from sentence_transformers import SentenceTransformer
 
             device = None if self.device_pref == "auto" else self.device_pref
-            on_cuda = device.startswith("cuda") if device else torch.cuda.is_available()
-            kwargs = {"truncate_dim": self.truncate_dim or None}
-            if on_cuda:  # checkpoint dtype (bf16 for Qwen3, fp32 for MiniLM); CPU stays fp32
-                kwargs["model_kwargs"] = {"dtype": "auto"}
+            # the checkpoint dtype on every device (bf16 for Qwen3, fp32 for MiniLM), recorded as spec.compute_dtype
+            kwargs = {"truncate_dim": self.truncate_dim or None, "model_kwargs": {"dtype": "auto"}}
             if (self.local / "modules.json").is_file():  # bundled copy in sig/models (offline)
                 self.source = str(self.local)
                 self._model = SentenceTransformer(str(self.local), device=device, **kwargs)
@@ -129,6 +142,8 @@ class HashingEmbedder:
 
     truncate_dim = 0
     query_instruction = ""
+    revision = ""
+    compute_dtype = "float64"
 
     def __init__(self, dim: int = 256) -> None:
         self.dim = dim
@@ -165,6 +180,10 @@ class InsightEncoder:
         self.embedder = embedder
         self.block_weights = tuple(float(w) for w in config.block_weights)
         self.emm_component_weight = config.emm_component_weight
+        # canonicalisation settings that shape the components (recorded in the spec)
+        self.min_component_z = config.min_component_z
+        self.min_emm_score = config.min_emm_score
+        self.weight_emm_ref = config.weight_emm_ref
 
     @property
     def spec(self) -> EmbeddingSpec:
@@ -173,14 +192,19 @@ class InsightEncoder:
         d = int(self.embedder.dim)
         return EmbeddingSpec(
             model_id=self.embedder.model_id,
+            model_revision=self.embedder.revision,
             truncate_dim=int(self.embedder.truncate_dim),
             query_instruction=self.embedder.query_instruction,
             block_dim=d,
             dim=3 * d,
             dtype="float32",
+            compute_dtype=self.embedder.compute_dtype,
             normalization="l2(block) -> weighted concat -> l2",
             block_weights=self.block_weights,  # type: ignore[arg-type]
             emm_component_weight=self.emm_component_weight,
+            min_component_z=self.min_component_z,
+            min_emm_score=self.min_emm_score,
+            weight_emm_ref=self.weight_emm_ref,
             canonical_version=CANONICAL_VERSION,
             representation_version=REPRESENTATION_VERSION,
         )

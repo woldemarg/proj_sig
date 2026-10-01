@@ -17,6 +17,9 @@ Layout under ``WORKSPACE_DIR``::
 
 Recovery: ``checkpoint()`` marks the journal extent and copies state before a batch;
 ``rollback()`` restores both, so a failed batch leaves no partial knowledge.
+
+Writers: one process at a time holds ``<workspace>.writer.lock`` (beside the folder, so a
+migration can rename the folder while it is held); see ``acquire_writer_lock``.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 
@@ -52,6 +55,61 @@ def read_json(path: Path, default: Any = None) -> Any:
     if not path.is_file():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+class WorkspaceBusy(RuntimeError):
+    """Another live process holds the workspace's writer lock."""
+
+
+_LOCK_OFFSET = 1 << 20  # the locked byte, far past the pid at offset 0, which stays readable for the error message
+_HELD_LOCKS: dict[str, BinaryIO] = {}
+
+
+def writer_lock_path(workspace_dir: Path | str) -> Path:
+    """``<workspace>.writer.lock`` beside the workspace folder."""
+    root = Path(workspace_dir).resolve()
+    return root.with_name(f"{root.name}.writer.lock")
+
+
+def _lock_byte(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(_LOCK_OFFSET)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def acquire_writer_lock(workspace_dir: Path | str) -> None:
+    """Hold the workspace's exclusive writer lock until this process exits (re-entrant).
+
+    One writer process per workspace — the web app or one CLI writer. A second process gets
+    ``WorkspaceBusy`` instead of interleaving batches with the first or failing its queued
+    uploads during recovery. The operating system releases the lock when the holder exits,
+    also after a crash.
+    """
+    path = writer_lock_path(workspace_dir)
+    if str(path) in _HELD_LOCKS:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    try:
+        _lock_byte(handle)
+    except OSError:
+        os.lseek(handle.fileno(), 0, os.SEEK_SET)  # unbuffered: a buffered read would reach the locked byte
+        owner = os.read(handle.fileno(), 32).decode("ascii", "ignore").strip() or "unknown"
+        handle.close()
+        raise WorkspaceBusy(
+            f"workspace {workspace_dir} is in use by another writer process (pid {owner}); stop it first (while the web app runs, upload through it)"
+        ) from None
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()).encode("ascii"))
+    handle.flush()
+    _HELD_LOCKS[str(path)] = handle
 
 
 class RepresentationMismatch(RuntimeError):
