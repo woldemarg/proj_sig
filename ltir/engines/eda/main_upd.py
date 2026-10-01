@@ -2,20 +2,10 @@ import pandas as pd
 import numpy as np
 import pysubgroup as ps
 import itertools
-from scipy.stats import zscore
 from scipy.spatial.distance import jensenshannon
 import warnings
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-# %%
-
-# Guarded so the module can be imported as a library (sig/ltir/discovery.py)
-# without loading a dataset; Spyder cells still run it (__name__ == "__main__").
-if __name__ == "__main__":
-    # url = "../data/housing.csv"
-    url = "../data/demo_points.csv"
-    df = pd.read_csv(url)
 
 # %%
 
@@ -428,110 +418,3 @@ def step4b_deep_validation(
         )
 
     return pd.DataFrame(validated_insights)
-
-
-# ==========================================
-# STEP 5: Narrative Materialization
-# ==========================================
-def step5_integrate_and_materialize(validated_df):
-    if validated_df.empty:
-        return print("No insights survived validation.")
-
-    validated_df["z_sd"] = pd.Series(
-        zscore(validated_df["final_sd_score"]), index=validated_df.index
-    )
-    validated_df["z_emm"] = pd.Series(
-        zscore(validated_df["emm_stabilized_score"]), index=validated_df.index
-    )
-    validated_df["z_volume"] = pd.Series(
-        zscore(validated_df["volume_utility"]), index=validated_df.index
-    )
-
-    validated_df["z_sd"] = validated_df["z_sd"].fillna(0)
-    validated_df["z_emm"] = validated_df["z_emm"].fillna(0)
-    validated_df["z_volume"] = validated_df["z_volume"].fillna(0)
-
-    validated_df["integrated_index"] = (
-        validated_df["z_sd"].clip(lower=0)
-        + validated_df["z_emm"].clip(lower=0)
-        + validated_df["z_volume"].clip(lower=0)
-    )
-
-    top_results = validated_df.sort_values(
-        "integrated_index", ascending=False
-    ).head(15)
-
-    print("\n" + "=" * 80)
-    print("ENTERPRISE DISCOVERY ENGINE: VALIDATED INSIGHTS")
-    print("=" * 80)
-
-    for idx, row in top_results.reset_index().iterrows():
-        print(f"\n[{idx + 1}] DISCOVERY: {row['dimensions']}")
-        print(f"    - COHORT SIZE: {row['row_count']} rows.")
-
-        print("    - PRIMARY SHIFTS (MAD):")
-        for metric, score in row["top_shifts"]:
-            print(f"        * {metric}: {score:.2f} MAD divergence")
-
-        print(
-            f"    - CORRELATION STABILITY: Matrix Divergence (Z: {row['z_emm']:.2f})"
-        )
-        print(f"    - INDEX SCORE: {row['integrated_index']:.2f}")
-
-        if row["root_cause_drivers"]:
-            print("    - ROOT CAUSE DRIVERS:")
-            for driver in row["root_cause_drivers"]:
-                print(f"        > {driver}")
-        else:
-            print(
-                "    - ROOT CAUSE DRIVERS: No secondary hidden drivers detected."
-            )
-
-
-# ==========================================
-# EXECUTION WORKFLOW
-# ==========================================
-if __name__ == "__main__":
-    profile = step1_profile_data(df)
-    top_cats = step2_evaluate_macro_groupings(profile)
-    space = step3_generate_search_space(profile, top_cats, compute_budget=5000)
-
-    raw_micro_insights = step4_evaluate_micro_slices(profile, space)
-
-    if not raw_micro_insights.empty:
-        raw_micro_insights["temp_index"] = (
-            pd.Series(zscore(raw_micro_insights["sd_aggregate_score"]))
-            .fillna(0)
-            .clip(lower=0)
-            + pd.Series(zscore(raw_micro_insights["emm_stabilized_score"]))
-            .fillna(0)
-            .clip(lower=0)
-            + pd.Series(zscore(raw_micro_insights["volume_utility"]))
-            .fillna(0)
-            .clip(lower=0)
-        )
-        top_50_candidates = raw_micro_insights.sort_values(
-            "temp_index", ascending=False
-        ).head(50)
-
-        global_medians = {
-            num: np.median(profile["data_safe"][num].dropna())
-            for num in profile["numerics"]
-        }
-        global_mads = {
-            num: calculate_mad(profile["data_safe"][num].dropna())
-            for num in profile["numerics"]
-        }
-
-        validated_insights = step4b_deep_validation(
-            profile["data_safe"],
-            top_50_candidates,
-            profile["numerics"],
-            profile["categoricals"],
-            global_medians,
-            global_mads,
-        )
-
-        step5_integrate_and_materialize(validated_insights)
-    else:
-        print("No valid slices generated in Pass 1.")

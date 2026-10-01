@@ -7,7 +7,8 @@ Calls the EDA steps unchanged, in the order of the EDA workflow:
 
 and converts the resulting DataFrames into typed ``Insight`` objects. The adapter
 adds only what the EDA does not produce: shift *direction*, a significance
-estimate, the step-5 integrated index as a value (step 5 only prints), and
+estimate, the EDA workflow's ``temp_index`` ranking and ``integrated_index`` (the
+upstream standalone runner and its print-only step 5 are not vendored), and
 provenance.
 """
 
@@ -254,7 +255,7 @@ def run_discovery(df: pd.DataFrame, config: Config, on_stage: Callable[[str], No
     ]
     candidates, rejections = merge_identical_extents(pass1, data, categoricals)
 
-    # EDA workflow ranking (main_upd.py __main__): temp_index over the distinct cohorts
+    # EDA workflow ranking (upstream runner's temp_index), over the distinct cohorts
     scores = pd.DataFrame([(c.sd_aggregate_score, c.emm_stabilized_score, c.volume_utility) for c in candidates], columns=["sd", "emm", "vol"])
     for cand, index in zip(candidates, _z_positive(scores["sd"]) + _z_positive(scores["emm"]) + _z_positive(scores["vol"])):
         cand.temp_index = float(index)
@@ -325,7 +326,7 @@ def build_insights(result: DiscoveryResult, config: Config, *, dataset_id: str, 
             "vol": [c.volume_utility for c in validated],
         }
     )
-    # EDA step-5 integrated index (computed there only for printing)
+    # EDA step-5 integrated index (upstream prints it; SIG stores it)
     integrated = (_z_positive(frame["sd"]) + _z_positive(frame["emm"]) + _z_positive(frame["vol"])).tolist()
     prof = result.profile
     insights: list[Insight] = []
