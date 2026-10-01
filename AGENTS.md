@@ -44,7 +44,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 
 ## Boundaries
 
-- **Only this repository is in scope.** Code outside it is reference material at most: do not edit it, do not import from it, do not add it to `sys.path`. `tests/test_self_contained.py` enforces that no loaded module, `sys.path` entry or `ltir` source refers to the original engine projects, that every path setting resolves inside the repository, and that the model loads from `models/`.
+- **Only this repository is in scope.** Code outside it is reference material at most: do not edit it, do not import from it, do not add it to `sys.path`. `tests/test_self_contained.py` enforces that every loaded module and `sys.path` entry lies in the repository or the Python environment, that no `ltir` source holds a machine path or a relative path leading out of the repository, that every path setting resolves inside the repository, and that the model loads from `models/`.
 - Reuse upstream code by editing the vendored copy in `ltir/engines/` and recording the change in `PROVENANCE.md`. Never re-copy an upstream file over the vendored one (it carries the signed-attractor repair and the numerical fixes).
 - The Python environment that `.venv` may be layered on is not ours to modify; install into `.venv` only and add the dependency to `requirements.txt`.
 - The configured Neo4j database and the LLM provider account belong to the user. Tests run with `LTIR_NO_DOTENV=1` and `neo4j_enabled=False` (set in `conftest.py`); keep it that way.
