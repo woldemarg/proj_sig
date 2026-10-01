@@ -1,0 +1,162 @@
+"""Command line entry point: ``python -m ltir <command>``.
+
+demo                 write the synthetic dataset and ingest it
+ingest PATH          run the dataset lifecycle on a CSV/TSV/Parquet file (--bins col:q,... --categories a,b)
+query "QUESTION"     grounded answer (--no-llm, --json)
+status               batches + graph statistics
+experiment           cross-dimensional analogue retrieval benchmark (--k)
+rebuild-graph        regenerate graph/snapshot.json from journals + state
+sphere               write the 3D latent sphere HTML (-o FILE, --dataset ID)
+neo4j-sync           publish the snapshot to Neo4j (NEO4J_* settings)
+llm-check            probe the local Gemma 4 endpoint
+reset                delete the SIG workspace (--yes)
+serve                start the web UI
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+
+from ltir.config import load_config
+
+
+def _engine(*, writer: bool):
+    """Only writers (demo/ingest/reset/rebuild) may recover interrupted batches."""
+    from ltir.pipeline import Engine
+
+    return Engine(load_config(), recover=writer)
+
+
+def _print_batch(rec: dict) -> None:
+    m = rec.get("metrics", {})
+    print(f"{rec['batch_id']}  {rec['status']:<8} {rec.get('filename')}  dataset={rec.get('dataset_id')}")
+    if rec.get("error"):
+        print(f"  error: {rec['error']['code']}: {rec['error']['message']}")
+    for w in rec.get("warnings", []):
+        print(f"  warning: {w}")
+    if m.get("validated_insights") is not None:
+        print(
+            f"  rows={m['input_rows']} candidates={m['candidate_patterns']} validated_insights={m['validated_insights']} "
+            f"pruned={m['pruned_total']} attractors={m['attractors_total']} (+{m['attractors_new']}) orphan_rate={m['orphan_rate']:.2f} "
+            f"edges={m['graph_edges']} avg_attractor_degree={m['avg_attractor_degree']:.2f} duration={m['processing_duration_s']:.1f}s"
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="ltir", description="Latent Transversal Insight Representation (SIG)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("demo")
+    p = sub.add_parser("ingest")
+    p.add_argument("path")
+    p.add_argument("--bins", default=None, help="derive quantile band dimensions, e.g. median_income:4")
+    p.add_argument("--categories", default=None, help="treat code-like columns as dimensions, e.g. Store,Holiday_Flag")
+    p = sub.add_parser("query")
+    p.add_argument("question")
+    p.add_argument("--no-llm", action="store_true")
+    p.add_argument("--json", action="store_true")
+    sub.add_parser("status")
+    p = sub.add_parser("experiment")
+    p.add_argument("--k", type=int, default=5)
+    sub.add_parser("rebuild-graph")
+    p = sub.add_parser("sphere")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--dataset", default=None)
+    sub.add_parser("neo4j-sync")
+    sub.add_parser("llm-check")
+    p = sub.add_parser("reset")
+    p.add_argument("--yes", action="store_true")
+    sub.add_parser("serve")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    if args.cmd == "serve":
+        from ltir.web.app import main as serve
+
+        serve()
+        return 0
+    if args.cmd == "llm-check":
+        from ltir.llm import OpenAICompatibleLLM
+
+        llm = OpenAICompatibleLLM(load_config())
+        print(json.dumps(llm.health(fresh=True), indent=1))
+        resp = llm.generate("Reply with one word.", "Say OK.")
+        print(
+            json.dumps(
+                {"ok": resp.ok, "model": resp.model, "latency_s": round(resp.latency_s, 2), "text": resp.text[:200], "error": resp.error}, indent=1
+            )
+        )
+        return 0 if resp.ok else 1
+
+    engine = _engine(writer=args.cmd in {"demo", "ingest", "reset", "rebuild-graph"})
+    if args.cmd == "demo":
+        from ltir.synth import write_demo
+
+        rec = engine.ingest_file(write_demo())
+        _print_batch(rec)
+        return 0 if rec["status"] in {"READY", "SKIPPED"} else 1
+    if args.cmd == "ingest":
+        rec = engine.ingest_file(args.path, bins=args.bins, categories=args.categories)
+        _print_batch(rec)
+        return 0 if rec["status"] in {"READY", "SKIPPED"} else 1
+    if args.cmd == "query":
+        qa = engine.ask(args.question, use_llm=not args.no_llm)
+        if args.json:
+            print(json.dumps(qa.to_dict(), indent=1, ensure_ascii=False, default=str))
+            return 0
+        print(qa.answer)
+        print("\n---")
+        print(
+            f"mode={qa.answer_mode} llm={qa.llm.get('model')} ok={qa.llm.get('ok')} err={qa.llm.get('error')} grounded={qa.citations.get('grounded')}"
+        )
+        print(
+            f"seeds={qa.highlight['seeds']} anchors={qa.highlight['anchors']} evidence={len(qa.highlight['evidence'])} "
+            f"cross_scope={qa.highlight['transversal_only']} metrics={qa.metrics}"
+        )
+        for it in qa.evidence.get("items", []):
+            print(f"  [{it['key']}] {it['role']:<11} {' AND '.join(it['scope'])}  via {it['path_text']}")
+        print(qa.provenance_footer)
+        return 0
+    if args.cmd == "status":
+        for rec in engine.ws.list_batches():
+            _print_batch(rec)
+        print("graph:", json.dumps(engine.graph().snapshot.get("stats", {})))
+        return 0
+    if args.cmd == "experiment":
+        from ltir.experiment import format_summary, run_experiment
+
+        print(format_summary(run_experiment(engine, k=args.k)))
+        return 0
+    if args.cmd == "rebuild-graph":
+        print(json.dumps(engine.rebuild_graph()["stats"]))
+        return 0
+    if args.cmd == "sphere":
+        from pathlib import Path
+
+        from ltir.sphere import export_sphere
+
+        print(export_sphere(engine, Path(args.output) if args.output else None, dataset=args.dataset))
+        return 0
+    if args.cmd == "neo4j-sync":
+        from ltir.neo4j_sink import publish_snapshot
+
+        snap = engine.ws.load_graph()
+        if not snap:
+            print("no graph snapshot yet", file=sys.stderr)
+            return 1
+        print(json.dumps(publish_snapshot(snap, engine.config), indent=1))
+        return 0
+    if args.cmd == "reset":
+        if not args.yes:
+            print(f"This deletes {engine.config.workspace_dir}. Re-run with --yes.", file=sys.stderr)
+            return 1
+        engine.reset()
+        print("workspace reset")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

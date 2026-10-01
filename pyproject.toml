@@ -1,0 +1,27 @@
+[project]
+name = "ltir"
+version = "0.1.0"
+description = "SIG / LTIR — Latent Transversal Insight Representation of statistically discovered insights"
+requires-python = ">=3.12"
+
+# Lint + format gate (AGENTS.md Rule 0: `python scripts/check.py`).
+[tool.ruff]
+line-length = 150
+target-version = "py312"
+extend-exclude = ["ltir/web/static", "models", "workspace", "data", ".pytest_tmp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",  # long lines are allowed where a formula or a table row reads better unbroken
+    "B023",  # closures over loop variables are used deliberately in the experiment method table
+    "B905",  # zip(strict=...) everywhere is noise; lengths are guaranteed by construction at the call sites
+    "UP042", # EdgeType(str, Enum) is the stored-JSON contract; StrEnum would change nothing but the diff
+]
+
+[tool.ruff.lint.per-file-ignores]
+"ltir/engines/eda/main_upd.py" = ["I", "UP", "B", "E"]  # vendored EDA: keep the upstream style (PROVENANCE.md)
+"ltir/web/app.py" = ["B008"]  # FastAPI's `File(...)` / `Form(...)` defaults are the framework's declaration idiom
+
+[tool.ruff.format]
+exclude = ["ltir/engines/eda/main_upd.py"]  # same reason: cosmetic drift from upstream is noise

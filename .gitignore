@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+workspace/
+.pytest_tmp/
+.pytest_cache/
+.ruff_cache/
+
+# keep directories, drop local artifacts
+models/**
+!models/.gitkeep
+data/**
+!data/.gitkeep

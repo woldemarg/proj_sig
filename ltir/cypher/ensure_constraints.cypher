@@ -1,0 +1,6 @@
+CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (p:Pattern) REQUIRE p.id IS UNIQUE;
+CREATE CONSTRAINT attractor_id_unique IF NOT EXISTS FOR (a:Attractor) REQUIRE a.id IS UNIQUE;
+CREATE CONSTRAINT dimension_id_unique IF NOT EXISTS FOR (d:Dimension) REQUIRE d.id IS UNIQUE;
+CREATE CONSTRAINT metric_id_unique IF NOT EXISTS FOR (m:Metric) REQUIRE m.id IS UNIQUE;
+CREATE CONSTRAINT dataset_id_unique IF NOT EXISTS FOR (s:Dataset) REQUIRE s.id IS UNIQUE;
+CREATE CONSTRAINT batch_id_unique IF NOT EXISTS FOR (b:Batch) REQUIRE b.id IS UNIQUE;
