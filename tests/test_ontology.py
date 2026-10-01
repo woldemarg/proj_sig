@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import io
-from contextlib import redirect_stdout
-
 import numpy as np
 import pytest
 
@@ -38,8 +35,7 @@ def toy():
 
 def ingest(ont, x, w=None, seq=0, prefix="p"):
     ids = [f"{prefix}{seq}-{i}" for i in range(len(x))]
-    with redirect_stdout(io.StringIO()):
-        return ont.ingest(x, np.ones(len(x)) if w is None else w, ids, batch_seq=seq, batch_id=f"B{seq}"), ids
+    return ont.ingest(x, np.ones(len(x)) if w is None else w, ids, batch_seq=seq, batch_id=f"B{seq}"), ids
 
 
 def test_cold_start_creates_attractors_with_full_activation_coverage(tmp_path, toy):

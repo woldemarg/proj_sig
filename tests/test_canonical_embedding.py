@@ -35,7 +35,6 @@ def insight(scope, shifts, emm=0.05, ptype="shift", cov=None):
         emm_score=emm,
         volume_utility=0.2,
         stability=0.9,
-        integrated_index=1.0,
         p_value=1e-9,
         p_adjusted=1e-7,
         drivers=("[payment] heavily skewed to 'cash' (JS: 0.20)",),

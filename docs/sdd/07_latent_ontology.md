@@ -100,7 +100,7 @@ Checked every batch by `check_invariants()` (a violation raises `OntologyError`)
 Checked by tests (SDD 09): `store.next_chunk_id == journal rows == mmap rows`, because a pattern's `row_id` is its journal row.
 
 ## Observability
-lac `BatchMetrics` per batch (ingested, orphaned, orphan_rate, total_concepts, new_extracted/kept, soft_merged, extraction_yield, related_to_edges, avg_degree, max_concept_density_pct, centroid_drift, adaptive_thresh, density_threshold, damped_attractors, max_centroid_step, clamped_attractors, warnings) appended to `state/ontology_metrics.csv` and copied into the batch record. The hub warning fires above `τ_density`, not at a fixed 25 %.
+lac `BatchMetrics` per batch (ingested, orphaned, orphan_rate, total_concepts, new_extracted/kept, soft_merged, extraction_yield, related_to_edges, avg_degree, max_concept_density_pct, centroid_drift, adaptive_thresh, density_threshold, damped_attractors, max_centroid_step, clamped_attractors, warnings) appended to `state/ontology_metrics.csv` and copied into the batch record. The hub warning fires above `τ_density`, not at a fixed 25 %. The K-sweep itself is silent: `new_extracted` counts the active atoms of the selected dictionary; the swept K before dead atoms are dropped, the per-K reconstruction error and the stop rule that fired are not recorded.
 
 ## Testing requirements
 `tests/test_ontology.py`: cold start (coverage, unit norm, one attractor per planted cluster), assignment, orphans → OMP → new concept, single-orphan nearest fallback, soft merge absorption, weight → EMA pull, `τ_density` formula, damping slows an over-represented attractor without changing membership, trust region caps a batch move (unit norm, warning, CSV columns), sign repair, state round-trip.

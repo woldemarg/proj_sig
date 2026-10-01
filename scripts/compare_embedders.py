@@ -22,7 +22,7 @@ import io
 import time
 
 import numpy as np
-from scratch import build_engine, ingest_quietly, save_result, scratch_dir, write_demo_csv
+from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
 
 from ltir.canonical import canonicalize
 from ltir.config import PROJECT_ROOT, load_config
@@ -79,7 +79,6 @@ def synthetic_insight(scope: dict[str, str], shifts: list[tuple[str, float]]) ->
         emm_score=0.0,
         volume_utility=0.3,
         stability=0.9,
-        integrated_index=1.0,
         p_value=1e-9,
         p_adjusted=1e-6,
         drivers=(),
@@ -113,7 +112,7 @@ def domain_separation(engine, root) -> dict[str, float | None]:
         ("cross_domain", PROJECT_ROOT / "data" / "housing.csv", {"bins": "median_income:4,housing_median_age:4", "categories": ""}),
     )
     for label, path, options in batches:
-        record = ingest_quietly(engine, path, **options)
+        record = ingest_ready(engine, path, **options)
         assigned = [a["alignment"] for a in engine.ws.activations() if a["batch_id"] == record["batch_id"] and a["source"] == "assign"]
         out[f"{label}_orphan_rate"] = round(record["metrics"]["orphan_rate"], 2)
         out[f"{label}_{'min' if label == 'same_domain' else 'max'}_alignment"] = (
@@ -149,7 +148,7 @@ def evaluate(name: str, overrides: dict, k: int) -> dict:
     load_s = time.perf_counter() - start
     root = scratch_dir(f"compare_{name}", fresh=True)
     engine = build_engine(root / "ws", embedder=embedder, **overrides)  # reuses the loaded model
-    record = ingest_quietly(engine, write_demo_csv(root))
+    record = ingest_ready(engine, write_demo_csv(root))
     with contextlib.redirect_stdout(io.StringIO()):
         bench = run_experiment(engine, k=k)
     row = {

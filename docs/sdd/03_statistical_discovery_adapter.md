@@ -26,7 +26,6 @@ Use the existing automatic-EDA engine (`main_upd.py`, vendored as `ltir/engines/
 | Pass 1 | `step4_evaluate_micro_slices` | min size max(5·#numerics, 0.5 % N); robust z = min(0.6745·\|Δmedian\| / scale, 10) with scale = MAD, or the normal-consistent mean absolute deviation (0.845·mean\|x − med\|) when the MAD is 0 (more than half of the values tie); SD = top-3 shift sum; EMM = ‖C_local − C_global‖_F over the entries defined in the subgroup (a metric constant inside the subgroup contributes no change) · √((n−n_min)/(N−n_min)); volume = √p(1−p) |
 | Ranking | workflow `temp_index` | Σ clip₊(zscore) of SD, EMM, volume over the **distinct** cohorts → near-duplicate pruning → top `VALIDATION_BUDGET` (see *Deduplication before validation*) |
 | Pass 2 | `step4b_deep_validation` | 20 bootstrap resamples (n of n, with replacement) of the top-shift sum; `final_sd = sd·(1 − min(CV, 0.9))`; drivers: a categorical whose subgroup distribution has JS distance > 0.15 **and** a chi-square test of independence (subgroup vs rest) with p < 0.01 / #categoricals, named by the level whose share grew most; numeric metrics outside the top-3 with a signed hidden shift > 1.5 robust σ |
-| Index | upstream step-5 formula | `integrated_index` = Σ clip₊(zscore) of final SD, EMM, volume over the validated set (upstream step 5 only prints it and is not vendored; the adapter computes it) |
 
 ## Edits made to `main_upd.py` (each is a local, commented change; full list with hashes in `PROVENANCE.md`)
 1. The data load and workflow run under `if __name__ == "__main__":` (the module is importable); both blocks were later removed (item 12).
@@ -40,7 +39,7 @@ Use the existing automatic-EDA engine (`main_upd.py`, vendored as `ltir/engines/
 9. EMM ignores correlations undefined inside the subgroup instead of reading them as 0.
 10. Bootstrap: 20 full-size resamples instead of 5 resamples of 90 %.
 11. Confounder drivers need a significant skew (chi-square) and name the level with the largest share gain; hidden shifts are reported signed in robust σ.
-12. The standalone runner, the print-only `step5_integrate_and_materialize` and the then-unused `zscore` import are removed; the adapter owns `temp_index` and `integrated_index` (same formula, identical values).
+12. The standalone runner, the print-only `step5_integrate_and_materialize` and the then-unused `zscore` import are removed; the adapter owns `temp_index` (same formula). Step 5's index is not computed: nothing in SIG read it.
 
 ## Deduplication before validation (R5, R6)
 The bootstrap of step 4b is the expensive stage and `VALIDATION_BUDGET` slots are scarce, so redundant cohorts are removed **between pass 1 and the ranking into step 4b** (`run_discovery`):

@@ -43,7 +43,7 @@ Field order and meaning (all JSON-native; floats are float64, lists where the da
 | `shifts` | `[{"metric", "robust_z" (signed), "local_median", "global_median", "global_mad", "source": "eda" \| "covariance_pair"}, …]` sorted by `|robust_z|` descending |
 | `support`, `support_fraction` | covered rows, fraction of `N` |
 | `baseline`, `local`, `effect_size` | global median, subgroup median, signed robust z of `target` |
-| `sd_score`, `sd_raw_score`, `emm_score`, `volume_utility`, `stability`, `integrated_index` | SDD 16 §5–7 |
+| `sd_score`, `sd_raw_score`, `emm_score`, `volume_utility`, `stability` | SDD 16 §5–7 |
 | `p_value`, `p_adjusted` | median test, Bonferroni |
 | `drivers` | EDA confounder strings, e.g. `"[payment] heavily skewed to 'cash' (JS: 0.20)"`, `"[discount] hidden shift (+1.8 robust sigma)"` |
 | `row_hash` | 16 hex, identity of the covered row set |

@@ -276,7 +276,6 @@ def _omp_fallback_unit_norm_rows(
     n = len(centroids)
     counts = np.ones(n, dtype=np.int64)
     local_acts = [{"chunk_id": i, "concept_id": i, "weight": 1.0} for i in range(n)]
-    print(f"OMP small-buffer fallback: {n} unit-norm concept(s)")
     return centroids, counts, local_acts
 
 
@@ -300,7 +299,6 @@ def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np
     last_coefficients = None
     last_dictionary = None
     previous_error = float("inf")
-    selected_k = effective_k_min
     matrix_norm_sq = np.linalg.norm(embeddings, "fro") ** 2
 
     for k in range(effective_k_min, k_upper + 1, k_step):
@@ -323,16 +321,9 @@ def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np
         dead_ratio = int(np.sum(concept_usage == 0)) / k
         improvement = previous_error - reconstruction_error
 
-        print(
-            f" -> K={k:03d} | Error: {reconstruction_error:.4f} | "
-            f"Dead: {dead_ratio * 100:.1f}% | "
-            f"Improvement: {improvement if previous_error != float('inf') else 0:.4f}"
-        )
-
         if dead_ratio > config.max_dead_concept_ratio:
             if best_coefficients is not None:
-                print(f"Stopping at dead-node limit; reverting to K={selected_k}")
-                break
+                break  # dead-node limit: keep the last K that passed (best_* hold it)
             continue
 
         dynamic_tolerance = config.reconstruction_error_tolerance + (dead_ratio * config.dead_concept_penalty)
@@ -340,17 +331,15 @@ def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np
         if previous_error != float("inf") and improvement < dynamic_tolerance:
             # elbow: the extra atoms did not pay for themselves -> keep the previous K
             # (best_* already hold it), the parsimonious model
-            print(f"Stopping: improvement {improvement:.4f} < threshold {dynamic_tolerance:.4f}; keeping K={selected_k}")
             break
 
         best_coefficients = coefficients
         best_dictionary = dictionary
-        selected_k = k
         previous_error = reconstruction_error
 
     if best_coefficients is None or best_dictionary is None:
         if last_coefficients is not None and last_dictionary is not None:
-            print("OMP: using last K attempt (dead-node limit on all swept K)")
+            # every swept K hit the dead-node limit: use the last attempt
             best_coefficients = last_coefficients
             best_dictionary = last_dictionary
         else:
@@ -365,8 +354,6 @@ def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np
 
     centroid_embeddings = _l2_normalize_rows(dictionary.astype(np.float64)).astype(np.float32)
     local_acts = _build_local_activations(coefficients_abs, concepts_per_chunk)
-
-    print(f"OMP selected K={selected_k}, active concepts={len(active_indices)}")
     return centroid_embeddings, omp_chunk_counts, local_acts
 
 
