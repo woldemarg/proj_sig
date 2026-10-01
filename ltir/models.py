@@ -83,7 +83,7 @@ class Insight:
     emm_score: float  # EDA emm_stabilized_score / sqrt(m(m-1)): RMS correlation change per pair
     volume_utility: float
     stability: float  # final_sd / sd_raw = 1 - min(bootstrap CV, 0.9)
-    integrated_index: float  # EDA step-5 z-sum over the validated set
+    integrated_index: float  # EDA step-5 formula: z-sum over the validated set (discovery.build_insights)
     p_value: float  # adapter: asymptotic median test on the target
     p_adjusted: float  # Bonferroni over (candidates x metrics)
     drivers: tuple[str, ...]  # EDA root_cause_drivers (confounders)

@@ -119,7 +119,7 @@ driver if  JS(S) > 0.15  and  p_χ²(S) < 0.01 / #categoricals
 | target | the shift with the largest magnitude | `effect_size = z_target` |
 | median test | `scale = MAD(y_S) or MAD_k`; `se = 1.2533 · 1.4826 · scale / √n`; `z = (med_S − med) / se`; `p = 2 · Φ̄(|z|)` | asymptotic s.e. of the median `1.2533 σ/√n` with `σ ≈ 1.4826 · MAD`; falls back to `sd/√n` if the scale is 0; `p = 1` for `n < 2` |
 | Bonferroni | `p_adj = min(1, p · n_tests)`, `n_tests = |distinct cohorts| · m` | identical extents are one test; overlapping cohorts are still counted as independent tests (conservative) |
-| integrated index | `clip₊(zscore(final_sd)) + clip₊(zscore(emm)) + clip₊(zscore(vol))` over the validated set | the EDA's step-5 index, computed instead of printed |
+| integrated index | `clip₊(zscore(final_sd)) + clip₊(zscore(emm)) + clip₊(zscore(vol))` over the validated set | the upstream EDA's step-5 index (print-only there, not vendored), computed by the adapter |
 
 ## 8. Selection rules (`quality.select_insights`)
 ```text
