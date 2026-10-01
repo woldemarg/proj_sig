@@ -57,9 +57,8 @@ def compute_baselines(engine: Engine, graph: DualGraph, question: str, seeds: li
     """What structural-only and naive text retrieval would have returned (docs/07_question_answering.md §7.6)."""
     config = engine.config
     closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, config.lattice_edges)
-    ids = [n["id"] for n in graph.of_kind("Pattern")]
-    embed = engine.encoder.embedder.embed
-    doc_vecs = dict(zip(ids, embed([graph.canonical_document(i) for i in ids])))
+    documents = engine.document_vectors()  # embedded at ingest: the question is the only text embedded here
+    doc_vecs = {n["id"]: documents[n["id"]] for n in graph.of_kind("Pattern")}
     naive = naive_nearest(engine.encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved)
     retrieved = {r.node_id for r in result.patterns}
     return {

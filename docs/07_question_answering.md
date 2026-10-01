@@ -59,12 +59,12 @@ Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES
 
 | Step | Condition | Factor |
 |---|---|---|
-| ACTIVATES, pattern → anchor | `alignment ≥ ACTIVATION_THRESHOLD` (0.40) | alignment |
-| RELATED_TO, anchor → anchor | `weight ≥ RELATION_THRESHOLD` (0.40) | weight |
-| ACTIVATES against its direction, anchor → pattern (not a seed) | `alignment ≥ 0.40` | alignment |
+| ACTIVATES, pattern → anchor | the membership is not `weak` | alignment |
+| RELATED_TO, anchor → anchor | every link the ontology kept (mutual kNN above `RELATED_TO_MIN_WEIGHT`, 0.30) | weight |
+| ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
 | lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS |
 
-Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
+The walk crosses exactly the edges the ontology kept: one predicate decides coverage and retrieval. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
 
 | Output | Definition |
 |---|---|
@@ -77,7 +77,7 @@ Every factor is at most 1, so best-first order is meaningful. The search state i
 
 Because the skip rule for seeds covers only SPECIALIZES and GENERALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
 
-> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and six tablet insights in EU and APAC that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 46 search states, 13 retrieved patterns, 2 anchors.
+> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and six tablet insights in EU and APAC that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 65 search states, 13 retrieved patterns, 2 anchors.
 
 ## 7.4 The evidence object
 
@@ -173,7 +173,7 @@ Be concise (at most ~250 words).
 
 ## 7.6 Baselines
 
-`compute_baselines` stores, with every answer, what simpler retrieval would have returned: `structural_only` (the lattice closure of the seeds, same edge set and depth), `naive_nearest` (the top 12 patterns by `cos(E_query(question), E(canonical document))` — plain text RAG), and the set differences `transversal_only`, `not_in_naive_topk`, `not_structurally_reachable`. The naive baseline embeds every pattern's document; embeddings are memoised per process, so only the first question pays for the encoding (and the VRAM peak of [4.4](04_representation.md#44-the-embedding-model)). For the demo question: the structural closure holds 23 patterns, and 7 of the 13 retrieved patterns are not in the naive top 12. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
+`compute_baselines` stores, with every answer, what simpler retrieval would have returned: `structural_only` (the lattice closure of the seeds, same edge set and depth), `naive_nearest` (the top 12 patterns by `cos(E_query(question), E(canonical document))` — plain text RAG), and the set differences `transversal_only`, `not_in_naive_topk`, `not_structurally_reachable`. The naive baseline compares the question with document vectors embedded once at ingest and stored beside the journal rows (`journal/blocks/<batch>.npz`, read into the committed frame), so an answer embeds only the question — never the corpus — and does not compete with an ingest for the model; a pattern without a stored vector would be embedded on demand. For the demo question: the structural closure holds 23 patterns, and 7 of the 13 retrieved patterns are not in the naive top 12. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
 
 ## 7.7 Measured behaviour
 
@@ -196,14 +196,13 @@ Prompt size (`scripts/prompt_tokens.py`, demo question, 10 items; XLM-R Sentence
 | canonical documents (28): symbol-based → current | 11,406 → 15,080 | 0 | 3,455 → 4,367 | 4,224 → 5,017 |
 | evidence-only answer: symbol-based → current | 1,730 → 2,509 | 7 → 0 | 588 → 779 | 760 → 887 |
 
-The documents and the summary grew because they are written for people; no LLM reads the documents (only the naive baseline embeds them). Retrieval for one question takes about 1 s with the model loaded, most of it the naive baseline's document embeddings on the first question.
+The documents and the summary grew because they are written for people; no LLM reads the documents (only the naive baseline embeds them). Retrieval for one question takes about 0.1 s with the model loaded, the first question included.
 
 ## 7.8 Configuration, failure modes and limitations
 
 | Parameter | Default |
 |---|---|
 | `SEED_TOP_K`, `SEED_MIN_SCORE`, `SEED_RELATIVE_MIN` | 3, 0.25, 0.75 |
-| `ACTIVATION_THRESHOLD`, `RELATION_THRESHOLD` | 0.40, 0.40 |
 | `STRUCTURAL_HOPS`, `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 1, 5 |
 | `STRUCTURAL_EDGE_DECAY`, `TRAVERSAL_STRUCTURAL_EDGES` | 0.85, `SPECIALIZES,GENERALIZES,CONTRASTS` |
 | `MAX_RETRIEVED`, `EVIDENCE_MAX_PATTERNS` | 12, 10 |
@@ -214,7 +213,7 @@ The documents and the summary grew because they are written for people; no LLM r
 |---|---|
 | empty graph | `answer_mode = empty`; `llm`, `citations`, `evidence`, `traversal` are empty and `metrics = {"error": "empty_graph"}` |
 | no lexical match | semantic seeds |
-| no path above the thresholds | only seeds and their lattice neighbours; "empty retrieval" shows as zero transversal items |
+| no walkable path to an anchor | only seeds and their lattice neighbours; "empty retrieval" shows as zero transversal items |
 | LLM unavailable, HTTP error, empty completion | evidence-only summary; graph and statistics untouched |
 | representation mismatch | refused before retrieval (HTTP 409) |
 

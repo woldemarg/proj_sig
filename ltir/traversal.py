@@ -145,15 +145,15 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: Config) -> Traver
                     push(score * factor, other, phase, s_cnt + 1, l_cnt, seed, step(e, other, e["weight"]))
             if phase == "P0":
                 for e, other in graph.incident(node, ["ACTIVATES"]):
-                    if e["source"] == node and e["weight"] >= config.activation_threshold:
+                    if e["source"] == node and not e["props"].get("weak"):
                         push(score * e["weight"], other, "A", 0, 0, seed, step(e, other, e["weight"]))
         elif phase == "A":
             if l_cnt < config.max_latent_hops:
+                # every RELATED_TO the ontology kept (mutual kNN above RELATED_TO_MIN_WEIGHT) is walkable
                 for e, other in graph.incident(node, ["RELATED_TO"]):
-                    if e["weight"] >= config.relation_threshold:
-                        push(score * e["weight"], other, "A", 0, l_cnt + 1, seed, step(e, other, e["weight"]))
+                    push(score * e["weight"], other, "A", 0, l_cnt + 1, seed, step(e, other, e["weight"]))
             for e, other in graph.incident(node, ["ACTIVATES"]):
-                if e["target"] == node and other not in seed_ids and e["weight"] >= config.activation_threshold:
+                if e["target"] == node and other not in seed_ids and not e["props"].get("weak"):
                     push(score * e["weight"], other, "P1", 0, l_cnt, seed, step(e, other, e["weight"]))
 
     closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth)

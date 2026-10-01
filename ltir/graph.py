@@ -158,6 +158,9 @@ def _activation_edges(ws: Workspace, ontology: LatentOntology, by_pid: dict[str,
         rec = by_pid[pid]
         alignment = float(vectors[rec["row_id"]].astype(np.float64) @ ontology.centroid(aid).astype(np.float64))
         w = float(rec["weight"])
+        # one predicate for coverage and retrieval: below the ontology's alignment floor (rerouted at
+        # ingest, or drifted below it since) a membership is coverage only and is not walked
+        weak = bool(act["weak"]) or alignment < ontology.config.min_activation_alignment
         members[aid].append((rec, alignment, alignment * w))
         edges.append(
             GraphEdge(
@@ -173,7 +176,7 @@ def _activation_edges(ws: Workspace, ontology: LatentOntology, by_pid: dict[str,
                     "alignment_at_ingest": act["alignment"],
                     "source": act["source"],
                     "batch_id": act["batch_id"],
-                    "weak": act["weak"],
+                    "weak": weak,
                 },
             )
         )

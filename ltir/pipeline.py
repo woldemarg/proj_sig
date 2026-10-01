@@ -66,18 +66,22 @@ class PipelineError(RuntimeError):
 
 @dataclass(frozen=True)
 class LatentFrame:
-    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid."""
+    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid,
+    plus the canonical-document embeddings the naive text baseline compares questions with."""
 
     patterns: dict[str, np.ndarray]
     attractors: dict[int, np.ndarray]
+    documents: dict[str, np.ndarray]
 
     @classmethod
     def load(cls, ws: Workspace, ontology: LatentOntology) -> LatentFrame:
         vectors = ws.vectors()
         st = ontology.store
+        records = ws.patterns()
         return cls(
-            patterns={r["id"]: vectors[r["row_id"]] for r in ws.patterns()} if len(vectors) else {},
+            patterns={r["id"]: vectors[r["row_id"]] for r in records} if len(vectors) else {},
             attractors={int(c): st.embeddings[i].copy() for i, c in enumerate(st.concept_ids)},
+            documents=ws.document_vectors({r["batch_id"] for r in records}),
         )
 
 
@@ -201,6 +205,15 @@ class Engine:
                     else:
                         self._graph = DualGraph(snap) if snap else DualGraph.empty()
         return self._graph
+
+    def document_vectors(self) -> dict[str, np.ndarray]:
+        """Canonical-document embedding of every committed pattern; one without a stored vector is embedded now."""
+        stored = self.frame().documents
+        graph = self.graph()
+        missing = [n["id"] for n in graph.of_kind("Pattern") if n["id"] not in stored]
+        if not missing:
+            return stored
+        return {**stored, **dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))}
 
     def frame(self) -> LatentFrame:
         """Committed pattern vectors and attractor centroids (retrieval and the sphere)."""
@@ -337,7 +350,8 @@ class Engine:
                     self.ws.save_covers(loaded.dataset_id, {i.id: covers[i.expression] for i in kept})
                     self._enter(record, "PERSISTING")
                     self._refuse_journaled(kept)
-                    self.ws.append(patterns, enc["vector"], update.activations, {k: enc[k] for k in BLOCKS}, batch_id)
+                    blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
+                    self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
                     ontology.save()
                     self.ws.record_representation(spec)
                     self.ws.commit_batch_seq(seq)
@@ -386,7 +400,10 @@ class Engine:
     def _encode(self, canon: list[CanonicalInsight]) -> tuple[dict[str, np.ndarray], EmbeddingSpec]:
         """Tripartite vectors + their spec; any encoder error becomes ``embedding_failure``."""
         try:
-            return self.encoder.encode(canon), self.encoder.spec
+            enc = self.encoder.encode(canon)
+            # embedded once here, so the per-question naive text baseline is a dot product, not a corpus pass
+            enc["document"] = self.encoder.embedder.embed([c.document() for c in canon])
+            return enc, self.encoder.spec
         except Exception as exc:
             raise PipelineError("embedding_failure", f"Embedding failed: {exc}") from exc
 

@@ -98,7 +98,8 @@ def run_experiment(engine: Engine, *, k: int = 5, dataset_id: str | None = None,
     cases = build_cases(engine, dataset_id, truth)
     ids = [n["id"] for n in g.of_kind("Pattern")]
     vec_nn = engine.frame().patterns  # the LTIR representation itself, no attractor graph
-    text = dict(zip(ids, engine.encoder.embedder.embed([g.canonical_document(p) for p in ids])))
+    documents = engine.document_vectors()
+    text = {p: documents[p] for p in ids}
     wide = replace(cfg, max_retrieved=len(ids))
     weight = {p: g.insight(p).weight for p in ids}
 

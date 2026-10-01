@@ -160,6 +160,7 @@ function graphStyle() {
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
     { selector: 'edge[type="ACTIVATES"]', style: { "line-color": anchor, width: "mapData(weight, 0, 1, 0.4, 2)", opacity: 0.22 } },
+    { selector: 'edge[type="ACTIVATES"][?weak]', style: { "line-style": "dashed" } },
     { selector: 'edge[type="RELATED_TO"]', style: { "curve-style": "unbundled-bezier", "control-point-distances": "data(cpd)", "control-point-weights": 0.5, "line-color": anchor, width: "mapData(weight, 0, 1, 1, 6)", opacity: 0.75, label: "data(weight)", "font-size": 8.5, color: anchor, "text-background-color": surface, "text-background-opacity": 0.9, "text-background-padding": 2 } },
     { selector: 'edge[type="HAS_SCOPE"], edge[type="TARGETS"], edge[type="DISCOVERED_IN"], edge[type="OF_DATASET"]', style: { "line-color": edge, width: 0.6, opacity: 0.5 } },
     { selector: ".hidden", style: { display: "none" } },

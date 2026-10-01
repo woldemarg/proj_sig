@@ -50,7 +50,7 @@ Plain HTML, JavaScript and a design-token stylesheet with light and dark themes;
 | SPECIALIZES | grey arrow |
 | CONTRASTS | red dashed line |
 | SIBLING | dotted line |
-| ACTIVATES | thin lilac line, width ∝ alignment |
+| ACTIVATES | thin lilac line, width ∝ alignment; dashed when the membership is weak (coverage only, not walked) |
 | RELATED_TO | thick purple arc labelled with its weight |
 | GENERALIZES | hidden (the inverse of SPECIALIZES), but highlighted when a path uses it |
 

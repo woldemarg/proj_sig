@@ -64,6 +64,9 @@ def test_graph_consistency(hashed_engine):
             assert kinds[e["source"]] == kinds[e["target"]] == "Pattern"
     activated = {e["source"] for e in g.edges if e["type"] == "ACTIVATES"}
     assert activated == {nid for nid, k in kinds.items() if k == "Pattern"}
+    # one predicate for coverage and retrieval: a membership below the ontology's floor is weak (not walked)
+    floor = hashed_engine.config.min_activation_alignment
+    assert all(e["props"]["weak"] or e["weight"] >= floor for e in g.edges if e["type"] == "ACTIVATES")
     assert {e["target"] for e in g.edges if e["type"] == "ACTIVATES"} == {nid for nid, k in kinds.items() if k == "Attractor"}
     spec = {(e["source"], e["target"]) for e in g.edges if e["type"] == "SPECIALIZES"}
     gen = {(e["target"], e["source"]) for e in g.edges if e["type"] == "GENERALIZES"}

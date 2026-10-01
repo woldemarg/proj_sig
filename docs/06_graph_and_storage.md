@@ -37,7 +37,7 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 | Edge | From → to | Plane | Weight and properties |
 |---|---|---|---|
 | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS | Pattern → Pattern | structural | [6.1](#61-the-structural-plane) |
-| ACTIVATES | Pattern → Attractor | bridge | alignment with the **current** centroid; `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `weak`, `batch_id` |
+| ACTIVATES | Pattern → Attractor | bridge | alignment with the **current** centroid; `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `batch_id`, `weak` (coverage only: rerouted at ingest or now below `MIN_ACTIVATION_ALIGNMENT`; not walked) |
 | RELATED_TO | Attractor → Attractor (smaller → larger id) | latent | mutual-kNN cosine; `kind: mutual_knn` |
 | HAS_SCOPE | Pattern → Dimension | schema | 1.0; `value` |
 | TARGETS | Pattern → Metric | schema | `min(1, |z| / 3)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z`; `role` primary / secondary, `z`, medians |
@@ -64,7 +64,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `journal/patterns.jsonl` | one JSON record per line | `Insight.to_record()` + `row_id`, `canonical` (incl. the document), `embedding` | `ChunkJournal.append_batch` |
 | `journal/activations.jsonl` | one JSON record per line | activation records ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)) | same |
 | `journal/embeddings.mmap` + `embeddings_meta.json` | float32 `(rows, 1152)`; `{rows, dim}` | the insight vectors; row = `row_id` | same (grown by a `.tmp` write and an atomic rename) |
-| `journal/blocks/<batch_id>.npz` | `scope`, `target`, `phenomenon`, float32 `(n, 384)` | the three blocks of each vector | `Workspace.append` |
+| `journal/blocks/<batch_id>.npz` | `scope`, `target`, `phenomenon`, `document`, float32 `(n, 384)`; `pattern_ids` | the three blocks of each vector, and the canonical-document embedding the naive text baseline compares questions with | `Workspace.append` |
 | `state/concepts.npz`, `state.json`, `orphan_buffer.npz` | lac `ConceptStore` | centroids, counts, ids, timestamps (no text) | `ConceptStore.save` |
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
 | `state/sig_state.json` | JSON | the next batch sequence | pipeline |
