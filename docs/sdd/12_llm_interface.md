@@ -4,7 +4,7 @@
 Use a local Gemma 4 model to verbalise retrieved evidence into a grounded answer. The model is never the knowledge store and never discovers statistics. The interface stays replaceable.
 
 ## Scope
-`ltir/llm.py` (`LLMClient` protocol — the type of `Engine.llm` —, `OpenAICompatibleLLM`, `SYSTEM_PROMPT`), `ltir/qa.py` (`answer_question`, `compute_baselines`, `check_citations`, `QAResult`).
+`ltir/llm.py` (`OpenAICompatibleLLM`, the only client and the type of `Engine.llm`; `LLMResponse`; `SYSTEM_PROMPT`; tests inject a duck-typed `FakeLLM` with `model`, `generate()`, `health()`), `ltir/qa.py` (`answer_question`, `compute_baselines`, `check_citations`, `QAResult`).
 
 ## Inputs
 Question, `Engine` (graph, encoder, vectors, config, LLM client).

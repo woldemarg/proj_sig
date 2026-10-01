@@ -38,7 +38,7 @@ from ltir.quality import SelectionResult, select_insights
 from ltir.store import Workspace, atomic_write_json, utc_now
 
 if TYPE_CHECKING:
-    from ltir.llm import LLMClient
+    from ltir.llm import OpenAICompatibleLLM
 
 log = logging.getLogger("ltir.pipeline")
 
@@ -185,7 +185,7 @@ class Engine:
         config: Config,
         *,
         embedder: TextEmbedder | None = None,
-        llm: LLMClient | None = None,
+        llm: OpenAICompatibleLLM | None = None,
         recover: bool = True,
     ) -> None:
         """``recover=False`` for read-only callers (CLI status/query): they must never roll
@@ -201,7 +201,9 @@ class Engine:
             self._recover_interrupted()
 
     @property
-    def llm(self) -> LLMClient:
+    def llm(self) -> OpenAICompatibleLLM:
+        """The configured client, created on first use. Tests inject any object with
+        ``model``, ``generate(system, user) -> LLMResponse`` and ``health(fresh=...)``."""
         if self._llm is None:
             from ltir.llm import OpenAICompatibleLLM
 
