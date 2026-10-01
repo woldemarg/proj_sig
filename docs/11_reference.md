@@ -37,7 +37,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | dataset id | `ds-` + 12 hex of `sha256(file bytes ‖ bands ‖ categories)` | `ds-6e53eb7fb0f9` | [2.1](02_discovery.md#21-ingestion) |
 | batch id | `B` + UTC `YYYYMMDDTHHMMSS` + `-` + 6 hex | `B20261001T112454-ff7fe6` | [9.1](09_operations.md#91-the-batch-lifecycle) |
 | writer lock | `<workspace>.writer.lock` beside the workspace folder, holding the writer's pid | `workspace.writer.lock` | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
-| pattern id | `P-` + 12 hex of `sha1(dataset id, sorted condition expressions)` | `P-bc4657a04746` | [3.1](03_insights.md#31-the-insight-record) |
+| pattern id | `P-` + 12 hex of `sha1(dataset id, condition expressions of the conditions sorted by (attribute, value))` | `P-bc4657a04746` | [3.1](03_insights.md#31-the-insight-record) |
 | row-set identity | `row_hash`: 16 hex of `sha1(sorted covered row positions)` | `cda451bada571c5d` | [3.1](03_insights.md#31-the-insight-record) |
 | attractor id | integer `k` from lac; graph node `A-k` | `A-1` | [5.2](05_latent_anchors.md#52-one-batch-through-the-ontology) |
 | schema node ids | `D:<dataset>:<column>`, `M:<dataset>:<column>`, `DS:<dataset>`, `B:<batch>` | `M:ds-6e53eb7fb0f9:discount` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
@@ -89,7 +89,7 @@ Every quantity the system computes, where it is explained and which code compute
 | SD score, EMM score, volume utility | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) | `main_upd.step4_evaluate_micro_slices` |
 | bootstrap stability, confounder drivers | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) | `main_upd.step4b_deep_validation` |
 | closed intent, near-duplicate Jaccard, `temp_index` | [2.3](02_discovery.md#23-deduplication-before-validation) | `discovery.closed_intent`, `prune_near_duplicates`, `run_discovery` |
-| signed shift, EMM per pair, covariance pair, median test, Bonferroni | [2.4](02_discovery.md#24-what-the-adapter-adds) | `discovery.build_insights` |
+| signed shift, EMM per pair, covariance pair, median test, Bonferroni | [2.4](02_discovery.md#24-what-the-adapter-adds) | `discovery.run_discovery` (EMM per pair), `discovery._covariance_pair`, `discovery._median_test`, `discovery.build_insights` (signed shift, Bonferroni) |
 | selection predicates | [3.2](03_insights.md#32-selection-rules) | `quality.select_insights` |
 | weight factors and weighted geometric mean | [3.3](03_insights.md#33-insight-weight) | `quality.weight_factors`, `quality.insight_weight` |
 | phenomenon components | [4.2](04_representation.md#42-the-canonical-form) | `canonical.canonicalize` |
@@ -101,7 +101,7 @@ Every quantity the system computes, where it is explained and which code compute
 | signature, label, dispersion, evidence mass | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) | `graph._attractor_nodes` |
 | alignment, strength | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `ontology._activation_records`, `graph._activation_edges` |
 | batch metrics and warnings | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `LatentOntology` (`BatchMetrics`), `observability.apply_health_warnings` |
-| structural edges, contrast overlap, TARGETS weight | [6.1](06_graph_and_storage.md#61-the-structural-plane) | `structural.structural_edges`, `graph.build_snapshot` |
+| structural edges, contrast overlap, TARGETS weight | [6.1](06_graph_and_storage.md#61-the-structural-plane), [6.2](06_graph_and_storage.md#62-the-graph-schema) | `structural.structural_edges`, `graph._schema_plane` (TARGETS) |
 | query components, seed score | [7.1](07_question_answering.md#71-from-question-to-query), [7.2](07_question_answering.md#72-seeds) | `query.parse_query`, `query.score_pattern` |
 | path score, node rank, scope overlap | [7.3](07_question_answering.md#73-transversal-traversal) | `traversal.traverse` |
 | sphere projection | [8.4](08_interface.md#84-the-latent-sphere) | `sphere.sphere_figure` |
@@ -115,7 +115,7 @@ Two version strings in `ltir/models.py` and one fingerprint decide whether store
 |---|---|---|
 | `CANONICAL_VERSION` | `ltir-canon-4` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients (covariance insights cite only their correlation change) ([4.2](04_representation.md#42-the-canonical-form)) |
 | `REPRESENTATION_VERSION` | `ltir-rep-3` | what is embedded and how it is composed: block layout, re-normalisation, the uncentred frame ([4.3](04_representation.md#43-the-tripartite-vector)) |
-| fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
+| fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, storage and compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
 | `SNAPSHOT_VERSION` | 2 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 
 A workspace built under another fingerprint is refused (`representation_mismatch`) for ingest and for queries; `python -m ltir migrate --yes` rebuilds it from its stored sources and keeps the old copy ([6.5](06_graph_and_storage.md#65-versions-and-migration)). Renderings — documents, headlines, labels, the prompt, the UI — are derived from the records and can change without a version bump.

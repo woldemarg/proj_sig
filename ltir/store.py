@@ -217,6 +217,21 @@ class Workspace:
                     out.update(zip(data["pattern_ids"].tolist(), data["document"]))
         return out
 
+    def add_document_vectors(self, batch_id: str, pattern_ids: list[str], vectors: np.ndarray) -> None:
+        """Back-fill a batch's document vectors (``pattern_ids`` in the batch's journal order, so they
+        align with its blocks); the other arrays are kept and the file is replaced atomically."""
+        path = self.journal_dir / "blocks" / f"{batch_id}.npz"
+        arrays: dict[str, np.ndarray] = {}
+        if path.is_file():
+            with np.load(path) as data:
+                arrays = {k: data[k] for k in data.files}
+        arrays["document"] = np.asarray(vectors, dtype=np.float32)
+        arrays["pattern_ids"] = np.array(pattern_ids)
+        tmp = path.with_name(path.name + ".tmp")
+        with tmp.open("wb") as handle:
+            np.savez_compressed(handle, **arrays)
+        os.replace(tmp, path)
+
     def activations(self) -> list[dict[str, Any]]:
         return self.journal.load_activations()
 

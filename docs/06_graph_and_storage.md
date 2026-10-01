@@ -37,7 +37,7 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 | Edge | From → to | Plane | Weight and properties |
 |---|---|---|---|
 | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS | Pattern → Pattern | structural | [6.1](#61-the-structural-plane) |
-| ACTIVATES | Pattern → Attractor | bridge | alignment with the **current** centroid; `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `batch_id`, `weak` (coverage only: rerouted at ingest or now below `MIN_ACTIVATION_ALIGNMENT`; not walked) |
+| ACTIVATES | Pattern → Attractor | bridge | `alignment` with the **current** centroid (also the weight); `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `batch_id`, `weak` — the membership was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest, or its current alignment is below that floor; it counts for coverage and is not walked |
 | RELATED_TO | Attractor → Attractor (smaller → larger id) | latent | mutual-kNN cosine; `kind: mutual_knn` |
 | HAS_SCOPE | Pattern → Dimension | schema | 1.0; `value` |
 | TARGETS | Pattern → Metric | schema | `min(1, |z| / 3)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z`; `role` primary / secondary, `z`, medians |
@@ -54,9 +54,9 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 
 | Path | Format | Content | Written by |
 |---|---|---|---|
-| `<workspace>.writer.lock` (beside the folder) | the writer's pid; one OS-locked byte | the exclusive writer lock ([6.4](#64-commit-rollback-and-recovery)) | `store.acquire_writer_lock` |
+| `<workspace>.writer.lock` (beside the folder) | the writer's pid, under an OS lock | the exclusive writer lock ([6.4](#64-commit-rollback-and-recovery)) | `store.acquire_writer_lock` |
 | `registry/batches/<batch_id>.json` | JSON | the batch record ([9.1](09_operations.md#91-the-batch-lifecycle)) | `save_batch`, atomically at every stage |
-| `uploads/` | files | uploads waiting to be processed | web app |
+| `uploads/` | files | the web app's uploads, kept after processing until a reset | web app |
 | `datasets/<ds>/source.<ext>` | the uploaded bytes | provenance, migration input | pipeline |
 | `datasets/<ds>/profile.json` | JSON | the batch `profile` (columns, selected dimensions, global medians and MADs, cardinality, entropy, bands, overrides) | pipeline |
 | `datasets/<ds>/covers.npz` | npz: pattern id → int64 row positions | the `rows_ref` target | pipeline |
@@ -64,17 +64,17 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `journal/patterns.jsonl` | one JSON record per line | `Insight.to_record()` + `row_id`, `canonical` (incl. the document), `embedding` | `ChunkJournal.append_batch` |
 | `journal/activations.jsonl` | one JSON record per line | activation records ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)) | same |
 | `journal/embeddings.mmap` + `embeddings_meta.json` | float32 `(rows, 1152)`; `{rows, dim}` | the insight vectors; row = `row_id` | same (grown by a `.tmp` write and an atomic rename) |
-| `journal/blocks/<batch_id>.npz` | `scope`, `target`, `phenomenon`, `document`, float32 `(n, 384)`; `pattern_ids` | the three blocks of each vector, and the canonical-document embedding the naive text baseline compares questions with | `Workspace.append` |
+| `journal/blocks/<batch_id>.npz` | `scope`, `target`, `phenomenon`, `document`, float32 `(n, 384)`; `pattern_ids` | the three blocks of each vector, and the canonical-document embedding the naive text baseline compares questions with | `Workspace.append`; `add_document_vectors` back-fills `document` for an older batch ([7.6](07_question_answering.md#76-baselines)) |
 | `state/concepts.npz`, `state.json`, `orphan_buffer.npz` | lac `ConceptStore` | centroids, counts, ids, timestamps (no text) | `ConceptStore.save` |
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
 | `state/sig_state.json` | JSON | the next batch sequence | pipeline |
 | `state/ontology_metrics.csv` | CSV | lac `BatchMetrics` rows | `MetricsRecorder` |
 | `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 2) | `save_graph`, atomically |
-| `graph/sphere.html` | standalone Plotly page | the latent sphere ([8.4](08_interface.md#84-the-latent-sphere)) | after every READY batch (`SPHERE_EXPORT`) |
+| `graph/sphere.html` | standalone Plotly page | the latent sphere ([8.4](08_interface.md#84-the-latent-sphere)) | on a background thread after a READY batch (`SPHERE_EXPORT`; only the latest of several queued exports runs, and one that finishes after a reset is discarded); `python -m ltir sphere` |
 | `logs/queries.jsonl` | one JSON per question | `{at, question, mode, metrics, seeds, evidence, citations}` | `log_query` (empty-graph questions are not logged) |
 | `experiments/*.json` | JSON | benchmark results | `python -m ltir experiment` |
 
-The snapshot is **derived data**: `ltir rebuild-graph` regenerates it from the journals, the profiles, the registry and the concept store, recomputing ACTIVATES alignments against the current centroids and RELATED_TO from the topology. Nothing in the workspace stores raw rows other than the source copy.
+The snapshot is **derived data**: `ltir rebuild-graph` regenerates it from the journals, the profiles, the registry and the concept store, recomputing ACTIVATES alignments against the current centroids and RELATED_TO from the topology. Raw rows are stored only in the source copy and, for web uploads, in `uploads/`; both stay until a reset.
 
 ## 6.4 Commit, rollback and recovery
 
@@ -84,16 +84,16 @@ The snapshot is **derived data**: `ltir rebuild-graph` regenerates it from the j
 checkpoint → ontology ingest → duplicate guard (duplicate_patterns if a pattern id is already journaled)
 → journal append (records, activations, vectors) → ConceptStore.save → record_representation → batch sequence
 → snapshot build + atomic write → batch saved READY → checkpoint discarded → committed caches swapped in
-→ optional: Neo4j publish, sphere export (failures there are warnings; the batch stays READY)
+→ optional: Neo4j publish, then the sphere export queued on its own thread (failures there are warnings; the batch stays READY)
 ```
 
 **Checkpoint and rollback.** `checkpoint()` copies `state/` to `checkpoint/` and stores `ChunkJournal.mark()` (the sizes of both logs and the record count). `rollback()` truncates the journal to the mark and restores `state/`; it runs on any failure after the checkpoint. The checkpoint outlives the READY write, so a crash between the two still recovers. Files outside the journal and the state survive a failed batch — `journal/blocks/<batch>.npz`, `covers.npz`, `profile.json`, `rejections.json` and the source copy — and so does a snapshot written just before a failure of the READY save; the next successful batch or `rebuild-graph` replaces it.
 
-**Committed caches.** `Engine.graph()` and `Engine.frame()` (`LatentFrame`: pattern id → unit vector, anchor id → centroid) are rebuilt from committed state after READY, so readers never see a half-appended journal or a half-saved ontology. A reader that finds an outdated snapshot version rebuilds and writes the snapshot.
+**Committed caches.** `Engine.graph()` and `Engine.frame()` (`LatentFrame`: pattern id → unit vector, anchor id → centroid, pattern id → document vector) are rebuilt from committed state after READY, so readers never see a half-appended journal or a half-saved ontology. An engine that finds an outdated snapshot version rebuilds and writes the snapshot.
 
-**One writer per workspace.** A *writer* engine (the web app; CLI `demo`, `ingest`, `reset`, `rebuild-graph`; `migrate`) first takes the workspace's exclusive writer lock: an operating-system lock on one byte of `<workspace>.writer.lock`, a file beside the workspace folder (so a migration can rename the folder while it is held), which also records the holder's pid. The lock is held until the process exits and released by the operating system, also after a crash; it is re-entrant within a process. A second writer process gets `WorkspaceBusy` — the CLI prints it and exits with code 2, the web app refuses to start — instead of interleaving batches with the first or touching its queue. Read-only engines (`query`, `status`, `experiment`, `sphere`, `neo4j-sync`) take no lock. Within the writer, batches run one at a time (a re-entrant lock; the web app uses a single worker thread).
+**One writer per workspace.** A *writer* engine (the web app; CLI `demo`, `ingest`, `reset` — with or without `--yes` —, `rebuild-graph`; `migrate`) first takes the workspace's exclusive writer lock on `<workspace>.writer.lock`, a file beside the workspace folder (so a migration can rename the folder while it is held) that also records the holder's pid: on Windows `msvcrt` locks one byte (at offset 1 MiB, so the pid stays readable), on POSIX `fcntl.flock` locks the whole file. The lock is held until the process exits and released by the operating system, also after a crash; it is re-entrant within a process. A second writer process gets `WorkspaceBusy` — the CLI prints it and exits with code 2, the web app refuses to start — instead of interleaving batches with the first or touching its queue. Read-only engines (`query`, `status`, `experiment`, `sphere`, `neo4j-sync`) take no lock and change no batch, journal or ontology state; they may still write derived files — an outdated snapshot rebuilt, `logs/queries.jsonl`, `experiments/*.json`, `graph/sphere.html`. Within the writer, batches run one at a time (a re-entrant lock; the web app uses a single worker thread).
 
-**Recovery.** Holding the lock, the writer rolls back and fails (`interrupted`) every unfinished batch — with no other writer alive, any batch that is not terminal was left by a process that died, including uploads that were still queued.
+**Recovery.** Holding the lock, the writer rolls back and fails (`interrupted`) every unfinished batch — with no other writer alive, any batch that is not terminal was left by a process that died, including uploads that were still queued. Recovery restores the journal and the state; it does not rebuild the snapshot (the next READY batch or `rebuild-graph` does).
 
 **Idempotency.** The dataset id is content-addressed, so a READY batch for the same id makes a new upload `SKIPPED` (`duplicate_of`); pattern ids are deterministic; a Neo4j publish is idempotent (MERGE on ids, then the same stale deletions). A failed batch keeps its `batch_seq`, and the next batch reuses that number.
 
@@ -104,21 +104,21 @@ A workspace records the `EmbeddingSpec` of its first batch ([4.6](04_representat
 `python -m ltir migrate --yes` (`migrate.migrate_workspace`) rebuilds a workspace with the current code:
 
 1. takes the writer lock (refused while the web app or another writer runs) and refuses while any batch is unfinished;
-2. re-ingests every READY batch's stored `datasets/<id>/source.<ext>` with its recorded `bins` and `categories`, in `batch_seq` order, into `<workspace>.migrating` (Neo4j off);
+2. re-ingests every READY batch's stored `datasets/<id>/source.<ext>` with its recorded `bins` and `categories`, in `batch_seq` order, into `<workspace>.migrating` (Neo4j off); FAILED and SKIPPED batches do not carry over, and a batch recorded without options (`None`) is resolved against the current defaults again;
 3. on success renames the old workspace to `<workspace>.bak-<UTC timestamp>` — never deleted — and the new one into place, syncs the Neo4j mirror when it is enabled, and prints old → new batch ids and pattern counts.
 
-Dataset ids stay stable (content + options); pattern ids change only where closure adds conditions. A failure leaves the old workspace untouched. `python -m ltir reset --yes` deletes a workspace instead; it is never needed for a version change.
+Dataset ids stay stable (content + options); pattern ids change only where closure adds conditions. A failure leaves the old workspace untouched and the partial `<workspace>.migrating` folder for inspection (the next migration replaces it). `.gitignore` covers these folders and the lock file for the default name `workspace` only. `python -m ltir reset --yes` deletes a workspace instead; it is never needed for a version change.
 
 ## 6.6 Neo4j mirror
 
-With `NEO4J_ENABLED=true`, every publish makes `NEO4J_DATABASE` equal to the snapshot (`neo4j_sink.publish_snapshot`, one write transaction):
+With `NEO4J_ENABLED=true`, every publish makes `NEO4J_DATABASE` equal to the snapshot (`neo4j_sink.publish_snapshot`):
 
-* `CREATE DATABASE <db> IF NOT EXISTS` (ignored on editions without multi-database support), unique constraints on all six labels;
-* parameterised `UNWIND … MERGE (n:Label {id}) SET n = props, n.id = id` and `MERGE (s)-[r:TYPE]->(t) SET r = props, r.weight = …`, batched by `NEO4J_LOAD_BATCH_SIZE` — properties are **replaced**, so a property that disappeared or became `None` is removed;
+* before the write, each as its own statement: `CREATE DATABASE <db> IF NOT EXISTS WAIT` (errors ignored: an edition without multi-database support, or a user without the right, uses the database as configured), then unique constraints on all six labels;
+* in one write transaction, parameterised `UNWIND … MERGE (n:Label {id}) SET n = props, n.id = id` (the props include the node's `label`) and `MERGE (s)-[r:TYPE]->(t) SET r = props, r.weight = …`, batched by `NEO4J_LOAD_BATCH_SIZE` — properties are **replaced**, so a property that disappeared or became `None` is removed (`None` values are never written);
 * then every node of the six labels whose id the snapshot does not hold is deleted with its relationships, and every relationship of the ten types whose (source, target) pair it does not hold is deleted — stale anchors, links and patterns never linger;
 * nested properties are stored as JSON strings in `<key>_json` (`conditions_json`, `shifts_json`, `canonical_json`, `signature_json`, `centroid_json`, …).
 
-Publishing happens after every READY batch, after `rebuild-graph` and after a migration; `reset` publishes an empty snapshot, which clears the mirror; `python -m ltir neo4j-sync` syncs on demand (regardless of `NEO4J_ENABLED`). SIG owns its six labels in that database: one workspace per database, and no other data under those labels. A Neo4j failure leaves the batch READY with `neo4j.status = failed` and the warning `graph persistence (Neo4j) failed`; `reset`, `rebuild-graph` and `migrate` report it and go on. `ltir/cypher/queries/transversal.cypher` is the Browser equivalent of the traversal of [7.3](07_question_answering.md#73-transversal-traversal).
+Publishing happens after every READY batch, after `rebuild-graph` and after a migration; `reset` publishes an empty snapshot, which clears the mirror; `python -m ltir neo4j-sync` syncs on demand (regardless of `NEO4J_ENABLED`). SIG owns its six labels in that database: one workspace per database, and no other data under those labels. A Neo4j failure leaves the batch READY with `neo4j.status = failed` and the warning `graph persistence (Neo4j) failed`; `reset`, `rebuild-graph` and `migrate` report it and go on. `ltir/cypher/queries/transversal.cypher` approximates the traversal of [7.3](07_question_answering.md#73-transversal-traversal) for the Browser: the same walkable edges, one latent hop and one lattice hop, the best path per target, but no budgeted best-first search.
 
 ## 6.7 Configuration and guarantees
 

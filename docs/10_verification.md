@@ -8,21 +8,21 @@
 
 ## 10.1 Test map
 
-71 collected tests (70 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
+74 collected tests (73 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
 | discovery → insight | `test_discovery_contract.py` (10) | profile contract (identifier dropped, float targets kept, EDA dimensions, candidates within the search space); fields and provenance; signed directions of the planted effects; determinism; planted phenomena survive selection; `closed_intent` adds implied conditions; identical extents merge before validation; near duplicates pruned in rank order; extent/intent antitone; `no_numeric_targets` and `invalid_schema` |
 | selection and weight | `test_quality.py` (4) | weight bounds and monotonicity, the formula with all five factors measured, reason codes, the R7 budget, covariance retargeting with unmeasured factors and the shift's p-values and stability `None` |
 | canonical → embedding | `test_canonical_embedding.py` (9) | embedding inputs vs document (sections, ASCII); labels without numbers; number rules; covariance component; shape, dtype, unit norms, stability, direction separation and cross-scope similarity for the hashing backend **and the real model**; fingerprint sensitivity; query instruction only on free question text; the MiniLM env block applies verbatim |
-| insight → ontology | `test_ontology.py` (9) | cold start coverage and one anchor per planted cluster; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
+| insight → ontology | `test_ontology.py` (9) | cold start coverage, at least three anchors, each planted cluster within one anchor; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
 | structural plane | `test_structural.py` (5) | covering relation only, GENERALIZES inverse, SIBLING rule, CONTRASTS rule and relation type, no embedding dependency |
 | persistence | `test_persistence.py` (11) | write → reload → rebuild identical; idempotent re-ingest; graph consistency (incl. every membership below the alignment floor is weak); rollback; representation mismatch; crash recovery; a second writer process refused while the first keeps its queue; migration with backup; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; the Neo4j mirror equals the snapshot |
-| traversal and evidence | `test_traversal.py` (4) | the exact pattern → anchor → anchor → pattern path with hops, weights, reversal and score; thresholds; hop and depth budgets; parsing against the graph vocabulary; the evidence object |
+| traversal and evidence | `test_traversal.py` (4) | the exact pattern → anchor → anchor → pattern path with hops, weights, reversal and score; a weak membership is not walked while a kept 0.35 link is; hop and depth budgets; parsing against the graph vocabulary; the evidence object |
 | LLM client | `test_llm_client.py` (4) | the real HTTP client against an OpenAI-compatible stub (payload, provider pinning, health, reasoning flag); fail-fast on an unreachable endpoint; citation validation incl. grouped citations |
-| end to end | `test_e2e.py` (6) | upload → … → grounded answer with provenance and cross-scope analogues (hashing and real model); the benchmark ordering (`test_hypothesis_apparatus`); an answer embeds the question, never the corpus; LLM failure keeps knowledge; empty graph |
-| 3D sphere | `test_sphere.py` (3) | one legend group per anchor, points within bounds, highlight layers, export, the sphere API and served plotly |
-| self-containment | `test_self_contained.py` (4) | no module, `sys.path` entry, config path or source string resolves outside the repository; the model loads from `models/` |
+| end to end | `test_e2e.py` (7) | upload → … → grounded answer with provenance and cross-scope analogues (hashing and real model); the benchmark ordering (`test_hypothesis_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; LLM failure keeps knowledge; empty graph |
+| 3D sphere | `test_sphere.py` (5) | one legend group per anchor, points within bounds, highlight layers, export, the export runs off the batch thread, a reset during an export leaves no record and no page, the sphere API and served plotly |
+| self-containment | `test_self_contained.py` (4) | no loaded module and no `sys.path` entry lies in the original eda or lac project, and no `ltir` source refers to them; every path setting resolves inside the repository; the model loads from `models/` |
 | UI | `test_ui_smoke.py` (2) | API upload → READY → graph → node → query highlight; headless Chromium: dataset card, insights table, chat answer with highlight and evidence cards, citation → drawer, theme toggle, no page errors |
 
 **Isolation.** `conftest.py` sets `LTIR_NO_DOTENV=1`, `neo4j_enabled=False` and `sphere_export=False`, so developer credentials never reach a test and no test writes to a real database; the LLM is a deterministic fake or a local stub. **Markers**: `model` (4 tests, skipped automatically when the model folder is missing) and `browser` (skipped without Playwright and an installed Chromium). `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider`.
@@ -72,11 +72,11 @@ With MiniLM the transversal row is 0.333 / 0.361 / 0.567 / 0.729 ([4.5](04_repre
 
 ## 10.4 Measurement scripts
 
-All scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j and the sphere export off, and save their results to `.scratch/results/`; the numbers quoted in chapters 4, 5 and 7 come from them. `scripts/scratch.py` holds the shared helpers.
+The measurement scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j and the sphere export off, and save their results to `.scratch/results/`; the numbers quoted in chapters 4, 5 and 7 come from them. `scripts/scratch.py` holds the shared helpers; `download_model.py` is a setup script and builds no workspace.
 
 | Script | Measures |
 |---|---|
-| `prompt_tokens.py` | characters, non-ASCII characters and tokens (XLM-R SentencePiece, Qwen BPE) of the evidence prompt, the documents and the evidence-only answer |
+| `prompt_tokens.py [--backend hashing]` | characters, non-ASCII characters and tokens (XLM-R SentencePiece, Qwen BPE) of the evidence prompt, the documents and the evidence-only answer; the default hashing backend leaves the documents unchanged, but the prompt's items depend on retrieval and so on the backend |
 | `compare_embedders.py --models minilm,qwen3` | contract cosines, the benchmark, domain separation for `MIN_ASSIGN_THRESHOLD`, cross-domain links and evidence, load and embed time, peak VRAM per embedder |
 | `eval_answers.py` | five demo questions through the configured LLM: grounding, unknown citations, latency, token usage — **live**, it uses the endpoint and key in `.env` |
 | `download_model.py` | fetches the pinned embedding model into `models/` |
@@ -100,7 +100,7 @@ All scripts build throwaway workspaces under `.scratch/` (never `workspace/`), s
 
 **Operation**
 * Rollback restores the journal and the state; dataset-folder files and a just-written snapshot of a failed batch remain until the next successful batch or `rebuild-graph`.
-* The highlight covers up to 15 retrieved patterns, the prompt 10. The LLM runs remotely in the configured deployment, so the prompt — subgroup statistics, not rows — leaves the machine; use a local server for fully local inference.
+* The highlighted walk (`traversed`, `edges`) covers up to 15 retrieved patterns; the `evidence` group and the prompt hold the first 10. The LLM runs remotely in the configured deployment, so the prompt — subgroup statistics, not rows — leaves the machine; use a local server for fully local inference.
 * One writer process per workspace: while the web app runs, CLI writers (`demo`, `ingest`, `reset`, `rebuild-graph`, `migrate`) are refused; upload through the app.
 * SIG owns its six node labels in `NEO4J_DATABASE`: every publish deletes nodes of those labels that the snapshot does not hold, so the database serves one workspace and no other data under those labels.
 * The LLM and Neo4j are covered by a stub server and a fake driver in the tests; the live OpenRouter runs and an earlier, add-only version of the Neo4j publisher were verified by hand — the current sync-to-snapshot publisher has been checked against the fake driver only ([7.7](07_question_answering.md#77-measured-behaviour), [6.6](06_graph_and_storage.md#66-neo4j-mirror)).

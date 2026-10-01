@@ -13,7 +13,7 @@ Every task that changes a line of Python ends with the gate passing:
 .venv/bin/python scripts/check.py                  # macOS / Linux
 ```
 
-The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (71 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
+The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (74 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
 
 - `scripts/check.py --quick` (lint + the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence and UI tests are where cross-module regressions show up.
@@ -44,7 +44,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 
 ## Boundaries
 
-- **Only this repository is in scope.** Code outside it is reference material at most: do not edit it, do not import from it, do not add it to `sys.path`. `tests/test_self_contained.py` enforces that no module, path or model resolves outside the repository.
+- **Only this repository is in scope.** Code outside it is reference material at most: do not edit it, do not import from it, do not add it to `sys.path`. `tests/test_self_contained.py` enforces that no loaded module, `sys.path` entry or `ltir` source refers to the original engine projects, that every path setting resolves inside the repository, and that the model loads from `models/`.
 - Reuse upstream code by editing the vendored copy in `ltir/engines/` and recording the change in `PROVENANCE.md`. Never re-copy an upstream file over the vendored one (it carries the signed-attractor repair and the numerical fixes).
 - The Python environment that `.venv` may be layered on is not ours to modify; install into `.venv` only and add the dependency to `requirements.txt`.
 - The configured Neo4j database and the LLM provider account belong to the user. Tests run with `LTIR_NO_DOTENV=1` and `neo4j_enabled=False` (set in `conftest.py`); keep it that way.
@@ -65,7 +65,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 - Typed contracts over ad-hoc dicts where the shape matters (`Insight`, `CanonicalInsight`, `EmbeddingSpec`, `LatentFrame`, `QAResult`). Journal and snapshot records are plain JSON by design — read them through `Insight.from_record`.
 - Minimal English docstrings on public functions and non-trivial helpers; state the contract or the non-obvious intent, not the control flow. Action-oriented helper names (`build_`, `select_`, `compute_`, `resolve_`, `record_`).
 - No decorative section banners, no review scaffolding, no "temporary" compatibility layers, no wrappers around a single call.
-- `ltir/config.py` is the only home for tunables; every field is settable from the environment by its upper-case name and documented in `.env.sample`. lac parameters keep lac's names.
+- `ltir/config.py` is the only home for tunables; every field is settable from the environment by its upper-case name and listed with its default in `docs/11_reference.md` §11.3; `.env.sample` documents the commonly changed ones. lac parameters keep lac's names.
 - Vocabulary: one name per concept per layer (glossary: `docs/11_reference.md` §11.1). Code says Pattern / Attractor / scope / target; the UI says insight / theme; vendored lac code says chunk / concept. Do not mix layers.
 - Errors are codes, not crashes: a batch ends `FAILED` with an `error.code` from `docs/09_operations.md` §9.4; an answer degrades to `answer_mode=fallback`. Never swallow an exception without recording it on the batch or the result.
 
@@ -96,7 +96,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 - Order: targeted tests for the changed area → `check.py --quick` → **`check.py`** (Rule 0).
 - Behaviour changes, regressions and non-trivial edge cases get a test in the file that owns the transition (test map: `docs/10_verification.md` §10.1). Prefer extending an existing fixture over inventing a new workspace.
 - Planted-phenomenon tests (`test_discovery_contract.py`, `test_e2e.py`, `test_hypothesis_apparatus`) are the statistical regression suite: a change that makes them fail is a change to the mathematics and needs the owning chapter updated and a justification, not a loosened assertion.
-- Browser test: Playwright with the locally installed Chromium (`tests/test_ui_smoke.py::_chromium`). UI changes keep its selectors working or update them in the same change.
+- Browser test: Playwright with the locally installed Chromium (`tests/test_ui_smoke.py::_chromium` looks under `%LOCALAPPDATA%\ms-playwright` for the Windows or Linux build; elsewhere the test skips). UI changes keep its selectors working or update them in the same change.
 - Never add network calls to tests. The LLM endpoint and Neo4j are covered by the stub server and the fake driver.
 
 ## 5) Statistical and representational changes
@@ -108,7 +108,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 | the embedding model | also rerun `scripts/compare_embedders.py`: cosine thresholds belong to the embedder, so recalibrate `MIN_ASSIGN_THRESHOLD` until `domains_separated` is `True` (`docs/05_latent_anchors.md` §5.10) and requote the tables of §4.5 and §5.10 |
 | attractor extraction, assignment, EMA, thresholds (`ontology.py`, `engines/lac/`) | update chapter 5; run `tests/test_ontology.py` and the E2E tests with the real model |
 | traversal grammar, seed scoring, evidence limits | update chapter 7; keep `cypher/queries/transversal.cypher` in step |
-| a `Config` field | `.env.sample`, the owning chapter, the parameter table in `docs/11_reference.md` §11.3 |
+| a `Config` field | the owning chapter, the parameter table in `docs/11_reference.md` §11.3, and `.env.sample` when users are expected to change it |
 | error codes, batch record fields, API responses | chapter 9 (codes, record), chapter 8 (API), `app.js` (`ERROR_HELP`, data contract) |
 
 ## 6) Documentation rules

@@ -45,7 +45,11 @@ def measure(text: str, tokenizers: dict) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="current", help="name of this measurement (e.g. baseline, canon3)")
-    parser.add_argument("--backend", default="hashing", help="embedding backend for the scratch ingest (text does not depend on it)")
+    parser.add_argument(
+        "--backend",
+        default="hashing",
+        help="embedding backend of the scratch run: the documents do not depend on it, the evidence prompt does (retrieval)",
+    )
     args = parser.parse_args()
     engine = demo_engine("prompt_tokens", embedding_backend=args.backend)
     graph = engine.graph()

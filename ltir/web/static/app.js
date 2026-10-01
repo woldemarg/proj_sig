@@ -507,7 +507,9 @@ function botCard(turn) {
   ].join("");
   const evid = items.map((it, i) => {
     const s = it.statistics;
-    const sh = s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
+    const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
+      ? esc(it.relationship || "correlation change")
+      : s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
     return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +

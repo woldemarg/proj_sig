@@ -16,7 +16,7 @@
 | `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* / CLI `--bins` |
 | `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* / CLI `--categories` |
 
-An empty UI field means "workspace default"; only the CLI can pass an explicit `""`.
+An empty upload field means "workspace default" (`None`); the UI's *Try the demo* sends an explicit `""` for both options, while CLI `demo` uses the workspace defaults and CLI `ingest` passes `None` unless the flag is given (`--bins ""` is an explicit "none").
 
 Steps, in order:
 
@@ -24,7 +24,7 @@ Steps, in order:
 2. **Options.** The band and category specs are parsed before the file is read; a malformed spec → `invalid_options`.
 3. **Type and parse.** Unknown extensions → `unsupported_file`. CSV and `.txt` use delimiter sniffing (`sep=None`, python engine), TSV a tab, Parquet `read_parquet` (without pyarrow installed: `unreadable_file`). Parser errors → `unreadable_file`. pandas' default NA parsing applies: a literal `NA` becomes missing, which is why the synthetic region is called `US`, not `NA`.
 4. **Shape.** Fewer than 2 columns or fewer than `MIN_ROWS` (50) rows → `invalid_schema`.
-5. **Categories, then bands.** A *categorical override* casts a column to text (`Int64` first when it holds integral floats, so `1.0` becomes `"1"`; NaN becomes `missing`): this is how integer-coded dimensions such as `Store` or `Holiday_Flag` become scope columns instead of metrics or identifiers. A *band* derives `<col>_band` with values `q1 … qk` (quantile bins, duplicate edges dropped) plus `missing`, and **drops the source column**, so the band acts as a dimension and can never become a tautological target (`median_income` shifting inside `median_income_band = q4`). Workspace defaults (`None`) are applied leniently — columns the dataset lacks are skipped with one warning — while an explicit option is strict: an unknown column, or a band on a non-numeric column, → `invalid_options`. Because NaN becomes the level `missing` (not a null), `x_band = missing` can be a selector like any other value.
+5. **Categories, then bands.** A *categorical override* casts a column to text (`Int64` first when it holds integral floats, so `1.0` becomes `"1"`; NaN becomes `missing`): this is how integer-coded dimensions such as `Store` or `Holiday_Flag` become scope columns instead of metrics or identifiers. A *band* derives `<col>_band` with values `q1 … qk` (quantile bins, duplicate edges dropped) plus `missing`, and **drops the source column**, so the band acts as a dimension and can never become a tautological target (`median_income` shifting inside `median_income_band = q4`). Workspace defaults (`None`) are applied leniently — columns the dataset lacks are skipped with one warning — while an explicit option is strict: an unknown column → `invalid_options`. A band on a non-numeric column is `invalid_options` in both modes; since categories are applied first, that includes a column named in both options (it is already text when the band is made). Because NaN becomes the level `missing` (not a null), `x_band = missing` can be a selector like any other value.
 6. **Targets.** No numeric column → `no_numeric_targets`. All-null columns produce a warning.
 
 The dataset id is a pure function of the bytes and the applied options:
@@ -39,7 +39,7 @@ Identical content with identical options always gets the same id; a second uploa
 
 ## 2.2 The EDA engine in five steps
 
-The adapter (`discovery.run_discovery`) calls the vendored engine step by step, in the order of the EDA's own workflow, and converts its DataFrames into typed objects; downstream of discovery the pipeline reads only typed candidates, the profile, the rejections and the covers. Two process-wide side effects come with the engine: importing it silences `RuntimeWarning`, and the adapter reseeds NumPy's global RNG before the bootstrap. Notation for this chapter:
+The adapter (`discovery.run_discovery(df, config, on_stage=None)`; `on_stage("DISCOVERING")` is called once profiling and the search space are done, which moves the batch from PROFILING to DISCOVERING) calls the vendored engine step by step, in the order of the EDA's own workflow, and converts its DataFrames into typed objects; downstream of discovery the pipeline reads only typed candidates, the profile, the rejections and the covers. Two process-wide side effects come with the engine: importing it silences `RuntimeWarning`, and the adapter reseeds NumPy's global RNG before the bootstrap. Notation for this chapter:
 
 | Symbol | Meaning |
 |---|---|
@@ -107,7 +107,7 @@ The adapter seeds the RNG once before the whole step, so a cohort's resamples de
 
 > **Running example.** Profiling keeps the numerics `discount, margin, delivery_days, return_rate` and the categoricals `region, category, channel, payment, weekday, store_size`, and drops `order_id` as an identifier. Step 2 keeps `region, category, channel`; the planted noise columns `payment, weekday, store_size` fall below the median power. The search space has 88 conjunctions; 84 pass the size screen (four rare `partner` slices do not); the top 50 are validated. `category=='phones' AND region=='US'` covers 438 rows, its top shifts are discount and margin, its bootstrap stability is 0.974, and it has no confounders (the demo dimensions are drawn independently).
 
-The vendored engine differs from upstream in a set of local, commented numerical repairs — the MAD fallback and cap, ε² instead of η², the 95 %-mass rule, the over-budget truncation, NaN-aware EMM, the full-size bootstrap, the significance-gated confounders — each listed with its reason in [`PROVENANCE.md`](../ltir/engines/PROVENANCE.md).
+The vendored engine differs from upstream in a set of local, commented numerical repairs — the MAD fallback and cap, constant categoricals dropped before the nesting rule (which needs an informative coarser column), ε² instead of η², the 95 %-mass rule, the over-budget truncation, NaN-aware EMM, the full-size bootstrap, confounders gated by a chi-square test and named by the level with the largest share gain, signed hidden shifts — each listed with its reason in [`PROVENANCE.md`](../ltir/engines/PROVENANCE.md).
 
 ## 2.3 Deduplication before validation
 
@@ -141,14 +141,14 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | EMM per pair | `emm_score = EMM_eda / sqrt(m(m − 1))`, applied as the pass-1 rows become candidates (so `temp_index`, step 4b and the insight all see the per-pair value) | the Frobenius norm grows with the number of off-diagonal entries; per pair it is an RMS correlation change in `[0, 2]`, so `MIN_EMM_SCORE` means the same on every dataset |
 | covariance pair | `argmax_{i<j} |C_S,ij − C_ij|` over pairs defined in `S` (needs `n ≥ 3m`; `{}` if none) → `{pair, local_corr, global_corr, delta}` | says *which* relation drives the EMM score |
 | pair shifts | `z_k(S)` for pair metrics missing from the top three (`Shift.source = "covariance_pair"`) | lets a correlation-change insight be targeted on one of its metrics |
-| significance | two-sided asymptotic median test on the primary metric, `se = 1.2533 · 1.4826 · MAD(y_S) / √n` (falls back to the global MAD, then to `sd/√n`), `z = (med_S − med) / se`, `p = 2 · Φ̄(|z|)` (`p = 1` for `n < 2`); `p_adjusted = min(1, p · n_tests)` | the EDA has no p-values; selection and weight need one. Bonferroni over overlapping cohorts is conservative, never anti-conservative |
+| significance | two-sided asymptotic median test on the primary metric, `se = 1.2533 · 1.4826 · MAD(y_S) / √n` with the subgroup MAD computed like the EDA's (zero-MAD fallback included); if that is 0, the global MAD; if that is 0 too, `se = sd(y_S) / √n`. `z = (med_S − med) / se`, `p = 2 · Φ̄(|z|)` (`p = 1` for `n < 2` or a zero or non-finite `se`); `p_adjusted = min(1, p · n_tests)` | the EDA has no p-values; selection and weight need one. Bonferroni over overlapping cohorts is conservative, never anti-conservative |
 | stability | `final_sd / sd_raw = 1 − min(CV, 0.9)` | recovers the bootstrap factor that step 4b folds into `final_sd` |
 | determinism | `np.random.seed(EDA_RANDOM_SEED)` before step 4b | `DataFrame.sample` uses the global RNG; same data and config → identical insights |
 | provenance | dataset, file, batch, engine path, steps, exact selector, `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), size of the testing family | traceability |
 
 ## 2.5 Contracts
 
-* `run_discovery(df, config) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
+* `run_discovery(df, config, on_stage=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
 * `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
 * `covers_of(result) → {expression: row positions}` for every distinct cohort; the pipeline persists the covers of the kept insights as `covers.npz`, keyed by pattern id.
@@ -173,9 +173,9 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); empty search space or nothing passed pass 1 |
 | `internal_error` | `DiscoveryError` | a closed intent that does not contain its own selector (an invariant check that should never fire) |
 
-Guarantees (asserted by `tests/test_discovery_contract.py`):
-* `0 < len(candidates) ≤ pass1_subgroups ≤ search space size`; `pass1_subgroups − len(candidates)` equals the `cover_equivalent` rejections.
-* `len(validated) ≤ VALIDATION_BUDGET`; validated cohorts have pairwise distinct extents.
+Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame is named):
+* `0 < len(candidates) ≤ search space size`, `0 < len(validated) ≤ VALIDATION_BUDGET`, `n_tests = len(candidates) · m`; by construction `len(candidates) ≤ pass1_subgroups`.
+* On a toy frame with an implied column: `pass1_subgroups − len(candidates)` equals the `cover_equivalent` rejections, the merged cohort carries the implied condition and no driver for it, and the validated cohorts have pairwise distinct extents; near duplicates are pruned in rank order (a second toy case).
 * Galois antitone: among validated cohorts, a strictly smaller extent has a strictly larger intent.
 * Same data and config → identical insights; `Insight.support == len(covers[expression])`.
 * The planted mechanisms of the demo are recovered with the right signs (the test asserts five of the six; the sixth, delay → returns, is recovered on the demo — APAC∧online and US∧laptops∧retail — and guarded by the benchmark regression of [10.3](10_verification.md#103-hypothesis-benchmark)).
@@ -188,4 +188,4 @@ Guarantees (asserted by `tests/test_discovery_contract.py`):
 | `housing.csv` with two bands | 102 → 102 | 0 | 50 | 40 |
 | HR attrition sample with five category overrides | 143 → 135 (8 merged by closure) | 9 | 50 | — |
 
-On the demo and on `housing.csv`, step-1 nesting pruning already removes the dependent columns, so closure finds nothing to merge (the same held for an adapted Walmart sample). On the HR attrition sample, closure and pruning free 17 bootstrap slots for distinct cohorts and give 8 cohorts implied conditions. The HR and Walmart files are not shipped with the repository; their rows are a measurement from development.
+On the demo and on `housing.csv`, no profiled categorical is constant on another's subgroups (the demo dimensions are drawn independently; housing has one native categorical and two bands), so there is no implied condition and closure finds nothing to merge (the same held for an adapted Walmart sample). On the HR attrition sample, closure and pruning free 17 bootstrap slots for distinct cohorts and give 8 cohorts implied conditions. The HR and Walmart files are not shipped with the repository; their rows are a measurement from development.

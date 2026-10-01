@@ -1,6 +1,6 @@
 # 4. Representation — canonical text and insight vectors
 
-> **In one paragraph.** Each insight is written down twice, for two different readers. The *embedding inputs* — the scope string, the target name and a list of signed components such as `("discount", +2.21)` — define the vector and contain no measured numbers and no prose. The *readable text* — a Markdown document and phrase helpers shared with the LLM prompt — is for people and the language model and never enters the vector. The encoder embeds scope and target as sentences and builds the phenomenon as a signed, magnitude-weighted sum of metric-name embeddings, so "margin up" and "margin down" point in opposite directions. The three unit blocks are weighted and concatenated into one 1152-d unit vector, and a fingerprint of the model and composition choices guards the workspace against mixing incompatible vectors.
+> **In one paragraph.** Each insight is written down twice, for two different readers. The *embedding inputs* — the scope string, the target name and a list of signed components such as `("discount", +2.21)` — define the vector and contain no measured numbers and no prose. The *readable text* — a Markdown document and phrase helpers shared with the LLM prompt — is for people and the language model; it enters the vector only in one rare fallback (components that cancel out). The encoder embeds scope and target as sentences and builds the phenomenon as a signed, magnitude-weighted sum of metric-name embeddings, so "margin up" and "margin down" point in opposite directions. The three unit blocks are weighted and concatenated into one 1152-d unit vector, and a fingerprint of the model and composition choices guards the workspace against mixing incompatible vectors.
 
 **Code** `ltir/canonical.py`, `ltir/encoder.py`, `ltir/models.py` (`CanonicalInsight`, `EmbeddingSpec`) · **Tests** `tests/test_canonical_embedding.py` · **Previous** [3. Insights](03_insights.md) · **Next** [5. Latent anchors](05_latent_anchors.md)
 
@@ -8,7 +8,7 @@
 
 ## 4.1 Two text contracts
 
-Text appears in three tiers. Only the third shapes similarity.
+Text appears in three tiers. Only the third shapes similarity — apart from one fallback: when an insight's components cancel out, its readable phenomenon sentence stands in for the phenomenon block ([4.3](#43-the-tripartite-vector)).
 
 | Tier | What | Where it lives | Who reads it |
 |---|---|---|---|
@@ -16,7 +16,7 @@ Text appears in three tiers. Only the third shapes similarity.
 | rendering | text derived from the record: the canonical document, headlines and labels, hover text, the evidence prompt and the evidence-only summary | stored next to the record (the document) or computed on demand | people, the LLM, the naive text baseline |
 | embedding input | three short strings per insight — scope text, target text and the component labels | the vector in `journal/embeddings.mmap`, its blocks in `journal/blocks/*.npz` | retrieval, the ontology, the sphere |
 
-The canonical document is also embedded once at ingest, but only for the naive text baseline: that vector never enters the ontology or retrieval. Keeping the tiers apart is what lets the prompt be rewritten for readability without moving a single vector, and keeps measured magnitudes out of the embedded strings, where their tokenisation would only add noise. Renderings come in two flavours: the **LLM serializer** (ASCII prose with rounded numbers, [7.4](07_question_answering.md#74-the-evidence-object)) and **visual labels** (compact labels for graph nodes and cards — the headline is ASCII, the UI labels use `·` and arrows, [8.5](08_interface.md#85-text-shown-to-people)).
+The canonical document is also embedded once at ingest (`document` in the batch's blocks file; a batch written before that is back-filled on the first question, [7.6](07_question_answering.md#76-baselines)), but only for the naive text baseline and the benchmark's `text_nn` ranker: that vector never enters the ontology or retrieval. Keeping the tiers apart is what lets the prompt be rewritten for readability without moving a single vector, and keeps measured magnitudes out of the embedded strings, where their tokenisation would only add noise. Renderings come in two flavours: the **LLM serializer** (ASCII prose with rounded numbers, [7.4](07_question_answering.md#74-the-evidence-object)) and **visual labels** (compact labels for graph nodes and cards — the headline is ASCII, the UI labels use `·` and arrows, [8.5](08_interface.md#85-text-shown-to-people)).
 
 ## 4.2 The canonical form
 
@@ -26,11 +26,11 @@ The canonical document is also embedded once at ingest, but only for the naive t
 
 | Field | Rule | Running example |
 |---|---|---|
-| `scope` | `attribute = value` joined by `; `, raw column names, values verbatim, in closed-intent order | `category = phones; region = US` |
+| `scope` | `attribute = value` joined by `; `, raw column names, values verbatim, in the record's condition order (sorted by attribute, then value) | `category = phones; region = US` |
 | `target` | `humanize(target)` (underscores → spaces) | `discount` |
 | `components` | `(humanize(metric), signed robust z)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (0.5) — none for a covariance insight, whose median shift failed the shift test; plus `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm_score / WEIGHT_EMM_REF)` when the correlation change is material | `[("discount", 2.21), ("margin", −1.10)]` |
 
-The correlation change is material for covariance-typed insights and whenever `emm_score ≥ MIN_EMM_SCORE` (`has_material_covariance`). Its sign is `−1` when the correlation reverses (both `|C_ij|` and `|C_S,ij|` above 0.1 with opposite signs — this test comes first, so `−0.2 → +0.9` is a reversal), otherwise `+1` when `|corr|` grows and `−1` when it does not. With `EMM_COMPONENT_WEIGHT = 0.5`, an EMM score of 0.14 becomes a component of 0.875, comparable to a 0.9 sd shift. The strings carry names and condition values only: no magnitude, median or p-value ever reaches an embedded string — the magnitude lives in the coefficient. (A column name or a condition value can itself contain digits: `Store = 12`, `median_income_band = q4`.) Structural predicates (scope) and statistical behaviour (phenomenon) never share a string.
+The correlation change is material when a covariance pair exists and the insight is covariance-typed or has `emm_score ≥ MIN_EMM_SCORE` (`has_material_covariance`). Its sign is `−1` when the correlation reverses (both `|C_ij|` and `|C_S,ij|` above 0.1 with opposite signs — this test comes first, so `−0.2 → +0.9` is a reversal), otherwise `+1` when `|corr|` grows and `−1` when it does not. With `EMM_COMPONENT_WEIGHT = 0.5`, an EMM score of 0.14 becomes a component of 0.875, comparable to a 0.9 sd shift. The strings carry names and condition values only: no magnitude, median or p-value ever reaches an embedded string — the magnitude lives in the coefficient. (A column name or a condition value can itself contain digits: `Store = 12`, `median_income_band = q4`.) Structural predicates (scope) and statistical behaviour (phenomenon) never share a string.
 
 **Readable text.** Fixed number rules (`format_value`, `format_p`): values below 1,000 with 4 significant digits (`.4g`: trailing zeros dropped, so `19.0` prints as `19`, and values below 0.0001 switch to exponent notation), values from 1,000 rounded to integers with thousands separators; shifts `±x.xx sd`; correlations `±0.xx`; p-values bucketed as `< 0.001`, `< 0.01`, `< 0.05` or two decimals; shares as one-decimal percentages. Magnitude words: `mild < 1 ≤ moderate < 2 ≤ strong < 3 ≤ extreme`. The text is ASCII as long as the data is: column names, values and confounder strings pass through verbatim.
 
@@ -82,7 +82,7 @@ Because the three blocks are unit vectors, the cosine of two insight vectors dec
 cos(v, v′) = ( w_s² s·s′ + w_t² t·t′ + w_p² p·p′ ) / (w_s² + w_t² + w_p²)  =  0.135 · s·s′ + 0.201 · t·t′ + 0.664 · p·p′
 ```
 
-The phenomenon carries two thirds of the similarity, the target one fifth, the scope one seventh. Direction lives in the sign of the coefficients: two insights on the same metrics with opposite signs have `p·p′ = −1`, while their sentence embeddings would be nearly identical (cosine 0.56 between "margin decreases strongly" and "margin increases strongly"). The label vocabulary is small and shared — humanised metric names and `correlation between <a> and <b>` — so insights with the same mechanism land on the same phenomenon direction whatever their scope.
+The phenomenon carries two thirds of the similarity, the target one fifth, the scope one seventh. Direction lives in the sign of the coefficients: two insights with exactly opposite coefficients have `p·p′ = −1` (opposite signs with other magnitudes give a strongly negative cosine), while their sentence embeddings would be nearly identical (cosine 0.56 between "margin decreases strongly" and "margin increases strongly"). The label vocabulary is small and shared — humanised metric names and `correlation between <a> and <b>` — so insights with the same mechanism land on the same phenomenon direction whatever their scope.
 
 > **Running example.** Cosines of `P-bc4657a04746` (phones ∧ US: discount +2.21, margin −1.10) with three other demo insights:
 >
@@ -96,7 +96,7 @@ The phenomenon carries two thirds of the similarity, the target one fifth, the s
 
 The fallback fires whenever the component sum has a norm below `1e-9` — also when components cancel.
 
-**Queries** use the same composition (`encode_query`): recognised scope conditions and metrics give the scope and target strings, and each named metric becomes a component `±2.0` in the question's direction ([7.1](07_question_answering.md#71-from-question-to-query)). Where a block has nothing recognised — no condition, no metric, no direction word — the question text stands in for it. A query scope lists conditions in the order they were recognised and a multi-metric target reads `a; b`, so the query strings are close to, but not always identical with, the documents' strings.
+**Queries** use the same composition (`encode_query`): recognised scope conditions and metrics give the scope and target strings, and each named metric becomes a component `±2.0` in the question's direction — a relationship question about two or more metrics gets one correlation component instead ([7.1](07_question_answering.md#71-from-question-to-query)). Where a block has nothing recognised — no condition, no metric, no direction word — the question text stands in for it. A query scope lists conditions in the order they were recognised and a multi-metric target reads `a; b`, so the query strings are close to, but not always identical with, the documents' strings.
 
 ## 4.4 The embedding model
 
@@ -104,10 +104,10 @@ The fallback fires whenever the component sum has a norm below `1e-9` — also w
 |---|---|
 | default model | `Qwen/Qwen3-Embedding-0.6B`, loaded offline from `models/Qwen3-Embedding-0.6B/` (pinned revision, fetched once by `scripts/download_model.py`, 1.19 GB bf16) |
 | alternative | `paraphrase-multilingual-MiniLM-L12-v2` (native 384-d) from `models/paraphrase-multilingual-MiniLM-L12-v2/`; the hashing backend (`EMBEDDING_BACKEND=hashing`) is a deterministic offline stand-in for tests |
-| folder rule | `model_folder(config) = MODEL_DIR / <last path segment of EMBEDDING_MODEL>`; if the folder is missing, the name is resolved through the Hugging Face cache under `MODEL_DIR` — offline (`HF_HUB_OFFLINE=1` is set by default), so only an existing cache resolves |
+| folder rule | `model_folder(config) = MODEL_DIR / <last path segment of EMBEDDING_MODEL>`, used when it holds a `modules.json`; otherwise the name is resolved through the Hugging Face cache under `MODEL_DIR` — offline (`HF_HUB_OFFLINE=1` is set by default), so only an existing cache resolves |
 | Matryoshka truncation | `EMBEDDING_TRUNCATE_DIM = 384` keeps the first 384 of 1024 dimensions; every row is then **re-normalised** (`E(x) = normalize(f(x)_{:384})`) — a slice of a unit vector is shorter than 1, and the decomposition above assumes unit blocks |
 | query instruction | `embed_queries` prefixes `Instruct: {EMBEDDING_QUERY_INSTRUCTION}\nQuery: `; `embed` (documents, labels, recognised query strings) does not |
-| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16 for Qwen3, fp32 for MiniLM), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the process |
+| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16 for Qwen3, fp32 for MiniLM), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the embedder (one per engine) |
 | device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0`); Qwen3 takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB |
 
 **Where the instruction goes.** Qwen3 is instruction-aware, but the prefix is applied **only** to free question text — the stand-in for an unrecognised scope or target block and for an empty component sum — and to the naive text baseline. Recognised scope and target strings and every component label are embedded exactly as for documents, because the signed composition needs the identical `E(label)` on both sides to keep its exact ±1 geometry. This forgoes the instruction gain on structured queries by design.
@@ -157,14 +157,14 @@ Switching to MiniLM: `EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2`, `E
 
 The spec is written to `state/representation.json` when the first batch commits; every pattern record carries `{fingerprint, model_id, dim, representation_version}`. Two checks refuse a mismatch instead of comparing vectors from different spaces: `check_representation` compares the fingerprint (ingestion and queries; HTTP 409 on `/api/query`), and `check_versions` compares the two version strings without loading a model (graph rebuilds). `CANONICAL_VERSION` covers [4.2](#42-the-canonical-form); `REPRESENTATION_VERSION` covers [4.3](#43-the-tripartite-vector). Renderings can change without a bump; anything that changes an embedded string, a coefficient or the composition must bump a version.
 
-**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in, the truncation, the query instruction, the block weights, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch` until the workspace is migrated ([6.5](06_graph_and_storage.md#65-versions-and-migration)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either.
+**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in and the storage dtype, the truncation, the query instruction, the block weights and the correlation component weight, the normalisation, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch` until the workspace is migrated ([6.5](06_graph_and_storage.md#65-versions-and-migration)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either; the phenomenon sentence of the fallback is covered by `CANONICAL_VERSION`.
 
 ## 4.7 Configuration
 
 | Parameter | Default | Changes the fingerprint |
 |---|---|---|
 | `EMBEDDING_BACKEND` | `sentence-transformers` | yes (model id) |
-| `EMBEDDING_MODEL`, `MODEL_DIR` | `Qwen/Qwen3-Embedding-0.6B`, `models` | model: yes |
+| `EMBEDDING_MODEL`, `MODEL_DIR` | `Qwen/Qwen3-Embedding-0.6B`, `models` | the model id: yes; `MODEL_DIR` only through the folder's `REVISION` |
 | `EMBEDDING_TRUNCATE_DIM` | 384 | yes |
 | `EMBEDDING_QUERY_INSTRUCTION` | retrieval task sentence | yes |
 | `EMBEDDING_DEVICE` | `auto` | no (the model runs in its checkpoint dtype on every device) |
@@ -173,10 +173,10 @@ The spec is written to `state/representation.json` when the first batch commits;
 
 ## 4.8 Guarantees and failure modes
 
-* Embedding inputs contain only conditions (scope) and metric names (target, labels): no measured numbers, no prose. The readable text is a pure function of the insight and the config, and ASCII for ASCII data.
+* Embedding inputs contain only conditions (scope) and metric names (target, labels): no measured numbers, no prose — except the fallback phenomenon sentence when components cancel. The readable text is a pure function of the insight and the config, and ASCII for ASCII data.
 * Every row and every block is unit-norm, also after truncation (the hashing backend excepted for text without `[a-z0-9]`); `dim = 3 · block_dim`; identical input gives identical output.
 * The query instruction never reaches component labels or recognised scope/target strings.
 * The fingerprint changes whenever any input that shapes a stored vector changes ([4.6](#46-representation-identity-and-versions)).
-* Model load or encode errors become `embedding_failure` (the batch fails before any state change); a fingerprint change becomes `representation_mismatch`.
+* Model load or encode errors become `embedding_failure` (the batch fails before the journal or the ontology changes; the dataset folder's source copy, `profile.json` and `rejections.json` are already written); a fingerprint change becomes `representation_mismatch`.
 
 Tests: `test_canonical_sections_are_separate`, `test_embedding_labels_carry_no_numbers`, `test_text_number_rules`, `test_covariance_canonical_component`, `test_embedding_contract` (hashing and the real model: shape, dtype, unit norms, stability, direction separation, cross-scope similarity), `test_fingerprint_changes_with_representation_choices`, `test_query_instruction_only_reaches_free_question_text`, `test_env_file_switches_to_the_minilm_block`.

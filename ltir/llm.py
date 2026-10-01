@@ -1,8 +1,7 @@
 """LLM interface (docs/07_question_answering.md §7.5): local Gemma 4 over an OpenAI-compatible endpoint.
 
 Works with any OpenAI-compatible endpoint: OpenRouter (``https://openrouter.ai/api/v1``,
-``google/gemma-4-26b-a4b-it`` with ``LLM_PROVIDER_ORDER`` pinning, as in
-spectr/agentic-data-science), Ollama (``http://localhost:11434/v1``, ``gemma4``) or
+``google/gemma-4-26b-a4b-it`` with ``LLM_PROVIDER_ORDER`` pinning), Ollama (``http://localhost:11434/v1``, ``gemma4``) or
 LM Studio (``http://localhost:1234/v1``, ``google/gemma-4-26b-a4b``).
 The LLM only *verbalises* evidence; it never retrieves or computes statistics.
 """
@@ -89,7 +88,7 @@ class OpenAICompatibleLLM:
         }
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
-        if self.provider_order:  # OpenRouter routing, same contract as spectr's GemmaChatModel
+        if self.provider_order:  # OpenRouter provider routing: only the pinned providers
             payload["provider"] = {"order": self.provider_order, "allow_fallbacks": False}
         start = time.perf_counter()
         status = self.health()

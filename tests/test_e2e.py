@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import FakeLLM
+from conftest import FakeLLM, make_config
 
 QUESTION = "Why is margin lower for phones in the US?"
 EROSION_ANALOGUES = {
@@ -108,8 +108,33 @@ def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch
     assert seen and not documents & set(seen)
 
 
+def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatch):
+    """A batch without stored document vectors is embedded on the first question only, and a writer saves them."""
+    import numpy as np
+
+    from ltir.pipeline import Engine
+
+    cfg = make_config(tmp_path / "ws")
+    Engine(cfg, llm=FakeLLM()).ingest_file(demo_csv)
+    for path in (cfg.workspace_dir / "journal" / "blocks").glob("*.npz"):  # as written before documents were stored
+        with np.load(path) as data:
+            kept = {k: data[k] for k in data.files if k not in ("document", "pattern_ids")}
+        np.savez_compressed(path, **kept)
+    engine = Engine(cfg, llm=FakeLLM())
+    graph = engine.graph()
+    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
+    seen: list[str] = []
+    original = engine.encoder.embedder.embed
+    monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
+    engine.ask("Why is margin lower for phones in the US?", use_llm=False)
+    assert documents <= set(seen)  # filled on the first question
+    seen.clear()
+    engine.ask("Why is margin lower for phones in the US?", use_llm=False)
+    assert not documents & set(seen)  # kept on the frame
+    assert set(Engine(cfg, llm=FakeLLM(), recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
+
+
 def test_empty_graph_answer(tmp_path):
-    from conftest import make_config
 
     from ltir.pipeline import Engine
 

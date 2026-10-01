@@ -144,7 +144,7 @@ class Config:
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1200
     llm_reasoning_effort: str = ""
-    # OpenRouter provider pinning (as spectr GEMMA_PROVIDER): "dekallm/bf16,parasail/bf16"
+    # OpenRouter provider pinning, comma-separated, no fallbacks: "dekallm/bf16,parasail/bf16"
     llm_provider_order: str = ""
     llm_app_title: str = "SIG LTIR"  # OpenRouter X-Title attribution header
 
