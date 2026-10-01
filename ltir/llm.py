@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 
@@ -43,14 +43,6 @@ class LLMResponse:
     latency_s: float
     error: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
-
-
-class LLMClient(Protocol):
-    model: str
-
-    def generate(self, system: str, user: str) -> LLMResponse: ...
-
-    def health(self, *, fresh: bool = False) -> dict[str, Any]: ...
 
 
 class OpenAICompatibleLLM:
