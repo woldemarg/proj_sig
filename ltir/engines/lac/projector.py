@@ -1,4 +1,7 @@
-"""3D sphere visualisation: chunks + L0 concepts + optional ACTIVATES edges."""
+"""3D sphere visualisation: L0 concepts + optional ACTIVATES edges on a prosphera sphere.
+
+The chunk points are drawn by the caller (``ltir/sphere.py``: one trace per latent anchor).
+"""
 
 from __future__ import annotations
 
@@ -16,7 +19,6 @@ BG = "#0f172a"  # Deep slate (modern, soft dark mode)
 STYLE = {
     "concept_color": "#f8fafc",  # Crisp white — concepts stand out as anchors
     "concept_size": 6,
-    "chunk_size": 4,
     "chunk_opacity": 0.9,
     "edge_color": "rgba(255, 255, 255, 0.08)",
     "edge_width": 0.5,
@@ -60,7 +62,7 @@ def _edge_segments(
 
 
 class OntologyProjector(Projector):
-    """Joint prosphera projection of chunk + concept embeddings."""
+    """Joint prosphera projection of chunk + concept embeddings (chunk coordinates feed the edges)."""
 
     def _build_figure(
         self,
@@ -68,8 +70,6 @@ class OntologyProjector(Projector):
         concept_coords: np.ndarray,
         activations: list[dict[str, Any]],
         *,
-        chunk_labels: list[str],
-        chunk_hovertext: list[str],
         concept_hovertext: list[str],
         draw_edges: bool,
     ) -> go.Figure:
@@ -90,23 +90,6 @@ class OntologyProjector(Projector):
                     )
                 )
 
-        fig.add_trace(
-            go.Scatter3d(
-                x=chunk_coords[:, 0],
-                y=chunk_coords[:, 1],
-                z=chunk_coords[:, 2],
-                mode="markers",
-                name="Chunks",
-                opacity=STYLE["chunk_opacity"],
-                marker=dict(
-                    size=STYLE["chunk_size"],
-                    color=_chunk_colors(chunk_labels),
-                    line=dict(width=0),
-                ),
-                hovertext=chunk_hovertext,
-                hovertemplate=HOVER,
-            )
-        )
         fig.add_trace(
             go.Scatter3d(
                 x=concept_coords[:, 0],
