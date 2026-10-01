@@ -23,6 +23,11 @@ def _l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:
     return matrix / norms
 
 
+def _step_scale(damping: np.ndarray | None, concept_idx: int) -> float:
+    """EMA step multiplier of one attractor (1.0 when undamped or minted in this batch)."""
+    return 1.0 if damping is None or concept_idx >= len(damping) else float(damping[concept_idx])
+
+
 def compute_adaptive_threshold(store: ConceptStore, config: Config) -> float:
     k = len(store.embeddings)
     if k < 10:
@@ -45,6 +50,7 @@ def assign_and_update(
     config: Config,
     adaptive_thresh: float,
     batch_id: int,
+    damping: np.ndarray | None = None,
 ) -> tuple[list[dict[str, Any]], list[np.ndarray], list[int]]:
     activations: list[dict[str, Any]] = []
     orphan_embs: list[np.ndarray] = []
@@ -74,7 +80,7 @@ def assign_and_update(
                             "weight": score,
                         }
                     )
-                    store.update_concept_centroid(tgt_idx, x[i], config.centroid_alpha, batch_id)
+                    store.update_concept_centroid(tgt_idx, x[i], config.centroid_alpha, batch_id, _step_scale(damping, tgt_idx))
         else:
             orphan_embs.append(x[i])
             orphan_ids.append(global_chunk_ids[i])
@@ -88,6 +94,7 @@ def assign_orphans_nearest(
     store: ConceptStore,
     config: Config,
     batch_id: int,
+    damping: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Wire lone orphans to their nearest attractor when OMP buffer is too small."""
     if len(orphan_embeddings) == 0 or len(store.embeddings) == 0:
@@ -106,7 +113,7 @@ def assign_orphans_nearest(
                 "weight": score,
             }
         )
-        store.update_concept_centroid(best_idx, orphan_embeddings[i], config.centroid_alpha, batch_id)
+        store.update_concept_centroid(best_idx, orphan_embeddings[i], config.centroid_alpha, batch_id, _step_scale(damping, best_idx))
     return activations
 
 
@@ -142,6 +149,7 @@ def route_absorbed_activations(
     store: ConceptStore,
     config: Config,
     batch_id: int,
+    damping: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Re-map absorbed OMP concepts to existing attractors and update centroids."""
     routed: list[dict[str, Any]] = []
@@ -164,6 +172,7 @@ def route_absorbed_activations(
             buffer_embeddings[edge["chunk_id"]],
             config.centroid_alpha,
             batch_id,
+            _step_scale(damping, store_idx),
         )
     return routed
 

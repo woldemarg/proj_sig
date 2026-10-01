@@ -1,0 +1,16 @@
+{
+ "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+ "block_dim": 384,
+ "dim": 1152,
+ "dtype": "float32",
+ "normalization": "l2(block) -> weighted concat -> l2",
+ "block_weights": [
+  0.45,
+  0.55,
+  1.0
+ ],
+ "emm_component_weight": 0.5,
+ "canonical_version": "ltir-canon-1",
+ "representation_version": "ltir-rep-1",
+ "fingerprint": "6295026291"
+}

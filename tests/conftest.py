@@ -21,7 +21,9 @@ from ltir.synth import generate_retail_dataset
 
 
 def _model_available(cfg) -> bool:
-    return (Path(cfg.model_dir) / cfg.embedding_model / "modules.json").is_file()
+    from ltir.encoder import model_folder
+
+    return (model_folder(cfg) / "modules.json").is_file()
 
 
 def pytest_collection_modifyitems(config, items):

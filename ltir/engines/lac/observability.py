@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ltir.config import Config
+
 from .storage import ConceptStore
 
 METRICS_CSV_HEADER = [
@@ -27,6 +29,10 @@ METRICS_CSV_HEADER = [
     "max_concept_density_pct",
     "centroid_drift",
     "adaptive_thresh",
+    "density_threshold",
+    "damped_attractors",
+    "max_centroid_step",
+    "clamped_attractors",
     "warnings",
 ]
 
@@ -49,6 +55,10 @@ class BatchMetrics:
     max_concept_density_pct: float = 0.0
     centroid_drift: float | None = None
     adaptive_thresh: float | None = None
+    density_threshold: float = 1.0  # hub share threshold in force for this batch
+    damped_attractors: int = 0  # attractors whose EMA step was damped
+    max_centroid_step: float | None = None  # largest raw centroid move of the batch (before clamping)
+    clamped_attractors: int = 0  # attractors pulled back to MAX_CENTROID_STEP
     warnings: list[str] = field(default_factory=list)
 
 
@@ -80,6 +90,10 @@ class MetricsRecorder:
                     f"{metrics.max_concept_density_pct:.4f}",
                     "" if metrics.centroid_drift is None else f"{metrics.centroid_drift:.6f}",
                     "" if metrics.adaptive_thresh is None else f"{metrics.adaptive_thresh:.4f}",
+                    f"{metrics.density_threshold:.4f}",
+                    metrics.damped_attractors,
+                    "" if metrics.max_centroid_step is None else f"{metrics.max_centroid_step:.6f}",
+                    metrics.clamped_attractors,
                     "; ".join(metrics.warnings),
                 ]
             )
@@ -111,16 +125,24 @@ def max_concept_density_pct(store: ConceptStore) -> float:
     return float(np.max(store.chunk_counts)) / total * 100.0
 
 
-def apply_health_warnings(metrics: BatchMetrics) -> None:
-    if metrics.orphan_rate > 0.50:
-        metrics.warnings.append(f"orphan_rate>{50}% ({metrics.orphan_rate:.1%})")
-    if metrics.extraction_yield is not None and metrics.extraction_yield < 0.10:
-        metrics.warnings.append(f"extraction_yield<{10}% ({metrics.extraction_yield:.1%})")
+def density_threshold(n_attractors: int, config: Config) -> float:
+    """Hub share threshold: DENSITY_MULTIPLE x the uniform share 1/N, never below DENSITY_FLOOR."""
+    return max(config.density_floor, config.density_multiple / n_attractors) if n_attractors else 1.0
+
+
+def apply_health_warnings(metrics: BatchMetrics, config: Config) -> None:
+    """Advisory warnings; the thresholds are the same ``Config`` values the guards use."""
+    if metrics.orphan_rate > config.warn_orphan_rate:
+        metrics.warnings.append(f"orphan_rate>{config.warn_orphan_rate:.0%} ({metrics.orphan_rate:.1%})")
+    if metrics.extraction_yield is not None and metrics.extraction_yield < config.warn_min_extraction_yield:
+        metrics.warnings.append(f"extraction_yield<{config.warn_min_extraction_yield:.0%} ({metrics.extraction_yield:.1%})")
+    low, high = config.warn_avg_degree
     if metrics.total_concepts > 0:
-        # Mutual k-NN: effective degree scales with RELATED_TO_PEER_COUNT (7 → ~4–5 typical).
-        if metrics.avg_degree < 1.0:
-            metrics.warnings.append(f"avg_degree<{1.0} ({metrics.avg_degree:.2f})")
-        elif metrics.avg_degree > 8.0:
-            metrics.warnings.append(f"avg_degree>{8.0} ({metrics.avg_degree:.2f})")
-    if metrics.max_concept_density_pct > 25.0:
-        metrics.warnings.append(f"max_hub>{25}% of corpus ({metrics.max_concept_density_pct:.1f}%)")
+        if metrics.avg_degree < low:
+            metrics.warnings.append(f"avg_degree<{low} ({metrics.avg_degree:.2f})")
+        elif metrics.avg_degree > high:
+            metrics.warnings.append(f"avg_degree>{high} ({metrics.avg_degree:.2f})")
+    if metrics.max_concept_density_pct > 100.0 * metrics.density_threshold:
+        metrics.warnings.append(f"max_hub>{metrics.density_threshold:.0%} of corpus ({metrics.max_concept_density_pct:.1f}%)")
+    if metrics.clamped_attractors:
+        metrics.warnings.append(f"centroid_step>{config.max_centroid_step} on {metrics.clamped_attractors} attractor(s): clamped")

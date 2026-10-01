@@ -1,0 +1,25 @@
+{
+ "batch_id": "B20260930T152537-a69e50",
+ "dataset_id": null,
+ "filename": "epoints.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\workspace\\uploads\\d9331ecf_epoints.csv",
+ "bins": "",
+ "status": "FAILED",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:25:37+00:00",
+  "VALIDATING": "2026-09-30T15:25:37+00:00"
+ },
+ "created_at": "2026-09-30T15:25:37+00:00",
+ "metrics": {
+  "processing_duration_s": 0.007802000000083353
+ },
+ "profile": {},
+ "warnings": [],
+ "error": {
+  "code": "internal_error",
+  "message": "[WinError 5] Access is denied: 'D:\\\\llm\\\\sig_proj\\\\sig\\\\workspace\\\\registry\\\\batches\\\\tmp8q6twulc.tmp' -> 'D:\\\\llm\\\\sig_proj\\\\sig\\\\workspace\\\\registry\\\\batches\\\\B20260930T152537-a69e50.json'",
+  "trace": "Traceback (most recent call last):\n  File \"D:\\llm\\sig_proj\\sig\\ltir\\pipeline.py\", line 134, in process\n    self._stage(record, \"VALIDATING\")\n  File \"D:\\llm\\sig_proj\\sig\\ltir\\pipeline.py\", line 120, in _stage\n    self.ws.save_batch(record)\n  File \"D:\\llm\\sig_proj\\sig\\ltir\\store.py\", line 91, in save_batch\n    atomic_write_json(self.batch_path(record[\"batch_id\"]), record)\n  File \"D:\\llm\\sig_proj\\sig\\ltir\\store.py\", line 48, in atomic_write_json\n    os.replace(tmp, path)\nPermissionError: [WinError 5] Access is denied: 'D:\\\\llm\\\\sig_proj\\\\sig\\\\workspace\\\\registry\\\\batches\\\\tmp8q6twulc.tmp' -> 'D:\\\\llm\\\\sig_proj\\\\sig\\\\workspace\\\\registry\\\\batches\\\\B20260930T152537-a69e50.json'\n"
+ },
+ "updated_at": "2026-09-30T15:25:37+00:00",
+ "failed_stage": "VALIDATING"
+}

@@ -41,7 +41,7 @@ class PathStep:
     weight: float
     hop: int
     edge_id: str
-    reverse: bool = False  # directed edge traversed against its stored direction (e.g. ACTIVATES⁻¹)
+    reverse: bool = False  # directed edge traversed against its stored direction (path text: <-TYPE(w)-)
 
 
 @dataclass
@@ -53,7 +53,6 @@ class Retrieved:
     route: str  # seed | structural | transversal | latent
     seed_id: str
     path: list[PathStep]
-    rationale: str
     structural_distance: int | None = None  # lattice hops (incl. SIBLING) to nearest seed
     scope_overlap: float = 0.0  # max Jaccard of scope conditions with any seed
     transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed
@@ -85,28 +84,6 @@ class TraversalResult:
 
 def _conds(graph: DualGraph, pid: str) -> set[str]:
     return {c.expr for c in graph.insight(pid).conditions}
-
-
-def _label(graph: DualGraph, nid: str) -> str:
-    return graph.nodes[nid]["label"]
-
-
-def _rationale(graph: DualGraph, path: list[PathStep], route: str, seed: str) -> str:
-    if route == "seed":
-        return "seed pattern matched to the question"
-    parts = [f"from seed {seed}"]
-    for st in path:
-        arrow = f"{st.edge_type}{'⁻¹' if st.reverse else ''}"
-        tgt = st.target
-        if graph.kind(tgt) == "Attractor":
-            parts.append(f"{arrow} ({st.weight:.2f}) → {tgt} “{_label(graph, tgt)}”")
-        else:
-            parts.append(f"{arrow} ({st.weight:.2f}) → {tgt}")
-    if route == "transversal":
-        parts.append("= same latent phenomenon reached across the attractor plane")
-    elif route == "structural":
-        parts.append("= exact lattice relation")
-    return " ".join(parts)
 
 
 def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None) -> dict[str, int]:
@@ -186,7 +163,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: Config) -> Traver
     for (node, phase, _s, _l), (score, seed, path) in final.items():
         kind = graph.kind(node)
         if kind == "Attractor":
-            r = Retrieved(node, kind, score, len(path), "latent", seed, path, _rationale(graph, path, "latent", seed))
+            r = Retrieved(node, kind, score, len(path), "latent", seed, path)
             if node not in attractors or score > attractors[node].score:
                 attractors[node] = r
             continue
@@ -203,7 +180,6 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: Config) -> Traver
             route,
             seed,
             path,
-            _rationale(graph, path, route, seed),
             structural_distance=closure.get(node),
             scope_overlap=round(overlap, 3),
         )

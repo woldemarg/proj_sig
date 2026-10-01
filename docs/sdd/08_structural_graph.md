@@ -24,14 +24,14 @@ Let C(P) be the condition set of pattern P.
 | SIBLING | \|C(A)\| = \|C(B)\|, C(A)∖C(B) = {(x,a)}, C(B)∖C(A) = {(x,b)}: same parent scope, different value of one partition attribute | min id → max id (undirected semantics), 1.0 | `parent_scope`, `partition_attribute`, `values` |
 | CONTRASTS | overlap = \|C(A) ∩ C(B)\| / min(\|C(A)\|, \|C(B)\|) ≥ `CONTRAST_MIN_OVERLAP`, and some metric in both shift profiles with opposite signs and min(\|z_A\|, \|z_B\|) ≥ `CONTRAST_MIN_SHIFT` (the strongest such metric is recorded) | min id → max id, weight = overlap | `metric`, `z_source`, `z_target`, `scope_overlap`, `relation` ∈ {`specialization_reversal` (a SPECIALIZES pair), `sibling` (a SIBLING pair: one differing value of the same attribute), `overlap`} |
 
-The EDA builds only 2- and 3-conjunctions, so the lattice has depth 1 (3-conjunctions specialise 2-conjunctions); the covering rule still holds for deeper spaces.
+Conditions are closed intents (SDD 03), so the covering relation is the Hasse diagram of the concept lattice restricted to the present patterns: a strictly smaller extent always has a strictly larger intent, and SPECIALIZES follows extent containment exactly. The EDA enumerates 2- and 3-conjunctions, but implied conditions can make intents longer.
 
 ## Graph schema (snapshot and Neo4j)
 | Node | Id | Key properties |
 |---|---|---|
 | Pattern | `P-<hash>` | the journal `Insight` record (`weight`, `conditions` as `{attribute, value}`, `shifts` as `Shift`, plus `canonical`, `embedding`, `row_id`). No projected aliases (`insight_weight`, `eda_expression`, stringified conditions). |
 | Attractor | `A-<int>` | see SDD 07 (label, mass, evidence_mass, signature, dispersion, centroid metadata, last_updated_batch) |
-| Dimension | `D:<dataset>:<name>` | name, cardinality, entropy (only EDA-selected dimensions) |
+| Dimension | `D:<dataset>:<name>` | name, cardinality, entropy (EDA-selected dimensions plus every attribute used by a closed intent) |
 | Metric | `M:<dataset>:<name>` | name, global_median, global_mad |
 | Dataset | `DS:<dataset_id>` | filename, rows, columns |
 | Batch | `B:<batch_id>` | batch_seq, created_at, status |

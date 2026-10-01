@@ -1,0 +1,384 @@
+{
+ "at": "2026-09-30T14:36:02+00:00",
+ "k": 3,
+ "cases": 12,
+ "summary": {
+  "transversal": {
+   "recall": 0.583,
+   "precision": 0.417,
+   "mrr": 0.583
+  },
+  "structural": {
+   "recall": 0.0,
+   "precision": 0.0,
+   "mrr": 0.094
+  },
+  "text_nn": {
+   "recall": 0.104,
+   "precision": 0.111,
+   "mrr": 0.257
+  },
+  "vector_nn": {
+   "recall": 0.146,
+   "precision": 0.111,
+   "mrr": 0.271
+  }
+ },
+ "per_case": [
+  {
+   "seed": "P-a2d74883914a",
+   "seed_label": "channel=online, region=APAC: delivery days \u2191 (+2.36 z)",
+   "phenomenon": "delay_returns",
+   "analogues": [
+    "P-848dcddfa5aa"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.05555555555555555
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-bc4657a04746",
+   "seed_label": "category=phones, region=US: discount \u2191 (+2.21 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-d9ed21be2eb3",
+    "P-dc62e58fd403",
+    "P-ddfe04dc0882",
+    "P-de94f9a092ae"
+   ],
+   "transversal": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "text_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "vector_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   }
+  },
+  {
+   "seed": "P-de94f9a092ae",
+   "seed_label": "category=tablets, region=APAC: discount \u2191 (+2.10 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-4f7921c47717",
+    "P-a15aca298c71",
+    "P-bc4657a04746"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 1.0,
+    "mrr": 1.0
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.16666666666666666
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-239c4bb42c34",
+   "seed_label": "category=phones, channel=online, region=APAC: delivery days \u2191 (+2.28 z)",
+   "phenomenon": "delay_returns",
+   "analogues": [
+    "P-848dcddfa5aa"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.058823529411764705
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-4f7921c47717",
+   "seed_label": "category=phones, channel=online, region=US: discount \u2191 (+2.25 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-d9ed21be2eb3",
+    "P-dc62e58fd403",
+    "P-ddfe04dc0882",
+    "P-de94f9a092ae"
+   ],
+   "transversal": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.07692307692307693
+   },
+   "text_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "vector_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   }
+  },
+  {
+   "seed": "P-a15aca298c71",
+   "seed_label": "category=phones, channel=retail, region=US: discount \u2191 (+2.12 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-de94f9a092ae"
+   ],
+   "transversal": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.16666666666666666
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.08333333333333333
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.16666666666666666
+   }
+  },
+  {
+   "seed": "P-848dcddfa5aa",
+   "seed_label": "category=laptops, channel=retail, region=US: delivery days \u2191 (+2.36 z)",
+   "phenomenon": "delay_returns",
+   "analogues": [
+    "P-239c4bb42c34",
+    "P-33b175b166ec",
+    "P-9370a02cd2ab",
+    "P-a2d74883914a"
+   ],
+   "transversal": {
+    "recall": 0.5,
+    "precision": 0.6666666666666666,
+    "mrr": 1.0
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.1
+   },
+   "text_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "vector_nn": {
+    "recall": 0.25,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   }
+  },
+  {
+   "seed": "P-d9ed21be2eb3",
+   "seed_label": "category=tablets, channel=retail: discount \u2191 (+1.62 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-4f7921c47717",
+    "P-bc4657a04746"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 0.6666666666666666,
+    "mrr": 1.0
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.07692307692307693
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-33b175b166ec",
+   "seed_label": "category=tablets, channel=online, region=APAC: delivery days \u2191 (+2.28 z)",
+   "phenomenon": "delay_returns",
+   "analogues": [
+    "P-848dcddfa5aa"
+   ],
+   "transversal": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.047619047619047616
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "vector_nn": {
+    "recall": 1.0,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   }
+  },
+  {
+   "seed": "P-dc62e58fd403",
+   "seed_label": "category=tablets, channel=retail, region=APAC: discount \u2191 (+2.09 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-4f7921c47717",
+    "P-bc4657a04746"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 0.6666666666666666,
+    "mrr": 1.0
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.07142857142857142
+   },
+   "text_nn": {
+    "recall": 0.5,
+    "precision": 0.3333333333333333,
+    "mrr": 0.3333333333333333
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-9370a02cd2ab",
+   "seed_label": "category=phones, region=APAC: delivery days \u2191 (+1.52 z)",
+   "phenomenon": "delay_returns",
+   "analogues": [
+    "P-848dcddfa5aa"
+   ],
+   "transversal": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.06666666666666667
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.2
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  },
+  {
+   "seed": "P-ddfe04dc0882",
+   "seed_label": "category=tablets, channel=retail, region=EU: discount \u2191 (+2.14 z)",
+   "phenomenon": "discount_erosion",
+   "analogues": [
+    "P-4f7921c47717",
+    "P-bc4657a04746"
+   ],
+   "transversal": {
+    "recall": 1.0,
+    "precision": 0.6666666666666666,
+    "mrr": 1.0
+   },
+   "structural": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.125
+   },
+   "text_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   },
+   "vector_nn": {
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.25
+   }
+  }
+ ],
+ "phenomena": {
+  "discount_erosion": 7,
+  "delay_returns": 5,
+  "margin_uplift": 0
+ }
+}

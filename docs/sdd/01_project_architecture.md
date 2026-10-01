@@ -18,7 +18,7 @@ Persisted knowledge in `WORKSPACE_DIR`: journals, ontology state, and the graph 
 |------|------|
 | Reused code (vendored in `ltir/engines/`, see `PROVENANCE.md`) | `engines/eda/main_upd.py` (steps 1–4b, robust primitives; from `eda/scripts`); `engines/lac/` (`ConceptStore`, `ontology_engine`, `ChunkJournal`, `observability`, sphere `projector`; from `lac/v2_orchestrator` + `lac/v1_single_pass/visualisation`) |
 | Libraries | numpy, pandas, scipy, scikit-learn, pysubgroup, sentence-transformers (torch), fastapi/uvicorn, httpx, neo4j (optional), playwright (optional tests) |
-| Models | `paraphrase-multilingual-MiniLM-L12-v2` bundled in `sig/models/`; local Gemma 4 through an OpenAI-compatible endpoint (Ollama `gemma4` / LM Studio `google/gemma-4-26b-a4b`) |
+| Models | embedder `Qwen/Qwen3-Embedding-0.6B` (Matryoshka 384-d; default) or `paraphrase-multilingual-MiniLM-L12-v2`, bundled in `sig/models/` and loaded in-process (SDD 06); Gemma 4 only through an OpenAI-compatible endpoint (OpenRouter `google/gemma-4-26b-a4b-it`, or a local Ollama / LM Studio server), never loaded by SIG |
 
 ## Architecture
 
@@ -48,10 +48,10 @@ Module map (package `sig/ltir/`):
 | `config.py` | all tunables, env loading | 01 |
 | `engines/` | vendored EDA and lac engines; discovery imports `eda.main_upd`, ontology imports `lac` | 03, 07, 13 |
 | `ingestion.py` | file validation, band derivation, dataset id | 02 |
-| `discovery.py` | EDA adapter → typed candidates → `Insight` | 03 |
+| `discovery.py` | EDA adapter → typed candidates → closed intents, duplicate cohorts pruned before validation → `Insight` | 03 |
 | `models.py` | shared data contracts | 04 |
-| `quality.py` | selection rules R1–R7 + `insight_weight` | 04 |
-| `canonical.py` | six-section canonical form, signed components | 05 |
+| `quality.py` | selection rules R1–R4, R7 + `insight_weight` (R5/R6 run in discovery) | 04 |
+| `canonical.py` | canonical form (`ltir-canon-3`): embedding inputs, readable document, signed components, number formatting | 05, 17 |
 | `encoder.py` | `TextEmbedder`s, `InsightEncoder`, `EmbeddingSpec` | 06 |
 | `ontology.py` | `LatentOntology` over lac's lifecycle | 07 |
 | `structural.py` | deterministic lattice edges | 08 |
@@ -65,8 +65,10 @@ Module map (package `sig/ltir/`):
 | `web/` | FastAPI app + static UI | 13 |
 | `sphere.py` | 3D latent sphere over lac's prosphera projector | 13 |
 | `pipeline.py` | `Engine`, lifecycle, recovery, committed `LatentFrame` | 14 |
+| `migrate.py` | `python -m ltir migrate --yes`: rebuild an outdated workspace from its stored sources (old copy kept) | 09 |
 | `synth.py`, `experiment.py`, `cli.py` | demo data, hypothesis benchmark, CLI | 15, 14 |
 | `scripts/check.py`, `pyproject.toml` | quality gate (ruff check, ruff format, pytest) and its configuration | 15 |
+| `scripts/` (others) | measurements on scratch workspaces (`.scratch/`): prompt tokens, embedder comparison, live answer eval, model download | 15 |
 
 Cross-cutting documents: SDD 16 (every formula, in pipeline order) and SDD 17 (every text contract: records, renderings, embedding inputs, LLM prompt). `AGENTS.md` at the repo root is the working agreement for changing any of this.
 
@@ -109,7 +111,9 @@ One concept, one name per layer. Code and SDDs use the first column; the UI uses
 | Attractor, latent anchor (`A-k`) | theme | concept | a living centroid on the unit sphere that recurring phenomena activate |
 | scope (conditions) | where | — | the conjunction of `attribute = value` selectors defining the subgroup |
 | target, metric | metric | — | the numeric column whose robust median shift (or correlation) the pattern reports |
-| robust z | ±x σ | — | 0.6745·Δmedian / MAD, signed, capped at 10 |
+| robust z | ±x sd | — | 0.6745·Δmedian / MAD, signed, capped at 10 (the prompt and UI write "sd") |
+| cohort, extent | — | — | the set of rows a subgroup covers; selectors with the same extent are one cohort (SDD 03) |
+| closed intent | scope | — | every `attribute = value` constant on a cohort's rows; the pattern's conditions (SDD 03, 16 §1) |
 | `insight_weight` | evidence | weight (the scaled input magnitude) | statistical strength in [WEIGHT_FLOOR, 1] (SDD 04) |
 | ACTIVATES | membership | activation | pattern → attractor edge (alignment, strength) |
 | RELATED_TO | theme link | RELATED_TO | mutual-kNN edge between attractors |
@@ -128,4 +132,4 @@ One concept, one name per layer. Code and SDDs use the first column; the UI uses
 | Pattern property `mad_score`, `bootstrap_ci` | `sd_score`, `stability`, `p_value`, `p_adjusted` | The EDA produces a bootstrap CV, not a CI |
 
 ## Current implementation status
-Implemented and tested (58 tests passing). The E2E flow works in the web UI and the CLI with live Gemma 4 (`google/gemma-4-26b-a4b-it` via OpenRouter) and the live Neo4j mirror (`sigv1`).
+Implemented and tested (69 tests passing). The E2E flow works in the web UI and the CLI with live Gemma 4 (`google/gemma-4-26b-a4b-it` via OpenRouter) and the live Neo4j mirror (`sigv1`).

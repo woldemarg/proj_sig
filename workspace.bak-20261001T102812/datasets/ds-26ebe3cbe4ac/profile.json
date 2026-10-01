@@ -1,0 +1,60 @@
+{
+ "rows": 20640,
+ "columns": 10,
+ "numerics": [
+  "longitude",
+  "latitude",
+  "total_rooms",
+  "total_bedrooms",
+  "population",
+  "median_house_value"
+ ],
+ "categoricals": [
+  "ocean_proximity",
+  "median_income_band",
+  "housing_median_age_band"
+ ],
+ "dropped_columns": [
+  "households"
+ ],
+ "selected_dimensions": [
+  "ocean_proximity",
+  "median_income_band",
+  "housing_median_age_band"
+ ],
+ "search_space_size": 54,
+ "global_medians": {
+  "longitude": -118.49,
+  "latitude": 34.26,
+  "total_rooms": 2127.0,
+  "total_bedrooms": 435.0,
+  "population": 1166.0,
+  "median_house_value": 179700.0
+ },
+ "global_mads": {
+  "longitude": 1.2800000000000011,
+  "latitude": 1.2299999999999969,
+  "total_rooms": 797.0,
+  "total_bedrooms": 162.0,
+  "population": 440.0,
+  "median_house_value": 68400.0
+ },
+ "dimension_cardinality": {
+  "ocean_proximity": 5,
+  "median_income_band": 4,
+  "housing_median_age_band": 4
+ },
+ "dimension_entropy": {
+  "ocean_proximity": 1.781597049626012,
+  "median_income_band": 2.0,
+  "housing_median_age_band": 1.999150933092748
+ },
+ "derived_columns": [
+  "median_income_band",
+  "housing_median_age_band"
+ ],
+ "bins": {
+  "median_income": 4,
+  "housing_median_age": 4
+ }
+}

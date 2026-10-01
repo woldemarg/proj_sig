@@ -36,9 +36,10 @@ class ConceptStore:
     def is_empty(self) -> bool:
         return len(self.concept_ids) == 0
 
-    def update_concept_centroid(self, concept_idx: int, chunk_vec: np.ndarray, alpha: float, batch_id: int) -> None:
-        # Concept inertia: mature attractors resist drift (alpha decays with sqrt(chunk_count))
-        decayed_alpha = max(0.01, alpha / np.sqrt(self.chunk_counts[concept_idx] + 1))
+    def update_concept_centroid(self, concept_idx: int, chunk_vec: np.ndarray, alpha: float, batch_id: int, damping: float = 1.0) -> None:
+        # Concept inertia: mature attractors resist drift (alpha decays with sqrt(chunk_count));
+        # ``damping`` (<= 1) further slows over-represented attractors (SIG hub guard)
+        decayed_alpha = max(0.01, alpha / np.sqrt(self.chunk_counts[concept_idx] + 1)) * damping
 
         c_old = self.embeddings[concept_idx].astype(np.float64)
         chunk = chunk_vec.astype(np.float64)

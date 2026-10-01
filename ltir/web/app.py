@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from ltir.canonical import humanize
 from ltir.config import Config, load_config
 from ltir.pipeline import TERMINAL, Engine
 from ltir.store import RepresentationMismatch
@@ -55,10 +56,9 @@ def _short_label(graph, node: dict[str, Any]) -> str:
     ins = graph.insight(node["id"])
     scope = " · ".join(c.value for c in ins.conditions)
     if ins.phenomenon_type == "covariance" and ins.covariance:
-        a, b = ins.covariance["pair"]
-        return f"{scope}\ncorr {a}~{b}"
-    arrow = "↑" if ins.effect_size > 0 else "↓"
-    return f"{scope}\n{ins.target} {arrow}"
+        a, b = sorted(ins.covariance["pair"])
+        return f"{scope}\ncorr({humanize(a)}, {humanize(b)})"
+    return f"{scope}\n{humanize(ins.target)} {ins.effect_size:+.2f} sd"
 
 
 def cytoscape_elements(engine: Engine, dataset: str | None = None) -> dict[str, Any]:
@@ -227,6 +227,19 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
     return app
 
 
+def log_gpu_headroom() -> None:
+    """Report free GPU memory after the embedder is loaded. SIG never loads the LLM in-process
+    (it is only reached through LLM_BASE_URL), so a local LLM server must fit in what is left."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            log.info("GPU memory after warm-up: %.1f GB free of %.1f GB (LLM is external: LLM_BASE_URL)", free / 2**30, total / 2**30)
+    except Exception as exc:  # observability only; never blocks startup
+        log.info("GPU memory unavailable: %s", exc)
+
+
 def main() -> None:
     import uvicorn
 
@@ -237,6 +250,7 @@ def main() -> None:
     log.info("warming up embedding model %s", config.embedding_model)
     engine.encoder.embedder.embed(["warmup"])
     log.info("embedding device: %s", getattr(engine.encoder.embedder, "device", "n/a"))
+    log_gpu_headroom()
 
     def _warm_viz() -> None:
         # Deferred on purpose: plotly/prosphera take a few seconds and must not block startup.

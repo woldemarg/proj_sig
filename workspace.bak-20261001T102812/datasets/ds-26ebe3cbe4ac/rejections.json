@@ -1,0 +1,62 @@
+[
+ {
+  "expression": "housing_median_age_band=='q3' AND ocean_proximity=='<1H OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.23 p_adj=1.3e-35 emm=0.21"
+ },
+ {
+  "expression": "median_income_band=='q3' AND ocean_proximity=='<1H OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.31 p_adj=2.1e-94 emm=0.13"
+ },
+ {
+  "expression": "housing_median_age_band=='q3' AND median_income_band=='q3'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.26 p_adj=3.1e-25 emm=0.12"
+ },
+ {
+  "expression": "median_income_band=='q2' AND ocean_proximity=='<1H OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.29 p_adj=6.9e-19 emm=0.09"
+ },
+ {
+  "expression": "housing_median_age_band=='q2' AND median_income_band=='q2'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.49 p_adj=2.7e-26 emm=0.11"
+ },
+ {
+  "expression": "housing_median_age_band=='q2' AND ocean_proximity=='NEAR OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=7.5e-14 emm=0.13"
+ },
+ {
+  "expression": "housing_median_age_band=='q3' AND median_income_band=='q2'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.24 p_adj=6.2e-25 emm=0.10"
+ },
+ {
+  "expression": "housing_median_age_band=='q3' AND median_income_band=='q3' AND ocean_proximity=='<1H OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=2.7e-15 emm=0.12"
+ },
+ {
+  "expression": "housing_median_age_band=='q3' AND ocean_proximity=='NEAR OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.49 p_adj=5.5e-13 emm=0.10"
+ },
+ {
+  "expression": "housing_median_age_band=='q2' AND median_income_band=='q3'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.42 p_adj=5.2e-22 emm=0.08"
+ },
+ {
+  "expression": "housing_median_age_band=='q3' AND median_income_band=='q2' AND ocean_proximity=='<1H OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.28 p_adj=6e-11 emm=0.09"
+ },
+ {
+  "expression": "median_income_band=='q2' AND ocean_proximity=='NEAR OCEAN'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.31 p_adj=5.2e-06 emm=0.09"
+ }
+]

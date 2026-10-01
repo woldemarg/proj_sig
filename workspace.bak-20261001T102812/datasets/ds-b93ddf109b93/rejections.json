@@ -1,0 +1,72 @@
+[
+ {
+  "expression": "Attrition=='No' AND MaritalStatus=='Married'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.22 p_adj=0.0088 emm=0.02"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Life Sciences'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.06 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Medical'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.13 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "Attrition=='No' AND MaritalStatus=='Divorced'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.22 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "EducationField=='Life Sciences' AND MaritalStatus=='Married'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.22 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Life Sciences' AND MaritalStatus=='Married'",
+  "reason": "unstable",
+  "detail": "stability=0.39"
+ },
+ {
+  "expression": "EducationField=='Medical' AND MaritalStatus=='Married'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.12 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Medical' AND MaritalStatus=='Married'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.14 p_adj=1 emm=0.02"
+ },
+ {
+  "expression": "JobRole=='Sales Executive' AND MaritalStatus=='Married'",
+  "reason": "unstable",
+  "detail": "stability=0.47"
+ },
+ {
+  "expression": "EducationField=='Marketing' AND JobRole=='Sales Executive'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0.049 emm=0.01"
+ },
+ {
+  "expression": "Attrition=='No' AND JobRole=='Healthcare Representative'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0.049 emm=0.01"
+ },
+ {
+  "expression": "EducationField=='Life Sciences' AND MaritalStatus=='Divorced'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.22 p_adj=1 emm=0.01"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Marketing'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=1 emm=0.01"
+ },
+ {
+  "expression": "Attrition=='No' AND EducationField=='Life Sciences' AND MaritalStatus=='Divorced'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.34 p_adj=1.4e-06 emm=0.01"
+ }
+]

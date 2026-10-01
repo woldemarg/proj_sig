@@ -1,0 +1,51 @@
+{
+ "rows": 5000,
+ "columns": 11,
+ "numerics": [
+  "discount",
+  "margin",
+  "delivery_days",
+  "return_rate"
+ ],
+ "categoricals": [
+  "region",
+  "category",
+  "channel",
+  "payment",
+  "weekday",
+  "store_size"
+ ],
+ "dropped_columns": [
+  "order_id"
+ ],
+ "selected_dimensions": [
+  "region",
+  "category",
+  "channel"
+ ],
+ "search_space_size": 39,
+ "global_medians": {
+  "discount": 10.74,
+  "margin": 19.45,
+  "delivery_days": 3.4,
+  "return_rate": 0.0555
+ },
+ "global_mads": {
+  "discount": 2.58,
+  "margin": 2.8900000000000006,
+  "delivery_days": 0.7999999999999998,
+  "return_rate": 0.010100000000000005
+ },
+ "dimension_cardinality": {
+  "region": 4,
+  "category": 4,
+  "channel": 3
+ },
+ "dimension_entropy": {
+  "region": 1.8784371100412964,
+  "category": 1.9691040023729474,
+  "channel": 1.4364011016925131
+ },
+ "derived_columns": [],
+ "bins": {}
+}

@@ -14,8 +14,8 @@ from typing import Any
 
 # Bumped when stored vectors would no longer be comparable with new ones; a workspace
 # built with another version is refused (``representation_mismatch``) instead of mixed.
-CANONICAL_VERSION = "ltir-canon-2"  # EMM on the per-pair RMS scale, capped robust z
-REPRESENTATION_VERSION = "ltir-rep-2"  # single uncentred frame (no running-mean centering)
+CANONICAL_VERSION = "ltir-canon-3"  # closed-intent scopes; ASCII Markdown document; p-value buckets
+REPRESENTATION_VERSION = "ltir-rep-3"  # Qwen3-Embedding-0.6B (MRL 384, re-normalised); single uncentred frame
 
 
 def stable_hash(*parts: Any, length: int = 12) -> str:
@@ -150,7 +150,8 @@ class CanonicalInsight:
     insight_id: str
     version: str
     target: str
-    scope: str
+    scope: str  # embedding input: "attribute = value; ..."
+    scope_sentence: str  # readable: "attribute is value and ..."
     phenomenon: str
     covariance: str
     confounders: str
@@ -159,14 +160,16 @@ class CanonicalInsight:
     components: tuple[tuple[str, float], ...]
 
     def document(self) -> str:
+        """Readable Markdown rendering (humans, the naive text-NN baseline); never an embedding input."""
         return "\n".join(
             [
-                f"TARGET: {self.target}",
-                f"SCOPE: {self.scope}",
-                f"PHENOMENON: {self.phenomenon}",
-                f"COVARIANCE: {self.covariance}",
-                f"CONFOUNDERS: {self.confounders}",
-                f"SUPPORT: {self.support}",
+                f"### Subgroup finding {self.insight_id}",
+                f"* Scope: {self.scope_sentence}",
+                f"* Target metric: {self.target}",
+                f"* Observed shift: {self.phenomenon}",
+                f"* Metric relationships: {self.covariance}",
+                f"* Confounders: {self.confounders}",
+                f"* Validation: {self.support}",
             ]
         )
 
@@ -176,6 +179,8 @@ class EmbeddingSpec:
     """Contract that makes a stored vector reproducible."""
 
     model_id: str
+    truncate_dim: int  # Matryoshka truncation (0 = native width)
+    query_instruction: str  # prefix for free question text ("" = none)
     block_dim: int
     dim: int
     dtype: str

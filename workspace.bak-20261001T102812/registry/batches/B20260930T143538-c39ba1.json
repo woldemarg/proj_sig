@@ -1,0 +1,141 @@
+{
+ "batch_id": "B20260930T143538-c39ba1",
+ "dataset_id": "ds-26ebe3cbe4ac",
+ "filename": "housing.csv",
+ "source_path": "..\\eda\\data\\housing.csv",
+ "bins": "median_income:4,housing_median_age:4",
+ "status": "READY",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T14:35:38+00:00",
+  "VALIDATING": "2026-09-30T14:35:38+00:00",
+  "PROFILING": "2026-09-30T14:35:38+00:00",
+  "DISCOVERING": "2026-09-30T14:35:38+00:00",
+  "VALIDATING_INSIGHTS": "2026-09-30T14:35:38+00:00",
+  "EMBEDDING": "2026-09-30T14:35:38+00:00",
+  "UPDATING_ONTOLOGY": "2026-09-30T14:35:48+00:00",
+  "BUILDING_GRAPH": "2026-09-30T14:35:49+00:00",
+  "PERSISTING": "2026-09-30T14:35:50+00:00",
+  "READY": "2026-09-30T14:35:50+00:00"
+ },
+ "created_at": "2026-09-30T14:35:38+00:00",
+ "metrics": {
+  "input_rows": 20640,
+  "columns": 10,
+  "numeric_targets": 6,
+  "dimensions": 3,
+  "search_space": 54,
+  "candidate_patterns": 53,
+  "validated_candidates": 50,
+  "validated_insights": 38,
+  "pruned": {
+   "weak_effect": 12
+  },
+  "pruned_total": 12,
+  "avg_insight_support": 923.6578947368421,
+  "avg_insight_weight": 0.6982736735102291,
+  "embedding_count": 38,
+  "embedding_dim": 1152,
+  "attractors_total": 12,
+  "attractors_new": 7,
+  "orphan_rate": 1.0,
+  "activation_count": 38,
+  "soft_merged": 0,
+  "centroid_drift": null,
+  "adaptive_thresh": 0.55,
+  "max_concept_density_pct": 20.0,
+  "avg_attractor_degree": 2.0,
+  "graph_edges": 677,
+  "edge_counts": {
+   "OF_DATASET": 2,
+   "DISCOVERED_IN": 60,
+   "HAS_SCOPE": 151,
+   "TARGETS": 129,
+   "SPECIALIZES": 66,
+   "GENERALIZES": 66,
+   "SIBLING": 97,
+   "CONTRASTS": 34,
+   "ACTIVATES": 60,
+   "RELATED_TO": 12
+  },
+  "graph_patterns": 60,
+  "ontology_warnings": [
+   "orphan_rate>50% (100.0%)"
+  ],
+  "timings": {
+   "validate_s": 0.14308710000113933,
+   "discover_s": 0.5717752000000473,
+   "select_s": 0.22139919999972335,
+   "embed_s": 9.234910900000614,
+   "ontology_s": 1.6803573999986838,
+   "graph_s": 0.22182020000036573
+  },
+  "processing_duration_s": 12.107412100000147
+ },
+ "profile": {
+  "rows": 20640,
+  "columns": 10,
+  "numerics": [
+   "longitude",
+   "latitude",
+   "total_rooms",
+   "total_bedrooms",
+   "population",
+   "median_house_value"
+  ],
+  "categoricals": [
+   "ocean_proximity",
+   "median_income_band",
+   "housing_median_age_band"
+  ],
+  "dropped_columns": [
+   "households"
+  ],
+  "selected_dimensions": [
+   "ocean_proximity",
+   "median_income_band",
+   "housing_median_age_band"
+  ],
+  "search_space_size": 54,
+  "global_medians": {
+   "longitude": -118.49,
+   "latitude": 34.26,
+   "total_rooms": 2127.0,
+   "total_bedrooms": 435.0,
+   "population": 1166.0,
+   "median_house_value": 179700.0
+  },
+  "global_mads": {
+   "longitude": 1.2800000000000011,
+   "latitude": 1.2299999999999969,
+   "total_rooms": 797.0,
+   "total_bedrooms": 162.0,
+   "population": 440.0,
+   "median_house_value": 68400.0
+  },
+  "dimension_cardinality": {
+   "ocean_proximity": 5,
+   "median_income_band": 4,
+   "housing_median_age_band": 4
+  },
+  "dimension_entropy": {
+   "ocean_proximity": 1.781597049626012,
+   "median_income_band": 2.0,
+   "housing_median_age_band": 1.999150933092748
+  },
+  "derived_columns": [
+   "median_income_band",
+   "housing_median_age_band"
+  ],
+  "bins": {
+   "median_income": 4,
+   "housing_median_age": 4
+  }
+ },
+ "warnings": [],
+ "error": null,
+ "updated_at": "2026-09-30T14:35:50+00:00",
+ "batch_seq": 1,
+ "neo4j": {
+  "status": "disabled"
+ }
+}

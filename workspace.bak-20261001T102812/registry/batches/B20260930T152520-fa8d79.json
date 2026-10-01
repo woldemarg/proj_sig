@@ -1,0 +1,25 @@
+{
+ "batch_id": "B20260930T152520-fa8d79",
+ "dataset_id": "ds-c0f1593715cb",
+ "filename": "Walmart.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\workspace\\uploads\\39d1e9ff_Walmart.csv",
+ "bins": "",
+ "status": "FAILED",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:25:20+00:00",
+  "VALIDATING": "2026-09-30T15:25:20+00:00",
+  "PROFILING": "2026-09-30T15:25:20+00:00"
+ },
+ "created_at": "2026-09-30T15:25:20+00:00",
+ "metrics": {
+  "processing_duration_s": 0.08996229999866046
+ },
+ "profile": {},
+ "warnings": [],
+ "error": {
+  "code": "no_candidates",
+  "message": "Search space is empty (dimensions selected: [])."
+ },
+ "updated_at": "2026-09-30T15:25:20+00:00",
+ "failed_stage": "PROFILING"
+}

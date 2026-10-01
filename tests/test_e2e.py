@@ -54,7 +54,8 @@ def _check_grounded_answer(engine):
     assert h["seeds"] and h["anchors"] and h["edges"] and set(h["evidence"]) <= set(h["traversed"])
     assert "Sources:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
     prompt = engine.llm.prompts[-1]
-    assert "EVIDENCE — verified statistical observations" in prompt and "[P1]" in prompt
+    assert "EVIDENCE (verified statistical observations" in prompt and "[P1]" in prompt
+    assert prompt.isascii()  # no byte-fallback symbols reach the LLM (SDD 17 §9)
     return qa
 
 

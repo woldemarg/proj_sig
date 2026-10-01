@@ -1,0 +1,208 @@
+{
+ "batch_id": "B20260930T152707-c3dd3b",
+ "dataset_id": "ds-a2e12d839926",
+ "filename": "demo_points.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\workspace\\uploads\\4e8f8453_demo_points.csv",
+ "bins": "",
+ "status": "READY",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:27:07+00:00",
+  "VALIDATING": "2026-09-30T15:27:07+00:00",
+  "PROFILING": "2026-09-30T15:27:08+00:00",
+  "DISCOVERING": "2026-09-30T15:27:09+00:00",
+  "VALIDATING_INSIGHTS": "2026-09-30T15:27:11+00:00",
+  "EMBEDDING": "2026-09-30T15:27:11+00:00",
+  "UPDATING_ONTOLOGY": "2026-09-30T15:27:12+00:00",
+  "BUILDING_GRAPH": "2026-09-30T15:27:13+00:00",
+  "PERSISTING": "2026-09-30T15:27:13+00:00",
+  "READY": "2026-09-30T15:27:13+00:00"
+ },
+ "created_at": "2026-09-30T15:27:07+00:00",
+ "metrics": {
+  "input_rows": 20062,
+  "columns": 56,
+  "numeric_targets": 4,
+  "dimensions": 5,
+  "search_space": 154,
+  "candidate_patterns": 69,
+  "validated_candidates": 50,
+  "validated_insights": 23,
+  "pruned": {
+   "weak_effect": 13,
+   "cover_equivalent": 3,
+   "near_duplicate": 11
+  },
+  "pruned_total": 27,
+  "avg_insight_support": 1812.0434782608695,
+  "avg_insight_weight": 0.7926501970560922,
+  "embedding_count": 23,
+  "embedding_dim": 1152,
+  "attractors_total": 17,
+  "attractors_new": 5,
+  "orphan_rate": 1.0,
+  "activation_count": 23,
+  "soft_merged": 0,
+  "centroid_drift": null,
+  "adaptive_thresh": 0.55,
+  "max_concept_density_pct": 14.457831325301203,
+  "avg_attractor_degree": 1.8823529411764706,
+  "graph_edges": 884,
+  "edge_counts": {
+   "OF_DATASET": 3,
+   "DISCOVERED_IN": 83,
+   "HAS_SCOPE": 207,
+   "TARGETS": 171,
+   "SPECIALIZES": 78,
+   "GENERALIZES": 78,
+   "SIBLING": 105,
+   "CONTRASTS": 60,
+   "ACTIVATES": 83,
+   "RELATED_TO": 16
+  },
+  "graph_patterns": 83,
+  "ontology_warnings": [
+   "orphan_rate>50% (100.0%)"
+  ],
+  "timings": {
+   "validate_s": 0.7635455999989063,
+   "discover_s": 2.9348289999998087,
+   "select_s": 0.3684450000000652,
+   "embed_s": 0.29972970000017085,
+   "ontology_s": 1.107378200000312,
+   "graph_s": 0.14342959999885352
+  },
+  "processing_duration_s": 5.653884800000014
+ },
+ "profile": {
+  "rows": 20062,
+  "columns": 56,
+  "numerics": [
+   "additional_information",
+   "quantity",
+   "distance_km",
+   "ammunition_weight"
+  ],
+  "categoricals": [
+   "reporter_organisation",
+   "operational_condition",
+   "aircraft_is_fiber_optics",
+   "aircraft_avionics",
+   "aircraft_purpose_name",
+   "aircraft_is_fpv",
+   "aircraft_type_name",
+   "device_category",
+   "overlay_unit",
+   "target_type_name",
+   "damage_detail_control_mode_type"
+  ],
+  "dropped_columns": [
+   "object_id",
+   "overlay_id",
+   "object_name",
+   "overlay_name",
+   "creation_date_kyiv",
+   "reporting_date_kyiv",
+   "observation_date_kyiv",
+   "score_accrual_date_kyiv",
+   "creator_name",
+   "reporter_name",
+   "creator_organisation",
+   "staff_comment",
+   "sidc",
+   "score_original",
+   "score",
+   "comment_score",
+   "score_override",
+   "comment_other",
+   "organization",
+   "movement_time_kyiv",
+   "comment_model",
+   "aircraft_of_defeat",
+   "ammunition_of_defeat",
+   "is_verified_layer",
+   "aircraft_reporting_name",
+   "aircraft_of_defeat_old",
+   "rating_type",
+   "object_category",
+   "is_confirmed",
+   "object_category_generalised",
+   "operational_condition_generalised",
+   "is_daytime",
+   "end_date_kyiv",
+   "distance_km_group",
+   "app6d_type",
+   "target_model_name",
+   "ammunition_reporting_name",
+   "object_type",
+   "ammunition_type_name",
+   "ammunition_reporting_name_generalised",
+   "otg_name"
+  ],
+  "selected_dimensions": [
+   "target_type_name",
+   "operational_condition",
+   "aircraft_avionics",
+   "device_category",
+   "aircraft_type_name"
+  ],
+  "search_space_size": 154,
+  "global_medians": {
+   "additional_information": 2.0,
+   "quantity": 1.0,
+   "distance_km": 0.1784897745,
+   "ammunition_weight": 1.25
+  },
+  "global_mads": {
+   "additional_information": 1.5,
+   "quantity": 0.0,
+   "distance_km": 1.7209742810000002,
+   "ammunition_weight": 0.57
+  },
+  "dimension_cardinality": {
+   "target_type_name": 6,
+   "operational_condition": 2,
+   "aircraft_avionics": 6,
+   "device_category": 3,
+   "aircraft_type_name": 3
+  },
+  "dimension_entropy": {
+   "target_type_name": 1.751296739571312,
+   "operational_condition": 0.9849078763320309,
+   "aircraft_avionics": 2.3906375263802655,
+   "device_category": 1.2381897856335222,
+   "aircraft_type_name": 0.16018593652369303
+  },
+  "derived_columns": [],
+  "bins": {}
+ },
+ "warnings": [
+  "all-null columns ignored by profiling: ['score_override', 'end_date_kyiv']"
+ ],
+ "error": null,
+ "updated_at": "2026-09-30T15:27:17+00:00",
+ "batch_seq": 2,
+ "neo4j": {
+  "status": "ok",
+  "nodes": {
+   "Pattern": 83,
+   "Attractor": 17,
+   "Dimension": 11,
+   "Metric": 14,
+   "Dataset": 3,
+   "Batch": 3
+  },
+  "edges": {
+   "SPECIALIZES": 78,
+   "GENERALIZES": 78,
+   "SIBLING": 105,
+   "CONTRASTS": 60,
+   "HAS_SCOPE": 207,
+   "TARGETS": 171,
+   "ACTIVATES": 83,
+   "RELATED_TO": 16,
+   "DISCOVERED_IN": 83,
+   "OF_DATASET": 3
+  },
+  "database": "sigv1"
+ }
+}

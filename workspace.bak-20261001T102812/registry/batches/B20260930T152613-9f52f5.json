@@ -1,0 +1,24 @@
+{
+ "batch_id": "B20260930T152613-9f52f5",
+ "dataset_id": null,
+ "filename": "epoints.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\workspace\\uploads\\e2cd4267_epoints.csv",
+ "bins": "",
+ "status": "FAILED",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:26:13+00:00",
+  "VALIDATING": "2026-09-30T15:26:13+00:00"
+ },
+ "created_at": "2026-09-30T15:26:13+00:00",
+ "metrics": {
+  "processing_duration_s": 0.007562699998743483
+ },
+ "profile": {},
+ "warnings": [],
+ "error": {
+  "code": "invalid_schema",
+  "message": "Only 3 rows (MIN_ROWS=50)"
+ },
+ "updated_at": "2026-09-30T15:26:13+00:00",
+ "failed_stage": "VALIDATING"
+}

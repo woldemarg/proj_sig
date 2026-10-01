@@ -32,7 +32,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 Batches run one at a time (`RLock`; the web app uses a single worker thread). Any exception before the batch is saved as `READY` triggers rollback, discards the checkpoint and marks the batch `FAILED` with `failed_stage`. Neo4j publish and sphere export run after that save; a failure there leaves the batch `READY`. On start, a writer engine's `_recover_interrupted()` rolls back and fails batches left in a non-terminal state whose `owner_pid` is dead (SDD 09).
 
 ## Metrics (observability, requirement §29)
-`input_rows, columns, numeric_targets, dimensions, search_space, candidate_patterns, validated_candidates, validated_insights, pruned{reason: n}, pruned_total, avg_insight_support, avg_insight_weight, embedding_count, embedding_dim, attractors_total, attractors_new, orphan_rate, activation_count, soft_merged, centroid_drift, adaptive_thresh, max_concept_density_pct, avg_attractor_degree, graph_edges, edge_counts, graph_patterns, ontology_warnings, timings{validate_s, discover_s, select_s, embed_s, ontology_s, graph_s}, processing_duration_s`. Query-side metrics (traversal depth, evidence count, LLM latency) are in `QAResult.metrics` and `logs/queries.jsonl`.
+`input_rows, columns, numeric_targets, dimensions, search_space, pass1_subgroups, candidate_patterns (distinct cohorts), validated_candidates, validated_insights, pruned{reason: n}, pruned_total, avg_insight_support, avg_insight_weight, embedding_count, embedding_dim, attractors_total, attractors_new, orphan_rate, activation_count, soft_merged, centroid_drift, adaptive_thresh, max_concept_density_pct, density_threshold, damped_attractors, max_centroid_step, clamped_attractors, avg_attractor_degree, graph_edges, edge_counts, graph_patterns, ontology_warnings, timings{validate_s, discover_s, select_s, embed_s, ontology_s, graph_s}, processing_duration_s`. Query-side metrics (traversal depth, evidence count, LLM latency) are in `QAResult.metrics` and `logs/queries.jsonl`.
 
 ## Error codes (requirement §30)
 | Code | Meaning | Stage |
@@ -60,7 +60,7 @@ Terminal states are final. `READY` implies journals, state and snapshot are mutu
 `tests/test_e2e.py` (full flow; all stages recorded; metrics keys; grounded answer), `tests/test_persistence.py` (rollback, recovery, idempotency, failure codes), `tests/test_ui_smoke.py` (upload → READY via the API).
 
 ## Integration points
-CLI (`demo`, `ingest`, `query`, `status`, `experiment`, `rebuild-graph`, `neo4j-sync`, `llm-check`, `reset`, `serve`) and the web API (SDD 13).
+CLI (`demo`, `ingest`, `query`, `status`, `experiment`, `rebuild-graph`, `sphere`, `neo4j-sync`, `llm-check`, `migrate`, `reset`, `serve`) and the web API (SDD 13).
 
 ## Current implementation status
-Implemented. Measured on the dev machine (RTX 4060, CUDA embeddings): synthetic 5 000 × 11 → 84 candidates, 28 insights, 7 themes, READY in 16–19 s including the one-off model load (the 20-resample bootstrap and the chi-square driver test add ≈ 1 s). `housing.csv` 20 640 × 10 + 2 bands → READY in ≈ 12 s.
+Implemented. Measured on the dev machine (RTX 4060, CUDA embeddings): synthetic 5 000 × 11 → 84 cohorts, 28 insights, 4 themes (Qwen3; 7 with MiniLM), READY in ≈ 3 s after the one-off model load (≈ 10 s) (the 20-resample bootstrap and the chi-square driver test add ≈ 1 s). `housing.csv` 20 640 × 10 + 2 bands → READY in ≈ 12 s.

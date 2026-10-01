@@ -1,40 +1,46 @@
 # SDD 05 — Insight canonicalisation
 
 ## Purpose
-Serialise every insight into a canonical, versioned, six-section representation. Structural predicates (scope) and statistical behaviour (phenomenon) stay separately accessible and are never mixed in one string before embedding.
+Serialise every insight into a canonical, versioned representation with **two separate contracts**: the *embedding inputs* (scope, target, signed components), which define the vector, and the *readable text* (a Markdown document and phrase helpers shared with the LLM prompt), which never enters the vector. Structural predicates (scope) and statistical behaviour (phenomenon) are never mixed in one string.
 
 ## Scope
-`ltir/canonical.py`: `canonicalize()`, `phenomenon_shifts()`, `headline()`, `covariance_label()`.
+`ltir/canonical.py`: `canonicalize()`, `phenomenon_shifts()`, `has_material_covariance()`, `headline()`, `covariance_label()`, and the readable-text helpers `format_value()`, `format_p()`, `describe_scope()`, `describe_shift()`, `describe_covariance()`. `ltir/models.py::CanonicalInsight`.
 
 ## Inputs
 `Insight` (SDD 04), `Config`, optional dataset row count.
 
 ## Outputs
-`CanonicalInsight(insight_id, version, target, scope, phenomenon, covariance, confounders, support, components)`. `document()` renders the six sections.
+`CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)`; `document()` renders the readable form.
 
-## Data contract / serialisation (`CANONICAL_VERSION = "ltir-canon-2"`)
-
-```text
-TARGET: margin
-SCOPE: category = laptops; region = EU
-PHENOMENON: margin strong decrease (robust z -2.30; median 12.1 vs 18); discount moderate increase (robust z +1.20; ...)
-COVARIANCE: stabilized correlation divergence 0.061; strongest pair discount ~ margin -0.57 -> -0.24
-CONFOUNDERS: [payment] heavily skewed to 'cash' (JS: 0.20)      | "none detected"
-SUPPORT: 560 rows (11.2% of 5,000); bootstrap stability 0.89; adjusted p 4.2e-28
-```
-
-| Section | Built from | Used by |
+## Data contract (`CANONICAL_VERSION = "ltir-canon-3"`)
+**Embedding inputs** (unchanged across canon versions 2 → 3; SDD 06 embeds exactly these):
+| Field | Rule | Example |
 |---|---|---|
-| TARGET | humanised `target` (`_` → space) | target embedding block |
-| SCOPE | `attribute = value` joined by `; `, sorted | scope embedding block |
-| PHENOMENON | phenomenon shifts: the target always, plus secondary shifts with \|z\| ≥ `MIN_COMPONENT_Z`; magnitude words mild < 1 ≤ moderate < 2 ≤ strong < 3 ≤ extreme | human/LLM reading |
-| COVARIANCE | EMM score and the strongest divergent pair | reading |
-| CONFOUNDERS | EDA drivers | reading, evidence |
-| SUPPORT | support, stability, adjusted p | reading |
+| `scope` | `attribute = value` joined by `; `, condition order (the closed intent, SDD 03) | `category = phones; region = US` |
+| `target` | humanised target metric (`_` → space) | `discount` |
+| `components` | `(humanised metric, signed robust z)` per phenomenon shift; plus `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm / WEIGHT_EMM_REF)` when the correlation change is material | `[("discount", 2.21), ("margin", -1.10)]` |
 
-**Signed components** (`components`, consumed by the encoder): `(humanised metric, signed robust z)` for each phenomenon shift. When the insight is `covariance`-typed or `emm ≥ MIN_EMM_SCORE`, one more component is added: `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm / WEIGHT_EMM_REF)`, with sign +1 when \|corr\| strengthens and −1 when it weakens or reverses. For covariance insights only shifts with \|z\| ≥ `MIN_COMPONENT_Z` are kept, and the phrase "no material median shift" is added when none remain.
+Labels never contain digits: the magnitude lives only in the coefficient (`test_embedding_labels_carry_no_numbers`). The phenomenon shifts are the target plus every shift with \|z\| ≥ `MIN_COMPONENT_Z` (covariance insights: only \|z\| ≥ `MIN_COMPONENT_Z`). The correlation change is material for covariance-typed insights and when `emm_score ≥ MIN_EMM_SCORE` (`has_material_covariance`); its sign is +1 when \|corr\| strengthens, −1 when it weakens or reverses.
 
-`headline(ins)` is a one-line label, e.g. `category=phones, region=US: discount ↑ (+2.21 z)`.
+**Readable text** (ASCII; number rules: values 4 significant digits below 1,000 and thousands separators above, never an exponent; shifts `±x.xx sd`; correlations `±0.xx`; p-values `< 0.001` / `< 0.01` / `< 0.05` / two decimals; shares one-decimal percent):
+```text
+### Subgroup finding P-bc4657a04746
+* Scope: category is phones and region is US
+* Target metric: discount
+* Observed shift: discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)
+* Metric relationships: strongest change: correlation between delivery days and return rate weakens from +0.88 overall to +0.73 in the subgroup (divergence score 0.02)
+* Confounders: none detected
+* Validation: 438 rows (8.8% of 5,000); bootstrap stability 0.97; adjusted p < 0.001
+```
+| Field | Built from |
+|---|---|
+| `scope_sentence` | `describe_scope`: `a is x and b is y`; three or more: `a is x, b is y, and c is z` |
+| `phenomenon` | `describe_shift` per phenomenon shift (`metric: <mild\|moderate\|strong\|extreme> <increase\|decrease>, ±z sd (median local vs global overall)`), the correlation phrase first for covariance insights and last otherwise; `no material median shift` when a covariance insight has none. Also the fallback text of the phenomenon block when all components cancel (SDD 06) |
+| `covariance` | `strongest change: <describe_covariance> (divergence score x.xx)` or `no correlation pair (divergence score x.xx)` |
+| `confounders` | the EDA driver strings, or `none detected` |
+| `support` | `n rows (share of N); bootstrap stability s; adjusted p <bucket>` |
+
+`headline(ins)` is the compact ASCII visual label (graph node `label`, Neo4j, UI tooltip): `category=phones, region=US: discount +2.21 sd`; covariance: `category=tablets, channel=online: corr(delivery days, discount) strengthens`.
 
 ## Algorithms
 Pure string/number formatting; no model calls.
@@ -46,15 +52,15 @@ Pure string/number formatting; no model calls.
 None expected. Insights always have ≥ 1 shift.
 
 ## Invariants
-* Scope text contains only conditions, and phenomenon text never contains scope attributes.
-* Output is deterministic for a given insight and config.
-* `version` is stored with every pattern record. A change of format must bump `CANONICAL_VERSION`, which changes the embedding fingerprint (SDD 06) and prevents silent mixing.
+* Embedding inputs contain only conditions (scope) or metric names (target, labels); no numbers, no prose.
+* The readable text is ASCII and is a pure function of the insight and the config.
+* `version` is stored with every pattern record. A change to either contract bumps `CANONICAL_VERSION`, which changes the fingerprint (SDD 06) and refuses old workspaces.
 
 ## Testing requirements
-`tests/test_canonical_embedding.py::test_canonical_sections_are_separate`, `::test_covariance_canonical_component`.
+`tests/test_canonical_embedding.py`: `test_canonical_sections_are_separate` (embedding inputs, document sections, ASCII), `test_covariance_canonical_component`, `test_embedding_labels_carry_no_numbers`, `test_text_number_rules`.
 
 ## Integration points
-Output feeds `InsightEncoder.encode()` and is persisted in `patterns.jsonl` (`canonical` field, including `document`). The UI inspector shows the document, and the naive text-NN baseline embeds it.
+Embedding inputs feed `InsightEncoder.encode()`; the record (including `document`, `scope_sentence`, `components`) is persisted in `patterns.jsonl` (`canonical`). The helpers render the LLM prompt (SDD 11) and the UI drawer shows the document; the naive text-NN baseline embeds the document.
 
 ## Current implementation status
-Implemented.
+Implemented; the document and the prompt are ASCII (measured: 0 non-ASCII characters in the demo prompt, SDD 17 §12).

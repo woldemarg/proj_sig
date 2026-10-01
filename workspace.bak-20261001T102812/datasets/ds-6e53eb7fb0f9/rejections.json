@@ -1,0 +1,87 @@
+[
+ {
+  "expression": "channel=='retail' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.24 p_adj=0.081 emm=0.22"
+ },
+ {
+  "expression": "category=='laptops' AND channel=='retail'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.24 p_adj=0.049 emm=0.16"
+ },
+ {
+  "expression": "channel=='online' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=1e-10 emm=0.12"
+ },
+ {
+  "expression": "channel=='retail' AND region=='EU'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=3.2e-20 emm=0.09"
+ },
+ {
+  "expression": "category=='phones' AND channel=='online' AND region=='EU'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.29 p_adj=8.9e-05 emm=0.21"
+ },
+ {
+  "expression": "category=='phones' AND channel=='retail'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.27 p_adj=0.11 emm=0.09"
+ },
+ {
+  "expression": "category=='phones' AND channel=='retail' AND region=='EU'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=0.0026 emm=0.18"
+ },
+ {
+  "expression": "channel=='retail' AND region=='APAC'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.14 p_adj=0.59 emm=0.06"
+ },
+ {
+  "expression": "category=='laptops' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.42 p_adj=0.0028 emm=0.02"
+ },
+ {
+  "expression": "category=='tablets' AND region=='EU'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.27 p_adj=0.86 emm=0.10"
+ },
+ {
+  "expression": "category=='tablets' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=0.00031 emm=0.05"
+ },
+ {
+  "expression": "category=='tablets' AND channel=='online' AND region=='EU'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.38 p_adj=7.6e-05 emm=0.05"
+ },
+ {
+  "expression": "category=='laptops' AND channel=='online' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.17 p_adj=0.23 emm=0.05"
+ },
+ {
+  "expression": "category=='tablets' AND channel=='online' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=0.11 emm=0.04"
+ },
+ {
+  "expression": "category=='tablets' AND channel=='retail' AND region=='US'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.25 p_adj=0.36 emm=0.03"
+ },
+ {
+  "expression": "category=='laptops' AND channel=='retail' AND region=='APAC'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.30 p_adj=0.045 emm=0.05"
+ },
+ {
+  "expression": "category=='phones' AND channel=='retail' AND region=='APAC'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.21 p_adj=0.96 emm=0.03"
+ }
+]

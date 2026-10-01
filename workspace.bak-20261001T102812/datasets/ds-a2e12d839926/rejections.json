@@ -1,0 +1,137 @@
+[
+ {
+  "expression": "aircraft_type_name=='Коптер' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=2e-277 emm=0.25"
+ },
+ {
+  "expression": "aircraft_type_name=='Коптер' AND device_category=='Камікадзе'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.18 p_adj=1.9e-73 emm=0.22"
+ },
+ {
+  "expression": "aircraft_type_name=='Коптер' AND device_category=='Камікадзе' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0 emm=0.18"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND device_category=='Камікадзе'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0 emm=0.16"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND aircraft_type_name=='Коптер'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.18 p_adj=1.5e-16 emm=0.09"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND aircraft_type_name=='Коптер' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0 emm=0.14"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND aircraft_type_name=='Коптер'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.30 p_adj=3e-13 emm=0.13"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND aircraft_type_name=='Коптер' AND device_category=='Камікадзе'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=0 emm=0.07"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Нічний,Тепловізійний' AND aircraft_type_name=='Коптер'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.44 p_adj=1.9e-26 emm=0.06"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=4.5e-42 emm=0.13"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND aircraft_type_name=='Коптер' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=2.6e-41 emm=0.11"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Нічний,Тепловізійний' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=2.8e-293 emm=0.08"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Нічний,Тепловізійний' AND aircraft_type_name=='Коптер' AND operational_condition=='Уражено'",
+  "reason": "weak_effect",
+  "detail": "|z|=0.45 p_adj=2.8e-293 emm=0.08"
+ },
+ {
+  "expression": "aircraft_avionics=='Нічний' AND operational_condition=='Уражено'",
+  "reason": "cover_equivalent",
+  "detail": "same rows as aircraft_avionics=='Нічний' AND aircraft_type_name=='Коптер' AND operational_condition=='Уражено'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Нічний,Тепловізійний' AND device_category=='Бомбер'",
+  "reason": "cover_equivalent",
+  "detail": "same rows as aircraft_avionics=='Денний,Нічний,Тепловізійний' AND aircraft_type_name=='Коптер' AND device_category=='Бомбер'"
+ },
+ {
+  "expression": "aircraft_avionics=='Тепловізійний' AND device_category=='Бомбер'",
+  "reason": "cover_equivalent",
+  "detail": "same rows as aircraft_avionics=='Тепловізійний' AND aircraft_type_name=='Коптер' AND device_category=='Бомбер'"
+ },
+ {
+  "expression": "aircraft_type_name=='Коптер' AND device_category=='Камікадзе' AND target_type_name=='Ударний'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with device_category=='Камікадзе' AND target_type_name=='Ударний'"
+ },
+ {
+  "expression": "aircraft_avionics=='Нічний' AND aircraft_type_name=='Коптер' AND device_category=='Бомбер'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Нічний' AND device_category=='Бомбер'"
+ },
+ {
+  "expression": "aircraft_avionics=='Нічний' AND aircraft_type_name=='Коптер'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Нічний' AND device_category=='Бомбер'"
+ },
+ {
+  "expression": "aircraft_type_name=='Коптер' AND device_category=='Бомбер' AND operational_condition=='Уражено'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with device_category=='Бомбер' AND operational_condition=='Уражено'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND target_type_name=='Ударний'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний,Тепловізійний' AND aircraft_type_name=='Коптер' AND target_type_name=='Ударний'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND device_category=='Камікадзе' AND target_type_name=='Ударний'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний,Тепловізійний' AND aircraft_type_name=='Коптер' AND target_type_name=='Ударний'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND aircraft_type_name=='Коптер' AND target_type_name=='Ударний'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний' AND target_type_name=='Ударний'"
+ },
+ {
+  "expression": "aircraft_avionics=='Нічний' AND device_category=='Бомбер' AND operational_condition=='Уражено'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Нічний' AND aircraft_type_name=='Коптер' AND operational_condition=='Уражено'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний' AND device_category=='Бомбер'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний' AND aircraft_type_name=='Коптер' AND device_category=='Бомбер'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Тепловізійний' AND aircraft_type_name=='Коптер' AND device_category=='Камікадзе'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний,Тепловізійний' AND device_category=='Камікадзе'"
+ },
+ {
+  "expression": "aircraft_avionics=='Денний,Нічний,Тепловізійний' AND aircraft_type_name=='Коптер' AND device_category=='Камікадзе'",
+  "reason": "near_duplicate",
+  "detail": "Jaccard>=0.9 with aircraft_avionics=='Денний,Нічний,Тепловізійний' AND device_category=='Камікадзе'"
+ }
+]

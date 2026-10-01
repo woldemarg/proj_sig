@@ -7,7 +7,7 @@ Define the canonical `Insight` (graph `Pattern`), the explicit policy deciding w
 `ltir/models.py` (contracts) and `ltir/quality.py` (rules R1–R7, weight).
 
 ## Inputs
-`list[Insight]` from `build_insights()` (SDD 03), plus `covers: {expression: row positions}` and `Config`.
+`list[Insight]` from `build_insights()` (SDD 03) — already distinct cohorts with closed-intent conditions — and `Config`.
 
 ## Outputs
 `SelectionResult(kept: list[Insight], rejections: list[Rejection], stats: {input, kept, <reason>: count})`. Kept insights carry `weight`, `weight_factors`, `aliases`, and possibly `phenomenon_type="covariance"`.
@@ -35,7 +35,7 @@ numpy only.
 | `row_hash` | sha1 of sorted covered row positions (cover identity) |
 | `phenomenon_type` | `shift` or `covariance` |
 | `covariance` | `{pair, local_corr, global_corr, delta}` |
-| `aliases` | expressions collapsed into this insight by R5/R6 |
+| `aliases` | selectors merged into this cohort before validation (R5 identical extent, R6 near duplicate; SDD 03) |
 | `weight`, `weight_factors` | see below |
 | `provenance` | dataset_id, filename, batch_id, engine, steps, expression, `rows_ref`, `multiple_testing_family` |
 
@@ -48,11 +48,11 @@ Serialisation: `Insight.to_record()` / `Insight.from_record()` (JSON-safe).
 | R1 support | `support ≥ MIN_SUPPORT_ROWS` (on top of the EDA's own min size) | `min_support` |
 | R2 / R3 strength and stability | `shift_ok ∨ emm_ok` | `unstable` (significant but not stable), `not_significant` (\|z\| large enough, p fails), `weak_effect` (otherwise) |
 | R4 weight | `weight ≥ MIN_INSIGHT_WEIGHT` | `low_weight` |
-| R5 cover equivalence | identical `row_hash` → keep the **closed** pattern (maximal intent), then higher weight, then lexical order; the others become aliases | `cover_equivalent` |
-| R6 near duplicate | same target and direction and Jaccard(rows) ≥ `REDUNDANCY_JACCARD` with a heavier kept insight → alias | `near_duplicate` |
+| R5 cover equivalence | runs in discovery **before validation** (SDD 03): one cohort per extent, described by its closed intent | `cover_equivalent` |
+| R6 near duplicate | runs in discovery before validation: same primary metric and sign, row Jaccard ≥ `REDUNDANCY_JACCARD` → alias of the higher-ranked cohort | `near_duplicate` |
 | R7 budget | keep the top `MAX_INSIGHTS_PER_BATCH` by weight | `budget` |
 
-Rejections are persisted to `datasets/<id>/rejections.json` and counted in batch metrics (`pruned`).
+`select_insights(insights, config)` applies the retype, R1–R4 and R7. Discovery and selection rejections are persisted together to `datasets/<id>/rejections.json` and counted in batch metrics (`pruned`).
 
 ## Insight weight
 Inputs: EDA effect, bootstrap stability, adapter significance, EDA volume utility, EDA EMM score.
@@ -82,18 +82,18 @@ Where the weight enters:
 4. **Selection**: R4.
 
 ## Configuration
-`MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MIN_EMM_SCORE` 0.08, `MIN_STABILITY` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_INSIGHT_WEIGHT` 0.2, `REDUNDANCY_JACCARD` 0.90, `MAX_INSIGHTS_PER_BATCH` 200, `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_CONFIDENCE_REF` 6, `WEIGHT_EMM_REF` 0.08, `WEIGHT_EXPONENTS` (.35,.25,.2,.1,.1), `WEIGHT_FLOOR` 0.05. `MIN_EMM_SCORE` and `WEIGHT_EMM_REF` are on the per-pair RMS scale: 0.08 after shrinkage corresponds to a raw RMS correlation change of ≈ 0.2–0.4 per pair for subgroups holding 5–15 % of the rows (the planted EU∧phones break scores 0.086).
+`MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MIN_EMM_SCORE` 0.08, `MIN_STABILITY` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_INSIGHT_WEIGHT` 0.2, `REDUNDANCY_JACCARD` 0.88 (SDD 03), `MAX_INSIGHTS_PER_BATCH` 200, `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_CONFIDENCE_REF` 6, `WEIGHT_EMM_REF` 0.08, `WEIGHT_EXPONENTS` (.35,.25,.2,.1,.1), `WEIGHT_FLOOR` 0.05. `MIN_EMM_SCORE` and `WEIGHT_EMM_REF` are on the per-pair RMS scale: 0.08 after shrinkage corresponds to a raw RMS correlation change of ≈ 0.2–0.4 per pair for subgroups holding 5–15 % of the rows (the planted EU∧phones break scores 0.086).
 
 ## Failure modes
 If nothing is kept, the pipeline raises `no_viable_insights` (batch FAILED, nothing persisted).
 
 ## Invariants
 * `WEIGHT_FLOOR ≤ weight ≤ 1`, and the weight is monotone non-decreasing in \|z\|, stability, −log p and EMM. Unmeasured factors are `None` in `weight_factors` and never enter the mean.
-* No two kept insights share a `row_hash`.
+* No two kept insights share a `row_hash` or an `id` (identical extents were merged before validation).
 * Every validated candidate (selection input) is either kept or has exactly one `Rejection`. Pass-1 candidates beyond `VALIDATION_BUDGET` never reach selection.
 
 ## Testing requirements
-`tests/test_quality.py`: bounds and monotonicity, the formula, reason codes, cover equivalence (closed pattern kept), near-duplicate collapse, covariance retargeting.
+`tests/test_quality.py`: bounds and monotonicity, the formula, reason codes, R7 budget, covariance retargeting. R5/R6: `tests/test_discovery_contract.py`.
 
 ## Integration points
 Consumed by canonicalisation (05), encoder weights (07), graph properties (08), traversal ranking (10).

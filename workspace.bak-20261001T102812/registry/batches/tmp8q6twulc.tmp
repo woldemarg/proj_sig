@@ -1,0 +1,18 @@
+{
+ "batch_id": "B20260930T152537-a69e50",
+ "dataset_id": null,
+ "filename": "epoints.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\workspace\\uploads\\d9331ecf_epoints.csv",
+ "bins": "",
+ "status": "VALIDATING",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:25:37+00:00",
+  "VALIDATING": "2026-09-30T15:25:37+00:00"
+ },
+ "created_at": "2026-09-30T15:25:37+00:00",
+ "metrics": {},
+ "profile": {},
+ "warnings": [],
+ "error": null,
+ "updated_at": "2026-09-30T15:25:37+00:00"
+}

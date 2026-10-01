@@ -1,0 +1,21 @@
+{
+ "batch_id": "B20260930T152601-49f362",
+ "dataset_id": "ds-6e53eb7fb0f9",
+ "filename": "retail_synthetic.csv",
+ "source_path": "D:\\llm\\sig_proj\\sig\\data\\demo\\retail_synthetic.csv",
+ "bins": "",
+ "status": "SKIPPED",
+ "stage_times": {
+  "UPLOADED": "2026-09-30T15:26:01+00:00",
+  "VALIDATING": "2026-09-30T15:26:01+00:00"
+ },
+ "created_at": "2026-09-30T15:26:01+00:00",
+ "metrics": {},
+ "profile": {},
+ "warnings": [
+  "dataset already ingested in B20260930T143523-55815a (idempotent skip)"
+ ],
+ "error": null,
+ "updated_at": "2026-09-30T15:26:01+00:00",
+ "duplicate_of": "B20260930T143523-55815a"
+}
