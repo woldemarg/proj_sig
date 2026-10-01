@@ -25,9 +25,9 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 | UPDATING_ONTOLOGY | **checkpoint**, batch sequence, `LatentOntology.ingest` | [5](05_latent_anchors.md) |
 | BUILDING_GRAPH | pattern records (+ canonical form, embedding metadata), covers | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | PERSISTING | duplicate guard, journal append, state save, representation record, batch sequence commit, snapshot | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
-| READY | record saved, checkpoint discarded, committed caches swapped in; then optional Neo4j publish and sphere export (a failure there is a warning) | [6.6](06_graph_and_storage.md#66-neo4j-mirror), [8.4](08_interface.md#84-the-latent-sphere) |
+| READY | record saved, checkpoint discarded, committed caches swapped in; then the optional Neo4j publish and the sphere export, queued on a background thread (a failure there is a warning) | [6.6](06_graph_and_storage.md#66-neo4j-mirror), [8.4](08_interface.md#84-the-latent-sphere) |
 
-One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back, discards the checkpoint and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. An exception after the READY save but before the caches are swapped also ends in `FAILED`. A failure to save the record after a Neo4j publish or a sphere export propagates out of `process()`; the batch stays READY on disk.
+One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back, discards the checkpoint and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. An exception after the READY save but before the caches are swapped (discarding the checkpoint, rebuilding the caches) overwrites READY with `FAILED`; it rolls back only while the checkpoint still exists, so a failure of the cache swap leaves the batch's rows committed under a FAILED record — a narrow window, kept visible rather than hidden. A failure to save the record after the Neo4j publish propagates out of `process()`; the batch stays READY on disk. The sphere export runs after `process()` has returned, so the returned record may not yet have its `sphere` key; its failures, including the record save, never reach the caller.
 
 **Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, owner_pid, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}, sphere}`; a temporary `checkpoint` key exists while a batch is committing (the batch list endpoint strips it).
 
@@ -50,11 +50,13 @@ One writer process works on a workspace at a time — it holds the workspace's w
 | `reset --yes` | deletes the workspace and clears the Neo4j mirror when enabled | workspace, Neo4j |
 | `serve` | starts the web UI (same as `python -m ltir.web`) | — |
 
-Writers (`demo`, `ingest`, `reset`, `rebuild-graph`, `migrate` and the web app) take the workspace's writer lock and recover interrupted batches when they start; while another writer holds the lock they stop with `error: workspace … is in use by another writer process (pid …)` and exit code 2 — while the web app runs, upload through it. The others open read-only and run alongside a writer. Use a separate `WORKSPACE_DIR` for experiments — the default `workspace/` is the knowledge base people work with.
+Writers (`demo`, `ingest`, `reset` — also without `--yes` —, `rebuild-graph`, `migrate` and the web app) take the workspace's writer lock; all but `migrate` then recover interrupted batches (`migrate` refuses while a batch is unfinished instead). While another writer holds the lock they stop with `error: workspace … is in use by another writer process (pid …)` and exit code 2 — while the web app runs, upload through it. The others open read-only and run alongside a writer. Use a separate `WORKSPACE_DIR` for experiments — the default `workspace/` is the knowledge base people work with.
+
+Exit codes: 0 on success (`SKIPPED` included); 1 for a FAILED `demo` or `ingest`, `migrate` or `reset` without `--yes`, `neo4j-sync` without a snapshot, and a failed `llm-check` (which sends one live request); 2 for a busy workspace. Other errors end with a Python traceback and exit code 1: a `migrate` refusal or failure (`PipelineError`), a `query` against an outdated workspace (`RepresentationMismatch`), a Neo4j error in `neo4j-sync`.
 
 ## 9.3 Configuration
 
-`ltir/config.py::Config` (a frozen dataclass) is the single source of tunables. `load_config(env_file=None, **overrides)` builds it from the defaults, then the environment (`NAME` = the field name in upper case, optionally loaded from `.env`; values already in the process environment win over the file), then explicit overrides. Values are coerced to the field's type (booleans from `1/true/yes/on`, tuples from comma-separated numbers, paths relative to the repository root). An empty value clears a text field (`EMBEDDING_QUERY_INSTRUCTION=`) and leaves any other field at its default. `LTIR_NO_DOTENV=1` skips `.env`; the test suite sets it, so no developer credential ever reaches a test. `Config.public_dict()` masks passwords and API keys for logs and the UI. `.env.sample` documents every field; [11.3](11_reference.md#113-parameters) lists them all with defaults.
+`ltir/config.py::Config` (a frozen dataclass) is the single source of tunables. `load_config(env_file=None, **overrides)` builds it from the defaults, then the environment (`NAME` = the field name in upper case, optionally loaded from `.env`; values already in the process environment win over the file), then explicit overrides. Values are coerced to the field's type (booleans from `1/true/yes/on`, tuples from comma-separated numbers, paths relative to the repository root). An empty value clears a text field (`EMBEDDING_QUERY_INSTRUCTION=`) and leaves any other field at its default. `LTIR_NO_DOTENV` set to any non-empty value skips `.env` (an explicit `env_file` argument is loaded anyway); the test suite sets it, so no developer credential ever reaches a test. `Config.public_dict()` masks passwords and API keys for logs and the UI. `.env.sample` documents the commonly changed fields; [11.3](11_reference.md#113-parameters) lists them all with defaults.
 
 **Deployment.**
 
@@ -79,8 +81,10 @@ Writers (`demo`, `ingest`, `reset`, `rebuild-graph`, `migrate` and the web app) 
 | `ontology_failure` | an ontology invariant was violated | UPDATING_ONTOLOGY |
 | `duplicate_patterns` | a pattern id is already journaled (the append-only journal would be corrupted) | PERSISTING |
 | `internal_error` | anything else (the trace is kept) | any |
-| `interrupted` | crash recovery found the batch unfinished (batches that never started have no `failed_stage`) | any |
+| `interrupted` | crash recovery found the batch unfinished; the record keeps its last stage in `stage_times` but gets no `failed_stage` | any |
 | `WorkspaceBusy` (not a batch code) | another writer process holds the workspace; the CLI exits with code 2, the web app does not start | engine start |
+| `busy`, `nothing_to_migrate`, `migration_failed` (not batch codes) | `migrate` refused (a batch is unfinished, or there is no READY batch) or a re-ingest did not end READY; the workspace is unchanged | migrate |
+| `unknown_batch` (not a batch code) | `Engine.process` was given an id with no record | — |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | query |
 
@@ -94,7 +98,7 @@ The UI maps every code to a plain-language title, cause and tip.
 
 ## 9.6 Guarantees
 
-* Terminal states are final.
+* Terminal states are final, with the one exception above: a failure between the READY save and the cache swap rewrites READY as FAILED.
 * `READY` implies that journals, state and snapshot are mutually consistent.
 * Idempotent: identical content and options are processed once.
-* Every failure is a batch state or an answer mode; the service keeps running.
+* Every failure inside a batch is a batch state and every failure inside a question an answer mode or an HTTP error; the service keeps running. Engine-level refusals (`WorkspaceBusy`, migration refusals) are errors of the command, not batch states.

@@ -17,8 +17,9 @@ import threading
 import time
 import traceback
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -179,6 +180,11 @@ class Engine:
         self.encoder = InsightEncoder(embedder or make_text_embedder(config), config)
         self._llm = llm
         self._lock = threading.RLock()
+        self._writer = recover  # holds the writer lock: may write derived files (document back-fill)
+        self._documents_lock = threading.Lock()  # the document back-fill, never the batch lock
+        self._sphere_pool: ThreadPoolExecutor | None = None  # standalone sphere export, off the batch thread
+        self._sphere_generation = 0  # the latest requested export; older queued ones are skipped
+        self._sphere_lock = threading.Lock()
         self._graph: DualGraph | None = None
         self._frame: LatentFrame | None = None
         if recover:
@@ -207,13 +213,29 @@ class Engine:
         return self._graph
 
     def document_vectors(self) -> dict[str, np.ndarray]:
-        """Canonical-document embedding of every committed pattern; one without a stored vector is embedded now."""
-        stored = self.frame().documents
-        graph = self.graph()
-        missing = [n["id"] for n in graph.of_kind("Pattern") if n["id"] not in stored]
-        if not missing:
-            return stored
-        return {**stored, **dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))}
+        """Canonical-document embedding of every committed pattern (stored at ingest).
+
+        A pattern without a stored vector (a batch written before documents were embedded) is
+        embedded once: the vector stays on the committed frame and, from a writer engine, is saved
+        into the batch's blocks file, so no later question pays for it again.
+        """
+        frame, graph = self.frame(), self.graph()
+        if all(n["id"] in frame.documents for n in graph.of_kind("Pattern")):
+            return frame.documents
+        with self._documents_lock:
+            missing = [n["id"] for n in graph.of_kind("Pattern") if n["id"] not in frame.documents]
+            if missing:
+                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
+                frame.documents.update(filled)
+                if self._writer:
+                    by_batch: dict[str, list[str]] = defaultdict(list)
+                    for record in self.ws.patterns():  # journal order = the row order of the batch's blocks
+                        if record["id"] in frame.documents:
+                            by_batch[record["batch_id"]].append(record["id"])
+                    for batch_id, ids in by_batch.items():
+                        if any(i in filled for i in ids):
+                            self.ws.add_document_vectors(batch_id, ids, np.stack([frame.documents[i] for i in ids]))
+        return frame.documents
 
     def frame(self) -> LatentFrame:
         """Committed pattern vectors and attractor centroids (retrieval and the sphere)."""
@@ -449,8 +471,23 @@ class Engine:
         self.ws.save_batch(record)
 
     def _export_sphere(self, record: dict[str, Any]) -> None:
-        """Standalone 3D sphere (lac prosphera projector); failure never invalidates the batch."""
+        """Queue the standalone 3D sphere (KernelPCA + Plotly) on its own thread.
+
+        The batch thread returns at once, so the next upload never waits on a plot; when several
+        batches finish quickly only the latest export runs. ``/api/sphere`` builds the page on demand.
+        """
         if not self.config.sphere_export:
+            return
+        with self._sphere_lock:
+            self._sphere_generation += 1
+            generation = self._sphere_generation
+            if self._sphere_pool is None:
+                self._sphere_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltir-sphere")
+        self._sphere_pool.submit(self._write_sphere, record, generation)
+
+    def _write_sphere(self, record: dict[str, Any], generation: int) -> None:
+        """Export for a READY batch unless a newer export (or a reset) superseded it; failure is a warning."""
+        if generation != self._sphere_generation:
             return
         try:
             from ltir.sphere import export_sphere
@@ -458,7 +495,11 @@ class Engine:
             record["sphere"] = str(export_sphere(self))
         except Exception as exc:
             record["warnings"].append(f"sphere export failed: {exc}")
-        self.ws.save_batch(record)
+        with self._lock:  # reset holds it: the record is saved before a reset or not at all
+            if self.ws.load_batch(record["batch_id"]) is not None:
+                self.ws.save_batch(record)
+            elif "sphere" in record:  # the workspace was reset during the export: drop the stale page
+                Path(record["sphere"]).unlink(missing_ok=True)
 
     def rebuild_graph(self) -> dict[str, Any]:
         with self._lock:
@@ -472,6 +513,7 @@ class Engine:
     def reset(self) -> dict[str, Any]:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning)."""
         with self._lock:
+            self._sphere_generation += 1  # drop a queued export of the old workspace
             self.ws.reset()
             self._graph = None
             self._frame = None

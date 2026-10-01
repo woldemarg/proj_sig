@@ -3,11 +3,11 @@
 > **Update (2026-09-30):** the reused engines, the embedding model and `housing.csv` are now **vendored into `sig/`** (`ltir/engines/`, `models/`, `data/`; see `ltir/engines/PROVENANCE.md`). The paths and APIs below describe the *originals* at reconnaissance time, not runtime dependencies; the vendored copies have diverged (e.g. no running-mean centering, one `extract_attractors`, numerical repairs in `main_upd.py`), and PROVENANCE.md lists every difference. Terms: glossary in `docs/11_reference.md` §11.1.
 
 Snapshot of what existed **before** the LTIR integration work. It records what the integration reuses as-is, what gets an adapter, and what is new.
-Paths are relative to the workspace root `sig_proj/`.
+Paths name the original projects (`eda`, `lac`) and files inside them; nothing here is a runtime dependency.
 
-## 1. Workspace layout
+## 1. Projects
 
-| Folder | Role | VCS | Notes |
+| Project | Role | VCS | Notes |
 |--------|------|-----|-------|
 | `eda/` | Automatic EDA / statistical insight discovery | none | `scripts/main_upd.py` is the current engine (`main_init.py`, `main_ext.py` are older iterations). Data: `data/housing.csv` (20 640 rows), `data/demo_points.csv` (60 604 rows, operational data — not used here). |
 | `lac/` | Dynamic latent ontology ("proj_ontology") | git | `v2_orchestrator/` = Latent Semantic Attractor Graph (streaming, EMA attractors, OMP, mutual k-NN, Neo4j MERGE). `v1_single_pass/` = static POC. |
@@ -57,12 +57,12 @@ lac docs: `lac/docs/v2-latent-semantic-attractor-graph/` (data-flow, concept ine
 
 | Item | Finding | Consequence |
 |------|---------|-------------|
-| Python | No Python on PATH. Conda envs: `D:\conda_envs\env_eda` (py3.12, pysubgroup), `env_ont` (py3.12, torch 2.12+cu126, sentence-transformers 5.6, transformers 5.12, neo4j, sklearn), `env_ads` (FastAPI). | SIG uses a venv layered on `env_ont` (`--system-site-packages`) plus pysubgroup/FastAPI/uvicorn/pytest. No existing env is modified. |
-| env_ont defect | `transformers` fails to import (`regex` missing). | Installed `regex` in the SIG venv only. |
+| Python | Python 3.12 environments with torch (CUDA 12.6), sentence-transformers 5.6, transformers 5.12, neo4j and scikit-learn, but without pysubgroup or FastAPI. | SIG uses its own `.venv`, optionally layered on such an environment (`--system-site-packages`), plus pysubgroup, FastAPI, uvicorn and pytest. No existing environment is modified. |
+| transformers import | `transformers` failed to import there (`regex` missing). | `regex` is listed in `requirements.txt` and installed in the SIG venv only. |
 | Embedding model | Cached at `lac/models/sentence-transformers/` (MiniLM-L12, 384-d). Loads offline. | Was the default SIG embedding model (`HF_HUB_OFFLINE=1`); since `ltir-rep-3` it is the documented alternative to `Qwen3-Embedding-0.6B` (`docs/04_representation.md` §4.4). |
-| GPU | RTX 4060 Laptop, 8 GB. | Embedding on CUDA when available (configurable). |
-| Neo4j | Neo4j Desktop 2, Enterprise DBMS with databases `ontologyv1`, `ontologyv2`, …; **not running**. lac `.env` holds credentials. | Neo4j is an optional mirror (`NEO4J_ENABLED`); the local journal/state/snapshot is the source of truth. |
-| Local LLM | Machine convention (from another local project): OpenAI-compatible endpoints — Ollama `http://localhost:11434/v1` model `gemma4`, LM Studio `http://localhost:1234/v1` model `google/gemma-4-26b-a4b`. **Neither is installed or running.** | LLM client targets the OpenAI-compatible API (default Ollama `gemma4`); deterministic evidence-only fallback when unreachable. |
+| GPU | A laptop GPU with 8 GB. | Embedding on CUDA when available (configurable). |
+| Neo4j | A local Neo4j server, **not running**. | Neo4j is an optional mirror (`NEO4J_ENABLED`); the local journal/state/snapshot is the source of truth. |
+| Local LLM | Common OpenAI-compatible local endpoints: Ollama `http://localhost:11434/v1` (model `gemma4`) and LM Studio `http://localhost:1234/v1` (model `google/gemma-4-26b-a4b`); **neither was running**. | LLM client targets the OpenAI-compatible API (default Ollama `gemma4`); deterministic evidence-only fallback when unreachable. |
 
 ## 4. Defects found in existing code and how they are handled
 

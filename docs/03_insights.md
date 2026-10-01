@@ -1,6 +1,6 @@
 # 3. Insights — record, selection and weight
 
-> **In one paragraph.** A validated candidate becomes an `Insight`: a typed, JSON-serialisable record that names its subgroup, its signed shifts, its scores and its provenance, and that every later stage reads (the graph calls it a `Pattern`). A fixed, ordered rule set decides which insights become persistent knowledge, and an `insight_weight` in `[0.05, 1]` summarises how strong the evidence is. The weight never changes *which* anchor an insight belongs to; it changes how hard the insight pulls on that anchor and how high it ranks in retrieval.
+> **In one paragraph.** A validated candidate becomes an `Insight`: a typed, JSON-serialisable record that names its subgroup, its signed shifts, its scores and its provenance, and that every later stage reads (the graph calls it a `Pattern`). A fixed, ordered rule set decides which insights become persistent knowledge, and an `insight_weight` in `[0.05, 1]` summarises how strong the evidence is. The weight never changes *which* existing anchor an insight is assigned to; it changes how hard the insight pulls on that anchor, how much it shapes the extraction of new anchors, and how high it ranks in retrieval.
 
 **Code** `ltir/models.py` (`Insight`, `Shift`, `Condition`, `Rejection`), `ltir/quality.py` · **Tests** `tests/test_quality.py` · **Previous** [2. Discovery](02_discovery.md) · **Next** [4. Representation](04_representation.md)
 
@@ -8,11 +8,11 @@
 
 ## 3.1 The insight record
 
-`Insight.to_record()` / `Insight.from_record()` give the JSON form that is written once to `journal/patterns.jsonl`, carried unchanged as the snapshot's Pattern node properties, and mirrored to Neo4j. Every module reads insights through `Insight.from_record`, which ignores fields it does not know, so older records stay readable.
+`Insight.to_record()` / `Insight.from_record()` give the JSON form that is written once to `journal/patterns.jsonl`, carried unchanged as the snapshot's Pattern node properties, and mirrored to Neo4j (nested values as `<key>_json` strings, `None` values left out; [6.6](06_graph_and_storage.md#66-neo4j-mirror)). Every module reads insights through `Insight.from_record`, which ignores fields it does not know, so older records stay readable.
 
 | Field | Content |
 |---|---|
-| `id` | `P-` + `sha1(json([dataset_id, sorted condition expressions]))[:12]` — deterministic, so a re-run produces the same ids |
+| `id` | `P-` + `sha1(json([dataset_id, condition expressions in (attribute, value) order]))[:12]` — deterministic, so a re-run produces the same ids |
 | `dataset_id`, `batch_id` | provenance keys |
 | `conditions` | the closed intent ([2.3](02_discovery.md#23-deduplication-before-validation)) as `[{"attribute", "value"}, …]` sorted by attribute then value; values are strings even for number-coded columns |
 | `expression` | the EDA selector of the cohort (the merged selector with most conditions), verbatim, e.g. `category=='phones' AND region=='US'` |
@@ -32,7 +32,7 @@
 | `weight`, `weight_factors` | `insight_weight`, and the five factors with `null` for unmeasured ones |
 | `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, rows_ref, multiple_testing_family}` |
 
-The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`). What is **not** stored: the covered rows themselves (only their positions in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians.
+The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`). What the record does **not** hold: the covered rows themselves (only their positions, in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians — the rows stay in the dataset's source copy (and, for web uploads, in `uploads/`; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). The vectors are stored beside it: the insight vector in `embeddings.mmap`, its three blocks and the document embedding in `journal/blocks/<batch>.npz`.
 
 > **Running example** (abridged record of `P-bc4657a04746`):
 > ```text
@@ -104,7 +104,7 @@ A geometric mean makes the factors complementary: a strong effect cannot buy bac
 
 | Consumer | Use | Chapter |
 |---|---|---|
-| latent ontology | an insight enters as `x = w · x̂`. Cosine assignment ignores the scale, so membership does not depend on `w`; the EMA pull on a centroid and the OMP reconstruction loss (∝ `w²`) do | [5.5](05_latent_anchors.md#55-how-the-evidence-weight-acts) |
+| latent ontology | an insight enters as `x = w · x̂`. Cosine assignment ignores the scale, so assignment to an existing anchor does not depend on `w`; the EMA pull on a centroid does, and so does OMP extraction, which runs on the `w`-scaled orphans (reconstruction loss ∝ `w²`) and therefore decides which new anchors appear | [5.5](05_latent_anchors.md#55-how-the-evidence-weight-acts) |
 | ACTIVATES edges | `strength = alignment · w`; an anchor's `evidence_mass = Σ strength` | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) |
 | retrieval | seed score `+ 0.10 · w` (`+ 0.30 · w` for questions without a recognised metric or condition); node rank `= path score · w` | [7.2](07_question_answering.md#72-seeds), [7.3](07_question_answering.md#73-transversal-traversal) |
 | selection | rule R4 | [3.2](#32-selection-rules) |
@@ -115,9 +115,9 @@ A geometric mean makes the factors complementary: a strong effect cannot buy bac
 |---|---|---|
 | `MIN_SUPPORT_ROWS` | 30 | |
 | `MIN_EFFECT_Z`, `MAX_P_ADJUSTED`, `MIN_STABILITY` | 0.5, 0.05, 0.5 | the shift test |
-| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.086 |
+| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.086. Part of the fingerprint ([4.6](04_representation.md#46-representation-identity-and-versions)): it decides whether a correlation component enters the vector |
 | `MIN_INSIGHT_WEIGHT`, `MAX_INSIGHTS_PER_BATCH` | 0.2, 200 | |
-| `WEIGHT_EFFECT_REF`, `WEIGHT_CONFIDENCE_REF`, `WEIGHT_EMM_REF` | 1.5, 6, 0.08 | saturation scales |
+| `WEIGHT_EFFECT_REF`, `WEIGHT_CONFIDENCE_REF`, `WEIGHT_EMM_REF` | 1.5, 6, 0.08 | saturation scales; `WEIGHT_EMM_REF` also scales the correlation component's coefficient, so it is part of the fingerprint |
 | `WEIGHT_EXPONENTS`, `WEIGHT_FLOOR` | (0.35, 0.25, 0.20, 0.10, 0.10), 0.05 | |
 
 ## 3.6 Guarantees

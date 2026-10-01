@@ -2,7 +2,7 @@
 
 > **In one paragraph.** SIG (Statistical Insight Graph; the package is `ltir`, *Latent Transversal Insight Representation*) turns a tabular file into statistically validated subgroup findings ("insights"), represents each one as text and as a vector, lets recurring phenomena self-organise into *latent anchors*, and stores everything as a dual-layer graph. Questions in natural language are answered by walking that graph — across the exact subgroup lattice **and** across the anchors — and a language model only verbalises the evidence that the walk returned, with citations that are checked.
 
-**Code** the whole `ltir/` package · **Tests** `tests/` (71) · **Next** [2. Discovery](02_discovery.md)
+**Code** the whole `ltir/` package · **Tests** `tests/` (74) · **Next** [2. Discovery](02_discovery.md)
 
 ---
 
@@ -22,7 +22,7 @@ The benchmark in [10.3](10_verification.md#103-hypothesis-benchmark) measures ex
 |---|---|---|---|---|
 | 1 | Ingestion | a CSV/TSV/Parquet file is validated, number-coded columns optionally become categories, numeric columns optionally become quantile bands; a content-addressed dataset id is assigned | `DataFrame` + `dataset_id` | [2](02_discovery.md) |
 | 2 | Discovery | the vendored automatic-EDA engine screens 2- and 3-attribute subgroups for robust median shifts and correlation changes; duplicate cohorts are merged before the expensive bootstrap validation | validated candidates | [2](02_discovery.md) |
-| 3 | Insights | candidates become typed `Insight` records; a fixed rule set keeps the significant, stable ones; each gets an `insight_weight` in [0.05, 1] | kept insights | [3](03_insights.md) |
+| 3 | Insights | candidates become typed `Insight` records; a fixed rule set keeps the significant, stable shifts and the material correlation changes; each gets an `insight_weight` in [0.05, 1] | kept insights | [3](03_insights.md) |
 | 4 | Representation | each insight gets a canonical text form and a 1152-d vector composed from three embedded blocks: scope, target and a *signed* phenomenon | unit vectors | [4](04_representation.md) |
 | 5 | Latent anchors | vectors stream into a self-organising dictionary of centroids (lac): assignment, orphan buffer, OMP extraction, soft merge, mutual-kNN links | anchors + memberships | [5](05_latent_anchors.md) |
 | 6 | Graph & storage | an exact structural lattice is derived from the scopes; journals, ontology state and a graph snapshot are committed atomically (optional Neo4j mirror) | dual-layer graph | [6](06_graph_and_storage.md) |
@@ -53,7 +53,8 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
 |---|---|---|
 | Nodes | `Pattern` (one validated insight); `Dimension`, `Metric` as schema anchors | `Attractor` = latent anchor = "theme" in the UI: a living unit-norm centroid |
 | Edges | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts | RELATED_TO — mutual nearest neighbours among centroids |
-| Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight) | |
+| Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight); a *weak* membership (rerouted, or now aligned below `MIN_ACTIVATION_ALIGNMENT`) counts for coverage but is not walked | |
+| Schema and provenance | `Dimension`, `Metric`, `Dataset`, `Batch` nodes; HAS_SCOPE, TARGETS (Pattern → schema), DISCOVERED_IN, OF_DATASET (provenance) — never walked by retrieval | |
 | Never | embeddings never create structural edges | scope predicates never create latent edges |
 
 The structural plane answers "which subgroups refine or contradict which"; the latent plane answers "which subgroups behave alike, wherever they are". Retrieval combines both ([7.3](07_question_answering.md#73-transversal-traversal)).
@@ -79,7 +80,7 @@ Every chapter follows the same object through its stage. The demo dataset (`data
 | Dynamic ontology (concept store, EMA with inertia, adaptive threshold, orphan buffer, OMP K-sweep, soft merge, mutual kNN, chunk journal, metrics) and the prosphera sphere projector | the lac project (`v2_orchestrator`, `v1_single_pass/visualisation`) | vendored as `ltir/engines/lac/`; driven by `ltir/ontology.py` |
 | Everything else | new | adapter, insight model, selection and weight, canonical text, encoder, structural lattice, graph, persistence and migration, retrieval, evidence, LLM interface, web UI, tests |
 
-Every divergence of the vendored code from its origin is listed in [`ltir/engines/PROVENANCE.md`](../ltir/engines/PROVENANCE.md). The embedding models live in `models/`, the demo data in `data/`; the repository needs nothing outside itself (`tests/test_self_contained.py`).
+Every divergence of the vendored code from its origin is listed in [`ltir/engines/PROVENANCE.md`](../ltir/engines/PROVENANCE.md). The embedding models live in `models/` (fetched by `scripts/download_model.py`), the data in `data/` (the demo file is generated by `ltir/synth.py`; `housing.csv` is a local copy); both folders are local and git-ignored. At run time the repository needs nothing outside itself (`tests/test_self_contained.py`).
 
 ## 1.6 Module map
 
@@ -95,7 +96,7 @@ Every divergence of the vendored code from its origin is listed in [`ltir/engine
 | `ontology.py`, `engines/lac/` | `LatentOntology` over lac's lifecycle | [5](05_latent_anchors.md) |
 | `structural.py` | the exact lattice edges | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | `graph.py` | snapshot assembly, attractor descriptions, `DualGraph` index | [6](06_graph_and_storage.md), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
-| `store.py` | workspace layout, journals, checkpoint and rollback | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
+| `store.py` | workspace layout, journals, checkpoint and rollback, the writer lock | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
 | `neo4j_sink.py`, `cypher/` | optional Neo4j mirror | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 | `migrate.py` | rebuild an outdated workspace from its stored sources | [6.5](06_graph_and_storage.md#65-versions-and-migration) |
 | `query.py`, `traversal.py` | question parsing, seeds, transversal walk, structural closure | [7](07_question_answering.md) |
@@ -112,7 +113,7 @@ Every divergence of the vendored code from its origin is listed in [`ltir/engine
 2. **Covered.** Every insight has at least one ACTIVATES edge, and every anchor has at least one member.
 3. **Planes stay separate.** Structural edges depend only on insight metadata; latent edges only on centroids.
 4. **One frame.** Vectors of different representations (model, composition, versions) never share a workspace; a mismatch is refused, not mixed ([4.6](04_representation.md#46-representation-identity-and-versions) lists what the fingerprint covers).
-5. **Atomic batches.** A batch either commits completely or is rolled back.
+5. **Atomic batches, one writer.** A batch either commits completely or is rolled back, and one process at a time writes a workspace (the writer lock, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). The Neo4j mirror and the sphere export run after the commit, outside it: their failure is a warning, never a rollback.
 6. **Grounded answers.** The LLM sees only the evidence object; every citation is checked against it, and a provenance footer is built without the LLM.
 
 ## 1.8 Deviations from the architecture document
@@ -121,7 +122,7 @@ The design started from [`docs/init_concepts/latent_insight_graph_architecture.m
 
 | Architecture document | Implementation | Reason |
 |---|---|---|
-| traversal in Cypher | traversal over the in-memory `DualGraph` (same schema); the equivalent Cypher is `ltir/cypher/queries/transversal.cypher` | testable without a database; Neo4j is an optional mirror |
+| traversal in Cypher | traversal over the in-memory `DualGraph` (same schema); an approximate Cypher equivalent (one latent hop, then one lattice hop, no budgeted best-first search) is `ltir/cypher/queries/transversal.cypher` | testable without a database; Neo4j is an optional mirror |
 | globally unique `Dimension` / `Metric` names | dataset-scoped ids `D:<dataset>:<name>`, `M:<dataset>:<name>` | datasets reuse column names with different meanings |
 | three text embeddings per insight | scope and target are text embeddings; the phenomenon is a signed, magnitude-weighted sum of metric-name embeddings | sentence embeddings barely separate "increases" from "decreases" (cosine 0.56 measured) |
 | every pattern equally authoritative | `insight_weight` scales the pattern's magnitude in the ontology and its rank in retrieval | weak evidence should not move anchors as much as strong evidence |
@@ -131,4 +132,4 @@ The design started from [`docs/init_concepts/latent_insight_graph_architecture.m
 
 In scope: the `ltir` package, its vendored engines, local persistence, the optional Neo4j mirror, the web UI and the CLI. Out of scope: authentication, multi-user concurrency, distributed processing, model training.
 
-Implemented and tested: 71 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 12 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).
+Implemented and tested: 74 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 13 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).

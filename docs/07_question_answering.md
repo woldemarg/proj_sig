@@ -64,7 +64,7 @@ Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES
 | ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
 | lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS |
 
-The walk crosses exactly the edges the ontology kept: one predicate decides coverage and retrieval. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
+The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` flag says which memberships those are. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
 
 | Output | Definition |
 |---|---|
@@ -95,7 +95,9 @@ Evidence(
         scope_text="category is tablets, channel is retail, and region is EU",
         shift_text=["discount: strong increase, +2.14 sd (median 18.91 vs 10.74 overall)", ...],
         relationship="",                  # only when the correlation change is material
-        path=[PathStep, ...], path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
+        validation="bootstrap stability 0.95; adjusted p < 0.001",   # or "correlation change (...); no median test"
+        path=[{source, target, edge_type, weight, hop, edge_id, reverse}, ...],   # the PathSteps as dicts
+        path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
         attractors=[{attractor, alignment, label}], transversal_only=True,
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight}], signature}],
@@ -163,17 +165,17 @@ Rules:
 Be concise (at most ~250 words).
 ```
 
-**Client** (`OpenAICompatibleLLM`, the only client; tests inject a duck-typed fake with `model`, `generate()` and `health()`): `POST {LLM_BASE_URL}/chat/completions` with `Authorization: Bearer <LLM_API_KEY>` and `X-Title: <LLM_APP_TITLE>` (each header only when set) and the body `{model, messages: [system, user], temperature, max_tokens, stream: false[, reasoning_effort][, provider: {order: LLM_PROVIDER_ORDER, allow_fallbacks: false}]}` — the provider block pins OpenRouter providers. Timeouts: 5 s to connect, `LLM_TIMEOUT_S` (120) overall. Health: `GET {base}/models` (10 s timeout), cached for 15 s — a failed check is cached too, so answers stay evidence-only for up to 15 s after an endpoint recovers; while the endpoint is known to be unreachable, generation fails fast. The code defaults point at a local Ollama (`http://localhost:11434/v1`, `gemma4`); the configured deployment uses OpenRouter (`https://openrouter.ai/api/v1`, `google/gemma-4-26b-a4b-it`, pinned bf16 providers); LM Studio works too.
+**Client** (`OpenAICompatibleLLM`, the only client; tests inject a duck-typed fake with `model`, `generate()` and `health()`): `POST {LLM_BASE_URL}/chat/completions` with `Authorization: Bearer <LLM_API_KEY>` and `X-Title: <LLM_APP_TITLE>` (each header only when set) and the body `{model, messages: [system, user], temperature, max_tokens, stream: false[, reasoning_effort][, provider: {order: LLM_PROVIDER_ORDER, allow_fallbacks: false}]}` — the provider block pins OpenRouter providers. Timeouts: 5 s to connect, `LLM_TIMEOUT_S` (120) for each read, write and pool wait — not a cap on the whole request. Health: `GET {base}/models` (10 s timeout), cached for 15 s — a failed check is cached too, so answers stay evidence-only for up to 15 s after an endpoint recovers; while the endpoint is known to be unreachable, generation fails fast. The code defaults point at a local Ollama (`http://localhost:11434/v1`, `gemma4`); the configured deployment uses OpenRouter (`https://openrouter.ai/api/v1`, `google/gemma-4-26b-a4b-it`, pinned bf16 providers); LM Studio works too.
 
 **Answer modes.** With evidence and a reachable model, the answer is the model's (`answer_mode = llm`). On an LLM failure, an empty completion or `use_llm = false`, the answer is the evidence-only summary (`answer_mode = fallback`; the reason is in `llm.error`, `disabled` when switched off) — the answer text carries no status prefix, clients read the mode. An empty graph gives `answer_mode = empty`.
 
 **Citation check** (`check_citations`): `[P#]` keys and grouped forms (`[P1, P3]`, `[P1; P3]`) are extracted; `grounded` = at least one citation and no unknown key. The provenance footer — `Sources: [P1] <pattern id> = <expression> (dataset <ds>, <file>, batch <batch>); …` — is built from the evidence, independent of the model.
 
-**Result** (`QAResult`): `question, answer, answer_mode, llm {model, ok, latency_s, error[, usage]}, citations {cited [{key, pattern_id}], unknown, uncited, grounded}, evidence (dict + "prompt"), traversal (dict incl. baselines), highlight {seeds, traversed, anchors, evidence, edges, transversal_only}, metrics {retrieval_s, total_s, llm_latency_s, seed_count, traversal_depth, visited_states, retrieved_evidence, anchors_visited, prompt_chars}, provenance_footer`. The highlight groups come from all retrieved patterns (up to 15), while the evidence and the prompt hold the first 10 — the graph can light up paths to a few patterns the model did not see.
+**Result** (`QAResult`): `question, answer, answer_mode, llm {model, ok, latency_s, error[, usage]}, citations {cited [{key, pattern_id}], unknown, uncited, grounded}, evidence (dict + "prompt"), traversal (dict incl. baselines), highlight {seeds, traversed, anchors, evidence, edges, transversal_only}, metrics {retrieval_s, total_s, llm_latency_s, seed_count, traversal_depth, visited_states, retrieved_evidence, anchors_visited, prompt_chars}, provenance_footer`. `traversed` and `edges` are the union of the paths to all retrieved patterns (up to `|seeds| + MAX_RETRIEVED`, 15), while `evidence`, `transversal_only`, the evidence object and the prompt hold the first 10 — the graph can light up paths to a few patterns the model did not see.
 
 ## 7.6 Baselines
 
-`compute_baselines` stores, with every answer, what simpler retrieval would have returned: `structural_only` (the lattice closure of the seeds, same edge set and depth), `naive_nearest` (the top 12 patterns by `cos(E_query(question), E(canonical document))` — plain text RAG), and the set differences `transversal_only`, `not_in_naive_topk`, `not_structurally_reachable`. The naive baseline compares the question with document vectors embedded once at ingest and stored beside the journal rows (`journal/blocks/<batch>.npz`, read into the committed frame), so an answer embeds only the question — never the corpus — and does not compete with an ingest for the model; a pattern without a stored vector would be embedded on demand. For the demo question: the structural closure holds 23 patterns, and 7 of the 13 retrieved patterns are not in the naive top 12. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
+`compute_baselines` stores, with every answer, what simpler retrieval would have returned: `structural_only` (a BFS from the seeds over the walk's lattice edge types — no SIBLING — in either direction, up to `TRAVERSAL_MAX_DEPTH` hops), `naive_nearest` (the top 12 patterns by `cos(E_query(question), E(canonical document))` — plain text RAG), and the set differences `transversal_only`, `not_in_naive_topk`, `not_structurally_reachable`. The naive baseline compares the question with document vectors embedded once at ingest and stored beside the journal rows (`journal/blocks/<batch>.npz`, read into the committed frame), so an answer embeds only the question and no canonical document, and does not compete with an ingest for the model. A pattern without a stored vector (a batch written before documents were stored) is embedded once, on the first question: `Engine.document_vectors()` keeps the vector on the committed frame and, in a writer process, saves it into that batch's blocks file. The same vectors serve the `text_nn` ranker of the benchmark. For the demo question: the structural closure holds 23 patterns, and 7 of the 13 retrieved patterns are not in the naive top 12. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
 
 ## 7.7 Measured behaviour
 
@@ -187,16 +189,16 @@ Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py
 
 Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.57 → +0.09), separate *Observations* from *Interpretation (hypotheses)*, cite the scope-disjoint analogues reached through `A-1`, and use grouped citations, which are parsed and linked.
 
-Prompt size (`scripts/prompt_tokens.py`, demo question, 10 items; XLM-R SentencePiece as a proxy for Gemma's tokenizer, and Qwen3's byte-level BPE):
+Prompt size (`scripts/prompt_tokens.py`, demo question, 10 items, scratch run with the default hashing backend — the documents do not depend on the backend, the evidence prompt does through retrieval; XLM-R SentencePiece as a proxy for Gemma's tokenizer, and Qwen3's byte-level BPE):
 
 | Surface | Characters | Non-ASCII | XLM-R tokens | Qwen tokens |
 |---|---|---|---|---|
 | evidence prompt, symbol-based format | 7,009 | 25 | 2,421 | 2,880 |
-| evidence prompt, ASCII prose (current) | 6,330 | 0 | 2,102 (−13 %) | 2,341 (−19 %) |
-| canonical documents (28): symbol-based → current | 11,406 → 15,080 | 0 | 3,455 → 4,367 | 4,224 → 5,017 |
+| evidence prompt, ASCII prose (current) | 6,304 | 0 | 2,096 (−13 %) | 2,342 (−19 %) |
+| canonical documents (28): symbol-based → current | 11,406 → 15,129 | 0 | 3,455 → 4,378 | 4,224 → 5,029 |
 | evidence-only answer: symbol-based → current | 1,730 → 2,509 | 7 → 0 | 588 → 779 | 760 → 887 |
 
-The documents and the summary grew because they are written for people; no LLM reads the documents (only the naive baseline embeds them). Retrieval for one question takes about 0.1 s with the model loaded, the first question included.
+The documents and the summary grew because they are written for people; no LLM reads the documents (only the naive baseline and the `text_nn` ranker use their embeddings). Retrieval for one question takes about 0.1 s with the model loaded, the first question included.
 
 ## 7.8 Configuration, failure modes and limitations
 
@@ -222,4 +224,4 @@ Limitations worth knowing:
 * Parsing is lexical plus embedding similarity; paraphrases outside the graph's vocabulary rely on the semantic term alone.
 * The LLM runs remotely in the configured deployment: the prompt (subgroup statistics, not rows) leaves the machine; a local server keeps it local.
 
-Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); edges below the thresholds are never used; paths obey the grammar; results are deterministic; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights.
+Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); weak memberships are never walked and every kept RELATED_TO is; paths obey the grammar; results are deterministic; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights.
