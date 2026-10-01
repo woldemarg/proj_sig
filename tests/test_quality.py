@@ -87,3 +87,5 @@ def test_emm_only_insight_becomes_covariance():
     kept = res.kept[0]
     assert kept.phenomenon_type == "covariance" and kept.target == "n"  # pair metric with larger |shift|
     assert kept.weight_factors["confidence"] is None and kept.weight_factors["stability"] is None  # unmeasured: left out
+    # the shift test failed, so its stability and p-values do not describe the insight
+    assert kept.stability is None and kept.p_value is None and kept.p_adjusted is None

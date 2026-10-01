@@ -36,13 +36,14 @@ One concept, one name per layer. Code and these docs use the first column, the U
 |---|---|---|---|
 | dataset id | `ds-` + 12 hex of `sha256(file bytes ‖ bands ‖ categories)` | `ds-6e53eb7fb0f9` | [2.1](02_discovery.md#21-ingestion) |
 | batch id | `B` + UTC `YYYYMMDDTHHMMSS` + `-` + 6 hex | `B20261001T112454-ff7fe6` | [9.1](09_operations.md#91-the-batch-lifecycle) |
+| writer lock | `<workspace>.writer.lock` beside the workspace folder, holding the writer's pid | `workspace.writer.lock` | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | pattern id | `P-` + 12 hex of `sha1(dataset id, sorted condition expressions)` | `P-bc4657a04746` | [3.1](03_insights.md#31-the-insight-record) |
 | row-set identity | `row_hash`: 16 hex of `sha1(sorted covered row positions)` | `cda451bada571c5d` | [3.1](03_insights.md#31-the-insight-record) |
 | attractor id | integer `k` from lac; graph node `A-k` | `A-1` | [5.2](05_latent_anchors.md#52-one-batch-through-the-ontology) |
 | schema node ids | `D:<dataset>:<column>`, `M:<dataset>:<column>`, `DS:<dataset>`, `B:<batch>` | `M:ds-6e53eb7fb0f9:discount` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | edge id | `<TYPE>:<source>-><target>` | `ACTIVATES:P-bc4657a04746->A-1` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | journal row id | position of the vector in `journal/embeddings.mmap` | `1` | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
-| representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `0686d73c59` | [4.6](04_representation.md#46-representation-identity-and-versions) |
+| representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` | [4.6](04_representation.md#46-representation-identity-and-versions) |
 | citation key | `P` + 1-based rank in the evidence | `[P1]`, grouped `[P4, P7]` | [7.4](07_question_answering.md#74-the-evidence-object) |
 | condition expression | `attribute=value` (no spaces, no quotes) | `category=phones` | [3.1](03_insights.md#31-the-insight-record) |
 | EDA selector | pysubgroup's rendering, kept verbatim as provenance | `category=='phones' AND region=='US'` | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
@@ -112,9 +113,9 @@ Two version strings in `ltir/models.py` and one fingerprint decide whether store
 
 | Version | Value | Covers |
 |---|---|---|
-| `CANONICAL_VERSION` | `ltir-canon-3` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients ([4.2](04_representation.md#42-the-canonical-form)) |
+| `CANONICAL_VERSION` | `ltir-canon-4` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients (covariance insights cite only their correlation change) ([4.2](04_representation.md#42-the-canonical-form)) |
 | `REPRESENTATION_VERSION` | `ltir-rep-3` | what is embedded and how it is composed: block layout, re-normalisation, the uncentred frame ([4.3](04_representation.md#43-the-tripartite-vector)) |
-| fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id, dimensions, truncation, query instruction, block weights, EMM component weight, normalisation ([4.6](04_representation.md#46-representation-identity-and-versions)) |
+| fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
 | `SNAPSHOT_VERSION` | 2 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 
 A workspace built under another fingerprint is refused (`representation_mismatch`) for ingest and for queries; `python -m ltir migrate --yes` rebuilds it from its stored sources and keeps the old copy ([6.5](06_graph_and_storage.md#65-versions-and-migration)). Renderings — documents, headlines, labels, the prompt, the UI — are derived from the records and can change without a version bump.

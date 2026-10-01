@@ -16,7 +16,7 @@ The hypothesis it makes testable:
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | [`ltir/engines/eda/main_upd.py`](ltir/engines/eda/main_upd.py), copied from the eda project's `scripts/main_upd.py` | vendored with 3 integration edits and documented numerical repairs; the unused standalone runner and print-only step 5 removed ([`PROVENANCE.md`](ltir/engines/PROVENANCE.md)) |
 | Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, journal, metrics) and the prosphera sphere projector | [`ltir/engines/lac/`](ltir/engines/lac), copied from the lac project's `v2_orchestrator` and `v1_single_pass/visualisation/projector.py` | vendored; running-mean centering removed, signed extraction repair, per-attractor EMA damping hooks, config-driven health warnings (`PROVENANCE.md`); SIG drives lac's batch lifecycle with insight vectors |
-| Embedding model | [`models/Qwen3-Embedding-0.6B/`](models) (default; Matryoshka-truncated to 384-d, bf16 on CUDA, pinned revision, fetched by `scripts/download_model.py`) or `models/paraphrase-multilingual-MiniLM-L12-v2/` | loaded offline from the folder |
+| Embedding model | [`models/Qwen3-Embedding-0.6B/`](models) (default; Matryoshka-truncated to 384-d, bf16, pinned revision, fetched by `scripts/download_model.py`) or `models/paraphrase-multilingual-MiniLM-L12-v2/` | loaded offline from the folder |
 | New in `ltir/` | adapter (closed intents, duplicate cohorts pruned before validation), insight model, selection & weight, canonicalisation, tripartite encoder, ontology guards, structural lattice, graph, persistence + migration, traversal, evidence, LLM, UI, tests | see [`docs/01_overview.md`](docs/01_overview.md) |
 
 ```text
@@ -62,7 +62,7 @@ Check it with `.venv\Scripts\python.exe -m ltir llm-check`. Any other OpenAI-com
 Without an LLM everything still works: answers fall back to a cited, evidence-only summary, and the LLM health pill turns red.
 
 ### Neo4j mirror
-In `.env`: `NEO4J_ENABLED=true`, `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE=sigv1` (created automatically on multi-database editions; the DBMS must be running). Every READY batch is MERGE-published, and `python -m ltir neo4j-sync` backfills. For exploration in Neo4j Browser, use [`ltir/cypher/queries/transversal.cypher`](ltir/cypher/queries/transversal.cypher). The local journal/state/snapshot is the source of truth; Neo4j failures only produce a warning.
+In `.env`: `NEO4J_ENABLED=true`, `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE=sigv1` (created automatically on multi-database editions; the DBMS must be running). Every READY batch, `rebuild-graph` and `migrate` make the mirror equal to the snapshot (stale nodes and properties are removed), `reset` clears it, and `python -m ltir neo4j-sync` syncs on demand. SIG owns its six node labels in that database: one workspace per database. For exploration in Neo4j Browser, use [`ltir/cypher/queries/transversal.cypher`](ltir/cypher/queries/transversal.cypher). The local journal/state/snapshot is the source of truth; Neo4j failures only produce a warning.
 
 ---
 
@@ -90,7 +90,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 69 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 70 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -145,7 +145,7 @@ The seed `US∧phones` shares no condition with the tablet patterns; the lattice
 |---|---|---|---|
 | transversal (this system) | **0.521** | **0.581** | **0.729** |
 | structural-only BFS | 0.000 | 0.079 | 0.000 |
-| naive text-NN (canonical documents) | 0.111 | 0.319 | 0.299 |
+| naive text-NN (canonical documents) | 0.111 | 0.321 | 0.299 |
 | insight-vector kNN (no attractor graph) | 0.028 | 0.229 | 0.507 |
 
 With MiniLM the transversal row is 0.333 / 0.567 / 0.729 ([4.5](docs/04_representation.md#45-embedder-comparison) compares the embedders). Labels come from the planted ground truth (scope containment), not from the measured shifts. See [10.3](docs/10_verification.md#103-hypothesis-benchmark) for the reading and the caveats.
@@ -161,7 +161,7 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics — conservative, not a permutation test.
 * Cosine thresholds belong to the embedder: `MIN_ASSIGN_THRESHOLD` is 0.75 for Qwen3 and 0.55 for MiniLM ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); under Qwen3 a few RELATED_TO edges join anchors of unrelated datasets.
 * A workspace built under another representation (versions, embedder) is refused with `representation_mismatch`; `python -m ltir migrate --yes` rebuilds it from its stored sources and keeps the old copy as `<workspace>.bak-<time>`.
-* Do not run two writer processes (the web app and a CLI `ingest`) on one workspace at the same time.
+* One writer process per workspace: while the web app runs, CLI writers (`ingest`, `demo`, `reset`, `rebuild-graph`, `migrate`) are refused; upload through the app.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
 
 ## Repository layout
@@ -170,7 +170,7 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    synth, experiment, cli, web/, cypher/)
-  tests/           69 contract / integration / E2E / UI tests
+  tests/           70 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml) and the

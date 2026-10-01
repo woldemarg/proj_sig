@@ -8,16 +8,16 @@
 
 ## 10.1 Test map
 
-69 collected tests (68 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
+70 collected tests (69 functions; the embedding contract runs for both the hashing backend and the real model). `python -m pytest` from the repository root; about 85 s with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
 | discovery → insight | `test_discovery_contract.py` (10) | profile contract (identifier dropped, float targets kept, EDA dimensions, candidates within the search space); fields and provenance; signed directions of the planted effects; determinism; planted phenomena survive selection; `closed_intent` adds implied conditions; identical extents merge before validation; near duplicates pruned in rank order; extent/intent antitone; `no_numeric_targets` and `invalid_schema` |
-| selection and weight | `test_quality.py` (4) | weight bounds and monotonicity, the formula with all five factors measured, reason codes, the R7 budget, covariance retargeting with unmeasured factors `None` |
+| selection and weight | `test_quality.py` (4) | weight bounds and monotonicity, the formula with all five factors measured, reason codes, the R7 budget, covariance retargeting with unmeasured factors and the shift's p-values and stability `None` |
 | canonical → embedding | `test_canonical_embedding.py` (9) | embedding inputs vs document (sections, ASCII); labels without numbers; number rules; covariance component; shape, dtype, unit norms, stability, direction separation and cross-scope similarity for the hashing backend **and the real model**; fingerprint sensitivity; query instruction only on free question text; the MiniLM env block applies verbatim |
 | insight → ontology | `test_ontology.py` (9) | cold start coverage and one anchor per planted cluster; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
 | structural plane | `test_structural.py` (5) | covering relation only, GENERALIZES inverse, SIBLING rule, CONTRASTS rule and relation type, no embedding dependency |
-| persistence | `test_persistence.py` (10) | write → reload → rebuild identical; idempotent re-ingest; graph consistency; rollback; representation mismatch; crash recovery; migration with backup; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; MERGE-only Neo4j publish |
+| persistence | `test_persistence.py` (11) | write → reload → rebuild identical; idempotent re-ingest; graph consistency; rollback; representation mismatch; crash recovery; a second writer process refused while the first keeps its queue; migration with backup; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; the Neo4j mirror equals the snapshot |
 | traversal and evidence | `test_traversal.py` (4) | the exact pattern → anchor → anchor → pattern path with hops, weights, reversal and score; thresholds; hop and depth budgets; parsing against the graph vocabulary; the evidence object |
 | LLM client | `test_llm_client.py` (4) | the real HTTP client against an OpenAI-compatible stub (payload, provider pinning, health, reasoning flag); fail-fast on an unreachable endpoint; citation validation incl. grouped citations |
 | end to end | `test_e2e.py` (5) | upload → … → grounded answer with provenance and cross-scope analogues (hashing and real model); the benchmark ordering (`test_hypothesis_apparatus`); LLM failure keeps knowledge; empty graph |
@@ -65,7 +65,7 @@ Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwe
 |---|---|---|---|---|
 | transversal | **0.521** | **0.556** | **0.581** | **0.729** |
 | structural | 0.000 | 0.000 | 0.079 | 0.000 |
-| text_nn | 0.111 | 0.111 | 0.319 | 0.299 |
+| text_nn | 0.111 | 0.111 | 0.321 | 0.299 |
 | vector_nn | 0.028 | 0.028 | 0.229 | 0.507 |
 
 With MiniLM the transversal row is 0.333 / 0.361 / 0.567 / 0.729 ([4.5](04_representation.md#45-embedder-comparison)). Reading: structural traversal never reaches scope-disjoint analogues within its first ranks — they sit 2–4 lattice hops away, mixed with everything else. Text-NN and raw vector kNN rank the seed's own refinements first. The anchor layer puts the analogues at the top (MRR 0.58 vs ≤ 0.32) and reaches most of them by `k = 5` (0.73 vs 0.51). This is an apparatus, not proof: one synthetic dataset, two mechanisms with analogues. `test_hypothesis_apparatus` guards the ordering as a regression.
@@ -91,18 +91,16 @@ All scripts build throwaway workspaces under `.scratch/` (never `workspace/`), s
 * The EDA searches only 2- and 3-conjunctions of equality selectors — no single selectors, no numeric intervals; numeric dimensions need explicit bands.
 * Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics: conservative (overlapping cohorts count as independent tests), not a permutation test. Pre-validation near-duplicate pruning ranks by the pass-1 `temp_index`, not by the final weight.
 * `SD` sums the three largest shifts; `temp_index` adds clipped z-scores of incommensurable quantities (the EDA's design, monotone in each); the EMM shrinkage `sqrt((n − n_min)/(N − n_min))` is a reliability heuristic, not a standard error.
-* After a covariance retype, `p_value`, `p_adjusted` and `stability` still describe the original primary metric, and a primary shift that failed only stability or significance stays in the phenomenon ([3.2](03_insights.md#32-selection-rules)).
 * Weight exponents, block weights, `EMM_COMPONENT_WEIGHT` and the seed-score weights are design choices validated on the synthetic data and the benchmark, not fitted.
 
 **Representation and ontology**
-* The fingerprint does not cover `MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`, the compute dtype or the model revision; change them only with a migration ([4.6](04_representation.md#46-representation-identity-and-versions)).
 * The phenomenon is linear in label embeddings: with correlated labels (Qwen3: discount · margin = 0.71), a one-metric question and a two-metric insight partly cancel ([7.2](07_question_answering.md#72-seeds)), and two one-off phenomena can share an anchor.
 * OMP dictionary learning on tens of rows is far from its intended regime; the signed repair is what makes it usable. The adaptive assignment threshold becomes adaptive only with 10 or more anchors.
 * Mutual kNN can leave an anchor without links, and under Qwen3 a few links join anchors of unrelated datasets ([5.7](05_latent_anchors.md#57-links-between-anchors), [5.10](05_latent_anchors.md#510-calibration-per-embedder)). `engine_weight` is not comparable across activation sources.
 
 **Operation**
-* There is no lock between processes: a CLI writer started while the web app has queued uploads fails them as interrupted, and two writers must not run batches in one workspace at once ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)).
 * Rollback restores the journal and the state; dataset-folder files and a just-written snapshot of a failed batch remain until the next successful batch or `rebuild-graph`.
-* The Neo4j mirror only adds: it never deletes nodes or stale properties ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).
 * The highlight covers up to 15 retrieved patterns, the prompt 10. The LLM runs remotely in the configured deployment, so the prompt — subgroup statistics, not rows — leaves the machine; use a local server for fully local inference.
-* The LLM and Neo4j are covered by a stub server and a fake driver in the tests; the live OpenRouter and Neo4j runs were verified by hand ([7.7](07_question_answering.md#77-measured-behaviour), [6.6](06_graph_and_storage.md#66-neo4j-mirror)).
+* One writer process per workspace: while the web app runs, CLI writers (`demo`, `ingest`, `reset`, `rebuild-graph`, `migrate`) are refused; upload through the app.
+* SIG owns its six node labels in `NEO4J_DATABASE`: every publish deletes nodes of those labels that the snapshot does not hold, so the database serves one workspace and no other data under those labels.
+* The LLM and Neo4j are covered by a stub server and a fake driver in the tests; the live OpenRouter runs and an earlier, add-only version of the Neo4j publisher were verified by hand — the current sync-to-snapshot publisher has been checked against the fake driver only ([7.7](07_question_answering.md#77-measured-behaviour), [6.6](06_graph_and_storage.md#66-neo4j-mirror)).

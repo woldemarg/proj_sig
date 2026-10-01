@@ -13,7 +13,7 @@ Every task that changes a line of Python ends with the gate passing:
 .venv/bin/python scripts/check.py                  # macOS / Linux
 ```
 
-The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (69 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
+The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (70 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
 
 - `scripts/check.py --quick` (lint + the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence and UI tests are where cross-module regressions show up.
@@ -86,7 +86,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 | compare embedders | `.venv\Scripts\python.exe scripts\compare_embedders.py --models minilm,qwen3` |
 | prompt size / live answers | `scripts\prompt_tokens.py`, `scripts\eval_answers.py` (the latter calls the LLM in `.env`) |
 
-- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the only platform-specific code is `pipeline._pid_alive`, which has both branches.
+- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the only platform-specific code is the writer lock (`store._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere).
 - The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s, CUDA when available). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the `hashing` backend unless marked `model`.
 - `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` (Windows temp-dir permissions); do not remove it.
 - Processing a batch is sequential and checkpointed (`docs/09_operations.md`); when debugging a stuck or failed batch, read `workspace/registry/batches/<id>.json` first (`error`, `failed_stage`, `warnings`).
@@ -104,7 +104,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 | If you change… | Then also… |
 |---|---|
 | any formula in `ltir/engines/eda/main_upd.py`, `discovery.py`, `quality.py` | update chapters 2/3; re-run `python -m ltir demo` and `experiment --k 3`; update the numbers in the README and in chapters 2, 3, 5, 9 and 10; list the edit in `PROVENANCE.md` if it is in the vendored file |
-| canonical text, components, what is embedded, block weights, the model | bump `CANONICAL_VERSION` / `REPRESENTATION_VERSION` in `ltir/models.py`; update chapter 4 (and 7 if the prompt changes); existing workspaces will be refused (`representation_mismatch`) until `python -m ltir migrate --yes` — say so in the summary. `MIN_COMPONENT_Z`, `MIN_EMM_SCORE` and `WEIGHT_EMM_REF` shape the components but are not in the fingerprint: changing them needs a version bump or a migration too |
+| canonical text, components, what is embedded, block weights, the model | bump `CANONICAL_VERSION` / `REPRESENTATION_VERSION` in `ltir/models.py`; update chapter 4 (and 7 if the prompt changes); existing workspaces will be refused (`representation_mismatch`) until `python -m ltir migrate --yes` — say so in the summary. A new input that shapes vectors belongs in `EmbeddingSpec` (the fingerprint), not only in `Config` |
 | the embedding model | also rerun `scripts/compare_embedders.py`: cosine thresholds belong to the embedder, so recalibrate `MIN_ASSIGN_THRESHOLD` until `domains_separated` is `True` (`docs/05_latent_anchors.md` §5.10) and requote the tables of §4.5 and §5.10 |
 | attractor extraction, assignment, EMA, thresholds (`ontology.py`, `engines/lac/`) | update chapter 5; run `tests/test_ontology.py` and the E2E tests with the real model |
 | traversal grammar, seed scoring, evidence limits | update chapter 7; keep `cypher/queries/transversal.cypher` in step |

@@ -83,6 +83,12 @@ def test_covariance_canonical_component():
     assert c.phenomenon.startswith("correlation between discount and margin weakens from -0.60 overall to +0.10 in the subgroup")
     label, coef = c.components[-1]
     assert label == "correlation between discount and margin" and coef < 0
+    # a covariance insight cites only its correlation change: an unvalidated shift is no component, no phrase
+    retyped = replace(insight({"region": "EU"}, [("margin", -1.4)], emm=0.3, ptype="covariance"), stability=None, p_value=None, p_adjusted=None)
+    r = canonicalize(retyped, cfg, 5000)
+    assert [label for label, _ in r.components] == ["correlation between discount and margin"]
+    assert "-1.40 sd" not in r.phenomenon and r.phenomenon.endswith("no validated median shift")
+    assert "no median test" in r.support and "stability" not in r.support
 
 
 @pytest.fixture(params=["hashing", pytest.param("model", marks=pytest.mark.model)])
@@ -126,7 +132,12 @@ def test_fingerprint_changes_with_representation_choices():
     c = InsightEncoder(HashingEmbedder(dim=128), cfg).spec
     d = replace(a, truncate_dim=384)  # Matryoshka width
     e = replace(a, query_instruction="Instruct: x\nQuery: ")
-    assert len({a.fingerprint, b.fingerprint, c.fingerprint, d.fingerprint, e.fingerprint}) == 5
+    variants = [a, b, c, d, e]
+    # settings that shape the components, the compute dtype and the checkpoint revision
+    for field, value in (("min_component_z", 1.0), ("min_emm_score", 0.2), ("weight_emm_ref", 0.2)):
+        variants.append(InsightEncoder(HashingEmbedder(), replace(cfg, **{field: value})).spec)
+    variants += [replace(a, compute_dtype="bfloat16"), replace(a, model_revision="97b0c614")]
+    assert len({v.fingerprint for v in variants}) == len(variants)
 
 
 class RecordingEmbedder(HashingEmbedder):

@@ -27,7 +27,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 | PERSISTING | duplicate guard, journal append, state save, representation record, batch sequence commit, snapshot | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | READY | record saved, checkpoint discarded, committed caches swapped in; then optional Neo4j publish and sphere export (a failure there is a warning) | [6.6](06_graph_and_storage.md#66-neo4j-mirror), [8.4](08_interface.md#84-the-latent-sphere) |
 
-Batches run one at a time per process (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back, discards the checkpoint and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. An exception after the READY save but before the caches are swapped also ends in `FAILED`. A failure to save the record after a Neo4j publish or a sphere export propagates out of `process()`; the batch stays READY on disk.
+One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back, discards the checkpoint and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. An exception after the READY save but before the caches are swapped also ends in `FAILED`. A failure to save the record after a Neo4j publish or a sphere export propagates out of `process()`; the batch stays READY on disk.
 
 **Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, owner_pid, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}, sphere}`; a temporary `checkpoint` key exists while a batch is committing (the batch list endpoint strips it).
 
@@ -42,15 +42,15 @@ Batches run one at a time per process (a re-entrant lock; the web app uses a sin
 | `query "QUESTION" [--no-llm] [--json]` | grounded answer, evidence, paths, footer | query log |
 | `status` | batches and graph statistics | — |
 | `experiment [--k K]` (default 5) | the hypothesis benchmark ([10.3](10_verification.md#103-hypothesis-benchmark)) | `experiments/*.json` |
-| `rebuild-graph` | regenerates `graph/snapshot.json` from journals and state | snapshot |
+| `rebuild-graph` | regenerates `graph/snapshot.json` from journals and state; syncs Neo4j when enabled | snapshot, Neo4j |
 | `sphere [-o FILE] [--dataset ID]` | writes the 3D sphere page | the file |
-| `neo4j-sync` | publishes the snapshot to Neo4j | Neo4j |
+| `neo4j-sync` | makes the Neo4j mirror equal to the snapshot | Neo4j |
 | `llm-check` | probes the configured LLM endpoint | — |
-| `migrate --yes` | rebuilds an outdated workspace; the old one is kept as `<workspace>.bak-<time>` ([6.5](06_graph_and_storage.md#65-versions-and-migration)) | workspace |
-| `reset --yes` | deletes the workspace | workspace |
+| `migrate --yes` | rebuilds an outdated workspace; the old one is kept as `<workspace>.bak-<time>`; syncs Neo4j when enabled ([6.5](06_graph_and_storage.md#65-versions-and-migration)) | workspace, Neo4j |
+| `reset --yes` | deletes the workspace and clears the Neo4j mirror when enabled | workspace, Neo4j |
 | `serve` | starts the web UI (same as `python -m ltir.web`) | — |
 
-Writers (`demo`, `ingest`, `reset`, `rebuild-graph` and the web app) recover interrupted batches when they start; the others open read-only. Use a separate `WORKSPACE_DIR` for experiments — the default `workspace/` is the knowledge base people work with.
+Writers (`demo`, `ingest`, `reset`, `rebuild-graph`, `migrate` and the web app) take the workspace's writer lock and recover interrupted batches when they start; while another writer holds the lock they stop with `error: workspace … is in use by another writer process (pid …)` and exit code 2 — while the web app runs, upload through it. The others open read-only and run alongside a writer. Use a separate `WORKSPACE_DIR` for experiments — the default `workspace/` is the knowledge base people work with.
 
 ## 9.3 Configuration
 
@@ -80,6 +80,7 @@ Writers (`demo`, `ingest`, `reset`, `rebuild-graph` and the web app) recover int
 | `duplicate_patterns` | a pattern id is already journaled (the append-only journal would be corrupted) | PERSISTING |
 | `internal_error` | anything else (the trace is kept) | any |
 | `interrupted` | crash recovery found the batch unfinished (batches that never started have no `failed_stage`) | any |
+| `WorkspaceBusy` (not a batch code) | another writer process holds the workspace; the CLI exits with code 2, the web app does not start | engine start |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | query |
 

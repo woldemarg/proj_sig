@@ -2,7 +2,7 @@
 
 > **In one paragraph.** SIG (Statistical Insight Graph; the package is `ltir`, *Latent Transversal Insight Representation*) turns a tabular file into statistically validated subgroup findings ("insights"), represents each one as text and as a vector, lets recurring phenomena self-organise into *latent anchors*, and stores everything as a dual-layer graph. Questions in natural language are answered by walking that graph — across the exact subgroup lattice **and** across the anchors — and a language model only verbalises the evidence that the walk returned, with citations that are checked.
 
-**Code** the whole `ltir/` package · **Tests** `tests/` (69) · **Next** [2. Discovery](02_discovery.md)
+**Code** the whole `ltir/` package · **Tests** `tests/` (70) · **Next** [2. Discovery](02_discovery.md)
 
 ---
 
@@ -14,7 +14,7 @@ SIG makes one hypothesis testable:
 
 > Structurally different subgroups that exhibit related statistical behaviour can be connected through latent attractor concepts. This enables *transversal* retrieval that purely structural graph traversal or naive nearest-neighbour text retrieval does not reliably achieve.
 
-The benchmark in [10.3](10_verification.md#103-hypothesis-benchmark) measures exactly this on data with planted mechanisms: transversal retrieval reaches MRR 0.581 / recall@3 0.521, against at most 0.319 / 0.111 for the structural and text baselines.
+The benchmark in [10.3](10_verification.md#103-hypothesis-benchmark) measures exactly this on data with planted mechanisms: transversal retrieval reaches MRR 0.581 / recall@3 0.521, against at most 0.321 / 0.111 for the structural and text baselines.
 
 ## 1.2 The pipeline at a glance
 
@@ -131,4 +131,4 @@ The design started from [`docs/init_concepts/latent_insight_graph_architecture.m
 
 In scope: the `ltir` package, its vendored engines, local persistence, the optional Neo4j mirror, the web UI and the CLI. Out of scope: authentication, multi-user concurrency, distributed processing, model training.
 
-Implemented and tested: 69 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 12 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).
+Implemented and tested: 70 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 12 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).

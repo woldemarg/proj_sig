@@ -18,7 +18,7 @@ from typing import Any
 
 from ltir.config import Config
 from ltir.pipeline import TERMINAL, Engine, PipelineError
-from ltir.store import Workspace
+from ltir.store import Workspace, acquire_writer_lock
 
 
 def _source_of(ws: Workspace, batch: dict[str, Any]) -> Path:
@@ -32,11 +32,14 @@ def _source_of(ws: Workspace, batch: dict[str, Any]) -> Path:
 def migrate_workspace(config: Config) -> dict[str, Any]:
     """Re-ingest every READY batch of ``config.workspace_dir`` into a fresh workspace and swap it in.
 
-    Refuses while a batch is in flight. A failed re-ingest leaves the old workspace untouched
-    and the partial ``.migrating`` folder for inspection. Neo4j publishing is off during the
-    run (re-sync with ``ltir neo4j-sync`` afterwards).
+    Takes the workspace's writer lock (``WorkspaceBusy`` while the web app or another writer
+    runs) and refuses while a batch is unfinished. A failed re-ingest leaves the old workspace
+    untouched and the partial ``.migrating`` folder for inspection. Neo4j publishing is off
+    during the re-ingest; with ``NEO4J_ENABLED`` the mirror is synced to the new workspace
+    once it is in place.
     """
     root = Path(config.workspace_dir)
+    acquire_writer_lock(root)
     old = Workspace(config)
     batches = old.list_batches()
     busy = [b["batch_id"] for b in batches if b["status"] not in TERMINAL]
@@ -68,4 +71,5 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
     backup = root.with_name(f"{root.name}.bak-{datetime.now(UTC):%Y%m%dT%H%M%S}")
     root.rename(backup)
     staging.rename(root)
-    return {"workspace": str(root), "backup": str(backup), "batches": report}
+    neo4j = Engine(config, recover=False).sync_neo4j()
+    return {"workspace": str(root), "backup": str(backup), "batches": report, "neo4j": neo4j["status"]}

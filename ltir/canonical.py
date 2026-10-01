@@ -88,11 +88,21 @@ def has_material_covariance(ins: Insight, config: Config) -> bool:
 
 
 def phenomenon_shifts(ins: Insight, config: Config) -> list[Shift]:
-    """Shifts that describe the phenomenon: the target always, others if |z| >= MIN_COMPONENT_Z."""
-    chosen = [s for s in ins.shifts if s.metric == ins.target or s.magnitude >= config.min_component_z]
+    """Shifts that describe the phenomenon: the target always, others if |z| >= MIN_COMPONENT_Z.
+
+    None for a covariance insight: its median shift failed the shift test, so only the
+    correlation change is cited (the shifts stay in the record as measurements).
+    """
     if ins.phenomenon_type == "covariance":
-        chosen = [s for s in chosen if s.magnitude >= config.min_component_z]
-    return chosen
+        return []
+    return [s for s in ins.shifts if s.metric == ins.target or s.magnitude >= config.min_component_z]
+
+
+def describe_validation(ins: Insight, config: Config) -> str:
+    """What validated the insight: '... stability 0.97; adjusted p < 0.001' or the correlation change."""
+    if ins.phenomenon_type == "covariance":
+        return f"correlation change (divergence score {ins.emm_score:.2f} >= {config.min_emm_score:g}); no median test"
+    return f"bootstrap stability {ins.stability:.2f}; adjusted p {format_p(ins.p_adjusted)}"
 
 
 def canonicalize(ins: Insight, config: Config, dataset_rows: int | None = None) -> CanonicalInsight:
@@ -106,15 +116,13 @@ def canonicalize(ins: Insight, config: Config, dataset_rows: int | None = None) 
         _, sign = _covariance_change(cov)
         phrases.insert(0 if ins.phenomenon_type == "covariance" else len(phrases), describe_covariance(cov))
         components.append((covariance_label(cov["pair"]), sign * config.emm_component_weight * ins.emm_score / config.weight_emm_ref))
-    if ins.phenomenon_type == "covariance" and not shifts:
-        phrases.append("no material median shift")
+    if ins.phenomenon_type == "covariance":
+        phrases.append("no validated median shift")
 
     divergence = f"divergence score {ins.emm_score:.2f}"
     covariance = f"strongest change: {describe_covariance(cov)} ({divergence})" if cov else f"no correlation pair ({divergence})"
     total = f" of {dataset_rows:,}" if dataset_rows else ""
-    support = (
-        f"{ins.support:,} rows ({ins.support_fraction:.1%}{total}); bootstrap stability {ins.stability:.2f}; adjusted p {format_p(ins.p_adjusted)}"
-    )
+    support = f"{ins.support:,} rows ({ins.support_fraction:.1%}{total}); {describe_validation(ins, config)}"
     return CanonicalInsight(
         insight_id=ins.id,
         version=CANONICAL_VERSION,

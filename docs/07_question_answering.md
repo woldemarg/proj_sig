@@ -105,7 +105,7 @@ Evidence(
 
 Rendering happens here, with the configuration: `shift_text` holds the phenomenon shifts only (the target and `|z| ≥ MIN_COMPONENT_Z`), `relationship` appears only when the correlation change is material, the scope is prose, and an anchor's `description` comes from its signature ([5.8](05_latent_anchors.md#58-how-an-anchor-is-described)). `metrics` holds the global median and MAD of every metric the prompt mentions. A note lists the items that share no scope condition with the seeds (they may still be structurally reachable; `structural_distance` says how far), or says that no pattern matched.
 
-**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (verified statistical observations; cite as [P#]):` with one block per item, key first; `NOTE:`. There is no free-form graph dump. From the demo:
+**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (verified statistical observations; cite as [P#]):` with one block per item, key first (scope and support; `shifts:`; `relationship:` when material; `validation:` — bootstrap stability and adjusted p, or for a covariance insight `correlation change (divergence score …) | no median test` — with the insight weight and confounders; `retrieved via:`); `NOTE:`. There is no free-form graph dump. From the demo:
 
 ```text
 QUESTION: Why is margin lower for phones in the US?
@@ -138,7 +138,7 @@ EVIDENCE (verified statistical observations; cite as [P#]):
 NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were reached through latent anchors (the same phenomenon in a different part of the data).
 ```
 
-Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and an item without shifts reads `shifts: no material median shift`. The prompt carries subgroup statistics, never rows.
+Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows.
 
 **The evidence-only summary** (`Evidence.summary`, used whenever there is no LLM answer) starts with `Observations:` and one cited line per item — `- <scope sentence> | <top two shift phrases, or the relationship> | n=<support> [P#]`, with ` (scope-disjoint from the seed, linked via a latent anchor)` for transversal-only items — and ends with `Interpretation (hypotheses): not generated (no language-model answer is available).` Without items it says `- No matching evidence in the graph.`
 
@@ -182,7 +182,7 @@ Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py
 | Configuration | Grounded | Unknown citations | Citations | Prompt tokens | Completion tokens | Mean latency |
 |---|---|---|---|---|---|---|
 | symbol-based prompt, MiniLM | 5/5 | 0 | 34 | 14,983 | 1,881 | 9.0 s |
-| ASCII prompt (`ltir-canon-3`), MiniLM | 5/5 | 0 | 38 | 11,705 | 1,668 | 6.0 s |
+| ASCII prompt, MiniLM | 5/5 | 0 | 38 | 11,705 | 1,668 | 6.0 s |
 | ASCII prompt, Qwen3 (current) | 5/5 | 0 | 40 | 11,099 | 1,728 | 6.6 s |
 
 Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.57 → +0.09), separate *Observations* from *Interpretation (hypotheses)*, cite the scope-disjoint analogues reached through `A-1`, and use grouped citations, which are parsed and linked.

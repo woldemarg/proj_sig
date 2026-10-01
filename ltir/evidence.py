@@ -17,7 +17,7 @@ from ltir.canonical import (
     describe_covariance,
     describe_scope,
     describe_shift,
-    format_p,
+    describe_validation,
     format_value,
     has_material_covariance,
     humanize,
@@ -45,6 +45,7 @@ class EvidenceItem:
     relationship: str  # material correlation change as a phrase, or ""
     path: list[dict[str, Any]]
     path_text: str
+    validation: str  # what validated it: bootstrap stability and adjusted p, or the correlation change
     attractors: list[dict[str, Any]]
     transversal_only: bool
     provenance: dict[str, Any]
@@ -105,11 +106,11 @@ class Evidence:
         for it in self.items:
             s = it.statistics
             lines.append(f"[{it.key}] role={it.role} | scope: {it.scope_text} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
-            lines.append(f"     shifts: {'; '.join(it.shift_text) or 'no material median shift'}")
+            lines.append(f"     shifts: {'; '.join(it.shift_text) or 'no validated median shift'}")
             if it.relationship:
                 lines.append(f"     relationship: {it.relationship} (divergence {s['emm_score']:.2f})")
             lines.append(
-                f"     validation: bootstrap stability {s['stability']:.2f} | adjusted p {format_p(s['p_adjusted'])} | insight weight {s['weight']:.2f}"
+                f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
                 f" | confounders: {', '.join(s['drivers']) or 'none detected'}"
             )
             lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
@@ -182,6 +183,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                 relationship=describe_covariance(ins.covariance) if material else "",
                 path=[asdict(st) for st in r.path],
                 path_text=_path_text(r.path, r.route),
+                validation=describe_validation(ins, config),
                 attractors=acts,
                 transversal_only=r.transversal_only,
                 provenance={**ins.provenance, "pattern_id": r.node_id},

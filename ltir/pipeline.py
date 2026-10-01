@@ -35,7 +35,7 @@ from ltir.ingestion import load_dataset
 from ltir.models import CanonicalInsight, EmbeddingSpec, Insight
 from ltir.ontology import LatentOntology, OntologyUpdate
 from ltir.quality import SelectionResult, select_insights
-from ltir.store import Workspace, atomic_write_json, utc_now
+from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, utc_now
 
 if TYPE_CHECKING:
     from ltir.llm import OpenAICompatibleLLM
@@ -79,29 +79,6 @@ class LatentFrame:
             patterns={r["id"]: vectors[r["row_id"]] for r in ws.patterns()} if len(vectors) else {},
             attractors={int(c): st.embeddings[i].copy() for i, c in enumerate(st.concept_ids)},
         )
-
-
-def _pid_alive(pid: int | None) -> bool:
-    """True when another live process owns a batch (portable; never signals the process)."""
-    if not pid or pid <= 0 or pid == os.getpid():
-        return False
-    if os.name == "nt":
-        import ctypes
-
-        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        code = ctypes.c_ulong()
-        ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 @contextmanager
@@ -188,9 +165,12 @@ class Engine:
         llm: OpenAICompatibleLLM | None = None,
         recover: bool = True,
     ) -> None:
-        """``recover=False`` for read-only callers (CLI status/query): they must never roll
-        back a batch another process is committing."""
+        """A writer (``recover=True``: the web app, CLI demo/ingest/reset/rebuild-graph) takes the
+        workspace's writer lock — ``WorkspaceBusy`` if another process holds it — and then
+        recovers unfinished batches. ``recover=False`` for read-only callers (CLI status/query)."""
         self.config = config
+        if recover:
+            acquire_writer_lock(config.workspace_dir)
         self.ws = Workspace(config)
         self.encoder = InsightEncoder(embedder or make_text_embedder(config), config)
         self._llm = llm
@@ -472,20 +452,31 @@ class Engine:
             self._refresh_caches(snapshot, ontology)
             return snapshot
 
-    def reset(self) -> None:
+    def reset(self) -> dict[str, Any]:
+        """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning)."""
         with self._lock:
             self.ws.reset()
             self._graph = None
             self._frame = None
+            return {"neo4j": self.sync_neo4j({"nodes": [], "edges": []})}
+
+    def sync_neo4j(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Make the Neo4j mirror equal to ``snapshot`` (default: the committed one) when ``NEO4J_ENABLED``."""
+        if not self.config.neo4j_enabled:
+            return {"status": "disabled"}
+        from ltir.neo4j_sink import publish_snapshot
+
+        snapshot = snapshot if snapshot is not None else self.ws.load_graph() or {"nodes": [], "edges": []}
+        try:
+            return {"status": "ok", **publish_snapshot(snapshot, self.config)}
+        except Exception as exc:  # the mirror is optional: report, never fail the caller
+            log.warning("Neo4j sync failed: %s", exc)
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
     def _recover_interrupted(self) -> None:
-        """A batch left mid-flight by a *dead* process is rolled back and marked FAILED.
-
-        Batches owned by a live process (e.g. the web server while the CLI starts) are
-        left alone.
-        """
+        """Roll back and fail every unfinished batch: under the writer lock no other writer is alive."""
         for record in self.ws.list_batches():
-            if record["status"] in TERMINAL or _pid_alive(record.get("owner_pid")):
+            if record["status"] in TERMINAL:
                 continue
             cp = record.pop("checkpoint", None)
             if cp and Path(cp["dir"]).exists():

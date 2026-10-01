@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from ltir.canonical import humanize
 from ltir.config import Config, load_config
 from ltir.pipeline import TERMINAL, Engine
-from ltir.store import RepresentationMismatch
+from ltir.store import RepresentationMismatch, WorkspaceBusy
 from ltir.synth import DEMO_PATH, write_demo
 
 STATIC = Path(__file__).parent / "static"
@@ -220,8 +220,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
         busy = [b["batch_id"] for b in engine.ws.list_batches() if b["status"] not in TERMINAL]
         if busy:
             raise HTTPException(409, f"batches in progress: {busy}")
-        engine.reset()
-        return {"status": "reset"}
+        return {"status": "reset", **engine.reset()}
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
@@ -245,7 +244,11 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = load_config()
-    app = create_app(config)
+    try:
+        app = create_app(config)
+    except WorkspaceBusy as exc:  # another writer (a CLI ingest, a second server) holds the workspace
+        log.error("%s", exc)
+        raise SystemExit(2) from None
     engine: Engine = app.state.engine
     log.info("warming up embedding model %s", config.embedding_model)
     engine.encoder.embedder.embed(["warmup"])

@@ -1,9 +1,11 @@
 """Optional Neo4j mirror of the graph snapshot (docs/06_graph_and_storage.md §6.6).
 
 Follows lac's publisher pattern (constraints + parameterised UNWIND/MERGE) with
-the SIG schema. The local journal/state is the source of truth; publishing is
-idempotent (MERGE on unique ids) and RELATED_TO is replaced wholesale so stale
-mutual-kNN edges do not linger (lac's accepted MERGE-only trade-off is fixed here).
+the SIG schema. The local journal/state is the source of truth and every publish makes
+the mirror equal to the snapshot: properties are replaced, not merged, and nodes of the
+six SIG labels and relationships of the ten SIG types that the snapshot no longer holds
+are deleted (after a reset, a migration, a rebuild or a recomputed topology). SIG owns
+these labels in ``NEO4J_DATABASE``: one workspace per database.
 """
 
 from __future__ import annotations
@@ -68,17 +70,31 @@ def edge_query(edge_type: str) -> str:
         f"MATCH (s:{src} {{id: row.source}})\n"
         f"MATCH (t:{dst} {{id: row.target}})\n"
         f"MERGE (s)-[r:{edge_type}]->(t)\n"
-        f"SET r += row.props, r.weight = row.weight"
+        f"SET r = row.props, r.weight = row.weight"
     )
 
 
 def node_query(label: str) -> str:
     assert label in LABELS
-    return f"UNWIND $rows AS row\nMERGE (n:{label} {{id: row.id}})\nSET n += row.props"
+    return f"UNWIND $rows AS row\nMERGE (n:{label} {{id: row.id}})\nSET n = row.props, n.id = row.id"
+
+
+def stale_node_query(label: str) -> str:
+    """Delete the label's nodes that the snapshot does not hold (with their relationships)."""
+    assert label in LABELS
+    return f"MATCH (n:{label}) WHERE NOT n.id IN $ids DETACH DELETE n"
+
+
+def stale_edge_query(edge_type: str) -> str:
+    """Delete the type's relationships whose (source, target) pair the snapshot does not hold."""
+    src, dst = EDGE_ENDPOINTS[edge_type]
+    return f"MATCH (s:{src})-[r:{edge_type}]->(t:{dst}) WHERE NOT (s.id + '|' + t.id) IN $keys DELETE r"
 
 
 def publish_snapshot(snapshot: dict[str, Any], config: Config, driver: Any = None) -> dict[str, Any]:
-    """MERGE the snapshot into ``NEO4J_DATABASE``; returns counts. ``driver`` is injectable for tests."""
+    """Make ``NEO4J_DATABASE`` equal to the snapshot (an empty snapshot clears it); returns counts.
+
+    ``driver`` is injectable for tests."""
     own = driver is None
     if own:
         from neo4j import GraphDatabase
@@ -101,10 +117,13 @@ def publish_snapshot(snapshot: dict[str, Any], config: Config, driver: Any = Non
                 for label, rows in nodes.items():
                     for i in range(0, len(rows), batch):
                         tx.run(node_query(label), rows=rows[i : i + batch])
-                tx.run(load_cypher("clear_related_to"))
                 for etype, rows in edges.items():
                     for i in range(0, len(rows), batch):
                         tx.run(edge_query(etype), rows=rows[i : i + batch])
+                for etype, rows in edges.items():
+                    tx.run(stale_edge_query(etype), keys=[f"{r['source']}|{r['target']}" for r in rows])
+                for label, rows in nodes.items():
+                    tx.run(stale_node_query(label), ids=[r["id"] for r in rows])
 
             session.execute_write(write)
         return {
