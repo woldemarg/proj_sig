@@ -1,4 +1,4 @@
-"""3D latent sphere built on lac's prosphera projector (SDD 13 §Sphere)."""
+"""3D latent sphere built on lac's prosphera projector (docs/08_interface.md §8.4)."""
 
 from __future__ import annotations
 

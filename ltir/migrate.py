@@ -1,4 +1,4 @@
-"""Rebuild a workspace with the current code by re-ingesting its stored sources (SDD 09 §Migration).
+"""Rebuild a workspace with the current code by re-ingesting its stored sources (docs/06_graph_and_storage.md §6.5).
 
 A representation or canonical version bump makes an existing workspace refuse new work
 (``representation_mismatch``). Every READY batch keeps its uploaded file

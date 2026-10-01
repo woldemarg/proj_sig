@@ -1,4 +1,4 @@
-"""Insight vectors -> latent ontology (SDD 07): assignment, weights, orphans, new concepts, soft merge."""
+"""Insight vectors -> latent ontology (docs/05_latent_anchors.md): assignment, weights, orphans, new concepts, soft merge."""
 
 from __future__ import annotations
 

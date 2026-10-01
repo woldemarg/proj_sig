@@ -1,4 +1,4 @@
-"""Token cost of the LLM-facing text (SDD 17): evidence prompt and canonical documents.
+"""Token cost of the LLM-facing text (docs/07_question_answering.md §7.7): evidence prompt and canonical documents.
 
     python scripts/prompt_tokens.py --label baseline
 

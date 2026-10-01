@@ -1,4 +1,4 @@
-"""End-to-end: upload -> discover -> validate -> embed -> ontology -> graph -> query -> evidence -> answer (SDD 14)."""
+"""End-to-end: upload -> discover -> validate -> embed -> ontology -> graph -> query -> evidence -> answer (docs/09_operations.md)."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def _check_grounded_answer(engine):
     assert "Sources:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
     prompt = engine.llm.prompts[-1]
     assert "EVIDENCE (verified statistical observations" in prompt and "[P1]" in prompt
-    assert prompt.isascii()  # no byte-fallback symbols reach the LLM (SDD 17 §9)
+    assert prompt.isascii()  # no byte-fallback symbols reach the LLM (docs/07_question_answering.md §7.4)
     return qa
 
 

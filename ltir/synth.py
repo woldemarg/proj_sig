@@ -1,4 +1,4 @@
-"""Deterministic synthetic retail dataset with planted phenomena (SDD 15 §Demo data).
+"""Deterministic synthetic retail dataset with planted phenomena (docs/10_verification.md §10.2).
 
 Mechanisms (global):
     margin      = 26 - 0.6 * discount + N(0, 3)          (discount erodes margin)

@@ -1,4 +1,4 @@
-"""3D latent sphere: insight vectors + attractors projected on a sphere (SDD 13 §Sphere).
+"""3D latent sphere: insight vectors + attractors projected on a sphere (docs/08_interface.md §8.4).
 
 Reuses lac's visualisation stack (vendored as ``ltir/engines/lac/projector.py``, rendering unchanged:
 prosphera ``KernelPCA(cosine)`` -> sphere scaling, dark Plotly figure, ACTIVATES

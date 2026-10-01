@@ -1,4 +1,4 @@
-"""Dataset ingestion: file validation, loading, derived band dimensions (SDD 02)."""
+"""Dataset ingestion: file validation, loading, derived band dimensions (docs/02_discovery.md §2.1)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Canonical data contracts shared by every LTIR module (SDD 04).
+"""Canonical data contracts shared by every LTIR module (docs/03_insights.md, docs/04_representation.md).
 
 Everything downstream of the discovery adapter speaks these types; pandas
 objects never cross a module boundary.
@@ -51,7 +51,7 @@ class Shift:
     local_median: float
     global_median: float
     global_mad: float
-    source: str = "eda"  # eda (step4 top shift) | covariance_pair (adapter, SDD 03)
+    source: str = "eda"  # eda (step4 top shift) | covariance_pair (adapter, docs/02_discovery.md §2.4)
 
     @property
     def direction(self) -> int:
@@ -87,11 +87,11 @@ class Insight:
     p_adjusted: float  # Bonferroni over (distinct cohorts x metrics)
     drivers: tuple[str, ...]  # EDA root_cause_drivers (confounders)
     row_hash: str  # identity of the covered row set
-    phenomenon_type: str = "shift"  # shift | covariance (correlation change, SDD 04)
+    phenomenon_type: str = "shift"  # shift | covariance (correlation change, docs/03_insights.md §3.2)
     # strongest diverging correlation pair: {pair:[a,b], local_corr, global_corr, delta}
     covariance: dict[str, Any] = field(default_factory=dict)
     aliases: tuple[str, ...] = ()  # redundant expressions collapsed into this one
-    weight: float = 0.0  # insight_weight (SDD 04 §weight)
+    weight: float = 0.0  # insight_weight (docs/03_insights.md §3.3)
     weight_factors: dict[str, float | None] = field(default_factory=dict)  # None = not measured
     provenance: dict[str, Any] = field(default_factory=dict)
 

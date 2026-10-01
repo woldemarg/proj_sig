@@ -1,4 +1,4 @@
-"""Dual-layer graph assembly + in-memory index (SDD 08, SDD 09).
+"""Dual-layer graph assembly + in-memory index (docs/06_graph_and_storage.md).
 
 The snapshot is *derived* data: it is rebuilt from the journals, dataset
 artifacts and ontology state after every batch, so it can always be

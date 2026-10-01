@@ -1,8 +1,8 @@
-"""Evidence builder (SDD 11): traversal result -> structured, citable evidence.
+"""Evidence builder (docs/07_question_answering.md §7.4): traversal result -> structured, citable evidence.
 
 The LLM receives *only* this object's ``to_prompt()`` rendering; ``summary()`` is the
 deterministic evidence-only answer used when no LLM answer is available. Both are plain
-ASCII built from the readable-text helpers in ``ltir.canonical`` (SDD 17): rounded numbers,
+ASCII built from the readable-text helpers in ``ltir.canonical`` (docs/04_representation.md §4.2): rounded numbers,
 p-value buckets, shifts in robust standard deviations, prose scopes. Every item has a
 citation key ``[P#]`` that maps back to a Pattern id, its dataset, batch and exact EDA
 selector, so answers are traceable to table slices.

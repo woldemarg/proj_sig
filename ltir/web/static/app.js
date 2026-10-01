@@ -1,4 +1,4 @@
-/* SIG UI — datasets, graph / sphere / table views, details drawer, AI chat with grounded citations (SDD 13). */
+/* SIG UI — datasets, graph / sphere / table views, details drawer, AI chat with grounded citations (docs/08_interface.md). */
 "use strict";
 
 const S = { cy: null, qa: null, poll: null, lastReady: null, view: "graph", sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };

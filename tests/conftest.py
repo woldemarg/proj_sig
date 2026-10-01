@@ -1,4 +1,4 @@
-"""Shared fixtures (SDD 15).
+"""Shared fixtures (docs/10_verification.md §10.1).
 
 * ``hashing`` backend: fast, offline, deterministic — used by most contract tests.
 * ``model`` marker: tests that need the real local sentence-transformers model;

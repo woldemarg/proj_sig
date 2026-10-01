@@ -1,4 +1,4 @@
-"""Local web app: upload, processing status, graph, node inspection, chat (SDD 13).
+"""Local web app: upload, processing status, graph, node inspection, chat (docs/08_interface.md).
 
 Run: ``python -m ltir.web`` (http://127.0.0.1:8765). Batches are processed by a
 single background worker so the ontology is updated strictly sequentially.

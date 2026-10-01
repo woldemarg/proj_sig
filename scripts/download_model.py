@@ -1,4 +1,4 @@
-"""Download an embedding model into ``sig/models/`` at a pinned revision (SDD 06).
+"""Download an embedding model into ``sig/models/`` at a pinned revision (docs/04_representation.md §4.4).
 
     python scripts/download_model.py                       # Qwen/Qwen3-Embedding-0.6B (default)
     python scripts/download_model.py --model <repo> --revision <sha>

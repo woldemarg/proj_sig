@@ -1,4 +1,4 @@
-"""Query interpretation and seed resolution (SDD 10 §Query).
+"""Query interpretation and seed resolution (docs/07_question_answering.md §7.1–7.2).
 
 Deterministic parse against the graph vocabulary (metrics, dimension values)
 plus a projection of the question into the insight space with the same

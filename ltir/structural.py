@@ -1,4 +1,4 @@
-"""Deterministic structural plane: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS (SDD 08).
+"""Deterministic structural plane: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS (docs/06_graph_and_storage.md §6.1).
 
 Derived only from scope conditions and signed shifts — never from embeddings.
 Relations are computed within one dataset (scopes of different schemas are
