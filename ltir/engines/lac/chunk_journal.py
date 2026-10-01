@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from ltir.fileio import replace_file, retry_sharing
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -67,8 +68,8 @@ class ChunkJournal:
         del mmap
         meta_tmp = self.meta_path.with_suffix(".json.tmp")
         meta_tmp.write_text(json.dumps({"rows": int(matrix.shape[0]), "dim": int(matrix.shape[1])}), encoding="utf-8")
-        os.replace(tmp_path, self.embeddings_path)
-        os.replace(meta_tmp, self.meta_path)
+        replace_file(tmp_path, self.embeddings_path)  # waits out a reader in another process (Windows)
+        replace_file(meta_tmp, self.meta_path)
 
     def load_chunks(self) -> list[dict[str, Any]]:
         return _read_jsonl(self.chunks_path)
@@ -79,9 +80,9 @@ class ChunkJournal:
     def load_embeddings(self) -> np.ndarray:
         if not (self.embeddings_path.exists() and self.meta_path.exists()):
             return np.empty((0, 0), dtype=np.float32)
-        meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
-        mmap = np.memmap(self.embeddings_path, dtype=np.float32, mode="r", shape=(int(meta["rows"]), int(meta["dim"])))
-        return np.array(mmap)
+        meta = json.loads(retry_sharing(lambda: self.meta_path.read_text(encoding="utf-8")))
+        shape = (int(meta["rows"]), int(meta["dim"]))
+        return retry_sharing(lambda: np.array(np.memmap(self.embeddings_path, dtype=np.float32, mode="r", shape=shape)))
 
     def row_count(self) -> int:
         if not self.chunks_path.exists():

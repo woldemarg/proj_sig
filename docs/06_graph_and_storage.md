@@ -74,6 +74,8 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `logs/queries.jsonl` | one JSON per question | `{at, question, mode, metrics, seeds, evidence, citations}` | `log_query` (empty-graph questions are not logged) |
 | `experiments/*.json` | JSON | benchmark results | `python -m ltir experiment` |
 
+**Atomic replacement on Windows.** Batch records, the snapshot and the other JSON files, the blocks files and the vector matrix are written beside the target and renamed over it (`fileio.replace_file`). On Windows that rename fails while another handle has the target open, and opening the target fails while it is being renamed over — both as `PermissionError` (WinError 5). The UI polls the batch records while the worker rewrites them, so the rename and the readers (`read_json`, the blocks and matrix loaders) retry with a short backoff for up to `fileio.SHARING_RETRY_S` (2 s, a module constant); a reader holds a file for microseconds. Elsewhere a `PermissionError` is raised at once. Without the retry, a batch failed with that error in the middle of a stage.
+
 The snapshot is **derived data**: `ltir rebuild-graph` regenerates it from the journals, the profiles, the registry and the concept store, recomputing ACTIVATES alignments against the current centroids and RELATED_TO from the topology. Raw rows are stored only in the source copy and, for web uploads, in `uploads/`; both stay until a reset.
 
 ## 6.4 Commit, rollback and recovery

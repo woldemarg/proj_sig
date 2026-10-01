@@ -2,7 +2,7 @@
 
 > **In one paragraph.** SIG (Statistical Insight Graph; the package is `ltir`, *Latent Transversal Insight Representation*) turns a tabular file into statistically validated subgroup findings ("insights"), represents each one as text and as a vector, lets recurring phenomena self-organise into *latent anchors*, and stores everything as a dual-layer graph. Questions in natural language are answered by walking that graph — across the exact subgroup lattice **and** across the anchors — and a language model only verbalises the evidence that the walk returned, with citations that are checked.
 
-**Code** the whole `ltir/` package · **Tests** `tests/` (74) · **Next** [2. Discovery](02_discovery.md)
+**Code** the whole `ltir/` package · **Tests** `tests/` (75) · **Next** [2. Discovery](02_discovery.md)
 
 ---
 
@@ -96,7 +96,7 @@ Every divergence of the vendored code from its origin is listed in [`ltir/engine
 | `ontology.py`, `engines/lac/` | `LatentOntology` over lac's lifecycle | [5](05_latent_anchors.md) |
 | `structural.py` | the exact lattice edges | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | `graph.py` | snapshot assembly, attractor descriptions, `DualGraph` index | [6](06_graph_and_storage.md), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
-| `store.py` | workspace layout, journals, checkpoint and rollback, the writer lock | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
+| `store.py`, `fileio.py` | workspace layout, journals, checkpoint and rollback, the writer lock; atomic file replacement that waits out Windows sharing violations | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
 | `neo4j_sink.py`, `cypher/` | optional Neo4j mirror | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 | `migrate.py` | rebuild an outdated workspace from its stored sources | [6.5](06_graph_and_storage.md#65-versions-and-migration) |
 | `query.py`, `traversal.py` | question parsing, seeds, transversal walk, structural closure | [7](07_question_answering.md) |
@@ -132,4 +132,4 @@ The design started from [`docs/init_concepts/latent_insight_graph_architecture.m
 
 In scope: the `ltir` package, its vendored engines, local persistence, the optional Neo4j mirror, the web UI and the CLI. Out of scope: authentication, multi-user concurrency, distributed processing, model training.
 
-Implemented and tested: 74 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 13 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).
+Implemented and tested: 75 tests pass, including the real embedding model and a headless browser. The demo runs `84 cohorts → 50 validated → 28 insights → 4 anchors` in about 13 s including the one-off model load. The end-to-end flow has been run live against Gemma 4 on OpenRouter (5 of 5 answers grounded, 0 unknown citations, [7.7](07_question_answering.md#77-measured-behaviour)) and against a live Neo4j mirror ([6.6](06_graph_and_storage.md#66-neo4j-mirror)).

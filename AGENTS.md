@@ -13,7 +13,7 @@ Every task that changes a line of Python ends with the gate passing:
 .venv/bin/python scripts/check.py                  # macOS / Linux
 ```
 
-The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (74 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
+The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (75 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
 
 - `scripts/check.py --quick` (lint + the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence and UI tests are where cross-module regressions show up.
@@ -29,7 +29,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`) may skip the gate; anythin
 
 | Path | Role |
 |---|---|
-| `ltir/` | the package: `config.py` (all tunables), `ingestion.py`, `discovery.py` (EDA adapter), `models.py` (contracts), `quality.py` (selection + weight), `canonical.py`, `encoder.py`, `ontology.py` (lac adapter), `structural.py`, `graph.py`, `store.py`, `neo4j_sink.py` + `cypher/`, `query.py`, `traversal.py`, `evidence.py`, `llm.py`, `qa.py`, `pipeline.py` (`Engine`), `migrate.py`, `sphere.py`, `synth.py`, `experiment.py`, `cli.py`, `web/` (FastAPI + static UI) |
+| `ltir/` | the package: `config.py` (all tunables), `ingestion.py`, `discovery.py` (EDA adapter), `models.py` (contracts), `quality.py` (selection + weight), `canonical.py`, `encoder.py`, `ontology.py` (lac adapter), `structural.py`, `graph.py`, `store.py`, `fileio.py` (atomic replacement), `neo4j_sink.py` + `cypher/`, `query.py`, `traversal.py`, `evidence.py`, `llm.py`, `qa.py`, `pipeline.py` (`Engine`), `migrate.py`, `sphere.py`, `synth.py`, `experiment.py`, `cli.py`, `web/` (FastAPI + static UI) |
 | `ltir/engines/` | **vendored** engines: `eda/main_upd.py` (statistical discovery) and `lac/` (attractor ontology, journal, projector). Every divergence from upstream is listed in `ltir/engines/PROVENANCE.md` |
 | `tests/` | pytest suite (`conftest.py` holds the fixtures and the `FakeLLM`); markers `model`, `browser` |
 | `docs/` | the specification: eleven chapters read in pipeline order (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
@@ -127,7 +127,7 @@ Code surface → doc owner:
 | `models.py` (`Insight`), `quality.py` | `03_insights.md` |
 | `canonical.py`, `encoder.py`, `models.py` (`CanonicalInsight`, `EmbeddingSpec`) | `04_representation.md` |
 | `ontology.py`, `engines/lac/`, `graph.py` (anchor descriptions) | `05_latent_anchors.md`, `PROVENANCE.md` |
-| `structural.py`, `graph.py` (schema, snapshot), `store.py`, `migrate.py`, `neo4j_sink.py`, `cypher/` | `06_graph_and_storage.md` |
+| `structural.py`, `graph.py` (schema, snapshot), `store.py`, `fileio.py`, `migrate.py`, `neo4j_sink.py`, `cypher/` | `06_graph_and_storage.md` |
 | `query.py`, `traversal.py`, `evidence.py`, `llm.py`, `qa.py` | `07_question_answering.md` |
 | `web/`, `sphere.py`, `engines/lac/projector.py` | `08_interface.md` |
 | `pipeline.py`, `cli.py`, `config.py` | `09_operations.md` (+ `11_reference.md` §11.3 for fields) |
