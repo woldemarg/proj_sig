@@ -104,7 +104,7 @@ Every quantity the system computes, where it is explained and which code compute
 | batch metrics and warnings | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `LatentOntology` (`BatchMetrics`), `observability.apply_health_warnings` |
 | structural edges, contrast overlap, TARGETS weight | [6.1](06_graph_and_storage.md#61-the-structural-plane), [6.2](06_graph_and_storage.md#62-the-graph-schema) | `structural.structural_edges`, `graph._schema_plane` (TARGETS) |
 | query components, seed score | [7.1](07_question_answering.md#71-from-question-to-query), [7.2](07_question_answering.md#72-seeds) | `query.parse_query`, `query.score_pattern` |
-| literal grounding: centred cosine, local margin, Lowe's ratio, char_wb TF-IDF, wildcard scope | [7.1.1](07_question_answering.md#711-literal-grounding) | `query.build_catalog`, `query._ground`, `query.score_pattern` |
+| literal grounding: centred cosine, local margin, Lowe's ratio, char_wb TF-IDF, wildcard scope | [7.1.1](07_question_answering.md#711-literal-grounding) | `Engine.catalog`, `query.build_catalog`, `query._ground`, `query._bind`, `query.score_pattern` |
 | path score, node rank, scope overlap | [7.3](07_question_answering.md#73-transversal-traversal) | `traversal.traverse` |
 | sphere projection | [8.4](08_interface.md#84-the-latent-sphere) | `sphere.sphere_figure` |
 | recall@k, precision@k, MRR | [10.3](10_verification.md#103-hypothesis-benchmark) | `experiment.run_experiment` |

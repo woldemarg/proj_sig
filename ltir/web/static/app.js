@@ -1,7 +1,7 @@
 /* SIG UI — datasets, graph / sphere / table views, details drawer, AI chat with grounded citations (docs/08_interface.md). */
 "use strict";
 
-const S = { cy: null, qa: null, poll: null, lastReady: null, view: "graph", sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
+const S = { cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGES = ["UPLOADED", "VALIDATING", "PROFILING", "DISCOVERING", "VALIDATING_INSIGHTS", "EMBEDDING", "UPDATING_ONTOLOGY", "BUILDING_GRAPH", "PERSISTING", "READY"];
 const STAGE_TEXT = {
   UPLOADED: "Queued", VALIDATING: "Reading the file", PROFILING: "Profiling columns", DISCOVERING: "Searching subgroups",
@@ -28,21 +28,16 @@ const SUGGESTIONS = [
   "Розкажи про margin для laptops у EU",
   "Де руйнується кореляція між discount і margin?",
 ];
-// sphere traces named after the legend's layer toggles (ltir/sphere.py LAYER_TRACES)
-const SPHERE_LAYERS = { lattice: ["Hierarchy"], contrast: ["Contrasts"], sibling: ["Siblings"], latent: ["Theme links"], activates: ["Memberships", "Memberships (weak)"] };
-// a legend entry under the mouse spotlights its elements in both views
-const LEGEND_TRACES = { anchor: ["Themes"], up: ["Metric higher"], down: ["Metric lower"], cov: ["Correlation change"], ...SPHERE_LAYERS,
-  seed: ["Seed"], ev: ["Evidence"], cross: ["Other segment"], path: ["Answer path", "Themes visited"] };
-const LAYERS = {
+// The legend (index.html data-key) -> the graph elements of each entry; a sphere trace carries its entry's key as
+// `meta` (ltir/sphere.py), and the toggles (.toggle[data-key]) show or hide their entry in both views.
+const MARKS = {
+  anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
+  down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]',
   lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]',
   latent: 'edge[type="RELATED_TO"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
 };
-const LEGEND_SEL = {
-  anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
-  down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]', ...LAYERS,
-  seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor",
-};
+const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -274,14 +269,12 @@ function runLayout() {
   }
 }
 
-function layerOn(name) { const b = document.querySelector(`.toggle[data-layer="${name}"]`); return b && b.classList.contains("on"); }
-
-function layerState() { return Object.fromEntries(Object.keys(SPHERE_LAYERS).map((k) => [k, layerOn(k)])); }
+function layerState() { return Object.fromEntries([...document.querySelectorAll(".toggle[data-key]")].map((b) => [b.dataset.key, b.classList.contains("on")])); }
 
 function applyVisibility() {
   const cy = S.cy;
   if (cy) {
-    for (const [name, sel] of Object.entries(LAYERS)) cy.$(sel).toggleClass("hidden", !layerOn(name));
+    for (const [key, on] of Object.entries(layerState())) cy.$(LEGEND[key]).toggleClass("hidden", !on);
     cy.$('node[kind="PlaneLabel"]').toggleClass("hidden", $("layout").value !== "dual");
   }
   applySphereLayers();
@@ -295,10 +288,8 @@ function sphereDiv() {
 
 function applySphereLayers() {
   const gd = sphereDiv(); if (!gd) return;
-  for (const [name, traces] of Object.entries(SPHERE_LAYERS)) {
-    const idx = gd.data.map((t, i) => (traces.includes(t.name) ? i : -1)).filter((i) => i >= 0);
-    if (idx.length) $("sphere").contentWindow.Plotly.restyle(gd, { visible: layerOn(name) }, idx);
-  }
+  const on = layerState(), idx = gd.data.map((t, i) => (t.meta in on ? i : -1)).filter((i) => i >= 0);
+  if (idx.length) $("sphere").contentWindow.Plotly.restyle(gd, { visible: idx.map((i) => on[gd.data[i].meta]) }, idx);
 }
 
 function wireSphere() {
@@ -312,14 +303,13 @@ function spotlight(key) {
   /* hovering a legend entry: everything else dims, in the graph and on the sphere */
   if (S.cy) {
     S.cy.elements().removeClass("lg-dim");
-    const sel = key ? S.cy.$(LEGEND_SEL[key]) : null;
+    const sel = key ? S.cy.$(LEGEND[key]) : null;
     if (sel && sel.nonempty()) S.cy.elements().not(sel.union(sel.filter("edge").connectedNodes())).addClass("lg-dim");
   }
   const gd = sphereDiv(); if (!gd) return;
   gd._sigOpacity = gd._sigOpacity || gd.data.map((t) => (t.opacity === undefined ? 1 : t.opacity));
-  const names = LEGEND_TRACES[key] || [];
-  const hit = gd.data.some((t) => names.includes(t.name));
-  $("sphere").contentWindow.Plotly.restyle(gd, { opacity: gd.data.map((t, i) => (!hit || names.includes(t.name) ? gd._sigOpacity[i] : 0.07)) });
+  const hit = key && gd.data.some((t) => t.meta === key);
+  $("sphere").contentWindow.Plotly.restyle(gd, { opacity: gd.data.map((t, i) => (!hit || t.meta === key ? gd._sigOpacity[i] : 0.07)) });
 }
 
 function setCounts(counts) {
@@ -337,15 +327,8 @@ async function loadGraph() {
   try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
-  const nodes = (f) => g.nodes.filter((n) => f(n.data)).length, edges = (t) => g.edges.filter((e) => e.data.type === t).length;
-  const pat = (f) => nodes((d) => d.kind === "Pattern" && f(d));
-  setCounts({
-    anchor: nodes((d) => d.kind === "Attractor"), up: pat((d) => d.ptype !== "covariance" && d.direction > 0),
-    down: pat((d) => d.ptype !== "covariance" && d.direction < 0), cov: pat((d) => d.ptype === "covariance"),
-    lattice: edges("SPECIALIZES"), latent: edges("RELATED_TO"), contrast: edges("CONTRASTS"), sibling: edges("SIBLING"), activates: edges("ACTIVATES"),
-    schema: nodes((d) => d.kind === "Dimension" || d.kind === "Metric"),
-  });
-  $("view-caption").textContent = S.nodes.length ? `${S.nodes.length} insights · ${nodes((d) => d.kind === "Attractor")} themes in view` : "No insights in view";
+  const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
+  $("view-caption").textContent = S.nodes.length ? `${S.nodes.length} insights · ${themes} themes in view` : "No insights in view";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
@@ -359,8 +342,10 @@ async function loadGraph() {
   } else {
     S.cy.elements().remove(); S.cy.add(els);
   }
+  // legend counts: what each entry marks (nodes for an entry with nodes, else its edges)
+  setCounts(Object.fromEntries(Object.entries(MARKS).map(([k, sel]) => { const m = S.cy.$(sel); return [k, m.nodes().length || m.length]; })));
   applyVisibility(); runLayout();
-  if (S.qa) highlight(S.qa.highlight);
+  if (S.hl) highlight(S.hl);
   renderTable();
   renderSphere();
 }
@@ -375,14 +360,14 @@ function setView(view) {
   $("sphere-open").hidden = view !== "sphere";
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
   $("fit-btn").hidden = view === "table";
-  const columns = document.querySelector('.toggle[data-layer="schema"]');  // column nodes have no vectors: graph only
+  const columns = document.querySelector('.toggle[data-key="schema"]');  // column nodes have no vectors: graph only
   columns.disabled = view === "sphere"; columns.title = view === "sphere" ? "Columns are not drawn in 3D (they have no vectors)" : "Dimension and metric columns (graph only)";
   $("empty-hint").hidden = view === "table" || S.nodes.length > 0;
   if (view === "sphere") renderSphere();
   if (view === "graph" && S.cy) { S.cy.resize(); S.cy.fit(S.cy.elements(":visible"), 40); }
 }
 
-async function renderSphere(hl = null) {
+async function renderSphere() {
   const ds = $("dataset-filter").value;
   $("sphere-open").href = "/api/sphere" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "");
   if (S.view !== "sphere") return;
@@ -392,7 +377,7 @@ async function renderSphere(hl = null) {
   frame.srcdoc = `<body style="background:${pal.bg};color:${pal.muted};font:14px system-ui;padding:24px">Projecting insight vectors on the sphere…</body>`;
   try {
     const res = await fetch("/api/sphere", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset: ds || null, highlight: hl || (S.qa && S.qa.highlight) || null, palette: pal, layers: layerState() }) });
+      body: JSON.stringify({ dataset: ds || null, highlight: S.hl, palette: pal, layers: layerState() }) });
     const html = await res.text();
     if (seq === S.sphereSeq) frame.srcdoc = html;  // ignore stale renders
   } catch (e) { if (seq === S.sphereSeq) frame.srcdoc = `<body style="background:${pal.bg};color:${pal.bad};font:14px system-ui;padding:24px">${esc(e.message)}</body>`; }
@@ -428,35 +413,33 @@ function clearHighlight() {
   setCounts({ seed: 0, ev: 0, cross: 0, path: 0 });
 }
 
-function highlight(h, onlyEdges = null) {
+function highlight(h) {
+  /* draw S.hl — the whole answer or one isolated evidence path — over the graph */
   const cy = S.cy; if (!cy || !h) return;
   clearHighlight();
   cy.elements().not('[kind="PlaneLabel"]').addClass("faded");
   const mark = (ids, cls) => (ids || []).forEach((id) => { const el = cy.getElementById(id); if (el.nonempty()) el.removeClass("faded").addClass("hl-node " + cls); });
-  mark(onlyEdges ? [] : h.traversed, "");
+  mark(h.traversed, "");
   mark(h.evidence, "hl-evidence");
   mark(h.transversal_only, "hl-cross");
   mark(h.anchors, "hl-anchor");
   mark(h.seeds, "hl-seed");
-  (onlyEdges || h.edges || []).forEach((id) => {
+  (h.edges || []).forEach((id) => {
     const e = cy.getElementById(id);
     if (e.nonempty()) { e.removeClass("faded hidden").addClass("hl-edge"); e.connectedNodes().removeClass("faded").addClass("hl-node"); }
   });
-  setCounts({ seed: (h.seeds || []).length, ev: (h.evidence || []).length, cross: (h.transversal_only || []).length, path: (onlyEdges || h.edges || []).length });
+  setCounts({ seed: (h.seeds || []).length, ev: (h.evidence || []).length, cross: (h.transversal_only || []).length, path: (h.edges || []).length });
   $("clear-btn").hidden = false;
 }
 
 function highlightPath(turn, item, el) {
   const h = turn.qa.highlight;
   const edges = item.path.map((st) => st.edge_id);
-  const one = { seeds: h.seeds, anchors: item.path.filter((s) => s.target.startsWith("A-")).map((s) => s.target), evidence: [item.pattern_id],
+  S.hl = { seeds: h.seeds, anchors: item.path.filter((s) => s.target.startsWith("A-")).map((s) => s.target), evidence: [item.pattern_id],
     transversal_only: item.transversal_only ? [item.pattern_id] : [], edges, traversed: [] };
-  S.qa = turn.qa;
-  if (S.view === "sphere") { renderSphere(one); } else {
-    if (S.view === "table") setView("graph");
-    highlight(one, edges);
-    focusNodes([item.pattern_id, ...item.path.map((s) => s.source)]);
-  }
+  if (S.view === "table") setView("graph");
+  highlight(S.hl);
+  if (S.view === "sphere") renderSphere(); else focusNodes([item.pattern_id, ...item.path.map((s) => s.source)]);
   document.querySelectorAll(".ev.on").forEach((x) => x.classList.remove("on"));
   if (el) el.classList.add("on");
 }
@@ -595,8 +578,8 @@ function botCard(turn) {
     cross ? `<span class="chip run" title="Reached only through a theme, in a different part of the data">⤳ ${cross} cross-segment</span>` : "",
   ].join("");
   // literal grounding (docs/07 §7.1.1): which words of the question were read as which data literals
-  const grounded = ((qa.evidence && qa.evidence.parsed && qa.evidence.parsed.grounding) || []).filter((g) => g.symbol !== "up" && g.symbol !== "down");
-  const understood = grounded.length ? `<div class="understood" title="Question words matched to data literals (exact, by characters, or by meaning)">Understood: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
+  const grounded = (qa.evidence && qa.evidence.parsed && qa.evidence.parsed.grounding) || [];
+  const understood = grounded.length ? `<div class="understood" title="Question words matched to data literals (by characters or by meaning)">Understood: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
   const evid = items.map((it, i) => {
     const s = it.statistics;
     const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
@@ -679,14 +662,14 @@ async function ask(question) {
   try {
     const qa = await api("/api/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, use_llm: $("use-llm").checked }) });
     Object.assign(turn, { pending: false, qa });
-    S.qa = qa;
+    S.hl = qa.highlight;
     const evDatasets = ((qa.evidence && qa.evidence.datasets) || []).map((d) => d.dataset_id);
     if ($("dataset-filter").value && evDatasets.length && !evDatasets.includes($("dataset-filter").value)) {
       $("dataset-filter").value = evDatasets.length === 1 ? evDatasets[0] : "";  // show where the evidence lives
       await loadGraph();
     }
     renderThread();
-    highlight(qa.highlight);
+    highlight(S.hl);
     if (S.view === "graph") focusNodes([...(qa.highlight.traversed || [])]);
     renderSphere();
   } catch (e) { Object.assign(turn, { pending: false, error: e.message }); renderThread(); }
@@ -743,7 +726,7 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-  document.querySelectorAll(".toggle[data-layer]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); if (S.qa && S.cy) highlight(S.qa.highlight); }));
+  document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); highlight(S.hl); }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", () => { loadGraph(); refreshBatches(); });
   $("fit-btn").addEventListener("click", () => {
@@ -757,7 +740,7 @@ function init() {
     k.addEventListener("mouseleave", () => spotlight(null));
   });
   $("legend-btn").addEventListener("click", () => setLegend($("legend").hidden));
-  $("clear-btn").addEventListener("click", () => { S.qa = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); });
+  $("clear-btn").addEventListener("click", () => { S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); });
   $("drawer-close").addEventListener("click", closeDrawer);
   $("table-search").addEventListener("input", renderTable);
   document.querySelectorAll("#ins-table th").forEach((th) => th.addEventListener("click", () => {
@@ -767,7 +750,7 @@ function init() {
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat = []; S.qa = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); });
+  $("new-chat").addEventListener("click", () => { S.chat = []; S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
   initResize();
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }

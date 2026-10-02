@@ -99,7 +99,7 @@ def answer_question(engine: Engine, question: str, *, use_llm: bool = True) -> Q
         )
 
     engine.ws.check_representation(engine.encoder.spec)  # query and stored vectors must share one frame
-    parsed = parse_query(question, graph, config)
+    parsed = parse_query(question, graph, config, engine.catalog())
     seeds = resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, config)
     result = traverse(graph, seeds, config)
     result.baselines = compute_baselines(engine, graph, question, seeds, result)

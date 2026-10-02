@@ -126,14 +126,38 @@ def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     assert rec["status"] == "FAILED" and rec["error"]["code"] == "representation_mismatch"
 
 
-def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path):
-    rec = engine.submit(demo_csv)
-    cp = engine.ws.checkpoint()
-    rec.update(status="UPDATING_ONTOLOGY", checkpoint=cp)
-    engine.ws.save_batch(rec)
+class Crash(BaseException):  # the process dies: no except-handler runs
+    pass
+
+
+def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch):
+    """A batch that dies after writing its journal leaves the transaction marker; the next writer start rolls
+    it back and fails the batch, and the same upload then commits."""
+    monkeypatch.setattr(pipeline_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(Crash()))
+    with pytest.raises(Crash):
+        engine.ingest_file(demo_csv)
+    monkeypatch.undo()
+    assert engine.ws.patterns() and engine.ws.pending_path.exists()  # half written
     fresh = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
-    after = fresh.ws.load_batch(rec["batch_id"])
+    (after,) = fresh.ws.list_batches()
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
+    assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists() and fresh.ontology().store.is_empty
+    assert fresh.ingest_file(demo_csv)["status"] == "READY"
+
+
+def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_path, monkeypatch):
+    """A rollback that fails keeps its marker and checkpoint: no later write may overwrite them, and the next
+    writer start finishes the rollback."""
+    monkeypatch.setattr(pipeline_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph failure")))
+    monkeypatch.setattr(engine.ws, "rollback", lambda cp: (_ for _ in ()).throw(OSError("disk gone")))
+    rec = engine.ingest_file(demo_csv)
+    assert rec["status"] == "FAILED" and rec["error"]["message"] == "graph failure" and "rollback failed" in rec["warnings"][-1]
+    monkeypatch.undo()
+    assert engine.ws.pending_path.exists() and engine.ws.patterns()  # the evidence stays
+    assert engine.ingest_file(demo_csv)["error"]["code"] == "rollback_pending"
+    fresh = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
+    assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists()
+    assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
 def test_records_survive_a_concurrent_reader(tmp_path):
@@ -267,19 +291,15 @@ def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypa
         )
 
     before = state()
-
-    class Crash(BaseException):  # the process dies: no except-handler runs
-        pass
-
     for failure in (RuntimeError("disk full"), Crash()):
         monkeypatch.setattr(engine.ws, "save_graph", lambda snapshot, failure=failure: (_ for _ in ()).throw(failure))
         with pytest.raises(type(failure)):
             engine.delete_dataset(ds)
         monkeypatch.undo()
         if isinstance(failure, Crash):
-            assert engine.ws.pending_delete_path.exists() and state() != before  # half done, marker left
+            assert engine.ws.pending_path.exists() and state() != before  # half done, marker left
             Engine(cfg, llm=FakeLLM())  # the next writer start
-        assert state() == before and not engine.ws.pending_delete_path.exists()
+        assert state() == before and not engine.ws.pending_path.exists()
     assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
 
 

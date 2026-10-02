@@ -4,37 +4,16 @@ from __future__ import annotations
 
 import inspect
 
+from conftest import toy_insight
+
 from ltir import structural
 from ltir.config import load_config
-from ltir.models import Condition, EdgeType, Insight, Shift
+from ltir.models import EdgeType, Shift
 
 
 def ins(pid, scope, shifts, dataset="d"):
-    conds = tuple(sorted(Condition(k, v) for k, v in scope.items()))
-    sh = tuple(Shift(m, z, 0, 0, 1) for m, z in shifts)
-    return Insight(
-        id=pid,
-        dataset_id=dataset,
-        batch_id="b",
-        conditions=conds,
-        expression=pid,
-        target=sh[0].metric,
-        shifts=sh,
-        support=100,
-        support_fraction=0.1,
-        baseline=0,
-        local=0,
-        effect_size=sh[0].robust_z,
-        sd_score=1,
-        sd_raw_score=1,
-        emm_score=0,
-        volume_utility=0.2,
-        stability=1,
-        p_value=0,
-        p_adjusted=0,
-        drivers=(),
-        row_hash=pid,
-    )
+    shifts = [Shift(m, z, 0, 0, 1) for m, z in shifts]
+    return toy_insight(sorted(scope.items()), shifts, id=pid, dataset_id=dataset, expression=pid, stability=1, p_value=0, p_adjusted=0)
 
 
 def edges_of(items, etype):

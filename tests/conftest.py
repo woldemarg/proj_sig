@@ -17,6 +17,7 @@ import pytest
 
 from ltir.config import load_config
 from ltir.llm import LLMResponse
+from ltir.models import Condition, Insight
 from ltir.synth import generate_retail_dataset
 
 
@@ -62,11 +63,6 @@ class FakeLLM:
         )
 
 
-@pytest.fixture
-def fake_llm():
-    return FakeLLM()
-
-
 @pytest.fixture(scope="session")
 def demo_df():
     return generate_retail_dataset(5000, seed=7)
@@ -79,15 +75,40 @@ def demo_csv(tmp_path_factory, demo_df):
     return path
 
 
+def toy_insight(scope, shifts, **fields) -> Insight:
+    """A test Insight: ``scope`` [(column, value)] in order, ``shifts`` Shift records. Target, baseline, local and
+    effect follow the first shift; the other statistics are neutral, and any field can be overridden."""
+    first = shifts[0]
+    values = {
+        "id": "P-x",
+        "dataset_id": "d",
+        "batch_id": "b",
+        "conditions": tuple(Condition(k, v) for k, v in scope),
+        "expression": "e",
+        "target": first.metric,
+        "shifts": tuple(shifts),
+        "support": 100,
+        "support_fraction": 0.1,
+        "baseline": first.global_median,
+        "local": first.local_median,
+        "effect_size": first.robust_z,
+        "sd_score": 1.0,
+        "sd_raw_score": 1.0,
+        "emm_score": 0.0,
+        "volume_utility": 0.2,
+        "stability": 0.9,
+        "p_value": 1e-9,
+        "p_adjusted": 1e-6,
+        "drivers": (),
+        "row_hash": fields.get("id", "P-x"),
+    }
+    return Insight(**{**values, **fields})
+
+
 def make_config(workspace: Path, **overrides):
     overrides.setdefault("neo4j_enabled", False)
     overrides.setdefault("sphere_export", False)
     return load_config(workspace_dir=workspace, embedding_backend=overrides.pop("embedding_backend", "hashing"), **overrides)
-
-
-@pytest.fixture
-def cfg(tmp_path):
-    return make_config(tmp_path / "ws")
 
 
 @pytest.fixture(scope="session")

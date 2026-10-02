@@ -45,15 +45,15 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
     busy = [b["batch_id"] for b in batches if b["status"] not in TERMINAL]
     if busy:
         raise PipelineError("busy", f"batches in progress: {busy}; stop the web app and retry")
-    if old.pending_delete_path.exists():
-        raise PipelineError("busy", "an interrupted dataset deletion is pending; start the web app once (it rolls it back), then retry")
+    if old.pending_path.exists():
+        raise PipelineError("busy", "an interrupted write is pending; start the web app once (it rolls it back), then retry")
     ready = sorted((b for b in batches if b["status"] == "READY"), key=lambda b: b.get("batch_seq", 0))
     if not ready:
         raise PipelineError("nothing_to_migrate", f"no READY batch in {root}")
 
     staging = root.with_name(f"{root.name}.migrating")
     shutil.rmtree(staging, ignore_errors=True)
-    engine = Engine(replace(config, workspace_dir=staging, neo4j_enabled=False), recover=False)
+    engine = Engine(replace(config, workspace_dir=staging, neo4j_enabled=False, sphere_export=False), recover=False)  # no thread in the folder
     report = []
     for batch in ready:
         record = engine.ingest_file(_source_of(old, batch), filename=batch["filename"], bins=batch.get("bins"), categories=batch.get("categories"))
@@ -72,6 +72,10 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
 
     backup = root.with_name(f"{root.name}.bak-{datetime.now(UTC):%Y%m%dT%H%M%S}")
     root.rename(backup)
-    staging.rename(root)
+    try:
+        staging.rename(root)
+    except OSError:  # put the old workspace back; the staging folder stays for inspection
+        backup.rename(root)
+        raise
     neo4j = Engine(config, recover=False).sync_neo4j()
     return {"workspace": str(root), "backup": str(backup), "batches": report, "neo4j": neo4j["status"]}

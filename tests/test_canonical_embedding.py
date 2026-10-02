@@ -7,35 +7,22 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from conftest import toy_insight
 
 from ltir.canonical import canonicalize, describe_scope, format_p, format_value
 from ltir.config import Config, load_config
 from ltir.encoder import HashingEmbedder, InsightEncoder, SentenceTransformerEmbedder
-from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, Condition, Insight, Shift
+from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, Condition, Shift
 
 
 def insight(scope, shifts, emm=0.05, ptype="shift", cov=None):
-    conds = tuple(sorted(Condition(k, v) for k, v in scope.items()))
-    sh = tuple(Shift(m, z, 1.0 + z, 1.0, 1.0) for m, z in shifts)
-    return Insight(
-        id="P-x",
-        dataset_id="d",
-        batch_id="b",
-        conditions=conds,
-        expression="e",
-        target=sh[0].metric,
-        shifts=sh,
+    return toy_insight(
+        sorted(scope.items()),
+        [Shift(m, z, 1.0 + z, 1.0, 1.0) for m, z in shifts],
         support=200,
         support_fraction=0.04,
-        baseline=1.0,
-        local=1.0 + sh[0].robust_z,
-        effect_size=sh[0].robust_z,
-        sd_score=1.0,
         sd_raw_score=1.1,
         emm_score=emm,
-        volume_utility=0.2,
-        stability=0.9,
-        p_value=1e-9,
         p_adjusted=1e-7,
         drivers=("[payment] heavily skewed to 'cash' (JS: 0.20)",),
         row_hash="h",

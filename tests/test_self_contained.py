@@ -52,7 +52,6 @@ def _docstrings(tree: ast.AST) -> set[int]:
 def test_loaded_code_comes_from_the_repository_or_the_environment(hashed_engine):
     import ltir.engines.eda.main_upd as eda
     import ltir.engines.lac.ontology_engine as ontology_engine
-    import ltir.engines.lac.projector as projector
 
     for mod in pkgutil.walk_packages(ltir.__path__, "ltir."):
         if not mod.name.endswith("__main__"):
@@ -62,7 +61,7 @@ def test_loaded_code_comes_from_the_repository_or_the_environment(hashed_engine)
     loaded = [m.__name__ for m in list(sys.modules.values()) if getattr(m, "__file__", None) and not _inside(m.__file__, allowed)]
     assert loaded == []
     assert not [p for p in sys.path if p and not _inside(p, allowed)]
-    for module in (eda, ontology_engine, projector):  # the vendored engines, not an installed copy
+    for module in (eda, ontology_engine):  # the vendored engines, not an installed copy
         assert Path(module.__file__).resolve().is_relative_to(ROOT)
 
 

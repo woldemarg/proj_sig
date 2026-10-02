@@ -15,7 +15,7 @@ The hypothesis it makes testable:
 | Layer | Source | How |
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | [`ltir/engines/eda/main_upd.py`](ltir/engines/eda/main_upd.py), copied from the eda project's `scripts/main_upd.py` | vendored with 3 integration edits and documented numerical repairs; the unused standalone runner and print-only step 5 removed ([`PROVENANCE.md`](ltir/engines/PROVENANCE.md)) |
-| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, journal, metrics) and the prosphera sphere projector | [`ltir/engines/lac/`](ltir/engines/lac), copied from the lac project's `v2_orchestrator` and `v1_single_pass/visualisation/projector.py` | vendored; running-mean centering removed, signed extraction repair, per-attractor EMA damping hooks, config-driven health warnings (`PROVENANCE.md`); SIG drives lac's batch lifecycle with insight vectors |
+| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, journal, metrics), plus the projection of lac's prosphera sphere (recomputed in `ltir/sphere.py`) | [`ltir/engines/lac/`](ltir/engines/lac), copied from the lac project's `v2_orchestrator` | vendored; running-mean centering removed, signed extraction repair, per-attractor EMA damping hooks, config-driven health warnings (`PROVENANCE.md`); SIG drives lac's batch lifecycle with insight vectors |
 | Embedding model | [`models/Qwen3-Embedding-0.6B/`](models) (default; Matryoshka-truncated to 384-d, bf16, pinned revision, fetched by `scripts/download_model.py`) or `models/paraphrase-multilingual-MiniLM-L12-v2/` | loaded offline from the folder |
 | New in `ltir/` | adapter (closed intents, duplicate cohorts pruned before validation), insight model, selection & weight, canonicalisation, tripartite encoder, ontology guards, structural lattice, graph, persistence + migration, traversal, evidence, LLM, UI, tests | see [`docs/01_overview.md`](docs/01_overview.md) |
 
@@ -76,7 +76,7 @@ Startup loads the embedding model onto the GPU (~10 s, `EMBEDDING_DEVICE=cuda`; 
 1. **Add data**: drop a CSV/TSV/Parquet file on the left rail (or click **Try demo**). Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`) and numeric columns split into band dimensions (`median_income:4`). A dataset card's *Delete* button removes that dataset again — its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. Watch the **batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
 3. **Explore.** The three tabs — *Graph*, *3D Sphere*, *Insights* — are views of the same knowledge base under one legend column; its link switches show the layers (hierarchy and theme links by default; contrasts, siblings, memberships, columns on demand) in the graph and on the sphere alike, and hovering an entry spotlights it. Click any node — in the graph or on the sphere — for the details drawer. Drag the borders between the three columns to resize them. *Graph*: the *Two planes* layout shows themes (latent anchors) on top and insights below, grouped by theme. *Insights*: a sortable, filterable table. Click any node or row for the details drawer: a one-line reading, shifts with meters, evidence facts, score breakdown, canonical form, connections and provenance. Number-coded columns (store ids, flags) can be declared under *Column options → Treat as categories*; numeric columns can be split into quantile bands.
-4. **3D Sphere**. The same insights are shown as embeddings projected on a sphere, using lac's prosphera projector (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
+4. **3D Sphere**. The same insights are shown as embeddings on a sphere, projected as lac's prosphera sphere does it (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
 5. **Chat** with the data (or click a suggestion). Questions and answers are in Ukrainian; every data literal — `margin`, `phones`, `US`, ids — stays exactly as the data holds it, so it can always be found in the table. The answer cites `[P#]` evidence and its *Evidence & how it was found*, *Sources* and *Prompt* panels open on click; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; the *Prompt* tab shows the exact evidence the model saw. The switch below the composer turns the LLM explanation off (evidence-only answers).
 
 CLI equivalents:
@@ -91,7 +91,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 91 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 93 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -174,7 +174,7 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, fileio, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    sphere, synth, experiment, cli, web/, cypher/)
-  tests/           91 contract / integration / E2E / UI tests
+  tests/           93 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), download_model.py

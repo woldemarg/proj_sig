@@ -13,10 +13,13 @@ Layout under ``WORKSPACE_DIR``::
     journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks, document vectors, pattern ids
     state/                                 lac ConceptStore.save() + representation.json + sig_state.json
     graph/snapshot.json                    materialised dual-layer graph (derived, rebuildable)
+    graph/literals.npz                     literal-catalog vectors by text (a cache, docs/07 §7.1.1)
     logs/queries.jsonl                     query observability
+    pending.json                           an unfinished transaction: its intent and checkpoint
 
-Recovery: ``checkpoint()`` marks the journal extent and copies state before a batch;
-``rollback()`` restores both, so a failed batch leaves no partial knowledge.
+Recovery: a batch commit and a dataset deletion each run in ``transaction()``, which
+checkpoints the journal extent, state and snapshot and writes ``pending.json``; an error rolls
+back at once, a crash leaves the marker and ``recover()`` rolls back at the next writer start.
 
 Writers: one process at a time holds ``<workspace>.writer.lock`` (beside the folder, so a
 migration can rename the folder while it is held); see ``acquire_writer_lock``.
@@ -25,9 +28,12 @@ migration can rename the folder while it is held); see ``acquire_writer_lock``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -38,6 +44,8 @@ from ltir.config import Config
 from ltir.engines.lac.chunk_journal import ChunkJournal
 from ltir.fileio import replace_file, retry_sharing
 from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, EmbeddingSpec
+
+log = logging.getLogger("ltir.store")
 
 
 def utc_now() -> str:
@@ -117,6 +125,10 @@ class RepresentationMismatch(RuntimeError):
     code = "representation_mismatch"
 
 
+class RollbackPending(RuntimeError):
+    code = "rollback_pending"
+
+
 class Workspace:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -127,7 +139,7 @@ class Workspace:
         self.state_dir = self.root / "state"
         self.graph_path = self.root / "graph" / "snapshot.json"
         self.query_log = self.root / "logs" / "queries.jsonl"
-        self.pending_delete_path = self.root / "pending_delete.json"  # a dataset deletion in progress (Engine.delete_dataset)
+        self.pending_path = self.root / "pending.json"  # an unfinished transaction (``transaction``)
         for d in (self.registry_dir, self.datasets_dir, self.journal_dir / "blocks", self.state_dir, self.query_log.parent):
             d.mkdir(parents=True, exist_ok=True)
         self.journal = ChunkJournal(self.journal_dir, records_name="patterns.jsonl")
@@ -199,15 +211,16 @@ class Workspace:
         return read_json(self.state_dir / "representation.json")
 
     def save_literals(self, arrays: dict[str, np.ndarray]) -> None:
-        """The literal catalog (docs/07 §7.1.1) as ``state/literals.npz``: texts, kinds, symbols, unit vectors, fingerprint."""
-        path = self.state_dir / "literals.npz"
+        """Literal-catalog vectors (docs/07 §7.1.1) as ``graph/literals.npz``: texts, unit vectors, fingerprint. A cache
+        checked on load, so it lives outside ``state/`` and no rollback has to restore it."""
+        path = self.graph_path.with_name("literals.npz")
         tmp = path.with_name(path.name + ".tmp")
         with tmp.open("wb") as handle:
             np.savez_compressed(handle, **arrays)
         replace_file(tmp, path)
 
     def load_literals(self) -> dict[str, np.ndarray] | None:
-        path = self.state_dir / "literals.npz"
+        path = self.graph_path.with_name("literals.npz")
         if not path.is_file():
             return None
         with retry_sharing(lambda: np.load(path)) as data:
@@ -256,6 +269,45 @@ class Workspace:
         """Unit insight vectors (the one frame shared by the ontology and retrieval), row = ``row_id``."""
         return self.journal.load_embeddings()
 
+    @contextmanager
+    def transaction(self, intent: dict[str, Any], *, journal: bool = False) -> Iterator[dict[str, Any]]:
+        """One all-or-nothing write (a batch commit, a dataset deletion): checkpoint, then ``pending.json`` holding
+        ``intent`` and the checkpoint. An error in the body rolls back; a crash leaves the marker for ``recover``.
+        A rollback that fails itself leaves the marker too, and no transaction starts again until ``recover`` ran."""
+        if self.pending_path.exists():
+            raise RollbackPending("an earlier write was not rolled back; restart the writer (web app or CLI) to recover")
+        cp = self.checkpoint(journal=journal)
+        atomic_write_json(self.pending_path, {**intent, "checkpoint": cp})
+        try:
+            yield cp
+        except Exception:  # (a BaseException is a dying process: the marker stays for recover)
+            try:
+                self.rollback(cp)
+            except Exception:
+                log.exception("rollback of %s failed; the next writer start retries it", intent)
+            else:
+                self._close(cp)
+            raise
+        self._close(cp)
+
+    def recover(self) -> dict[str, Any] | None:
+        """Finish an interrupted transaction (writer start: no other writer alive). A batch whose READY record was
+        written had committed and keeps its writes; anything else is rolled back. Returns the rolled-back intent."""
+        pending = read_json(self.pending_path)
+        if pending is None:
+            return None
+        cp = pending.pop("checkpoint")
+        batch = self.load_batch(pending["batch_id"]) if "batch_id" in pending else None
+        committed = batch is not None and batch["status"] == "READY"
+        if not committed:
+            self.rollback(cp)
+        self._close(cp)
+        return None if committed else pending
+
+    def _close(self, cp: dict[str, Any]) -> None:
+        self.pending_path.unlink()
+        shutil.rmtree(cp["dir"], ignore_errors=True)
+
     def checkpoint(self, *, journal: bool = False) -> dict[str, Any]:
         """Copy ``state/`` and the snapshot aside (and, for a rewrite that may shrink the journal, ``journal/``);
         a batch only appends, so for it the journal extent (``mark``) is enough. ``rollback`` restores all of it."""
@@ -272,21 +324,21 @@ class Workspace:
         return {**self.journal.mark(), "dir": str(cp_dir), "snapshot": had_snapshot}
 
     def rollback(self, cp: dict[str, Any]) -> None:
+        """Restore a checkpoint; repeatable, so ``recover`` can finish a rollback that failed halfway."""
         cp_dir = Path(cp["dir"])
         if (cp_dir / "journal").exists():
-            shutil.rmtree(self.journal_dir)
+            shutil.rmtree(self.journal_dir, ignore_errors=True)
             shutil.copytree(cp_dir / "journal", self.journal_dir)
         else:
             self.journal.truncate(cp)
-        shutil.rmtree(self.state_dir)
+        shutil.rmtree(self.state_dir, ignore_errors=True)
         shutil.copytree(cp_dir, self.state_dir, ignore=shutil.ignore_patterns("journal", "graph", "removed"))
-        if "snapshot" in cp:  # (checkpoints written before the snapshot was part of them carry no flag)
-            if cp["snapshot"]:
-                tmp = self.graph_path.with_name("snapshot.json.restore")
-                shutil.copyfile(cp_dir / "graph" / "snapshot.json", tmp)
-                replace_file(tmp, self.graph_path)
-            else:
-                self.graph_path.unlink(missing_ok=True)
+        if cp["snapshot"]:
+            tmp = self.graph_path.with_name("snapshot.json.restore")
+            shutil.copyfile(cp_dir / "graph" / "snapshot.json", tmp)
+            replace_file(tmp, self.graph_path)
+        else:
+            self.graph_path.unlink(missing_ok=True)
         removed = cp_dir / "removed"  # files a dataset deletion moved aside go back where they were
         for f in sorted(p for p in removed.rglob("*") if p.is_file()) if removed.exists() else []:
             dest = self.root / f.relative_to(removed)
@@ -311,9 +363,6 @@ class Workspace:
                 dest = trash / path.resolve().relative_to(root)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(path), str(dest))
-
-    def discard_checkpoint(self, cp: dict[str, Any]) -> None:
-        shutil.rmtree(cp["dir"], ignore_errors=True)
 
     def save_graph(self, snapshot: dict[str, Any]) -> None:
         atomic_write_json(self.graph_path, snapshot)
