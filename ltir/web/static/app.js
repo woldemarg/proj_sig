@@ -570,7 +570,7 @@ function renderChain(item) {
   if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">matched your question</span></div>`;
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
-    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", SPECIALIZES: "narrower", GENERALIZES: "broader", CONTRASTS: "contrast" }[st.edge_type] || st.edge_type;
+    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast" }[st.edge_type] || st.edge_type;
     html += `<span class="e">→ ${esc(label)} ${num(st.weight)} →</span><span class="n ${st.target.startsWith("A-") ? "A" : ""}">${esc(st.target)}</span>`;
   }
   return `<div class="chain">${html}</div>`;
@@ -612,8 +612,8 @@ function botCard(turn) {
   ].filter(Boolean);
   return `<div class="bot-card">${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" class="${i ? "" : "active"}">${esc(t)}${c}</button>`).join("")}</div>` +
-    panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" ${i ? "hidden" : ""}>${body}</div>`).join("") +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="false">${esc(t)}${c}</button>`).join("")}</div>` +
+    panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" hidden>${body}</div>`).join("") +
     `</div>`;
 }
 
@@ -658,8 +658,9 @@ function renderThread() {
     box.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", () => { if (S.view === "table") setView("graph"); focusNodes([a.dataset.pid]); inspect(a.dataset.pid); }));
     box.querySelectorAll(".ev").forEach((el) => el.addEventListener("click", () => highlightPath(turn, items[Number(el.dataset.i)], el)));
     box.querySelectorAll(".bot-tabs button").forEach((tab) => tab.addEventListener("click", () => {
-      box.querySelectorAll(".bot-tabs button").forEach((t) => t.classList.toggle("active", t === tab));
-      box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = pane.dataset.pane !== tab.dataset.pane; });
+      const open = !tab.classList.contains("active");  // a click on the open panel closes it
+      box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); });
+      box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
     }));
   });
   t.scrollTop = t.scrollHeight;

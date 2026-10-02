@@ -45,6 +45,8 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
     busy = [b["batch_id"] for b in batches if b["status"] not in TERMINAL]
     if busy:
         raise PipelineError("busy", f"batches in progress: {busy}; stop the web app and retry")
+    if old.pending_delete_path.exists():
+        raise PipelineError("busy", "an interrupted dataset deletion is pending; start the web app once (it rolls it back), then retry")
     ready = sorted((b for b in batches if b["status"] == "READY"), key=lambda b: b.get("batch_seq", 0))
     if not ready:
         raise PipelineError("nothing_to_migrate", f"no READY batch in {root}")
