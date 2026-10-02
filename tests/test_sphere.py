@@ -12,25 +12,31 @@ from ltir.sphere import export_sphere, plotly_js_path, sphere_figure
 from ltir.web.app import create_app
 
 
-def test_sphere_figure_layers(hashed_engine):
+def test_sphere_uses_the_graphs_visual_language(hashed_engine):
+    """The sphere draws what the graph draws: insight classes by colour, themes, the legend's link layers."""
+    from ltir.sphere import LAYER_DEFAULTS, LAYER_TRACES
+
     fig = sphere_figure(hashed_engine)
-    names = [t.name for t in fig.data]
+    by_name = {t.name: t for t in fig.data if t.name}
     g = hashed_engine.graph()
-    anchors = [n for n in g.of_kind("Attractor")]
-    assert "Latent anchors (attractors)" in names and "RELATED_TO (mutual kNN)" in names
-    groups = [n for n in names if n and n.startswith("A-")]
-    assert len(groups) == len(anchors)  # one legend group per latent anchor
-    n_points = sum(len(t.x) for t in fig.data if t.name and t.name.startswith("A-"))
-    assert n_points == len(g.of_kind("Pattern"))
-    pts = [t for t in fig.data if t.name and t.name.startswith("A-")][0]
-    assert max(abs(float(v)) for v in list(pts.x) + list(pts.y) + list(pts.z)) <= 1.0 + 1e-9  # on/inside the unit sphere
+    assert len(by_name["Themes"].x) == len(g.of_kind("Attractor")) and by_name["Themes"].marker.symbol == "diamond"
+    classes = [by_name[n] for n in ("Metric higher", "Metric lower", "Correlation change") if n in by_name]
+    assert sum(len(t.x) for t in classes) == len(g.of_kind("Pattern"))
+    assert max(abs(float(v)) for t in classes for v in list(t.x) + list(t.y) + list(t.z)) <= 1.0 + 1e-9  # on/inside the unit sphere
+    for key, names in LAYER_TRACES.items():  # every layer the legend toggles exists and starts in the toggle's state
+        assert any(n in by_name for n in names), key
+        assert all(bool(by_name[n].visible) is LAYER_DEFAULTS[key] for n in names if n in by_name), key
+    assert fig.layout.showlegend is False and fig.layout.title.text is None  # the shared legend strip explains it
+    flipped = sphere_figure(hashed_engine, layers={"sibling": True, "lattice": False}, palette={"bg": "#ffffff"})
+    vis = {t.name: bool(t.visible) for t in flipped.data if t.name}
+    assert vis["Siblings"] and not vis["Hierarchy"] and flipped.layout.template.layout.paper_bgcolor != fig.layout.template.layout.paper_bgcolor
 
 
 def test_sphere_highlight_and_export(hashed_engine, tmp_path):
     qa = hashed_engine.ask("Why is margin lower for phones in the US?")
     fig = sphere_figure(hashed_engine, highlight=qa.highlight)
     names = {t.name for t in fig.data}
-    assert {"Retrieval path", "Seed", "Evidence", "Anchors visited"} <= names
+    assert {"Answer path", "Seed", "Evidence", "Themes visited"} <= names  # the graph's answer markers
     out = export_sphere(hashed_engine, tmp_path / "sphere.html")
     assert "plotly" in out.read_text(encoding="utf-8").lower()
 
@@ -85,7 +91,9 @@ def test_reset_during_sphere_export_leaves_nothing_behind(tmp_path, demo_csv, mo
 def test_sphere_api(hashed_engine):
     with TestClient(create_app(hashed_engine.config, hashed_engine)) as client:
         page = client.get("/api/sphere")
-        assert page.status_code == 200 and "/vendor/plotly.min.js" in page.text and "Latent Insight Sphere" in page.text
-        post = client.post("/api/sphere", json={"dataset": None, "highlight": {"seeds": [], "edges": []}})
+        assert page.status_code == 200 and "/vendor/plotly.min.js" in page.text and "plotly-graph-div" in page.text
+        post = client.post(
+            "/api/sphere", json={"dataset": None, "highlight": {"seeds": [], "edges": []}, "palette": {"bg": "#f4f5f9"}, "layers": {"sibling": True}}
+        )
         assert post.status_code == 200
         assert client.get("/vendor/plotly.min.js").status_code == 200 and plotly_js_path().is_file()

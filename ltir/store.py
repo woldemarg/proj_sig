@@ -240,17 +240,40 @@ class Workspace:
         """Unit insight vectors (the one frame shared by the ontology and retrieval), row = ``row_id``."""
         return self.journal.load_embeddings()
 
-    def checkpoint(self) -> dict[str, Any]:
+    def checkpoint(self, *, journal: bool = False) -> dict[str, Any]:
+        """Copy ``state/`` (and, for a rewrite that may shrink the journal, ``journal/``) aside; a batch
+        only appends, so for it the journal extent (``mark``) is enough."""
         cp_dir = self.state_dir.parent / "checkpoint"
         if cp_dir.exists():
             shutil.rmtree(cp_dir)
         shutil.copytree(self.state_dir, cp_dir)
+        if journal:
+            shutil.copytree(self.journal_dir, cp_dir / "journal")
         return {**self.journal.mark(), "dir": str(cp_dir)}
 
     def rollback(self, cp: dict[str, Any]) -> None:
-        self.journal.truncate(cp)
+        journal_copy = Path(cp["dir"]) / "journal"
+        if journal_copy.exists():
+            shutil.rmtree(self.journal_dir)
+            shutil.copytree(journal_copy, self.journal_dir)
+        else:
+            self.journal.truncate(cp)
         shutil.rmtree(self.state_dir)
-        shutil.copytree(cp["dir"], self.state_dir)
+        shutil.copytree(cp["dir"], self.state_dir, ignore=shutil.ignore_patterns("journal"))
+
+    def rewrite_journal(self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]]) -> None:
+        self.journal.rewrite(patterns, vectors, activations)
+
+    def remove_dataset(self, dataset_id: str, batches: list[dict[str, Any]]) -> None:
+        """Delete a dataset's artefacts: its folder, its batches' blocks, records and web uploads."""
+        shutil.rmtree(self.datasets_dir / dataset_id, ignore_errors=True)
+        uploads = (self.root / "uploads").resolve()
+        for b in batches:
+            (self.journal_dir / "blocks" / f"{b['batch_id']}.npz").unlink(missing_ok=True)
+            source = Path(b.get("source_path") or "")
+            if source.is_file() and source.resolve().is_relative_to(uploads):
+                source.unlink()
+            self.batch_path(b["batch_id"]).unlink(missing_ok=True)
 
     def discard_checkpoint(self, cp: dict[str, Any]) -> None:
         shutil.rmtree(cp["dir"], ignore_errors=True)

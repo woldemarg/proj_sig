@@ -84,6 +84,17 @@ class ConceptStore:
         self.dirty_concept_indices.update(range(start_idx, len(self.concept_ids)))
         return new_ids
 
+    def keep_concepts(self, keep: list[int]) -> None:
+        """Drop every concept whose id is not in ``keep`` (SIG dataset deletion); the parallel arrays stay aligned."""
+        wanted = set(keep)
+        mask = np.array([c in wanted for c in self.concept_ids], dtype=bool)
+        self.embeddings = self.embeddings[mask] if self.embeddings.size else self.embeddings
+        self.chunk_counts = self.chunk_counts[mask]
+        self.last_updated_batch = self.last_updated_batch[mask]
+        self.created_at = [c for c, k in zip(self.created_at, mask) if k]
+        self.concept_ids = [c for c, k in zip(self.concept_ids, mask) if k]
+        self.dirty_concept_indices.clear()
+
     def push_orphans(self, orphan_embeddings: np.ndarray, orphan_chunk_ids: list[int] | np.ndarray) -> None:
         ids = list(orphan_chunk_ids)
         for i, emb in enumerate(orphan_embeddings):

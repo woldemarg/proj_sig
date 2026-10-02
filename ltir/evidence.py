@@ -120,15 +120,29 @@ class Evidence:
         return "\n".join(lines)
 
     def summary(self) -> str:
-        """Evidence-only answer: the verified observations, cited, without interpretation."""
-        lines = ["Observations:"]
+        """Evidence-only answer, in Ukrainian around untouched literals: the verified observations, cited.
+
+        The prose of the evidence (``scope_text``, ``shift_text``) is the English LLM serializer, so this
+        renders from the numbers: scope as ``attribute=value`` literals, the phenomenon shifts (the first
+        ``len(shift_text)`` of the record's shifts, which are sorted by |z|) as ``metric ±z sd``, or the
+        correlation pair for a covariance insight.
+        """
+        lines = ["Спостереження:"]
         for it in self.items:
-            observed = "; ".join(it.shift_text[:2] or [it.relationship])
-            tag = " (scope-disjoint from the seed, linked via a latent anchor)" if it.transversal_only else ""
-            lines.append(f"- {it.scope_text} | {observed} | n={it.statistics['support']:,} [{it.key}]{tag}")
+            s = it.statistics
+            if it.phenomenon_type == "covariance" and s["covariance"].get("pair"):
+                a, b = s["covariance"]["pair"]
+                observed = f"кореляція {a} ~ {b}: {s['covariance']['global_corr']:+.2f} загалом → {s['covariance']['local_corr']:+.2f} у підгрупі"
+            else:
+                observed = "; ".join(
+                    f"{x['metric']} {x['robust_z']:+.2f} sd (медіана {format_value(x['local_median'])} проти {format_value(x['global_median'])})"
+                    for x in s["shifts"][: len(it.shift_text) or 1][:2]
+                )
+            tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
+            lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         if not self.items:
-            lines.append("- No matching evidence in the graph.")
-        lines.append("Interpretation (hypotheses): not generated (no language-model answer is available).")
+            lines.append("- У графі немає відповідних свідчень.")
+        lines.append("Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).")
         return "\n".join(lines)
 
 

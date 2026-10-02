@@ -10,6 +10,7 @@ import pytest
 from conftest import FakeLLM, make_config
 
 from ltir import pipeline as pipeline_mod
+from ltir.graph import DualGraph
 from ltir.neo4j_sink import EDGE_ENDPOINTS, LABELS, edge_query, flatten_props, node_query, publish_snapshot, stale_edge_query, stale_node_query
 from ltir.pipeline import Engine
 
@@ -170,6 +171,49 @@ def test_records_survive_a_concurrent_reader(tmp_path):
         thread.join()
     assert errors == []
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_df, demo_csv):
+    """Deleting a dataset removes its patterns, vectors, memberships and artefacts; an anchor survives
+    only with a remaining member or a RELATED_TO link; the journal, state and snapshot stay consistent."""
+    cfg = make_config(tmp_path / "ws")
+    engine = Engine(cfg, llm=FakeLLM())
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    other = tmp_path / "other.csv"  # same rows, other column names: its own metrics, dimensions and anchors
+    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
+    rec = engine.ingest_file(other)
+    assert rec["status"] == "READY", rec.get("error")
+    ds = rec["dataset_id"]
+    g = engine.graph()
+    before_members = Counter(e["target"] for e in g.edges if e["type"] == "ACTIVATES" and g.nodes[e["source"]]["props"]["dataset_id"] != ds)
+    linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
+    anchors_before = {n["id"] for n in g.of_kind("Attractor")}
+
+    out = engine.delete_dataset(ds)
+    assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]
+    g = engine.graph()
+    assert all(n["props"]["dataset_id"] != ds for n in g.of_kind("Pattern"))
+    assert not (cfg.workspace_dir / "datasets" / ds).exists() and not (cfg.workspace_dir / "journal" / "blocks" / f"{rec['batch_id']}.npz").exists()
+    assert all(b["dataset_id"] != ds for b in engine.ws.list_batches())
+    # the orphan rule, anchor by anchor
+    anchors_after = {n["id"] for n in g.of_kind("Attractor")}
+    for a in anchors_before:
+        assert (a in anchors_after) == bool(before_members.get(a) or a in linked), a
+    assert set(out["anchors_removed"]) == {int(a[2:]) for a in anchors_before - anchors_after}
+    # journal, frame and ontology agree; the snapshot equals a fresh rebuild; questions still work
+    rows = engine.ws.patterns()
+    assert [r["row_id"] for r in rows] == list(range(len(rows))) == list(range(len(engine.ws.vectors())))
+    assert engine.ontology().store.next_chunk_id == len(rows) and set(engine.frame().patterns) == {r["id"] for r in rows}
+    assert all(a["row_id"] < len(rows) for a in engine.ws.activations())
+    ids = {(n["id"], n["kind"]) for n in g.nodes.values()}
+    assert {(n["id"], n["kind"]) for n in DualGraph(engine.rebuild_graph()).nodes.values()} == ids
+    assert engine.ask("Why is margin lower for phones in the US?", use_llm=False).evidence["items"]
+    assert engine.ingest_file(other)["status"] == "READY"  # not a duplicate any more
+    # deleting the last dataset empties the knowledge base, and ingestion starts over cleanly
+    for b in {b["dataset_id"] for b in engine.ws.list_batches()}:
+        engine.delete_dataset(b)
+    assert not engine.graph().of_kind("Pattern") and not engine.ontology().attractor_ids and len(engine.ws.vectors()) == 0
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
 
 
 def test_a_second_writer_process_is_refused(tmp_path, demo_csv):

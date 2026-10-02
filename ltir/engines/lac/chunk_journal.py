@@ -55,6 +55,16 @@ class ChunkJournal:
             for edge in activations:
                 f.write(json.dumps(edge) + "\n")
 
+    def rewrite(self, chunks: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]]) -> None:
+        """Replace the whole journal (SIG dataset deletion); each file is written aside and swapped."""
+        if len(chunks) != len(vectors):
+            raise ValueError("chunks and vectors row count mismatch")
+        for path, rows in ((self.chunks_path, chunks), (self.activations_path, activations)):
+            tmp = path.with_suffix(".jsonl.tmp")
+            tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+            replace_file(tmp, path)
+        self._write_embeddings(np.asarray(vectors, dtype=np.float32))
+
     def _write_embeddings(self, matrix: np.ndarray) -> None:
         """Replace the vector matrix; written aside and swapped so readers never see a partial file."""
         if len(matrix) == 0:

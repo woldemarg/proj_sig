@@ -143,6 +143,11 @@ def test_query_parsing_against_graph_vocabulary(toy):
     assert ("region", "EU") in q.conditions and ("category", "tablets") in q.conditions
     assert ("region", "US") not in parse_query("tell us about margins", toy).conditions  # 'us' is not 'US'
     assert parse_query("where does margin go up?", toy).direction == 1
+    # Ukrainian around untouched literals: the literals match as typed, the direction by stem
+    q = parse_query("Чому margin нижчий для tablets у EU?", toy)
+    assert q.targets == ["margin"] and q.direction == -1 and ("region", "EU") in q.conditions and ("category", "tablets") in q.conditions
+    assert parse_query("Де зростає margin?", toy).direction == 1
+    assert parse_query("Де руйнується зв'язок між discount і margin?", toy).covariance
 
 
 def test_evidence_object_is_structured_and_traceable(toy):

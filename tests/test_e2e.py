@@ -89,7 +89,8 @@ def test_llm_failure_keeps_knowledge(hashed_engine):
         qa = hashed_engine.ask(QUESTION)
     finally:
         hashed_engine._llm = llm
-    assert qa.answer_mode == "fallback" and "Observations:" in qa.answer and "[P1]" in qa.answer
+    assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
+    assert "category=phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
     assert qa.llm["error"] and qa.citations["grounded"]
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
