@@ -39,8 +39,6 @@ class DictEmbedder:
         "delivery_days": 5,
         "return rate": 6,
         "return_rate": 6,
-        "higher increase growth up": 8,
-        "lower decrease drop down reduction": 9,
         "retail": 7,
     }
 
@@ -82,56 +80,68 @@ def toy_graph(extra: list | None = None) -> DualGraph:
     return DualGraph({"nodes": nodes, "edges": []})
 
 
-def grounded(graph: DualGraph, embedder=None) -> DualGraph:
-    graph._catalog = build_catalog(graph, embedder or DictEmbedder(), "fp")
-    return graph
+def grounded(graph: DualGraph, embedder=None):
+    """``parse(question)`` against ``graph`` and its literal catalog."""
+    catalog = build_catalog(graph, embedder or DictEmbedder())
+    return lambda question: parse_query(question, graph, catalog=catalog)
 
 
 def test_dense_gate_accepts_translations_and_rejects_case():
-    g = grounded(toy_graph())
-    p = parse_query("Чому маржа нижча для телефонів у США?", g)
+    ask = grounded(toy_graph())
+    p = ask("Чому маржа нижча для телефонів у США?")
     assert p.targets == ["margin"] and set(p.conditions) == {("category", "phones"), ("region", "US")} and p.direction == -1
     assert {x["span"]: x["literal"] for x in p.grounding} == {"маржа": "margin", "телефонів": "phones", "США": "US"}
     assert all(x["layer"] == "dense" and x["score"] > 0 for x in p.grounding)
-    assert ("region", "US") not in parse_query("tell us about margins", g).conditions  # the acronym literal needs an upper-case span
+    assert ("region", "US") not in ask("tell us about margins").conditions  # the acronym literal needs an upper-case span
 
 
 def test_hub_and_ambiguity_are_rejected():
-    g = grounded(toy_graph([pattern("P5", ["region=hub"])]))
-    p = parse_query("Що обидва?", g)  # "обидва" is equidistant to margin and phones: Lowe's ratio rejects it
+    ask = grounded(toy_graph([pattern("P5", ["region=hub"])]))
+    p = ask("Що обидва?")  # "обидва" is equidistant to margin and phones: Lowe's ratio rejects it
     assert p.grounding == [] and p.targets == [] and p.conditions == []
-    p = parse_query("маржа", g)  # the hub literal is close to everything: the margin gate keeps margin on top
+    p = ask("маржа")  # the hub literal is close to everything: the margin gate keeps margin on top
     assert [x["literal"] for x in p.grounding] == ["margin"]
 
 
 def test_chars_match_same_script_inflections_only():
-    g = grounded(toy_graph())
-    p = parse_query("Чому маржа нижча у Харкові?", g)
+    ask = grounded(toy_graph())
+    p = ask("Чому маржа нижча у Харкові?")
     assert ("city", "Харків") in p.conditions and [x["layer"] for x in p.grounding if x["literal"] == "Харків"] == ["chars"]
-    assert ("category", "phones") in parse_query("Why is margin lower for fones?", g).conditions  # a typo, same script
-    assert "margin" not in [x["literal"] for x in parse_query("Did sales change marginally?", g).grounding]  # 4 letters longer: no
+    assert ("category", "phones") in ask("Why is margin lower for fones?").conditions  # a typo, same script
+    assert "margin" not in [x["literal"] for x in ask("Did sales change marginally?").grounding]  # 4 letters longer: no
 
 
 def test_longest_span_claims_its_tokens_and_the_rest_is_not_embedded():
     emb = DictEmbedder()
-    g = grounded(toy_graph(), emb)
+    ask = grounded(toy_graph(), emb)
     emb.calls.clear()
-    p = parse_query("Які сегменти мають довші дні доставки?", g)
+    p = ask("Які сегменти мають довші дні доставки?")
     assert p.targets == ["delivery_days"] and len(p.grounding) == 1 and p.grounding[0]["span"] == "дні доставки"
     assert len(emb.calls) == 1 and len(emb.calls[0]) <= 8  # one forward pass over the unresolved spans only
     emb.calls.clear()
-    assert parse_query("Why is margin lower for phones in the US?", g).grounding == [] and emb.calls == []  # fully lexical: no embedding
+    assert ask("Why is margin lower for phones in the US?").grounding == [] and emb.calls == []  # fully lexical: no embedding
 
 
 def test_shared_value_binds_the_named_column_or_a_wildcard(tmp_path):
-    g = grounded(toy_graph([pattern("P6", ["origin=US", "category=phones"])]))
-    p = parse_query("Чому маржа нижча для США?", g)
-    assert ("*", "US") in p.conditions  # US lives under region and origin: any column
-    ins = g.insight("P1")
-    s = score_pattern(ins, p, np.zeros(1), None, make_config(tmp_path))
-    assert s.matched["scope"] == 1.0 and s.matched["scope_conflicts"] == 0
-    p = parse_query("Чому маржа нижча для США за region?", grounded(toy_graph([pattern("P6", ["origin=US", "category=phones"])])))
-    assert ("region", "US") in p.conditions and ("*", "US") not in p.conditions
+    """A value under several columns binds alike whether it was typed (lexical) or translated (grounded)."""
+    g = toy_graph([pattern("P6", ["origin=US", "category=phones"])])
+    ask = grounded(g)
+    for p in (ask("Чому маржа нижча для США?"), parse_query("Why is margin lower in the US?", g)):
+        assert ("*", "US") in p.conditions and len(p.conditions) == 1  # US lives under region and origin: any column
+        s = score_pattern(g.insight("P1"), p, np.zeros(1), None, make_config(tmp_path))
+        assert s.matched["scope"] == 1.0 and s.matched["scope_conflicts"] == 0
+    for p in (ask("Чому маржа нижча для США за region?"), parse_query("Why is margin lower for US by region?", g)):
+        assert p.conditions == [("region", "US")]
+
+
+def test_literal_words_are_not_intent_words():
+    """A word inside a matched literal (a metric named delivery_delay) casts no direction; "close" is not "lose"."""
+    g = toy_graph([{"id": "M:ds1:delivery_delay", "kind": "Metric", "label": "delivery delay", "props": {"name": "delivery_delay"}}])
+    assert parse_query("What drives delivery delay?", g).direction == 0
+    assert parse_query("Where is delivery delay higher?", g).direction == 1
+    p = parse_query("Where is the correlation between margin and return_rate close?", g)
+    assert p.covariance and p.components()[0][1] == 2.0
+    assert parse_query("Where does the correlation between margin and return_rate weaken?", g).components()[0][1] == -2.0
 
 
 def test_ukrainian_comparatives_and_directed_drivers():
@@ -150,7 +160,7 @@ def test_ukrainian_comparatives_and_directed_drivers():
 
 def seeds(engine, question):
     graph = engine.graph()
-    parsed = parse_query(question, graph, engine.config)
+    parsed = parse_query(question, graph, engine.config, engine.catalog())
     return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.config))
 
 
@@ -167,26 +177,29 @@ def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
     cfg = make_config(tmp_path / "ws")
     writer = Engine(cfg, llm=FakeLLM())
     assert writer.ingest_file(demo_csv)["status"] == "READY"
+    built = writer.catalog()  # the first question after the commit embeds the literals and saves their vectors
     stored = writer.ws.load_literals()
     assert stored is not None and str(stored["fingerprint"]) == writer.encoder.spec.fingerprint
     reader = Engine(cfg, llm=FakeLLM(), recover=False)
     calls = []
     original = reader.encoder.embedder.embed
     reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
-    catalog = reader.graph().catalog
-    assert isinstance(catalog, LiteralCatalog) and catalog.texts == writer.graph().catalog.texts and calls == []  # loaded, not re-embedded
-    assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "state" / "literals.npz.tmp").exists()
+    catalog = reader.catalog()
+    assert isinstance(catalog, LiteralCatalog) and catalog.texts == built.texts and calls == []  # loaded, not re-embedded
+    assert np.allclose(catalog.vectors, built.vectors) and reader.catalog() is catalog  # cached until the next commit
+    assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "graph" / "literals.npz.tmp").exists()
 
 
 @pytest.mark.model
 def test_b3_translated_question_parses_like_english(model_engine):
-    en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.config)
-    uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.config)
+    catalog = model_engine.catalog()
+    en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.config, catalog)
+    uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.config, catalog)
     assert set(uk.conditions) == set(en.conditions) == {("category", "phones"), ("region", "US")} and uk.direction == en.direction == -1
     assert {x["literal"] for x in uk.grounding} >= {"phones", "US"}  # маржа itself is the one literal this model confuses (§7.1.1)
     assert set(seeds(model_engine, "Why is margin lower for phones in the US?")) <= set(seeds(model_engine, "Чому маржа нижча для телефонів у США?"))
     for distractor in ("tell us about margins", "Did sales change marginally?", "Де низька ціна?"):
-        p = parse_query(distractor, model_engine.graph(), model_engine.config)
+        p = parse_query(distractor, model_engine.graph(), model_engine.config, catalog)
         assert ("region", "US") not in p.conditions and "margin" not in [x["literal"] for x in p.grounding], distractor
 
 
@@ -199,7 +212,7 @@ def test_b4_inflected_ukrainian_value(tmp_path):
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
     engine = Engine(make_config(tmp_path / "ws", embedding_backend="sentence-transformers"), llm=FakeLLM())
     assert engine.ingest_file(path)["status"] == "READY"
-    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.config)
+    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.config, engine.catalog())
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 

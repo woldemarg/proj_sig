@@ -35,25 +35,14 @@ from ltir.ingestion import load_dataset
 from ltir.models import CanonicalInsight, EmbeddingSpec, Insight
 from ltir.ontology import LatentOntology, OntologyUpdate
 from ltir.quality import SelectionResult, select_insights
-from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, read_json, utc_now
+from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, utc_now
 
 if TYPE_CHECKING:
     from ltir.llm import OpenAICompatibleLLM
+    from ltir.query import LiteralCatalog
 
 log = logging.getLogger("ltir.pipeline")
 
-STAGES = [
-    "UPLOADED",
-    "VALIDATING",
-    "PROFILING",
-    "DISCOVERING",
-    "VALIDATING_INSIGHTS",
-    "EMBEDDING",
-    "UPDATING_ONTOLOGY",
-    "BUILDING_GRAPH",
-    "PERSISTING",
-    "READY",
-]
 TERMINAL = {"READY", "FAILED", "SKIPPED"}
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
 
@@ -183,12 +172,12 @@ class Engine:
         self._documents_lock = threading.Lock()  # the document back-fill, never the batch lock
         self._sphere_pool: ThreadPoolExecutor | None = None  # standalone sphere export, off the batch thread
         self._sphere_generation = 0  # the latest requested export; older queued ones are skipped
-        self._sphere_lock = threading.Lock()
         self._graph: DualGraph | None = None
         self._frame: LatentFrame | None = None
+        self._catalog: tuple[DualGraph, LiteralCatalog | None] | None = None  # (graph, its literal catalog)
+        self._catalog_lock = threading.Lock()  # never the batch lock: a question does not wait for a batch
         if recover:
-            self._recover_deletion()
-            self._recover_interrupted()
+            self._recover()
 
     @property
     def llm(self) -> OpenAICompatibleLLM:
@@ -209,33 +198,25 @@ class Engine:
                     if snap and snap.get("version") != SNAPSHOT_VERSION:
                         self.rebuild_graph()  # derived data; journals stay the source of truth
                     else:
-                        self._graph = self._with_catalog(DualGraph(snap) if snap else DualGraph.empty())
+                        self._graph = DualGraph(snap) if snap else DualGraph.empty()
         return self._graph
 
-    def _with_catalog(self, graph: DualGraph) -> DualGraph:
-        """Attach the literal catalog (docs/07 §7.1.1), resolved on first question: ``state/literals.npz`` when it
-        was written for this representation and this literal set, else embedded now (and saved by a writer)."""
+    def catalog(self) -> LiteralCatalog | None:
+        """The literal catalog of the committed graph (docs/07 §7.1.1), built on the first question after a commit.
+        Vectors of known literals come from ``graph/literals.npz`` (same fingerprint); a writer saves new ones there."""
+        graph = self.graph()
+        with self._catalog_lock:
+            if self._catalog is None or self._catalog[0] is not graph:
+                from ltir.query import build_catalog
 
-        def load():
-            from ltir.query import LiteralCatalog, build_catalog, catalog_entries
-
-            spec = self.encoder.spec
-            stored = self.ws.load_literals()
-            if (
-                stored is not None
-                and str(stored["fingerprint"]) == spec.fingerprint
-                and [str(t) for t in stored["texts"]] == catalog_entries(graph)[0]
-            ):
-                catalog = LiteralCatalog.from_arrays(stored)
-                catalog.embedder = self.encoder.embedder
-                return catalog
-            catalog = build_catalog(graph, self.encoder.embedder, spec.fingerprint)
-            if catalog is not None and self._writer:
-                self.ws.save_literals(catalog.arrays())
-            return catalog
-
-        graph.set_catalog_loader(load)
-        return graph
+                fingerprint = self.encoder.spec.fingerprint
+                stored = self.ws.load_literals()
+                known = dict(zip(map(str, stored["texts"]), stored["vectors"])) if stored and str(stored["fingerprint"]) == fingerprint else {}
+                catalog = build_catalog(graph, self.encoder.embedder, known)
+                if catalog is not None and self._writer and not known.keys() >= set(catalog.texts):
+                    self.ws.save_literals({"texts": np.array(catalog.texts), "vectors": catalog.vectors, "fingerprint": np.array(fingerprint)})
+                self._catalog = (graph, catalog)
+            return self._catalog[1]
 
     def document_vectors(self) -> dict[str, np.ndarray]:
         """Canonical-document embedding of every committed pattern (stored at ingest).
@@ -269,13 +250,6 @@ class Engine:
                 if self._frame is None:
                     self._frame = LatentFrame.load(self.ws, self.ontology())
         return self._frame
-
-    def _refresh_caches(self, snapshot: dict[str, Any], ontology: LatentOntology) -> None:
-        """Swap in the committed state for readers; the literal catalog follows the new snapshot (embedded and saved
-        right away: the model is loaded, and a reader process may need the file)."""
-        self._graph = self._with_catalog(DualGraph(snapshot))
-        self._graph.catalog  # noqa: B018 — build and persist now, under the writer lock
-        self._frame = LatentFrame.load(self.ws, ontology)
 
     def ontology(self) -> LatentOntology:
         return LatentOntology(self.config, self.ws.state_dir)
@@ -337,7 +311,6 @@ class Engine:
                 return record
             t0 = time.perf_counter()
             timings: dict[str, float] = {}
-            checkpoint = None
             try:
                 self._enter(record, "VALIDATING")
                 with _clock(timings, "validate_s"):
@@ -383,43 +356,39 @@ class Engine:
                     self.ws.check_representation(spec)  # validate only; recorded at commit
 
                 self._enter(record, "UPDATING_ONTOLOGY")
-                with _clock(timings, "ontology_s"):
-                    checkpoint = record["checkpoint"] = self.ws.checkpoint()
-                    seq = record["batch_seq"] = self.ws.next_batch_seq()
-                    self.ws.save_batch(record)
-                    ontology = self.ontology()
-                    update = ontology.ingest(
-                        enc["vector"], np.array([i.weight for i in kept]), [i.id for i in kept], batch_seq=seq, batch_id=batch_id
-                    )
+                with self.ws.transaction({"batch_id": batch_id}):
+                    with _clock(timings, "ontology_s"):
+                        seq = record["batch_seq"] = self.ws.next_batch_seq()
+                        ontology = self.ontology()
+                        update = ontology.ingest(
+                            enc["vector"], np.array([i.weight for i in kept]), [i.id for i in kept], batch_seq=seq, batch_id=batch_id
+                        )
 
-                self._enter(record, "BUILDING_GRAPH")
-                with _clock(timings, "graph_s"):
-                    patterns = _pattern_records(kept, canon, update.row_ids, spec)
-                    self.ws.save_covers(loaded.dataset_id, {i.id: covers[i.expression] for i in kept})
-                    self._enter(record, "PERSISTING")
-                    self._refuse_journaled(kept)
-                    blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
-                    self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
-                    ontology.save()
-                    self.ws.record_representation(spec)
-                    self.ws.commit_batch_seq(seq)
-                    snapshot = build_snapshot(self.ws, ontology, self.config, pending=record)
-                    self.ws.save_graph(snapshot)
+                    self._enter(record, "BUILDING_GRAPH")
+                    with _clock(timings, "graph_s"):
+                        patterns = _pattern_records(kept, canon, update.row_ids, spec)
+                        self.ws.save_covers(loaded.dataset_id, {i.id: covers[i.expression] for i in kept})
+                        self._enter(record, "PERSISTING")
+                        self._refuse_journaled(kept)
+                        blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
+                        self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
+                        ontology.save()
+                        self.ws.record_representation(spec)
+                        self.ws.commit_batch_seq(seq)
+                        snapshot = build_snapshot(self.ws, ontology, self.config, pending=record)
+                        self.ws.save_graph(snapshot)
+                        graph, frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)  # loaded before the commit point
 
-                record["metrics"] = _batch_metrics(result, selection, update, spec, snapshot, timings, t0)
-                record["status"] = "READY"
-                record["stage_times"]["READY"] = utc_now()
-                record.pop("checkpoint", None)
-                self.ws.save_batch(record)  # READY is durable before the checkpoint goes
-                self.ws.discard_checkpoint(checkpoint)
-                checkpoint = None
-                self._refresh_caches(snapshot, ontology)
-            except Exception as exc:  # failures before READY roll back and become FAILED
-                return self._fail(record, exc, checkpoint, t0)
-            # Journals, snapshot and READY are committed. Publish and sphere export
-            # must not be able to rewrite that status.
-            self._publish_neo4j(record, snapshot)
-            self._export_sphere(record)
+                    record["metrics"] = _batch_metrics(result, selection, update, spec, snapshot, timings, t0)
+                    record["status"] = "READY"
+                    record["stage_times"]["READY"] = utc_now()
+                    self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
+            except Exception as exc:  # failures before READY were rolled back by the transaction
+                return self._fail(record, exc, t0)
+            record["neo4j"] = self._publish(graph, frame, snapshot)  # committed: nothing below may turn READY into FAILED
+            if record["neo4j"]["status"] == "failed":
+                record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
+            self.ws.save_batch(record)
             return record
 
     def _enter(self, record: dict[str, Any], stage: str) -> None:
@@ -462,15 +431,10 @@ class Engine:
         if dupes:
             raise PipelineError("duplicate_patterns", f"{len(dupes)} patterns already journaled (e.g. {dupes[:3]})")
 
-    def _fail(self, record: dict[str, Any], exc: Exception, checkpoint: dict[str, Any] | None, t0: float) -> dict[str, Any]:
-        """Roll back to the pre-batch checkpoint and record the failure (called inside ``except``)."""
-        if checkpoint is not None:
-            try:
-                self.ws.rollback(checkpoint)
-                self.ws.discard_checkpoint(checkpoint)
-            except Exception:  # pragma: no cover - surfaced in the record
-                record["warnings"].append("rollback failed: " + traceback.format_exc(limit=2))
-        record.pop("checkpoint", None)
+    def _fail(self, record: dict[str, Any], exc: Exception, t0: float) -> dict[str, Any]:
+        """Record the failure of a batch (called inside ``except``; ``Workspace.transaction`` has rolled its writes back)."""
+        if self.ws.pending_path.exists():  # the rollback failed too (logged): its marker blocks every write until a restart
+            record["warnings"].append("rollback failed; restart the writer (web app or CLI) to retry it, no write runs until then")
         code = getattr(exc, "code", "internal_error")
         record["status"] = "FAILED"
         record["failed_stage"] = list(record["stage_times"])[-1]
@@ -482,50 +446,40 @@ class Engine:
         log.warning("[%s] FAILED %s: %s", record["batch_id"], code, exc)
         return record
 
-    def _publish_neo4j(self, record: dict[str, Any], snapshot: dict[str, Any]) -> None:
-        """Optional mirror; failure never invalidates the committed batch."""
-        if not self.config.neo4j_enabled:
-            record["neo4j"] = {"status": "disabled"}
-        else:
-            try:
-                from ltir.neo4j_sink import publish_snapshot
+    def _publish(self, graph: DualGraph, frame: LatentFrame, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """After a commit (batch or deletion): readers switch to the new state (the literal catalog follows on the
+        next question), the sphere export is queued and the optional Neo4j mirror synced; returns the mirror status."""
+        self._graph, self._frame = graph, frame
+        self._export_sphere()
+        return self.sync_neo4j(snapshot)
 
-                record["neo4j"] = {"status": "ok", **publish_snapshot(snapshot, self.config)}
-            except Exception as exc:
-                record["neo4j"] = {"status": "failed", "error": str(exc)}
-                record["warnings"].append(f"graph persistence (Neo4j) failed: {exc}")
-        self.ws.save_batch(record)
+    def _export_sphere(self) -> None:
+        """Queue the standalone 3D sphere (KernelPCA + Plotly) on its own thread; callers hold ``_lock``.
 
-    def _export_sphere(self, record: dict[str, Any]) -> None:
-        """Queue the standalone 3D sphere (KernelPCA + Plotly) on its own thread.
-
-        The batch thread returns at once, so the next upload never waits on a plot; when several
-        batches finish quickly only the latest export runs. ``/api/sphere`` builds the page on demand.
+        The writer returns at once, so the next upload never waits on a plot; when several commits
+        come quickly only the latest export runs. ``/api/sphere`` builds the page on demand.
         """
         if not self.config.sphere_export:
             return
-        with self._sphere_lock:
-            self._sphere_generation += 1
-            generation = self._sphere_generation
-            if self._sphere_pool is None:
-                self._sphere_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltir-sphere")
-        self._sphere_pool.submit(self._write_sphere, record, generation)
+        self._sphere_generation += 1
+        if self._sphere_pool is None:
+            self._sphere_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltir-sphere")
+        self._sphere_pool.submit(self._write_sphere, self._sphere_generation)
 
-    def _write_sphere(self, record: dict[str, Any], generation: int) -> None:
-        """Export for a READY batch unless a newer export (or a reset) superseded it; failure is a warning."""
+    def _write_sphere(self, generation: int) -> None:
+        """Export unless a newer export or a reset superseded it; a failure is logged, never raised."""
         if generation != self._sphere_generation:
             return
         try:
             from ltir.sphere import export_sphere
 
-            record["sphere"] = str(export_sphere(self))
+            page = export_sphere(self)
         except Exception as exc:
-            record["warnings"].append(f"sphere export failed: {exc}")
-        with self._lock:  # reset holds it: the record is saved before a reset or not at all
-            if self.ws.load_batch(record["batch_id"]) is not None:
-                self.ws.save_batch(record)
-            elif "sphere" in record:  # the workspace was reset during the export: drop the stale page
-                Path(record["sphere"]).unlink(missing_ok=True)
+            log.warning("sphere export failed: %s", exc)
+            return
+        with self._lock:  # reset holds it
+            if generation != self._sphere_generation:  # superseded while it ran (a reset must leave nothing behind)
+                page.unlink(missing_ok=True)
 
     def rebuild_graph(self) -> dict[str, Any]:
         with self._lock:
@@ -533,7 +487,7 @@ class Engine:
             ontology = self.ontology()
             snapshot = build_snapshot(self.ws, ontology, self.config)
             self.ws.save_graph(snapshot)
-            self._refresh_caches(snapshot, ontology)
+            self._graph, self._frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)
             return snapshot
 
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
@@ -541,9 +495,9 @@ class Engine:
 
         Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
         centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
-        rebuilt and the Neo4j mirror synced. All or nothing: the checkpoint holds the state, the journal,
-        the snapshot and the moved-aside files; an error rolls back at once, and a crash leaves the
-        ``pending_delete.json`` marker, so the next writer start rolls back (``_recover_deletion``).
+        rebuilt and the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the
+        state, the journal, the snapshot and the moved-aside files; an error rolls back at once, and a crash
+        leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
         ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
         with self._lock:
@@ -552,35 +506,25 @@ class Engine:
                 raise PipelineError("unknown_dataset", dataset_id)
             if any(b["status"] not in TERMINAL for b in batches):
                 raise PipelineError("busy", f"dataset {dataset_id} has a batch in progress")
-            self._sphere_generation += 1  # a queued export would draw the old workspace
             ontology = self.ontology()
             records, vectors = self.ws.patterns(), self.ws.vectors()
             kept = [r for r in records if r["dataset_id"] != dataset_id]
             row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
             acts = [{**a, "row_id": row_of[a["row_id"]]} for a in self.ws.activations() if a["row_id"] in row_of]
-            cp = self.ws.checkpoint(journal=True)
-            atomic_write_json(self.ws.pending_delete_path, {"dataset_id": dataset_id, "checkpoint": cp})
-            try:
+            with self.ws.transaction({"dataset_id": dataset_id}, journal=True) as cp:  # commit point: the marker goes
                 self.ws.remove_dataset(dataset_id, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
                 dropped = ontology.forget(acts, len(kept))
                 self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
                 ontology.save()
                 snapshot = build_snapshot(self.ws, ontology, self.config)
                 self.ws.save_graph(snapshot)
-                self.ws.pending_delete_path.unlink()  # commit point
-            except Exception:
-                self.ws.rollback(cp)
-                self.ws.pending_delete_path.unlink(missing_ok=True)
-                self.ws.discard_checkpoint(cp)
-                raise
-            self.ws.discard_checkpoint(cp)
-            self._refresh_caches(snapshot, ontology)
+                graph, frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)
             return {
                 "dataset_id": dataset_id,
                 "batches": [b["batch_id"] for b in batches],
                 "patterns_removed": len(records) - len(kept),
                 "anchors_removed": dropped,
-                "neo4j": self.sync_neo4j(snapshot),
+                "neo4j": self._publish(graph, frame, snapshot),
             }
 
     def reset(self) -> dict[str, Any]:
@@ -588,8 +532,7 @@ class Engine:
         with self._lock:
             self._sphere_generation += 1  # drop a queued export of the old workspace
             self.ws.reset()
-            self._graph = None
-            self._frame = None
+            self._graph = self._frame = self._catalog = None
             return {"neo4j": self.sync_neo4j({"nodes": [], "edges": []})}
 
     def sync_neo4j(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -605,27 +548,14 @@ class Engine:
             log.warning("Neo4j sync failed: %s", exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
-    def _recover_deletion(self) -> None:
-        """A dataset deletion that never reached its commit point (the process died) is undone from its checkpoint."""
-        pending = read_json(self.ws.pending_delete_path)
-        if pending is None:
-            return
-        cp = pending["checkpoint"]
-        if Path(cp["dir"]).exists():
-            self.ws.rollback(cp)
-            self.ws.discard_checkpoint(cp)
-        self.ws.pending_delete_path.unlink()
-        log.warning("an interrupted deletion of %s was rolled back; the dataset is still there", pending["dataset_id"])
-
-    def _recover_interrupted(self) -> None:
-        """Roll back and fail every unfinished batch: under the writer lock no other writer is alive."""
+    def _recover(self) -> None:
+        """Under the writer lock no other writer is alive: an unfinished transaction is rolled back (unless its
+        batch had committed) and every unfinished batch fails."""
+        intent = self.ws.recover()
+        if intent is not None:
+            log.warning("an interrupted write was rolled back: %s", intent)
         for record in self.ws.list_batches():
-            if record["status"] in TERMINAL:
-                continue
-            cp = record.pop("checkpoint", None)
-            if cp and Path(cp["dir"]).exists():
-                self.ws.rollback(cp)
-                self.ws.discard_checkpoint(cp)
-            record["status"] = "FAILED"
-            record["error"] = {"code": "interrupted", "message": "processing was interrupted; state rolled back"}
-            self.ws.save_batch(record)
+            if record["status"] not in TERMINAL:
+                record["status"] = "FAILED"
+                record["error"] = {"code": "interrupted", "message": "processing was interrupted; state rolled back"}
+                self.ws.save_batch(record)

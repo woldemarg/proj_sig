@@ -1,11 +1,10 @@
 """3D latent sphere: insight vectors + attractors projected on a sphere (docs/08_interface.md §8.4).
 
-Reuses lac's visualisation stack (vendored as ``ltir/engines/lac/projector.py``: prosphera
-``KernelPCA(cosine)`` -> sphere scaling, the figure skeleton, ``save_html``), the way lac's
-``v2_orchestrator/viz_export.py`` feeds it chunks + concepts. SIG feeds Pattern vectors (the
-journal rows) + Attractor centroids and draws them with the *same* visual language as the 2D
-graph (docs/08 §8.3): node colour = metric higher / lower / correlation change, theme = diamond,
-link layers named like the UI's legend toggles, answer markers identical to the graph's rings.
+The projection is lac's prosphera sphere (``_project``: robust scaling -> cosine KernelPCA -> sphere
+scaling), fed with Pattern vectors (the journal rows) + Attractor centroids, and drawn with the
+*same* visual language as the 2D graph (docs/08 §8.3): node colour = metric higher / lower /
+correlation change, theme = diamond, every trace tagged with its legend key, answer markers
+identical to the graph's rings.
 The web UI passes its theme palette and layer state; the standalone export uses the dark palette.
 """
 
@@ -16,13 +15,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ltir.engines.lac import projector as viz
 from ltir.models import Insight, attractor_id_of
 
 if TYPE_CHECKING:
     from ltir.pipeline import Engine
 
 PLOTLY_LOCAL = "/vendor/plotly.min.js"
+HOVER = "%{hovertext}<extra></extra>"
 # the dark-theme tokens of ltir/web/static/style.css (the UI sends its live palette; the export has none)
 DEFAULT_PALETTE = {
     "bg": "#0e1118",
@@ -35,14 +34,8 @@ DEFAULT_PALETTE = {
     "path": "#ffc53d",
     "bad": "#ff6b6b",
 }
-# the UI's layer toggles and their initial state (index.html); a trace is a layer when it carries one of these names
-LAYER_TRACES = {
-    "lattice": ("Hierarchy",),
-    "contrast": ("Contrasts",),
-    "sibling": ("Siblings",),
-    "latent": ("Theme links",),
-    "activates": ("Memberships", "Memberships (weak)"),
-}
+# Every trace that a legend entry explains carries the entry's key (index.html data-key) as ``meta``: the UI shows,
+# hides and spotlights traces by it. The link layers start as their toggles do (index.html "on").
 LAYER_DEFAULTS = {"lattice": True, "contrast": False, "sibling": False, "latent": True, "activates": False}
 
 
@@ -81,16 +74,30 @@ def _segments(pairs: list[tuple[np.ndarray, np.ndarray]]) -> tuple[list, list, l
     return xs, ys, zs
 
 
-def _rgba(hex_color: str, alpha: float) -> str:
+def _rgb(hex_color: str) -> tuple[int, int, int]:
     h = hex_color.lstrip("#")
-    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
-    return f"rgba({r},{g},{b},{alpha})"
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    return "rgba({},{},{},{})".format(*_rgb(hex_color), alpha)
 
 
 def _is_dark(hex_color: str) -> bool:
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    r, g, b = _rgb(hex_color)
     return 0.299 * r + 0.587 * g + 0.114 * b < 128
+
+
+def _project(vectors: np.ndarray, seed: int) -> np.ndarray:
+    """Points in the unit ball, as lac's prosphera projector places them: robust-scaled vectors -> cosine KernelPCA
+    to 3D -> centred; the direction is the PCA's, the radius ``log ‖y‖²`` min-max scaled to [0.1, 1]."""
+    from sklearn.decomposition import KernelPCA
+    from sklearn.preprocessing import minmax_scale, robust_scale
+
+    y = KernelPCA(n_components=3, kernel="cosine", random_state=seed, n_jobs=-1).fit_transform(robust_scale(vectors, quantile_range=(5, 95)))
+    y = y - y.mean(axis=0)
+    norms = np.linalg.norm(y, axis=1, keepdims=True)
+    return y / norms * minmax_scale(np.log(norms**2), feature_range=(0.1, 1))
 
 
 def sphere_figure(
@@ -127,25 +134,45 @@ def sphere_figure(
             best[e["source"]] = (e["target"], float(e["weight"]))
     hovers = [_pattern_hover(g.insight(n["id"]), g.nodes[best[n["id"]][0]]["label"], best[n["id"]][1]) for n in pats]
 
-    projector = viz.OntologyProjector(random_state=engine.config.random_seed)
-    coords, _ = projector._scale_vectors_on_sphere(projector._apply_pca(np.vstack([P, A])))
+    coords = _project(np.vstack([P, A]), engine.config.random_seed)
     pc, ac = coords[: len(pats)], coords[len(pats) :]
-    fig = projector._build_figure(pc, ac, [], concept_hovertext=[_attractor_hover(g.nodes[a]) for a in att_ids], draw_edges=False)
-
     hl = highlight or {}
     focus = set(hl.get("traversed", [])) | set(hl.get("evidence", [])) | set(hl.get("seeds", []))
-    for tr in fig.data:
-        if tr.name == "Concepts (L0)":  # lac's concept markers become the themes, drawn like the graph's hexagons
-            tr.name = "Themes"
-            tr.mode = "markers+text"
-            tr.text = att_ids
-            tr.customdata = att_ids  # node ids: a click opens the same details drawer as in the graph
-            tr.textposition = "top center"
-            tr.textfont = dict(color=pal["ink"], size=11)
-            tr.marker.symbol = "diamond"
-            tr.marker.size = [8 + 1.2 * g.nodes[a]["props"]["n_patterns"] for a in att_ids]
-            tr.marker.color = pal["anchor"]
-            tr.marker.line = dict(color=pal["ink"], width=1)
+
+    fig = go.Figure(  # the themes, drawn like the graph's hexagons
+        go.Scatter3d(
+            x=ac[:, 0],
+            y=ac[:, 1],
+            z=ac[:, 2],
+            mode="markers+text",
+            name="Themes",
+            meta="anchor",
+            text=att_ids,
+            customdata=att_ids,  # node ids: a click opens the same details drawer as in the graph
+            textposition="top center",
+            textfont=dict(color=pal["ink"], size=11),
+            marker=dict(
+                symbol="diamond",
+                size=[8 + 1.2 * g.nodes[a]["props"]["n_patterns"] for a in att_ids],
+                color=pal["anchor"],
+                line=dict(color=pal["ink"], width=1),
+            ),
+            hovertext=[_attractor_hover(g.nodes[a]) for a in att_ids],
+            hovertemplate=HOVER,
+        )
+    )
+    for axis in np.vstack([np.eye(3), -np.eye(3)]):  # the six half-axes
+        fig.add_trace(
+            go.Scatter3d(
+                x=[0, axis[0]],
+                y=[0, axis[1]],
+                z=[0, axis[2]],
+                mode="lines",
+                line=dict(color=_rgba(pal["muted"], 0.35), width=0.5),
+                showlegend=False,
+                hoverinfo="none",
+            )
+        )
 
     def coord(node_id: str) -> np.ndarray | None:
         if node_id in pidx:
@@ -154,30 +181,29 @@ def sphere_figure(
             return ac[aidx[node_id]]
         return None
 
-    def lines(name: str, pairs: list, color: str, width: float, visible: bool, dash: str | None = None) -> None:
+    def lines(name: str, key: str, pairs: list, color: str, width: float, dash: str | None = None) -> None:
         if pairs:
             x, y, z = _segments(pairs)
             line = dict(color=color, width=width, **({"dash": dash} if dash else {}))
-            fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode="lines", name=name, visible=visible, line=line, hoverinfo="skip"))
+            fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode="lines", name=name, meta=key, visible=on.get(key, True), line=line, hoverinfo="skip"))
 
     # memberships (the graph's lilac lines; weak = dashed), drawn first so nodes sit on top
     member_color = _rgba(pal["anchor"], 0.08 if focus else 0.3)
     for name, weak in (("Memberships", False), ("Memberships (weak)", True)):
         pairs = [(pc[pidx[e["source"]]], ac[aidx[e["target"]]]) for e in acts if bool(e["props"].get("weak")) == weak]
-        lines(name, pairs, member_color, 1.5, on["activates"], "dash" if weak else None)
+        lines(name, "activates", pairs, member_color, 1.5, "dash" if weak else None)
 
     # insights: colour and shape by what they say, exactly as in the graph
-    classes = {"Metric higher": ("circle", pal["up"]), "Metric lower": ("circle", pal["down"]), "Correlation change": ("square", pal["cov"])}
+    classes = {"up": ("Metric higher", "circle"), "down": ("Metric lower", "circle"), "cov": ("Correlation change", "square")}
     by_class: dict[str, list[int]] = {k: [] for k in classes}
     for i, n in enumerate(pats):
         ins = g.insight(n["id"])
-        by_class["Correlation change" if ins.phenomenon_type == "covariance" else "Metric higher" if ins.effect_size > 0 else "Metric lower"].append(
-            i
-        )
-    for name, idx in by_class.items():
+        by_class["cov" if ins.phenomenon_type == "covariance" else "up" if ins.effect_size > 0 else "down"].append(i)
+    for key, idx in by_class.items():
         if not idx:
             continue
-        symbol, color = classes[name]
+        name, symbol = classes[key]
+        color = pal[key]
         fig.add_trace(
             go.Scatter3d(
                 x=pc[idx, 0],
@@ -185,11 +211,12 @@ def sphere_figure(
                 z=pc[idx, 2],
                 mode="markers",
                 name=name,
+                meta=key,
                 opacity=0.35 if focus else 0.9,
                 marker=dict(symbol=symbol, size=[3 + 6 * g.insight(pats[i]["id"]).weight for i in idx], color=color, line=dict(width=0)),
                 hovertext=[hovers[i] for i in idx],
                 customdata=[pats[i]["id"] for i in idx],
-                hovertemplate=viz.HOVER,
+                hovertemplate=HOVER,
             )
         )
 
@@ -210,6 +237,7 @@ def sphere_figure(
     # the link layers, named like the legend toggles
     lines(
         "Theme links",
+        "latent",
         [
             (ac[aidx[e["source"]]], ac[aidx[e["target"]]])
             for e in g.edges
@@ -217,7 +245,6 @@ def sphere_figure(
         ],
         pal["anchor"],
         4,
-        on["latent"],
     )
     for etype, name, color, width, key, dash in (
         ("SPECIALIZES", "Hierarchy", pal["muted"], 2, "lattice", None),
@@ -225,20 +252,21 @@ def sphere_figure(
         ("SIBLING", "Siblings", pal["muted"], 1.5, "sibling", "dot"),
     ):
         pairs = [(coord(e["source"]), coord(e["target"])) for e in g.edges if e["type"] == etype and e["source"] in pidx and e["target"] in pidx]
-        lines(name, pairs, color, width, on[key], dash)
+        lines(name, key, pairs, color, width, dash)
 
     if hl:  # the answer, with the graph's markers: gold seed and path, ink evidence ring, red cross-segment ring
         by_id = {e["id"]: e for e in g.edges}
         path = [(coord(by_id[i]["source"]), coord(by_id[i]["target"])) for i in hl.get("edges", []) if i in by_id]
-        lines("Answer path", [(a, b) for a, b in path if a is not None and b is not None], pal["path"], 7, True)
-        for key, name, color, size, width in (
-            ("evidence", "Evidence", pal["ink"], 8, 2),
-            ("transversal_only", "Other segment", pal["bad"], 10, 3),
-            ("seeds", "Seed", pal["path"], 9, 4),
+        lines("Answer path", "path", [(a, b) for a, b in path if a is not None and b is not None], pal["path"], 7)
+        for field, key, name, color, size, width in (
+            ("evidence", "ev", "Evidence", pal["ink"], 8, 2),
+            ("transversal_only", "cross", "Other segment", pal["bad"], 10, 3),
+            ("seeds", "seed", "Seed", pal["path"], 9, 4),
+            ("anchors", "path", "Themes visited", pal["path"], 16, 4),
         ):
-            ids = [i for i in hl.get(key, []) if i in pidx]
+            ids = [i for i in hl.get(field, []) if coord(i) is not None]
             if ids:
-                pts = np.stack([pc[pidx[i]] for i in ids])
+                pts = np.stack([coord(i) for i in ids])
                 fig.add_trace(
                     go.Scatter3d(
                         x=pts[:, 0],
@@ -246,34 +274,22 @@ def sphere_figure(
                         z=pts[:, 2],
                         mode="markers",
                         name=name,
+                        meta=key,
                         marker=dict(symbol="circle-open", size=size, color=color, line=dict(color=color, width=width)),
-                        hovertext=[hovers[pidx[i]] for i in ids],
+                        hovertext=[hovers[pidx[i]] if i in pidx else _attractor_hover(g.nodes[i]) for i in ids],
                         customdata=ids,
-                        hovertemplate=viz.HOVER,
+                        hovertemplate=HOVER,
                     )
                 )
-        anchors = [a for a in hl.get("anchors", []) if a in aidx]
-        if anchors:
-            pts = np.stack([ac[aidx[a]] for a in anchors])
-            fig.add_trace(
-                go.Scatter3d(
-                    x=pts[:, 0],
-                    y=pts[:, 1],
-                    z=pts[:, 2],
-                    mode="markers",
-                    name="Themes visited",
-                    marker=dict(symbol="circle-open", size=16, color=pal["path"], line=dict(color=pal["path"], width=4)),
-                    hoverinfo="skip",
-                )
-            )
 
+    hidden = dict(visible=False, showgrid=False, zeroline=False, range=[-1, 1])
     fig.update_layout(  # no title and no legend of its own: the UI's shared legend strip explains both views
         template="plotly_dark" if _is_dark(pal["bg"]) else "plotly",
-        title=None,
         showlegend=False,
         paper_bgcolor=pal["bg"],
         plot_bgcolor=pal["bg"],
         margin=dict(l=0, r=0, b=0, t=0),
+        scene=dict(xaxis=hidden, yaxis=hidden, zaxis=hidden, aspectmode="cube", camera=dict(eye=dict(x=1.1, y=1.1, z=1.1))),
         uirevision="sig-sphere",
     )
     return fig
@@ -301,7 +317,8 @@ def sphere_html(
 def export_sphere(engine: Engine, output: Path | None = None, dataset: str | None = None) -> Path:
     """Standalone copy like lac's ``ontology_sphere.html`` (plotly from CDN, opens from disk)."""
     out = output or engine.ws.root / "graph" / "sphere.html"
-    viz.save_html(sphere_figure(engine, dataset=dataset), out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(sphere_html(engine, dataset=dataset, plotly_src="cdn"), encoding="utf-8")
     return out
 
 

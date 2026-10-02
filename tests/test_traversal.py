@@ -3,40 +3,29 @@
 from __future__ import annotations
 
 import pytest
+from conftest import toy_insight
 
 from ltir.config import load_config
 from ltir.evidence import build_evidence
 from ltir.graph import DualGraph
-from ltir.models import Condition, EdgeType, GraphEdge, Insight, Shift
+from ltir.models import EdgeType, GraphEdge, Shift
 from ltir.query import SeedMatch, parse_query
 from ltir.traversal import traverse
 
 
 def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):
     """Snapshot pattern node: props are an Insight journal record."""
-    conditions = tuple(Condition(*c.split("=", 1)) for c in conds)
-    ins = Insight(
+    ins = toy_insight(
+        [c.split("=", 1) for c in conds],
+        [Shift(target, z, 10.0, 12.0, 1.0)],
         id=pid,
         dataset_id=dataset,
         batch_id="B1",
-        conditions=conditions,
         expression=" AND ".join(conds),
-        target=target,
-        shifts=(Shift(target, z, 10.0, 12.0, 1.0),),
-        support=100,
-        support_fraction=0.1,
-        baseline=12.0,
-        local=10.0,
-        effect_size=z,
-        sd_score=1.0,
-        sd_raw_score=1.0,
         emm_score=0.1,
         volume_utility=0.3,
-        stability=0.9,
         p_value=1e-6,
         p_adjusted=1e-4,
-        drivers=(),
-        row_hash=pid,
         weight=w,
         provenance={
             "dataset_id": dataset,

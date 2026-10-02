@@ -6,27 +6,20 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from conftest import toy_insight
 
 from ltir.config import load_config
-from ltir.models import Condition, Insight, Shift
+from ltir.models import Shift
 from ltir.quality import insight_weight, select_insights, weight_factors, with_weight
 
 
 def make_insight(expr="a=1", conds=(("a", "1"),), z=2.0, stability=0.9, p=1e-10, vu=0.25, emm=0.05, support=300, row_hash=None, target="m"):
-    conditions = tuple(sorted(Condition(k, v) for k, v in conds))
-    return Insight(
+    return toy_insight(
+        sorted(conds),
+        [Shift(target, z, 1.0, 0.0, 1.0)],
         id="P-" + expr,
-        dataset_id="d",
-        batch_id="b",
-        conditions=conditions,
         expression=expr,
-        target=target,
-        shifts=(Shift(target, z, 1.0, 0.0, 1.0),),
         support=support,
-        support_fraction=0.1,
-        baseline=0.0,
-        local=1.0,
-        effect_size=z,
         sd_score=abs(z) * stability,
         sd_raw_score=abs(z),
         emm_score=emm,
@@ -34,7 +27,6 @@ def make_insight(expr="a=1", conds=(("a", "1"),), z=2.0, stability=0.9, p=1e-10,
         stability=stability,
         p_value=p,
         p_adjusted=p,
-        drivers=(),
         row_hash=row_hash or expr,
         covariance={"pair": [target, "n"], "local_corr": 0.1, "global_corr": -0.5, "delta": 0.6},
     )

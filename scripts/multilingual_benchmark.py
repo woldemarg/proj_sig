@@ -176,8 +176,7 @@ def run(engines: dict[str, Any]) -> list[dict[str, Any]]:
         ev = {i["pattern_id"] for i in qa.evidence["items"]}
         parsed, gold_parsed = qa.evidence["parsed"], gold.evidence["parsed"]
         wanted = symbols(gold_parsed)
-        # schema groundings only (direction anchors are not schema literals); a condition grounds to one symbol per column
-        grounding = [g for g in parsed.get("grounding", []) if g.get("symbol") not in ("up", "down")]
+        grounding = parsed.get("grounding", [])  # a condition grounds to one symbol per column
         false = [g for g in grounding if not any(s in wanted for s in (g["symbol"] if isinstance(g["symbol"], list) else [g["symbol"]]))]
         rows.append(
             {

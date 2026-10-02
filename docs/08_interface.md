@@ -2,7 +2,7 @@
 
 > **In one paragraph.** A local single-page app lets a person add tables (and remove them again), follow their processing, explore the dual graph as three views of one knowledge base — a two-plane graph, a 3D latent sphere and an insight table — under one shared legend whose link entries switch the same layers in the graph and on the sphere, inspect any node and chat with the data in Ukrainian, with every data literal left exactly as the data holds it. After an answer, the parts that produced it are highlighted with the same markers in both views: the seed, the themes passed through, the evidence, the scope-disjoint analogues and the exact edges. The UI reads the persisted snapshot through a small HTTP API; the only knowledge it changes is a dataset it deletes, through the engine.
 
-**Code** `ltir/web/app.py` (FastAPI), `ltir/web/static/` (`index.html`, `app.js`, `style.css`, `vendor/cytoscape.min.js`), `ltir/sphere.py`, `ltir/engines/lac/projector.py` · **Tests** `tests/test_ui_smoke.py`, `tests/test_sphere.py` · **Previous** [7. Question answering](07_question_answering.md) · **Next** [9. Operations](09_operations.md)
+**Code** `ltir/web/app.py` (FastAPI), `ltir/web/static/` (`index.html`, `app.js`, `style.css`, `vendor/cytoscape.min.js`), `ltir/sphere.py` · **Tests** `tests/test_ui_smoke.py`, `tests/test_sphere.py` · **Previous** [7. Question answering](07_question_answering.md) · **Next** [9. Operations](09_operations.md)
 
 ---
 
@@ -47,39 +47,39 @@ Plain HTML, JavaScript and a design-token stylesheet with light and dark themes;
 
 ## 8.3 One visual language for the graph and the sphere
 
-The graph and the sphere are two projections of one snapshot, so one meaning has one label and one marker in both; the legend column is that contract, and its link entries are the layer switches for both views (the sphere page is a same-origin frame, so a switch restyles its traces in place without re-rendering). By default only **Hierarchy** and **Theme links** are on. Colours are the theme tokens of `style.css`; the sphere receives them with every render (`palette`), so it follows light and dark mode.
+The graph and the sphere are two projections of one snapshot, so one meaning has one label and one marker in both; the legend column is that contract, and its link entries are the layer switches for both views (the sphere page is a same-origin frame, so a switch restyles its traces in place without re-rendering). One key ties the three sides together: a legend entry's `data-key` in `index.html` names its graph selector in `app.js` (`LEGEND`; the counts come from the same selectors) and is the `meta` of every sphere trace it explains — display names join nothing. By default only **Hierarchy** and **Theme links** are on. Colours are the theme tokens of `style.css`; the sphere receives them with every render (`palette`), so it follows light and dark mode.
 
-| Legend entry | Meaning | Graph | Sphere (trace name = legend label) |
+| Legend entry (key) | Meaning | Graph | Sphere (trace `meta` = key) |
 |---|---|---|---|
-| **Theme** | a latent anchor | purple hexagon, size ∝ members, labelled with its two strongest signature entries | purple diamond, size `8 + 1.2 · members`, labelled `A-k` (`Themes`) |
-| **Metric higher** | an insight whose primary metric is higher in its subgroup | blue circle, size ∝ evidence weight | blue circle, size `3 + 6w` |
-| **Metric lower** | … lower | orange circle | orange circle |
-| **Correlation change** | a covariance insight | green rounded square | green square |
-| **Hierarchy** (toggle, on) | SPECIALIZES: narrower subgroup of | grey arrow from the narrower insight to the broader one; GENERALIZES (its inverse) hidden | grey line |
-| **Contrasts** (toggle, off) | CONTRASTS: overlapping scope, opposite shift | red dashed line | red dashed line |
-| **Siblings** (toggle, off) | SIBLING: same parent, another value | dotted line | dotted line |
-| **Theme links** (toggle, on) | RELATED_TO: mutual nearest centroids | thick purple arc labelled with its weight | thick purple line |
-| **Memberships** (toggle, off) | ACTIVATES: insight belongs to theme; dashed = weak (coverage only, not walked) | thin lilac line, width ∝ alignment, dashed when weak | thin lilac line, dashed when weak (`Memberships`, `Memberships (weak)`) |
-| **Columns** (toggle, off) | Dimension and Metric nodes with HAS_SCOPE / TARGETS | grey tags in a bottom row | not drawn (no vectors); the toggle is disabled in the sphere view |
-| **Seed** | an insight matched directly to the question | thick gold ring | gold ring |
-| **Evidence** | an item shown to the model (cited or not) | thin ring in the graph's ink colour | ring in the ink colour |
-| **Other segment** | a cross-segment item: reached only through a theme, no shared condition (`transversal_only`) | double red ring | red ring |
-| **Answer path** | the edges of the paths used | thick gold edges | thick gold lines; themes on the path get a gold ring (`Themes visited`) |
+| **Theme** `anchor` | a latent anchor | purple hexagon, size ∝ members, labelled with its two strongest signature entries | purple diamond, size `8 + 1.2 · members`, labelled `A-k` (`Themes`) |
+| **Metric higher** `up` | an insight whose primary metric is higher in its subgroup | blue circle, size ∝ evidence weight | blue circle, size `3 + 6w` |
+| **Metric lower** `down` | … lower | orange circle | orange circle |
+| **Correlation change** `cov` | a covariance insight | green rounded square | green square |
+| **Hierarchy** (toggle, on) `lattice` | SPECIALIZES: narrower subgroup of | grey arrow from the narrower insight to the broader one; GENERALIZES (its inverse) hidden | grey line |
+| **Contrasts** (toggle, off) `contrast` | CONTRASTS: overlapping scope, opposite shift | red dashed line | red dashed line |
+| **Siblings** (toggle, off) `sibling` | SIBLING: same parent, another value | dotted line | dotted line |
+| **Theme links** (toggle, on) `latent` | RELATED_TO: mutual nearest centroids | thick purple arc labelled with its weight | thick purple line |
+| **Memberships** (toggle, off) `activates` | ACTIVATES: insight belongs to theme; dashed = weak (coverage only, not walked) | thin lilac line, width ∝ alignment, dashed when weak | thin lilac line, dashed when weak (`Memberships`, `Memberships (weak)`) |
+| **Columns** (toggle, off) `schema` | Dimension and Metric nodes with HAS_SCOPE / TARGETS | grey tags in a bottom row | not drawn (no vectors); the toggle is disabled in the sphere view |
+| **Seed** `seed` | an insight matched directly to the question | thick gold ring | gold ring |
+| **Evidence** `ev` | an item shown to the model (cited or not) | thin ring in the graph's ink colour | ring in the ink colour |
+| **Other segment** `cross` | a cross-segment item: reached only through a theme, no shared condition (`transversal_only`) | double red ring | red ring |
+| **Answer path** `path` | the edges of the paths used | thick gold edges | thick gold lines; themes on the path get a gold ring (`Themes visited`) |
 
-After an answer everything else fades (graph: opacity; sphere: insight opacity and faint memberships) and the answer stands out with those markers; a visited node that is not evidence keeps full brightness without a ring. Clicking an evidence card isolates **that** path (seed → theme → insight) and zooms to it; in the sphere view it re-renders the sphere with that path. A path is drawn even when its link layer is switched off. If the dataset filter hides the evidence, the filter switches to the evidence's dataset first.
+After an answer everything else fades (graph: opacity; sphere: insight opacity and faint memberships) and the answer stands out with those markers; a visited node that is not evidence keeps full brightness without a ring. Clicking an evidence card isolates **that** path (seed → theme → insight) and zooms to it; in the sphere view it re-renders the sphere with that path. The isolated path is the current highlight (`S.hl`) until another answer or *Clear*: a layer switch, a view switch or a dataset reload redraws it, not the whole answer. A path is drawn even when its link layer is switched off. If the dataset filter hides the evidence, the filter switches to the evidence's dataset first.
 
 ## 8.4 The latent sphere
 
-The sphere is lac's visualisation, vendored as `ltir/engines/lac/projector.py`, fed with insight vectors and anchor centroids instead of text chunks and concepts. On the stacked matrix `[P ; A]` (one frame):
+The sphere is lac's prosphera projection (`sphere._project`, the same scikit-learn calls; the vendored projector and the prosphera dependency were dropped once nothing else of them was used), fed with insight vectors and anchor centroids instead of text chunks and concepts. On the stacked matrix `[P ; A]` (one frame):
 
 ```text
 per-feature robust scaling (median, IQR over the 5–95 % quantile range)  →  KernelPCA(kernel = cosine, 3 components)
 → centre by the mean  →  u = y / ‖y‖,  radius = minmax(log ‖y‖²) ∈ [0.1, 1]
 ```
 
-Points lie inside the unit ball: the direction comes from the kernel PCA, the radius from the (log) spread. `sphere.sphere_figure(engine, dataset=, highlight=, palette=, layers=)` chains the projector's steps (`_apply_pca` → `_scale_vectors_on_sphere` → `_build_figure` without lac's edges) and draws the page in the graph's language ([8.3](#83-one-visual-language-for-the-graph-and-the-sphere)): one trace per insight class and per link layer, named like the legend entries (`sphere.LAYER_TRACES`), with the initial visibility of the toggles (`LAYER_DEFAULTS`, or the `layers` the UI sends), the themes as diamonds, faint great circles for depth, and with a highlight the answer-path lines and the seed, evidence, other-segment and themes-visited rings. The page has no title and no Plotly legend of its own — the legend column explains it — and uses the palette it is given (the UI's theme tokens; the standalone export and `GET /api/sphere` use the dark set, `sphere.DEFAULT_PALETTE`). Membership proximity, not colour, shows which theme an insight belongs to; hover text names the theme and the alignment.
+Points lie inside the unit ball: the direction comes from the kernel PCA, the radius from the (log) spread. `sphere.sphere_figure(engine, dataset=, highlight=, palette=, layers=)` projects with `_project` and draws the page in the graph's language ([8.3](#83-one-visual-language-for-the-graph-and-the-sphere)): one trace per insight class and per link layer, each tagged with its legend key as `meta`, with the initial visibility of the toggles (`LAYER_DEFAULTS`, or the `layers` the UI sends), the themes as diamonds, faint great circles for depth, and with a highlight the answer-path lines and the seed, evidence, other-segment and themes-visited rings. The page has no title and no Plotly legend of its own — the legend column explains it — and uses the palette it is given (the UI's theme tokens; the standalone export and `GET /api/sphere` use the dark set, `sphere.DEFAULT_PALETTE`). Membership proximity, not colour, shows which theme an insight belongs to; hover text names the theme and the alignment.
 
-It follows the dataset filter (the projection is refit on the subset) and re-renders after every answer and theme change; layer switches and the legend spotlight restyle the live page instead. Every insight and theme point carries its node id (`customdata`), which is how a click opens the drawer. After a READY batch a standalone copy is written to `workspace/graph/sphere.html` on a background thread, so the next upload never waits for it (only the latest of several queued exports runs; plotly from a CDN; `SPHERE_EXPORT`); CLI: `python -m ltir sphere [-o file] [--dataset id]`. The prosphera import (~5 s) is warmed in a background thread when the app starts. Three dimensions cannot preserve 1152-dimensional cosines: visual closeness on the sphere is a hint, the stored cosines are the truth ([5.7](05_latent_anchors.md#57-links-between-anchors)).
+It follows the dataset filter (the projection is refit on the subset) and re-renders after every answer and theme change; layer switches and the legend spotlight restyle the live page instead. Every insight and theme point carries its node id (`customdata`), which is how a click opens the drawer. After a READY batch a standalone copy is written to `workspace/graph/sphere.html` on a background thread, so the next upload never waits for it (only the latest of several queued exports runs; `sphere_html` with plotly from a CDN; `SPHERE_EXPORT`); CLI: `python -m ltir sphere [-o file] [--dataset id]`. The plotly and KernelPCA imports (a few seconds) are warmed in a background thread when the app starts. Three dimensions cannot preserve 1152-dimensional cosines: visual closeness on the sphere is a hint, the stored cosines are the truth ([5.7](05_latent_anchors.md#57-links-between-anchors)).
 
 ## 8.5 Text shown to people
 

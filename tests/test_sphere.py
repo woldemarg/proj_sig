@@ -1,9 +1,8 @@
-"""3D latent sphere built on lac's prosphera projector (docs/08_interface.md §8.4)."""
+"""3D latent sphere: lac's prosphera projection, drawn in the graph's language (docs/08_interface.md §8.4)."""
 
 from __future__ import annotations
 
 import threading
-import time
 
 from conftest import FakeLLM, make_config
 from fastapi.testclient import TestClient
@@ -14,7 +13,7 @@ from ltir.web.app import create_app
 
 def test_sphere_uses_the_graphs_visual_language(hashed_engine):
     """The sphere draws what the graph draws: insight classes by colour, themes, the legend's link layers."""
-    from ltir.sphere import LAYER_DEFAULTS, LAYER_TRACES
+    from ltir.sphere import LAYER_DEFAULTS
 
     fig = sphere_figure(hashed_engine)
     by_name = {t.name: t for t in fig.data if t.name}
@@ -25,9 +24,10 @@ def test_sphere_uses_the_graphs_visual_language(hashed_engine):
     assert {i for t in classes for i in t.customdata} == {n["id"] for n in g.of_kind("Pattern")}  # click -> drawer
     assert list(by_name["Themes"].customdata) == sorted((n["id"] for n in g.of_kind("Attractor")), key=lambda a: int(a[2:]))
     assert max(abs(float(v)) for t in classes for v in list(t.x) + list(t.y) + list(t.z)) <= 1.0 + 1e-9  # on/inside the unit sphere
-    for key, names in LAYER_TRACES.items():  # every layer the legend toggles exists and starts in the toggle's state
-        assert any(n in by_name for n in names), key
-        assert all(bool(by_name[n].visible) is LAYER_DEFAULTS[key] for n in names if n in by_name), key
+    for key, visible in LAYER_DEFAULTS.items():  # every layer the legend toggles exists and starts in the toggle's state
+        traces = [t for t in fig.data if t.meta == key]
+        assert traces and all(bool(t.visible) is visible for t in traces), key
+    assert {"anchor", "up", "down"} <= {t.meta for t in fig.data}  # the legend's keys, not its display names, tag the traces
     assert fig.layout.showlegend is False and fig.layout.title.text is None  # the shared legend strip explains it
     flipped = sphere_figure(hashed_engine, layers={"sibling": True, "lattice": False}, palette={"bg": "#ffffff"})
     vis = {t.name: bool(t.visible) for t in flipped.data if t.name}
@@ -44,7 +44,7 @@ def test_sphere_highlight_and_export(hashed_engine, tmp_path):
 
 
 def test_sphere_export_runs_off_the_batch_thread(tmp_path, demo_csv, monkeypatch):
-    """A READY batch returns while its sphere export still runs; the record gets the path afterwards."""
+    """A READY batch returns while its sphere export still runs."""
     import ltir.sphere as sphere
     from ltir.pipeline import Engine
 
@@ -58,12 +58,9 @@ def test_sphere_export_runs_off_the_batch_thread(tmp_path, demo_csv, monkeypatch
     monkeypatch.setattr(sphere, "export_sphere", slow_export)
     engine = Engine(make_config(tmp_path / "ws", sphere_export=True), llm=FakeLLM())
     record = engine.ingest_file(demo_csv)  # would block here if the export ran on the batch thread
-    assert record["status"] == "READY" and started.wait(30) and "sphere" not in engine.ws.load_batch(record["batch_id"])
+    assert record["status"] == "READY" and started.wait(30)
     release.set()
-    deadline = time.time() + 30
-    while "sphere" not in engine.ws.load_batch(record["batch_id"]) and time.time() < deadline:
-        time.sleep(0.05)
-    assert engine.ws.load_batch(record["batch_id"])["sphere"].endswith("sphere.html")
+    engine._sphere_pool.shutdown(wait=True)
 
 
 def test_reset_during_sphere_export_leaves_nothing_behind(tmp_path, demo_csv, monkeypatch):

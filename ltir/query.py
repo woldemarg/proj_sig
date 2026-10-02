@@ -4,9 +4,9 @@ Deterministic parse against the graph vocabulary (metrics, dimension values)
 plus a projection of the question into the insight space with the same
 tripartite composition as patterns. No LLM is involved in retrieval.
 
-Literal grounding (§7.1.1): a question in any language is matched span by span onto the
-graph's literal catalog — exact text, then same-script character n-grams, then the
-multilingual embedding with a local-margin and ratio gate — so *маржа*, *телефонів* and
+Literal grounding (§7.1.1): what the lexical pass leaves of a question in any language is
+matched span by span onto the graph's literal catalog — same-script character n-grams, then
+the multilingual embedding with a local-margin and ratio gate — so *маржа*, *телефонів* and
 *США* become ``margin``, ``category=phones`` and ``region=US`` before the structural seed
 scoring runs. Literals are never translated: the catalog holds them as the data does.
 """
@@ -27,106 +27,20 @@ from ltir.encoder import InsightEncoder, l2_normalize
 from ltir.graph import DualGraph
 from ltir.models import Insight
 
-NEG_WORDS = {
-    "lower",
-    "low",
-    "lowest",
-    "decrease",
-    "decreases",
-    "decreased",
-    "decreasing",
-    "decline",
-    "declines",
-    "declining",
-    "drop",
-    "drops",
-    "dropped",
-    "down",
-    "fall",
-    "falls",
-    "falling",
-    "less",
-    "reduced",
-    "reduce",
-    "reduction",
-    "worse",
-    "worst",
-    "negative",
-    "erosion",
-    "eroded",
-    "eroding",
-    "compressed",
-    "compression",
-    "shrink",
-    "shrinking",
-    "below",
-    "weak",
-    "weaker",
-    "poor",
-    "smaller",
-    "shorter",
-    "fewer",
-    "cheaper",
-    "loss",
-    "losses",
-}
-POS_WORDS = {
-    "higher",
-    "high",
-    "highest",
-    "increase",
-    "increases",
-    "increased",
-    "increasing",
-    "rise",
-    "rises",
-    "rising",
-    "up",
-    "more",
-    "grow",
-    "grows",
-    "growth",
-    "uplift",
-    "better",
-    "best",
-    "positive",
-    "above",
-    "elevated",
-    "spike",
-    "surge",
-    "larger",
-    "longer",
-    "bigger",
-    "delay",
-    "delays",
-    "delayed",
-    "slow",
-    "slower",
-    "stronger",
-    "inflated",
-}
+NEG_WORDS = frozenset(
+    "lower low lowest decrease decreases decreased decreasing decline declines declining drop drops dropped down fall falls falling less reduced reduce reduction worse worst negative erosion eroded eroding compressed compression shrink shrinking below weak weaker poor smaller shorter fewer cheaper loss losses".split()
+)
+POS_WORDS = frozenset(
+    "higher high highest increase increases increased increasing rise rises rising up more grow grows growth uplift better best positive above elevated spike surge larger longer bigger delay delays delayed slow slower stronger inflated".split()
+)
 # Ukrainian questions: inflected forms are matched by stem (prefix). Data literals (column names,
 # category values) are matched as typed, in whatever script the data holds them (§7.1.1).
 NEG_STEMS = ("нижч", "низьк", "менш", "пада", "спад", "знижен", "знижу", "зменш", "слабш", "гірш", "скороч", "втрат", "дешевш", "коротш")
 POS_STEMS = ("вищ", "висок", "більш", "зрост", "збільш", "підвищ", "затрим", "повільн", "сильніш", "кращ", "довш", "дорожч")
-WEAKENING_WORDS = ("break", "weak", "decoupl", "lose", "loss", "disappear", "руйн", "слаб", "розпад", "зник", "розрив", "втрач")
+WEAKENING_WORDS = ("break", "weak", "decoupl", "lose", "loss", "disappear", "руйн", "слаб", "ослаб", "послаб", "розпад", "зник", "розрив", "втрач")
 GENERIC_METRIC_WORDS = {"median", "mean", "average", "avg", "total", "number", "num", "count", "percent", "pct", "rate", "value", "score", "index"}
-COVARIANCE_WORDS = (
-    "correl",
-    "relationship",
-    "relation",
-    "coupl",
-    "decoupl",
-    "dependen",
-    "covari",
-    "linked",
-    "associat",
-    "кореляц",
-    "зв'яз",
-    "пов'яз",
-    "взаємозв",
-    "залежн",
-    "асоці",
+COVARIANCE_WORDS = tuple(
+    "correl relationship relation coupl decoupl dependen covari linked associat кореляц зв'яз пов'яз взаємозв залежн асоці".split()
 )
 _TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*")  # letters and digits in any script; underscores split (return_rate -> return, rate)
 
@@ -140,7 +54,6 @@ STOPWORDS = frozenset(
     "why what where which when how does do is are the a an for in on at of to about tell me show and or with by from than there their this that it its "
     "чому що де який яка які коли як для у в на і та з із зі при про від до це чи має є також там їх цей ця ці ніж між розкажи скажи покажи поясни".split()
 )
-DIRECTION_ANCHORS = (("higher increase growth up", 1), ("lower decrease drop down reduction", -1))  # multilingual sinks for direction words
 CHAR_MIN = 0.30  # char_wb (3–5) TF-IDF cosine floor (measured: inflections >= 0.33, typos >= 0.36, distractors <= 0.23)
 CHAR_MAX_LEN_DIFF = 3  # a same-script surface variant stays about as long as the literal (marginally -> margin is 0.89 but 4 letters longer)
 MARGIN_MIN, MARGIN_K, LOWE_MAX = 0.15, 5, 0.85  # dense gates: local margin over the catalog, Lowe's ratio
@@ -160,16 +73,15 @@ def detect_script(text: str) -> str:
 @dataclass
 class LiteralCatalog:
     """The graph's literals as the data holds them, indexed for grounding (§7.1.1): metric names (raw
-    and humanised), condition values (with the attributes they occur under), two direction anchors;
-    unit embeddings, and one char_wb TF-IDF index per script. Built by ``build_catalog``; persisted
-    as ``state/literals.npz`` by the writer (``Workspace.save_literals``)."""
+    and humanised) and condition values (with the attributes they occur under); unit embeddings, and
+    one char_wb TF-IDF index per script. Built by ``build_catalog`` (``Engine.catalog`` keeps the
+    vectors in ``graph/literals.npz``, so a known literal is never embedded twice)."""
 
     texts: list[str]
-    types: list[str]  # metric | condition | direction
-    symbols: list[Any]  # metric name | list of attributes | ±1
+    types: list[str]  # metric | condition
+    symbols: list[Any]  # metric name | list of attributes
     case_sensitive: list[bool]
     vectors: np.ndarray
-    fingerprint: str
     chars: dict[str, Any] = field(default_factory=dict)  # script -> (TfidfVectorizer, matrix, indices)
     embedder: Any = field(default=None, repr=False, compare=False)  # the model that embedded the catalog (attached by the engine)
 
@@ -183,9 +95,8 @@ class LiteralCatalog:
         self.scripts = [detect_script(t) for t in self.texts]
         self.words = np.array([len(t.split()) for t in self.texts])
         by_script: dict[str, list[int]] = {}
-        for i, kind in enumerate(self.types):
-            if kind != "direction":
-                by_script.setdefault(self.scripts[i], []).append(i)
+        for i, script in enumerate(self.scripts):
+            by_script.setdefault(script, []).append(i)
         for script, idx in by_script.items():
             if script != "other":
                 vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))
@@ -194,58 +105,32 @@ class LiteralCatalog:
     def symbol_key(self, j: int) -> str:
         return f"{self.types[j]}:{json.dumps(self.symbols[j], ensure_ascii=False)}"
 
-    def arrays(self) -> dict[str, Any]:
-        return {
-            "texts": np.array(self.texts),
-            "types": np.array(self.types),
-            "symbols": np.array(json.dumps(self.symbols, ensure_ascii=False)),
-            "case_sensitive": np.array(self.case_sensitive),
-            "vectors": self.vectors.astype(np.float32),
-            "fingerprint": np.array(self.fingerprint),
-        }
 
-    @classmethod
-    def from_arrays(cls, a: dict[str, Any]) -> LiteralCatalog:
-        return cls(
-            [str(t) for t in a["texts"]],
-            [str(t) for t in a["types"]],
-            json.loads(str(a["symbols"])),
-            [bool(c) for c in a["case_sensitive"]],
-            np.asarray(a["vectors"], dtype=np.float32),
-            str(a["fingerprint"]),
-        )
+def _values(graph: DualGraph) -> dict[str, list[str]]:
+    """Every condition value of the graph (first-seen order) -> the attributes it occurs under."""
+    values: dict[str, set[str]] = {}
+    for ins in graph.insights.values():
+        for c in ins.conditions:
+            values.setdefault(c.value, set()).add(c.attribute)
+    return {v: sorted(a) for v, a in values.items()}
 
 
-def catalog_entries(graph: DualGraph) -> tuple[list[str], list[str], list[Any], list[bool], list[str]]:
-    """The literal set of a graph, in a deterministic order (so a stored catalog can be checked against it)."""
+def build_catalog(graph: DualGraph, embedder: Any, known: dict[str, np.ndarray] | None = None) -> LiteralCatalog | None:
+    """The graph's literals, embedded with the document-side embedder (as component labels are); ``known`` maps a
+    literal to its unit vector from an earlier build, so only new literals are embedded. ``None`` for an empty graph."""
+    if not graph.insights:
+        return None
     texts, types, symbols, case = [], [], [], []
     for name in sorted({n["props"]["name"] for n in graph.of_kind("Metric")}):
         for text in dict.fromkeys((name, humanize(name))):  # raw and humanised form (once when equal)
             texts.append(text), types.append("metric"), symbols.append(name), case.append(False)
-    values: dict[str, list[str]] = {}
-    for ins in graph.insights.values():
-        for c in ins.conditions:
-            values.setdefault(c.value, [])
-            if c.attribute not in values[c.value]:
-                values[c.value].append(c.attribute)
-    for value in sorted(values):
-        (
-            texts.append(value),
-            types.append("condition"),
-            symbols.append(sorted(values[value])),
-            case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper()),
-        )
-    for text, sign in DIRECTION_ANCHORS:
-        texts.append(text), types.append("direction"), symbols.append(sign), case.append(False)
-    return texts, types, symbols, case
-
-
-def build_catalog(graph: DualGraph, embedder: Any, fingerprint: str = "") -> LiteralCatalog | None:
-    """Embed the graph's literals with the document-side embedder (as component labels are); ``None`` for an empty graph."""
-    texts, types, symbols, case = catalog_entries(graph)
-    if not graph.insights:
-        return None
-    return LiteralCatalog(texts, types, symbols, case, l2_normalize(embedder.embed(texts)), fingerprint, embedder=embedder)
+    for value, attrs in sorted(_values(graph).items()):
+        texts.append(value), types.append("condition"), symbols.append(attrs), case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
+    vectors = dict(known or {})
+    missing = [t for t in dict.fromkeys(texts) if t not in vectors]
+    if missing:
+        vectors.update(zip(missing, l2_normalize(embedder.embed(missing))))
+    return LiteralCatalog(texts, types, symbols, case, np.stack([vectors[t] for t in texts]).astype(np.float32), embedder=embedder)
 
 
 def _stem_match(a: str, b: str) -> bool:
@@ -272,7 +157,7 @@ class ParsedQuery:
 
     def components(self) -> tuple[tuple[str, float], ...]:
         if self.covariance and len(self.targets) >= 2:
-            weakening = any(w in self.text.lower() for w in WEAKENING_WORDS)
+            weakening = any(t.startswith(WEAKENING_WORDS) for t in _TOKEN.findall(self.text.lower()))  # a word, not a substring ("close")
             return ((covariance_label(self.targets[:2]), -2.0 if weakening else 2.0),)
         if not self.direction:
             # no direction word: no signed phenomenon components; the encoder then falls back
@@ -333,27 +218,23 @@ def _spans(raw_tokens: list[str], tokens: list[str], claimed: set[int]) -> list[
 
 
 def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], tokens: list[str], claimed: set[int], config: Config | None) -> None:
-    """Resolve the unclaimed spans onto catalog literals: exact text (A), same-script character
-    n-grams (B), then the multilingual embedding behind the floor / local-margin / ratio / case gates (C).
-    An accepted span claims its tokens (non-maximum suppression), so sub-spans never ground again."""
+    """Resolve the spans the lexical pass left onto catalog literals: same-script character n-grams first,
+    then the multilingual embedding behind the floor / local-margin / ratio / case gates. An accepted
+    span claims its tokens (non-maximum suppression), so sub-spans never ground again."""
     floor = config.grounding_min_cosine if config else 0.30
     pending: list[tuple[str, set[int]]] = []
     for span, pos in _spans(raw_tokens, tokens, claimed):
         if pos & claimed:
             continue
         hit = None
-        for j, text in enumerate(catalog.texts):
-            if (span == text) if catalog.case_sensitive[j] else (span.lower() == text.lower()):
-                hit = (j, "exact", 1.0)
-                break
-        if hit is None and len(span) >= 4 and (entry := catalog.chars.get(detect_script(span))):
+        if len(span) >= 4 and (entry := catalog.chars.get(detect_script(span))):
             vec, matrix, idx = entry
             sims = np.where(catalog.words[idx] == len(span.split()), (matrix @ vec.transform([span]).T).toarray().ravel(), -1.0)
             best = int(np.argmax(sims))
             if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF:
                 hit = (idx[best], "chars", float(sims[best]))
         if hit is not None:
-            _register(q, catalog, hit, span, pos, claimed, raw_tokens, tokens)
+            _register(q, catalog, hit, span, pos, claimed, tokens)
         else:
             pending.append((span, pos))
     if not pending:
@@ -380,40 +261,41 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
         margin = s1 - float(top[np.isfinite(top)].mean())
         if margin < MARGIN_MIN or (1.0 - s1) / max(1.0 - s2, 1e-6) > LOWE_MAX or (catalog.case_sensitive[j] and not span.isupper()):
             continue
-        _register(q, catalog, (j, "dense", s1), span, pos, claimed, raw_tokens, tokens)
+        _register(q, catalog, (j, "dense", s1), span, pos, claimed, tokens)
 
 
-def _register(
-    q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, float], span: str, pos: set[int], claimed: set[int], raw_tokens, tokens
-) -> None:
+def _bind(q: ParsedQuery, value: str, attrs: list[str], pos: set[int], tokens: list[str]) -> list[str]:
+    """Add the condition of ``value`` found at ``pos``. A value under several columns binds the one named within
+    two tokens of it, else ``*`` (any column holding the value, never a scope conflict). Returns the columns bound."""
+    if len(attrs) > 1:
+        near = [tokens[i] for i in range(max(0, min(pos) - 2), min(len(tokens), max(pos) + 3)) if i not in pos]
+        named = [a for a in attrs if any(_stem_match(part, t) for part in humanize(a).lower().split() for t in near)]
+        attrs = named if len(named) == 1 else ["*"]
+    for attr in attrs:
+        if (attr, value) not in q.conditions:
+            q.conditions.append((attr, value))
+    return attrs
+
+
+def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, float], span: str, pos: set[int], claimed: set[int], tokens) -> None:
     j, layer, score = hit
-    kind, symbol = catalog.types[j], catalog.symbols[j]
-    if kind == "direction":
-        if q.direction == 0 and not q.covariance:
-            q.direction = int(symbol)
-        symbol = "up" if int(symbol) > 0 else "down"
-    elif kind == "metric":
+    text, symbol = catalog.texts[j], catalog.symbols[j]
+    if catalog.types[j] == "metric":
         if symbol not in q.targets:
             q.targets.append(symbol)
     else:
-        attrs = symbol if len(symbol) > 1 else list(symbol)
-        if len(attrs) > 1:  # the value lives under several columns: a column named near the span decides, else any column
-            near = [tokens[i] for i in range(max(0, min(pos) - 2), min(len(tokens), max(pos) + 3)) if i not in pos]
-            named = [a for a in attrs if any(_stem_match(part, t) for part in humanize(a).lower().split() for t in near)]
-            attrs = named if len(named) == 1 else ["*"]
-        for attr in attrs:
-            if (attr, catalog.texts[j]) not in q.conditions:
-                q.conditions.append((attr, catalog.texts[j]))
-        symbol = [f"{a}={catalog.texts[j]}" if a != "*" else catalog.texts[j] for a in attrs]
+        symbol = [f"{a}={text}" if a != "*" else text for a in _bind(q, text, symbol, pos, tokens)]
     claimed |= pos
-    q.grounding.append({"span": span, "literal": catalog.texts[j], "layer": layer, "score": round(score, 3), "symbol": symbol})
+    q.grounding.append({"span": span, "literal": text, "layer": layer, "score": round(score, 3), "symbol": symbol})
 
 
-def parse_query(text: str, graph: DualGraph, config: Config | None = None) -> ParsedQuery:
+def parse_query(text: str, graph: DualGraph, config: Config | None = None, catalog: LiteralCatalog | None = None) -> ParsedQuery:
+    """Targets, conditions, direction and relationship intent of a question. Literals typed as the data holds
+    them match lexically; with ``catalog`` (``Engine.catalog``) the rest of the question is grounded (§7.1.1)."""
     raw_tokens = _TOKEN.findall(text.replace("’", "'").replace("ʼ", "'"))
     tokens = [t.lower() for t in raw_tokens]
     q = ParsedQuery(text=text)
-    claimed: set[int] = set()  # token positions resolved by the lexical layer, direction words and relationship words
+    claimed: set[int] = set()  # token positions taken by a literal, then by direction and relationship words
 
     metrics = sorted({n["props"]["name"] for n in graph.of_kind("Metric")})
     parts_of = {m: [p for p in humanize(m).lower().split() if len(p) >= 3] for m in metrics}
@@ -437,30 +319,22 @@ def parse_query(text: str, graph: DualGraph, config: Config | None = None) -> Pa
         q.targets = sorted(name for score, name in matched if score == best)
         claimed |= {i for i, t in enumerate(tokens) for name in q.targets for p in parts_of[name] if _stem_match(p, t)}
 
-    values: dict[tuple[str, str], None] = {}
-    for ins in graph.insights.values():
-        for cond in ins.conditions:
-            values[(cond.attribute, cond.value)] = None
-    for attr, value in values:
-        short_upper = len(value) <= ACRONYM_MAX_LEN and value.isupper()
-        if short_upper:
-            hit = value in raw_tokens
-            positions = {i for i, t in enumerate(raw_tokens) if t == value}
-        else:
-            vparts = value.lower().split()
-            hit = all(any(_stem_match(v, t) for t in tokens) for v in vparts)
-            positions = {i for i, t in enumerate(tokens) for v in vparts if _stem_match(v, t)}
-        if hit:
-            claimed |= positions
-            if (attr, value) not in q.conditions:
-                q.conditions.append((attr, value))
+    for value, attrs in _values(graph).items():
+        if len(value) <= ACRONYM_MAX_LEN and value.isupper():  # an acronym matches as typed: "us" is not "US"
+            pos = {i for i, t in enumerate(raw_tokens) if t == value}
+        else:  # every word of the value, inflected or not
+            found = [{i for i, t in enumerate(tokens) if _stem_match(v, t)} for v in value.lower().split()]
+            pos = set().union(*found) if all(found) else set()
+        if pos:
+            claimed |= pos
+            _bind(q, value, attrs, pos, tokens)
 
-    q.direction = _direction(tokens)
-    q.covariance = any(t.startswith(COVARIANCE_WORDS) for t in tokens) and not _directed_driver(tokens)
+    free = ["" if i in claimed else t for i, t in enumerate(tokens)]  # a literal's words are not intent words ("delivery delay")
+    q.direction = _direction(free)
+    q.covariance = any(t.startswith(COVARIANCE_WORDS) for t in free) and not _directed_driver(free)
     if q.covariance:
         q.direction = 0  # "breaks down" / "weakens" describe the relationship, not a metric level
     claimed |= {i for i, t in enumerate(tokens) if _is_direction(t) or t.startswith(COVARIANCE_WORDS) or t in COMPARATIVE_ADVERBS}
-    catalog = getattr(graph, "catalog", None)
     if catalog is not None:
         _ground(q, catalog, raw_tokens, tokens, claimed, config)
         q.targets = sorted(q.targets)

@@ -163,7 +163,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
 
     @app.get("/api/batches")
     def batches() -> list[dict[str, Any]]:
-        return [{k: v for k, v in b.items() if k not in {"checkpoint"}} for b in reversed(engine.ws.list_batches())]
+        return list(reversed(engine.ws.list_batches()))
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
@@ -268,8 +268,9 @@ def main() -> None:
     log_gpu_headroom()
 
     def _warm_viz() -> None:
-        # Deferred on purpose: plotly/prosphera take a few seconds and must not block startup.
-        importlib.import_module("ltir.engines.lac.projector")
+        # Deferred on purpose: plotly and KernelPCA take a few seconds to import and must not block startup.
+        importlib.import_module("plotly.graph_objs")
+        importlib.import_module("sklearn.decomposition")
         log.info("3D sphere projector ready")
 
     threading.Thread(target=_warm_viz, daemon=True).start()
