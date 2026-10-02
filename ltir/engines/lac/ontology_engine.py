@@ -268,21 +268,16 @@ def _build_local_activations(
     return edges
 
 
-def _omp_fallback_unit_norm_rows(
-    embeddings: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+def _omp_fallback_unit_norm_rows(embeddings: np.ndarray) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """When K-sweep is ill-conditioned (tiny orphan buffer), mint one concept per row."""
     centroids = _l2_normalize_rows(embeddings.astype(np.float64)).astype(np.float32)
-    n = len(centroids)
-    counts = np.ones(n, dtype=np.int64)
-    local_acts = [{"chunk_id": i, "concept_id": i, "weight": 1.0} for i in range(n)]
-    return centroids, counts, local_acts
+    return centroids, [{"chunk_id": i, "concept_id": i, "weight": 1.0} for i in range(len(centroids))]
 
 
-def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
-    """K-sweep OMP; returns (centroid_embeddings, chunk_counts, local_acts)."""
+def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """K-sweep OMP; returns (centroid_embeddings, local_acts). The counts come from ``repair_extraction``."""
     if len(embeddings) == 0:
-        return np.empty((0, 0)), np.empty(0, dtype=np.int64), []
+        return np.empty((0, 0)), []
 
     n_samples = len(embeddings)
     if n_samples < config.dictionary_k_min:
@@ -350,11 +345,10 @@ def _omp_extract(embeddings: np.ndarray, config: Config) -> tuple[np.ndarray, np
     active_indices = np.where(concept_usage > 0)[0]
     coefficients_abs = coefficients_abs[:, active_indices]
     dictionary = best_dictionary[active_indices, :]
-    omp_chunk_counts = np.sum(coefficients_abs > 1e-5, axis=0).astype(np.int64)
 
     centroid_embeddings = _l2_normalize_rows(dictionary.astype(np.float64)).astype(np.float32)
     local_acts = _build_local_activations(coefficients_abs, concepts_per_chunk)
-    return centroid_embeddings, omp_chunk_counts, local_acts
+    return centroid_embeddings, local_acts
 
 
 def repair_extraction(
@@ -435,5 +429,5 @@ def extract_attractors(rows: np.ndarray, unit_rows: np.ndarray, config: Config) 
     """Mint attractors (cold start and orphan buffer): OMP on ``dictionary_input_scale * rows``,
     then the signed repair; returns (centroids, chunk_counts, local activations)."""
     scaled = np.asarray(rows, dtype=np.float32) * float(config.dictionary_input_scale)
-    centroids, _counts, acts = _omp_extract(scaled, config)
+    centroids, acts = _omp_extract(scaled, config)
     return repair_extraction(centroids, acts, unit_rows, config)
