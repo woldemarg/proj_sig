@@ -216,6 +216,73 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     assert engine.ingest_file(demo_csv)["status"] == "READY"
 
 
+def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo_csv, monkeypatch):
+    """The READY record is the commit marker. If writing it fails (a Windows sharing violation that outlasts
+    the retry), the batch rolls back completely: journal, state and the snapshot it had already written."""
+    cfg = make_config(tmp_path / "ws")
+    engine = Engine(cfg, llm=FakeLLM())
+    save = engine.ws.save_batch
+
+    def flaky(record):
+        if record["status"] == "READY":
+            raise PermissionError(13, "Access is denied")
+        save(record)
+
+    monkeypatch.setattr(engine.ws, "save_batch", flaky)
+    assert engine.ingest_file(demo_csv)["status"] == "FAILED"
+    assert engine.ws.load_graph() is None and not engine.ws.patterns()  # first batch: no snapshot left behind
+    monkeypatch.setattr(engine.ws, "save_batch", save)
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    before = {n["id"] for n in engine.ws.load_graph()["nodes"]}
+    other = tmp_path / "other.csv"
+    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
+    monkeypatch.setattr(engine.ws, "save_batch", flaky)
+    assert engine.ingest_file(other)["status"] == "FAILED"
+    assert {n["id"] for n in engine.ws.load_graph()["nodes"]} == before  # the previous snapshot is back
+    fresh = Engine(cfg, llm=FakeLLM(), recover=False)
+    assert set(fresh.frame().patterns) == {n["id"] for n in fresh.graph().of_kind("Pattern")}
+
+
+def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypatch):
+    """Deletion is all or nothing: an error rolls it back at once; a crash leaves its marker, and the next
+    writer start rolls it back — journal, ontology, snapshot, batch records and dataset folder alike."""
+    cfg = make_config(tmp_path / "ws")
+    engine = Engine(cfg, llm=FakeLLM())
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    other = tmp_path / "other.csv"
+    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
+    rec = engine.ingest_file(other)
+    ds = rec["dataset_id"]
+
+    def state():
+        ont = engine.ontology()
+        return (
+            len(engine.ws.patterns()),
+            len(engine.ws.vectors()),
+            ont.store.next_chunk_id,
+            ont.attractor_ids,
+            sorted(n["id"] for n in engine.ws.load_graph()["nodes"]),
+            sorted(b["batch_id"] for b in engine.ws.list_batches()),
+            (cfg.workspace_dir / "datasets" / ds / "profile.json").is_file(),
+        )
+
+    before = state()
+
+    class Crash(BaseException):  # the process dies: no except-handler runs
+        pass
+
+    for failure in (RuntimeError("disk full"), Crash()):
+        monkeypatch.setattr(engine.ws, "save_graph", lambda snapshot, failure=failure: (_ for _ in ()).throw(failure))
+        with pytest.raises(type(failure)):
+            engine.delete_dataset(ds)
+        monkeypatch.undo()
+        if isinstance(failure, Crash):
+            assert engine.ws.pending_delete_path.exists() and state() != before  # half done, marker left
+            Engine(cfg, llm=FakeLLM())  # the next writer start
+        assert state() == before and not engine.ws.pending_delete_path.exists()
+    assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
+
+
 def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     """One writer per workspace: a CLI writer started while the web app holds the lock is refused
     and leaves the web app's queued upload alone; readers stay allowed."""

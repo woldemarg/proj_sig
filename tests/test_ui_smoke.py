@@ -117,9 +117,14 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             assert page.evaluate("S.cy.nodes('.hl-anchor').length") > 0
             assert page.evaluate("S.cy.nodes('.hl-seed').length") > 0
             assert page.evaluate("document.querySelectorAll('.ev').length") > 0
-            # the evidence is the default chat tab; UI chrome stays English
-            assert page.inner_text(".bot-tabs button.active").startswith("Evidence & how it was found")
-            assert not page.is_hidden(".bot-pane[data-pane='0']") and page.is_hidden(".bot-pane[data-pane='1']")
+            # the answer's panels start closed; a click opens the evidence, a second click closes it; UI chrome stays English
+            assert page.evaluate("document.querySelectorAll('.bot-tabs button.active').length") == 0 and page.is_hidden(".bot-pane[data-pane='0']")
+            tab = ".bot-tabs button[data-pane='0']"
+            assert page.inner_text(tab).startswith("Evidence & how it was found")
+            page.click(tab)
+            assert page.is_visible(".bot-pane[data-pane='0'] .ev") and page.is_hidden(".bot-pane[data-pane='1']")
+            page.click(tab)
+            assert page.is_hidden(".bot-pane[data-pane='0']")
             # clicking an evidence card opens the details drawer via its citation
             page.click(".answer-box a.cite >> nth=0")
             page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)

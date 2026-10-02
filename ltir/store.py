@@ -127,6 +127,7 @@ class Workspace:
         self.state_dir = self.root / "state"
         self.graph_path = self.root / "graph" / "snapshot.json"
         self.query_log = self.root / "logs" / "queries.jsonl"
+        self.pending_delete_path = self.root / "pending_delete.json"  # a dataset deletion in progress (Engine.delete_dataset)
         for d in (self.registry_dir, self.datasets_dir, self.journal_dir / "blocks", self.state_dir, self.query_log.parent):
             d.mkdir(parents=True, exist_ok=True)
         self.journal = ChunkJournal(self.journal_dir, records_name="patterns.jsonl")
@@ -241,39 +242,60 @@ class Workspace:
         return self.journal.load_embeddings()
 
     def checkpoint(self, *, journal: bool = False) -> dict[str, Any]:
-        """Copy ``state/`` (and, for a rewrite that may shrink the journal, ``journal/``) aside; a batch
-        only appends, so for it the journal extent (``mark``) is enough."""
+        """Copy ``state/`` and the snapshot aside (and, for a rewrite that may shrink the journal, ``journal/``);
+        a batch only appends, so for it the journal extent (``mark``) is enough. ``rollback`` restores all of it."""
         cp_dir = self.state_dir.parent / "checkpoint"
         if cp_dir.exists():
             shutil.rmtree(cp_dir)
         shutil.copytree(self.state_dir, cp_dir)
         if journal:
             shutil.copytree(self.journal_dir, cp_dir / "journal")
-        return {**self.journal.mark(), "dir": str(cp_dir)}
+        had_snapshot = self.graph_path.is_file()
+        if had_snapshot:  # readers trust the snapshot: a rolled-back batch must not leave its graph behind
+            (cp_dir / "graph").mkdir()
+            shutil.copyfile(self.graph_path, cp_dir / "graph" / "snapshot.json")
+        return {**self.journal.mark(), "dir": str(cp_dir), "snapshot": had_snapshot}
 
     def rollback(self, cp: dict[str, Any]) -> None:
-        journal_copy = Path(cp["dir"]) / "journal"
-        if journal_copy.exists():
+        cp_dir = Path(cp["dir"])
+        if (cp_dir / "journal").exists():
             shutil.rmtree(self.journal_dir)
-            shutil.copytree(journal_copy, self.journal_dir)
+            shutil.copytree(cp_dir / "journal", self.journal_dir)
         else:
             self.journal.truncate(cp)
         shutil.rmtree(self.state_dir)
-        shutil.copytree(cp["dir"], self.state_dir, ignore=shutil.ignore_patterns("journal"))
+        shutil.copytree(cp_dir, self.state_dir, ignore=shutil.ignore_patterns("journal", "graph", "removed"))
+        if "snapshot" in cp:  # (checkpoints written before the snapshot was part of them carry no flag)
+            if cp["snapshot"]:
+                tmp = self.graph_path.with_name("snapshot.json.restore")
+                shutil.copyfile(cp_dir / "graph" / "snapshot.json", tmp)
+                replace_file(tmp, self.graph_path)
+            else:
+                self.graph_path.unlink(missing_ok=True)
+        removed = cp_dir / "removed"  # files a dataset deletion moved aside go back where they were
+        for f in sorted(p for p in removed.rglob("*") if p.is_file()) if removed.exists() else []:
+            dest = self.root / f.relative_to(removed)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(dest))
 
     def rewrite_journal(self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]]) -> None:
         self.journal.rewrite(patterns, vectors, activations)
 
-    def remove_dataset(self, dataset_id: str, batches: list[dict[str, Any]]) -> None:
-        """Delete a dataset's artefacts: its folder, its batches' blocks, records and web uploads."""
-        shutil.rmtree(self.datasets_dir / dataset_id, ignore_errors=True)
-        uploads = (self.root / "uploads").resolve()
+    def remove_dataset(self, dataset_id: str, batches: list[dict[str, Any]], trash: Path) -> None:
+        """Move a dataset's artefacts — its folder, its batches' blocks, records and web uploads — into
+        ``trash`` (inside the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them."""
+        root = self.root.resolve()
+        paths = [self.datasets_dir / dataset_id]
         for b in batches:
-            (self.journal_dir / "blocks" / f"{b['batch_id']}.npz").unlink(missing_ok=True)
             source = Path(b.get("source_path") or "")
-            if source.is_file() and source.resolve().is_relative_to(uploads):
-                source.unlink()
-            self.batch_path(b["batch_id"]).unlink(missing_ok=True)
+            paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
+            if source.is_file() and source.resolve().is_relative_to(root / "uploads"):
+                paths.append(source)
+        for path in paths:
+            if path.exists():
+                dest = trash / path.resolve().relative_to(root)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), str(dest))
 
     def discard_checkpoint(self, cp: dict[str, Any]) -> None:
         shutil.rmtree(cp["dir"], ignore_errors=True)

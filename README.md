@@ -77,7 +77,7 @@ Startup loads the embedding model onto the GPU (~10 s, `EMBEDDING_DEVICE=cuda`; 
 2. Watch the **batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
 3. **Explore.** The three tabs — *Graph*, *3D Sphere*, *Insights* — are views of the same knowledge base under one legend column; its link switches show the layers (hierarchy and theme links by default; contrasts, siblings, memberships, columns on demand) in the graph and on the sphere alike, and hovering an entry spotlights it. Click any node — in the graph or on the sphere — for the details drawer. Drag the borders between the three columns to resize them. *Graph*: the *Two planes* layout shows themes (latent anchors) on top and insights below, grouped by theme. *Insights*: a sortable, filterable table. Click any node or row for the details drawer: a one-line reading, shifts with meters, evidence facts, score breakdown, canonical form, connections and provenance. Number-coded columns (store ids, flags) can be declared under *Column options → Treat as categories*; numeric columns can be split into quantile bands.
 4. **3D Sphere**. The same insights are shown as embeddings projected on a sphere, using lac's prosphera projector (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
-5. **Chat** with the data (or click a suggestion). Questions and answers are in Ukrainian; every data literal — `margin`, `phones`, `US`, ids — stays exactly as the data holds it, so it can always be found in the table. The answer cites `[P#]` evidence and opens on the *Evidence & how it was found* tab; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; the *Prompt* tab shows the exact evidence the model saw. The switch below the composer turns the LLM explanation off (evidence-only answers).
+5. **Chat** with the data (or click a suggestion). Questions and answers are in Ukrainian; every data literal — `margin`, `phones`, `US`, ids — stays exactly as the data holds it, so it can always be found in the table. The answer cites `[P#]` evidence and its *Evidence & how it was found*, *Sources* and *Prompt* panels open on click; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; the *Prompt* tab shows the exact evidence the model saw. The switch below the composer turns the LLM explanation off (evidence-only answers).
 
 CLI equivalents:
 ```powershell
@@ -91,7 +91,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 78 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 80 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -173,7 +173,7 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, fileio, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    sphere, synth, experiment, cli, web/, cypher/)
-  tests/           78 contract / integration / E2E / UI tests
+  tests/           80 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), download_model.py

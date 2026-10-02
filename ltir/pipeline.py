@@ -36,7 +36,7 @@ from ltir.ingestion import load_dataset
 from ltir.models import CanonicalInsight, EmbeddingSpec, Insight
 from ltir.ontology import LatentOntology, OntologyUpdate
 from ltir.quality import SelectionResult, select_insights
-from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, utc_now
+from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, read_json, utc_now
 
 if TYPE_CHECKING:
     from ltir.llm import OpenAICompatibleLLM
@@ -188,6 +188,7 @@ class Engine:
         self._graph: DualGraph | None = None
         self._frame: LatentFrame | None = None
         if recover:
+            self._recover_deletion()
             self._recover_interrupted()
 
     @property
@@ -515,7 +516,9 @@ class Engine:
 
         Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
         centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
-        rebuilt and the Neo4j mirror synced. Exception-safe through a state + journal checkpoint.
+        rebuilt and the Neo4j mirror synced. All or nothing: the checkpoint holds the state, the journal,
+        the snapshot and the moved-aside files; an error rolls back at once, and a crash leaves the
+        ``pending_delete.json`` marker, so the next writer start rolls back (``_recover_deletion``).
         ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
         with self._lock:
@@ -531,15 +534,18 @@ class Engine:
             row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
             acts = [{**a, "row_id": row_of[a["row_id"]]} for a in self.ws.activations() if a["row_id"] in row_of]
             cp = self.ws.checkpoint(journal=True)
+            atomic_write_json(self.ws.pending_delete_path, {"dataset_id": dataset_id, "checkpoint": cp})
             try:
+                self.ws.remove_dataset(dataset_id, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
                 dropped = ontology.forget(acts, len(kept))
                 self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
                 ontology.save()
-                self.ws.remove_dataset(dataset_id, batches)
                 snapshot = build_snapshot(self.ws, ontology, self.config)
                 self.ws.save_graph(snapshot)
+                self.ws.pending_delete_path.unlink()  # commit point
             except Exception:
                 self.ws.rollback(cp)
+                self.ws.pending_delete_path.unlink(missing_ok=True)
                 self.ws.discard_checkpoint(cp)
                 raise
             self.ws.discard_checkpoint(cp)
@@ -573,6 +579,18 @@ class Engine:
         except Exception as exc:  # the mirror is optional: report, never fail the caller
             log.warning("Neo4j sync failed: %s", exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+    def _recover_deletion(self) -> None:
+        """A dataset deletion that never reached its commit point (the process died) is undone from its checkpoint."""
+        pending = read_json(self.ws.pending_delete_path)
+        if pending is None:
+            return
+        cp = pending["checkpoint"]
+        if Path(cp["dir"]).exists():
+            self.ws.rollback(cp)
+            self.ws.discard_checkpoint(cp)
+        self.ws.pending_delete_path.unlink()
+        log.warning("an interrupted deletion of %s was rolled back; the dataset is still there", pending["dataset_id"])
 
     def _recover_interrupted(self) -> None:
         """Roll back and fail every unfinished batch: under the writer lock no other writer is alive."""
