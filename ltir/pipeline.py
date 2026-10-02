@@ -516,9 +516,10 @@ class Engine:
         Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
         centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
         rebuilt and the Neo4j mirror synced. Exception-safe through a state + journal checkpoint.
+        ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
         with self._lock:
-            batches = [b for b in self.ws.list_batches() if b.get("dataset_id") == dataset_id]
+            batches = [b for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b["batch_id"])]
             if not batches:
                 raise PipelineError("unknown_dataset", dataset_id)
             if any(b["status"] not in TERMINAL for b in batches):

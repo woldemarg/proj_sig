@@ -65,6 +65,11 @@ def test_upload_process_render_query(client, demo_csv):
     assert client.delete(f"/api/datasets/{ds}").json()["patterns_removed"] == batches[0]["metrics"]["validated_insights"]
     assert client.get("/api/batches").json() == [] and client.get("/api/graph").json()["nodes"] == []
     assert client.delete(f"/api/datasets/{ds}").status_code == 404
+    # an upload that failed before it had a dataset id is removed by its batch id
+    client.post("/api/upload", files={"file": ("notes.json", b"{}", "application/json")})
+    failed = _wait_ready(client)[0]
+    assert failed["status"] == "FAILED" and failed["dataset_id"] is None
+    assert client.delete(f"/api/datasets/{failed['batch_id']}").status_code == 200 and client.get("/api/batches").json() == []
     assert client.post("/api/reset").json()["status"] == "reset"
 
 
@@ -119,27 +124,45 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.click(".answer-box a.cite >> nth=0")
             page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
             assert "insight" in page.inner_text("#drawer-kind").lower()
-            # one legend for every view; its link entries toggle the layers in the graph and in the sphere alike
+            # one legend for every view; by default only Hierarchy and Theme links are on, with live counts
             assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-layer='activates']")
+            assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.layer)") == ["lattice", "latent"]
+            assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
+            page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
+            assert page.evaluate("S.cy.elements('.lg-dim').length") > 0
+            page.mouse.move(5, 5)
+            assert page.evaluate("S.cy.elements('.lg-dim').length") == 0
+            # the sphere: the same toggles switch its traces in place, a click on a point opens the drawer
             page.click("#view-switch button[data-view='sphere']")
-            page.wait_for_function(
-                "(() => { const w = document.querySelector('#sphere').contentWindow; return w && w.document.querySelector('.plotly-graph-div') && w.document.querySelector('.plotly-graph-div').data; })()",
-                timeout=60000,
-            )
-            trace_visible = "(() => { const gd = document.querySelector('#sphere').contentWindow.document.querySelector('.plotly-graph-div'); return gd.data.filter(t => t.name === 'Memberships').map(t => t.visible !== false); })()"
-            assert page.is_visible("#legend") and page.evaluate(trace_visible) == [True]
+            sphere = "document.querySelector('#sphere').contentWindow.document.querySelector('.plotly-graph-div')"
+            page.wait_for_function(f"(() => {{ const gd = {sphere}; return !!(gd && gd.data && gd.on); }})()", timeout=60000)
+            visible = f"(name) => {sphere}.data.filter(t => t.name === name).map(t => t.visible !== false)"
+            assert page.evaluate(f"({visible})('Memberships')") == [False] and page.evaluate(f"({visible})('Hierarchy')") == [True]
             assert page.evaluate("document.querySelector('.toggle[data-layer=\"schema\"]').disabled")  # columns have no 3D meaning
             page.click("#legend .toggle[data-layer='activates']")
-            assert page.evaluate(trace_visible) == [False]
+            page.click("#legend .toggle[data-layer='lattice']")
+            assert page.evaluate(f"({visible})('Memberships')") == [True] and page.evaluate(f"({visible})('Hierarchy')") == [False]
+            page.evaluate("document.querySelector('#drawer-close').click()")
+            pid = page.evaluate("S.nodes[0].id")
+            page.evaluate(f"{sphere}.emit('plotly_click', {{ points: [{{ customdata: '{pid}' }}] }})")
+            page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
             page.click("#view-switch button[data-view='graph']")
             hidden, rest = (page.evaluate(f"S.cy.edges('[type=\"ACTIVATES\"]').not('.hl-edge'){f}.length") for f in (".filter('.hidden')", ""))
-            assert hidden == rest > 0  # off in the graph too (the answer path stays visible by design)
+            assert hidden == 0 and rest > 0  # on in the graph too
+            # the column borders can be dragged
+            handle = page.locator(".rail .col-resize").bounding_box()
+            before = page.evaluate("document.querySelector('.rail').getBoundingClientRect().width")
+            page.mouse.move(handle["x"] + 4, handle["y"] + 300)
+            page.mouse.down()
+            page.mouse.move(handle["x"] + 84, handle["y"] + 300, steps=5)
+            page.mouse.up()
+            assert abs(page.evaluate("document.querySelector('.rail').getBoundingClientRect().width") - before - 80) < 4
             page.click("#theme-btn")
             assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
             page.screenshot(path=str(tmp_path / "ui.png"))
             # deleting the dataset from its card empties the views, through the backend
             page.once("dialog", lambda d: d.accept())
-            page.hover(".ds")
+            assert page.is_visible(".ds .ds-del")  # always visible, not only on hover
             page.click(".ds .ds-del")
             page.wait_for_selector(".empty-rail", timeout=20000)
             assert page.evaluate("S.cy.nodes().length") == 0 and not engine.graph().of_kind("Pattern")

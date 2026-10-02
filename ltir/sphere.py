@@ -43,7 +43,7 @@ LAYER_TRACES = {
     "latent": ("Theme links",),
     "activates": ("Memberships", "Memberships (weak)"),
 }
-LAYER_DEFAULTS = {"lattice": True, "contrast": True, "sibling": False, "latent": True, "activates": True}
+LAYER_DEFAULTS = {"lattice": True, "contrast": False, "sibling": False, "latent": True, "activates": False}
 
 
 class SphereError(RuntimeError):
@@ -139,6 +139,7 @@ def sphere_figure(
             tr.name = "Themes"
             tr.mode = "markers+text"
             tr.text = att_ids
+            tr.customdata = att_ids  # node ids: a click opens the same details drawer as in the graph
             tr.textposition = "top center"
             tr.textfont = dict(color=pal["ink"], size=11)
             tr.marker.symbol = "diamond"
@@ -187,6 +188,7 @@ def sphere_figure(
                 opacity=0.35 if focus else 0.9,
                 marker=dict(symbol=symbol, size=[3 + 6 * g.insight(pats[i]["id"]).weight for i in idx], color=color, line=dict(width=0)),
                 hovertext=[hovers[i] for i in idx],
+                customdata=[pats[i]["id"] for i in idx],
                 hovertemplate=viz.HOVER,
             )
         )
@@ -246,6 +248,7 @@ def sphere_figure(
                         name=name,
                         marker=dict(symbol="circle-open", size=size, color=color, line=dict(color=color, width=width)),
                         hovertext=[hovers[pidx[i]] for i in ids],
+                        customdata=ids,
                         hovertemplate=viz.HOVER,
                     )
                 )
