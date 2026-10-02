@@ -22,6 +22,8 @@ def test_sphere_uses_the_graphs_visual_language(hashed_engine):
     assert len(by_name["Themes"].x) == len(g.of_kind("Attractor")) and by_name["Themes"].marker.symbol == "diamond"
     classes = [by_name[n] for n in ("Metric higher", "Metric lower", "Correlation change") if n in by_name]
     assert sum(len(t.x) for t in classes) == len(g.of_kind("Pattern"))
+    assert {i for t in classes for i in t.customdata} == {n["id"] for n in g.of_kind("Pattern")}  # click -> drawer
+    assert list(by_name["Themes"].customdata) == sorted((n["id"] for n in g.of_kind("Attractor")), key=lambda a: int(a[2:]))
     assert max(abs(float(v)) for t in classes for v in list(t.x) + list(t.y) + list(t.z)) <= 1.0 + 1e-9  # on/inside the unit sphere
     for key, names in LAYER_TRACES.items():  # every layer the legend toggles exists and starts in the toggle's state
         assert any(n in by_name for n in names), key

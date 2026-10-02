@@ -138,7 +138,7 @@ Guarantees (tests: `test_structural.py`; `test_persistence.py`: write → reload
 
 ## 6.8 Deleting a dataset
 
-`Engine.delete_dataset(dataset_id)` (web: `DELETE /api/datasets/{id}`, the card's delete control) removes one dataset from the knowledge base while the rest stays intact — the counterpart of `reset`, which removes everything. It is a writer operation under the engine lock, refused with `busy` while one of the dataset's batches is still running and with `unknown_dataset` when no batch carries that id.
+`Engine.delete_dataset(dataset_id)` (web: `DELETE /api/datasets/{id}`, the card's *Delete* button; the id may also be the batch id of an upload that failed before it had a dataset id) removes one dataset from the knowledge base while the rest stays intact — the counterpart of `reset`, which removes everything. It is a writer operation under the engine lock, refused with `busy` while one of the dataset's batches is still running and with `unknown_dataset` when no batch carries that id.
 
 ```text
 rows of the dataset leave the journal: patterns.jsonl, activations.jsonl and the vector matrix are rewritten

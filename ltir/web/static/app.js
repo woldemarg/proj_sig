@@ -30,10 +30,18 @@ const SUGGESTIONS = [
 ];
 // sphere traces named after the legend's layer toggles (ltir/sphere.py LAYER_TRACES)
 const SPHERE_LAYERS = { lattice: ["Hierarchy"], contrast: ["Contrasts"], sibling: ["Siblings"], latent: ["Theme links"], activates: ["Memberships", "Memberships (weak)"] };
+// a legend entry under the mouse spotlights its elements in both views
+const LEGEND_TRACES = { anchor: ["Themes"], up: ["Metric higher"], down: ["Metric lower"], cov: ["Correlation change"], ...SPHERE_LAYERS,
+  seed: ["Seed"], ev: ["Evidence"], cross: ["Other segment"], path: ["Answer path", "Themes visited"] };
 const LAYERS = {
   lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]',
   latent: 'edge[type="RELATED_TO"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
+};
+const LEGEND_SEL = {
+  anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
+  down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]', ...LAYERS,
+  seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -101,11 +109,11 @@ function datasetCard(b) {
   const chip = running ? `<span class="chip run">Processing</span>` : b.status === "READY" ? `<span class="chip ok">Ready</span>`
     : b.status === "FAILED" ? `<span class="chip bad">Failed</span>` : `<span class="chip">Skipped</span>`;
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
-  const del = !running && b.dataset_id ? `<button type="button" class="ds-del" data-del="${esc(b.dataset_id)}" data-name="${esc(b.filename)}" title="Delete this dataset and its insights" aria-label="Delete dataset">` +
-    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>` : "";
+  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(b.filename)}" title="Remove this dataset and its insights from the knowledge base">` +
+    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
-    `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}${del}</div>` +
-    `<div class="ds-sub">${esc(when)}</div>${body}</div>`;
+    `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}</div>` +
+    `<div class="ds-sub">${esc(when)}</div>${body}${del}</div>`;
 }
 
 async function deleteDataset(id, name) {
@@ -189,6 +197,7 @@ function graphStyle() {
     { selector: ".hl-anchor", style: { "border-width": 5, "border-color": path } },
     { selector: "edge.hl-edge", style: { "line-color": path, "target-arrow-color": path, width: 5, opacity: 1, "z-index": 999, display: "element" } },
     { selector: "node:selected", style: { "overlay-color": anchor, "overlay-opacity": 0.14, "overlay-padding": 7 } },
+    { selector: ".lg-dim", style: { opacity: 0.06 } },
   ];
 }
 
@@ -278,14 +287,43 @@ function applyVisibility() {
   applySphereLayers();
 }
 
-function applySphereLayers() {
-  /* the sphere page is a same-origin srcdoc frame: restyle its traces in place, no re-render */
+function sphereDiv() {
+  /* the sphere page is a same-origin srcdoc frame: its traces are restyled in place, no re-render */
   const win = $("sphere").contentWindow, gd = win && win.document && win.document.querySelector(".plotly-graph-div");
-  if (!gd || !win.Plotly || !gd.data) return;
+  return gd && win.Plotly && gd.data ? gd : null;
+}
+
+function applySphereLayers() {
+  const gd = sphereDiv(); if (!gd) return;
   for (const [name, traces] of Object.entries(SPHERE_LAYERS)) {
     const idx = gd.data.map((t, i) => (traces.includes(t.name) ? i : -1)).filter((i) => i >= 0);
-    if (idx.length) win.Plotly.restyle(gd, { visible: layerOn(name) }, idx);
+    if (idx.length) $("sphere").contentWindow.Plotly.restyle(gd, { visible: layerOn(name) }, idx);
   }
+}
+
+function wireSphere() {
+  /* a fresh sphere page: clicks open the drawer (customdata = node id), layers follow the legend */
+  const gd = sphereDiv(); if (!gd) return;
+  gd.on("plotly_click", (ev) => { const id = ev.points && ev.points[0] && ev.points[0].customdata; if (id) inspect(id); });
+  applySphereLayers();
+}
+
+function spotlight(key) {
+  /* hovering a legend entry: everything else dims, in the graph and on the sphere */
+  if (S.cy) {
+    S.cy.elements().removeClass("lg-dim");
+    const sel = key ? S.cy.$(LEGEND_SEL[key]) : null;
+    if (sel && sel.nonempty()) S.cy.elements().not(sel.union(sel.filter("edge").connectedNodes())).addClass("lg-dim");
+  }
+  const gd = sphereDiv(); if (!gd) return;
+  gd._sigOpacity = gd._sigOpacity || gd.data.map((t) => (t.opacity === undefined ? 1 : t.opacity));
+  const names = LEGEND_TRACES[key] || [];
+  const hit = gd.data.some((t) => names.includes(t.name));
+  $("sphere").contentWindow.Plotly.restyle(gd, { opacity: gd.data.map((t, i) => (!hit || names.includes(t.name) ? gd._sigOpacity[i] : 0.07)) });
+}
+
+function setCounts(counts) {
+  for (const [k, v] of Object.entries(counts)) document.querySelectorAll(`[data-n="${k}"]`).forEach((el) => { el.textContent = v ? v : ""; });
 }
 
 function spherePalette() {
@@ -299,8 +337,15 @@ async function loadGraph() {
   try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
-  const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
-  $("view-caption").textContent = S.nodes.length ? `${S.nodes.length} insights · ${themes} themes · ${g.edges.length} links` : "";
+  const nodes = (f) => g.nodes.filter((n) => f(n.data)).length, edges = (t) => g.edges.filter((e) => e.data.type === t).length;
+  const pat = (f) => nodes((d) => d.kind === "Pattern" && f(d));
+  setCounts({
+    anchor: nodes((d) => d.kind === "Attractor"), up: pat((d) => d.ptype !== "covariance" && d.direction > 0),
+    down: pat((d) => d.ptype !== "covariance" && d.direction < 0), cov: pat((d) => d.ptype === "covariance"),
+    lattice: edges("SPECIALIZES"), latent: edges("RELATED_TO"), contrast: edges("CONTRASTS"), sibling: edges("SIBLING"), activates: edges("ACTIVATES"),
+    schema: nodes((d) => d.kind === "Dimension" || d.kind === "Metric"),
+  });
+  $("view-caption").textContent = S.nodes.length ? `${S.nodes.length} insights · ${nodes((d) => d.kind === "Attractor")} themes in view` : "No insights in view";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
@@ -329,6 +374,7 @@ function setView(view) {
   $("table-view").hidden = view !== "table";
   $("sphere-open").hidden = view !== "sphere";
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
+  $("fit-btn").hidden = view === "table";
   const columns = document.querySelector('.toggle[data-layer="schema"]');  // column nodes have no vectors: graph only
   columns.disabled = view === "sphere"; columns.title = view === "sphere" ? "Columns are not drawn in 3D (they have no vectors)" : "Dimension and metric columns (graph only)";
   $("empty-hint").hidden = view === "table" || S.nodes.length > 0;
@@ -379,6 +425,7 @@ function renderTable() {
 function clearHighlight() {
   if (S.cy) S.cy.elements().removeClass("faded hl-node hl-seed hl-anchor hl-evidence hl-cross hl-edge");
   document.querySelectorAll(".ev.on").forEach((el) => el.classList.remove("on"));
+  setCounts({ seed: 0, ev: 0, cross: 0, path: 0 });
 }
 
 function highlight(h, onlyEdges = null) {
@@ -395,6 +442,7 @@ function highlight(h, onlyEdges = null) {
     const e = cy.getElementById(id);
     if (e.nonempty()) { e.removeClass("faded hidden").addClass("hl-edge"); e.connectedNodes().removeClass("faded").addClass("hl-node"); }
   });
+  setCounts({ seed: (h.seeds || []).length, ev: (h.evidence || []).length, cross: (h.transversal_only || []).length, path: (onlyEdges || h.edges || []).length });
   $("clear-btn").hidden = false;
 }
 
@@ -643,6 +691,38 @@ async function ask(question) {
 
 function autosize() { const q = $("question"); q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 140) + "px"; $("ask-btn").disabled = S.busy || !q.value.trim(); }
 
+function setLegend(show) {
+  $("legend").hidden = !show;
+  $("legend-btn").setAttribute("aria-pressed", String(show));
+  try { localStorage.setItem("sig-legend", show ? "on" : "off"); } catch (e) { /* private mode */ }
+  if (S.cy) S.cy.resize();
+}
+
+function initResize() {
+  /* drag the border of the datasets rail or of the chat; widths are remembered, a double-click resets */
+  const app = document.querySelector(".app");
+  try { for (const col of ["rail", "chat"]) { const w = localStorage.getItem(`sig-${col}-w`); if (w) app.style.setProperty(`--${col}-w`, w); } } catch (e) { /* private mode */ }
+  document.querySelectorAll(".col-resize").forEach((h) => {
+    const col = h.dataset.col, other = document.querySelector(col === "rail" ? ".chat" : ".rail");
+    const save = () => { try { localStorage.setItem(`sig-${col}-w`, app.style.getPropertyValue(`--${col}-w`)); } catch (e) { /* private mode */ } };
+    h.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); h.setPointerCapture(e.pointerId); h.classList.add("on"); document.body.classList.add("resizing");
+      const box = app.getBoundingClientRect(), max = box.width - other.getBoundingClientRect().width - 380;
+      const move = (ev) => {
+        const w = col === "rail" ? ev.clientX - box.left : box.right - ev.clientX;
+        app.style.setProperty(`--${col}-w`, `${Math.round(Math.min(Math.max(w, col === "rail" ? 220 : 300), max))}px`);
+        if (S.cy) S.cy.resize();
+      };
+      const up = () => {
+        h.classList.remove("on"); document.body.classList.remove("resizing");
+        h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); save();
+      };
+      h.addEventListener("pointermove", move); h.addEventListener("pointerup", up);
+    });
+    h.addEventListener("dblclick", () => { app.style.removeProperty(`--${col}-w`); save(); if (S.cy) S.cy.resize(); });
+  });
+}
+
 // wiring
 function init() {
   $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
@@ -662,7 +742,17 @@ function init() {
   document.querySelectorAll(".toggle[data-layer]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); if (S.qa && S.cy) highlight(S.qa.highlight); }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", () => { loadGraph(); refreshBatches(); });
-  $("fit-btn").addEventListener("click", () => S.cy && S.cy.fit(S.cy.elements(":visible"), 40));
+  $("fit-btn").addEventListener("click", () => {
+    const gd = S.view === "sphere" && sphereDiv();
+    if (gd) $("sphere").contentWindow.Plotly.relayout(gd, { "scene.camera.eye": { x: 1.1, y: 1.1, z: 1.1 }, "scene.camera.center": { x: 0, y: 0, z: 0 } });
+    else if (S.cy) S.cy.fit(S.cy.elements(":visible"), 40);
+  });
+  $("sphere").addEventListener("load", wireSphere);
+  document.querySelectorAll("#legend .key[data-key]").forEach((k) => {
+    k.addEventListener("mouseenter", () => spotlight(k.dataset.key));
+    k.addEventListener("mouseleave", () => spotlight(null));
+  });
+  $("legend-btn").addEventListener("click", () => setLegend($("legend").hidden));
   $("clear-btn").addEventListener("click", () => { S.qa = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); });
   $("drawer-close").addEventListener("click", closeDrawer);
   $("table-search").addEventListener("input", renderTable);
@@ -675,6 +765,8 @@ function init() {
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat = []; S.qa = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  initResize();
+  try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
 }
