@@ -210,8 +210,33 @@ class Engine:
                     if snap and snap.get("version") != SNAPSHOT_VERSION:
                         self.rebuild_graph()  # derived data; journals stay the source of truth
                     else:
-                        self._graph = DualGraph(snap) if snap else DualGraph.empty()
+                        self._graph = self._with_catalog(DualGraph(snap) if snap else DualGraph.empty())
         return self._graph
+
+    def _with_catalog(self, graph: DualGraph) -> DualGraph:
+        """Attach the literal catalog (docs/07 §7.1.1), resolved on first question: ``state/literals.npz`` when it
+        was written for this representation and this literal set, else embedded now (and saved by a writer)."""
+
+        def load():
+            from ltir.query import LiteralCatalog, build_catalog, catalog_entries
+
+            spec = self.encoder.spec
+            stored = self.ws.load_literals()
+            if (
+                stored is not None
+                and str(stored["fingerprint"]) == spec.fingerprint
+                and [str(t) for t in stored["texts"]] == catalog_entries(graph)[0]
+            ):
+                catalog = LiteralCatalog.from_arrays(stored)
+                catalog.embedder = self.encoder.embedder
+                return catalog
+            catalog = build_catalog(graph, self.encoder.embedder, spec.fingerprint)
+            if catalog is not None and self._writer:
+                self.ws.save_literals(catalog.arrays())
+            return catalog
+
+        graph.set_catalog_loader(load)
+        return graph
 
     def document_vectors(self) -> dict[str, np.ndarray]:
         """Canonical-document embedding of every committed pattern (stored at ingest).
@@ -247,8 +272,10 @@ class Engine:
         return self._frame
 
     def _refresh_caches(self, snapshot: dict[str, Any], ontology: LatentOntology) -> None:
-        """Swap in the committed state for readers."""
-        self._graph = DualGraph(snapshot)
+        """Swap in the committed state for readers; the literal catalog follows the new snapshot (embedded and saved
+        right away: the model is loaded, and a reader process may need the file)."""
+        self._graph = self._with_catalog(DualGraph(snapshot))
+        self._graph.catalog  # noqa: B018 — build and persist now, under the writer lock
         self._frame = LatentFrame.load(self.ws, ontology)
 
     def ontology(self) -> LatentOntology:

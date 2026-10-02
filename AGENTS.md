@@ -13,7 +13,7 @@ Every task that changes a line of Python ends with the gate passing:
 .venv/bin/python scripts/check.py                  # macOS / Linux
 ```
 
-The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (80 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
+The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (92 tests, ≈ 85 s; model-backed and browser tests included when the local model and Chromium are present — they are on the development machine).
 
 - `scripts/check.py --quick` (lint + the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence and UI tests are where cross-module regressions show up.

@@ -22,12 +22,40 @@ Before retrieval the workspace's fingerprint is checked against the encoder's (`
 
 | Element | Rule | Demo question *"Why is margin lower for phones in the US?"* |
 |---|---|---|
-| metrics | name parts are the humanised words of at least 3 letters. A metric matches when all its parts match, or at least two parts including a non-generic word match, or its head word matches and that head is non-generic and unique among the metrics (generic: `median, mean, average, avg, total, number, num, count, percent, pct, rate, value, score, index`). Only the best-covered metrics are kept. "returns" finds `return_rate`, "house values" `median_house_value`, "the median" nothing | `margin` |
-| conditions | a value matches when every word of it stem-matches a token; values of at most 4 upper-case characters (`US`, `EU`) must appear verbatim, so "tell us" is not `US` | `category=phones`, `region=US` |
-| direction | `sign(#positive words − #negative words)` over two lexicons (`lower, drop, erosion, fewer, …` / `higher, rise, delay, slower, …`) plus Ukrainian stems matched as prefixes (`нижч, менш, спад, зниж, …` / `вищ, більш, зрост, затрим, …`); 0 without a direction word | −1 |
-| relationship intent | a token starting with `correl, relationship, relation, coupl, decoupl, dependen, covari, linked, associat` or `кореляц, зв'яз, пов'яз, взаємозв, залежн, асоці` makes it a relationship question: the direction is ignored and covariance insights score in the phenomenon slot | no |
+| metrics | name parts are the humanised words of at least 3 letters. A metric matches when all its parts match, or at least two parts including a non-generic word match, or its head word matches and that head is non-generic and unique among the metrics (generic: `median, mean, average, avg, total, number, num, count, percent, pct, rate, value, score, index`). Only the best-covered metrics are kept. "returns" finds `return_rate`, "house values" `median_house_value`, "the median" nothing. Words that match nothing are grounded against the literal catalog ([7.1.1](#711-literal-grounding)): *дні доставки* → `delivery_days` | `margin` |
+| conditions | a value matches when every word of it stem-matches a token; values of at most 4 upper-case characters (`US`, `EU`) must appear verbatim, so "tell us" is not `US`. Otherwise grounded ([7.1.1](#711-literal-grounding)): *телефонів* → `category=phones`, *США* → `region=US`, *Харкові* → `city=Харків` | `category=phones`, `region=US` |
+| direction | `sign(#positive words − #negative words)` over two lexicons (`lower, drop, erosion, fewer, …` / `higher, rise, delay, slower, …`) plus Ukrainian stems matched as prefixes (`нижч, менш, спад, знижен, …` / `вищ, більш, зрост, затрим, …`); a comparative adverb (`більш, більше, менш, менше, more, less`) directly before a direction word casts one vote with it — *більш низький* is one "down", not an "up" and a "down" that cancel; 0 without a direction word | −1 |
+| relationship intent | a token starting with `correl, relationship, relation, coupl, decoupl, dependen, covari, linked, associat` or `кореляц, зв'яз, пов'яз, взаємозв, залежн, асоці` makes it a relationship question: the direction is ignored and covariance insights score in the phenomenon slot — unless the phrase is a directed driver question, `пов'язано з / associated with / linked to` followed by a direction word (*Що пов'язано з вищим return_rate?*, *What is associated with higher discount?*), which keeps its direction | no |
 
-The query vector uses the composition of [4.3](04_representation.md#43-the-tripartite-vector): scope `attribute = value; …` for the recognised conditions (in recognition order), target `humanize(metric)` joined by `; `, and components `(humanize(metric), direction · 2.0)` per metric — or, for a relationship question with at least two metrics, `("correlation between a and b", ±2.0)` (−2 when the question speaks of breaking, weakening or decoupling). Without a direction word there are no components; the question text, embedded with the query instruction, stands in for every empty block — the system never assumes "higher". `ParsedQuery.to_dict()` is stored in the evidence: `{"text", "targets": ["margin"], "direction": -1, "conditions": ["category=phones", "region=US"], "covariance": false}`.
+The query vector uses the composition of [4.3](04_representation.md#43-the-tripartite-vector): scope `attribute = value; …` for the recognised conditions (in recognition order), target `humanize(metric)` joined by `; `, and components `(humanize(metric), direction · 2.0)` per metric — or, for a relationship question with at least two metrics, `("correlation between a and b", ±2.0)` (−2 when the question speaks of breaking, weakening or decoupling). Without a direction word there are no components; the question text, embedded with the query instruction, stands in for every empty block — the system never assumes "higher". `ParsedQuery.to_dict()` is stored in the evidence: `{"text", "targets": ["margin"], "direction": -1, "conditions": ["category=phones", "region=US"], "covariance": false, "grounding": [...]}` (a wildcard condition, [7.1.1](#711-literal-grounding), is written as the bare value).
+
+### 7.1.1 Literal grounding
+
+The lexical rules above read a literal only as the data spells it. A question in another language — *Чому маржа нижча для телефонів у США?* — names the same literals in other words, and without grounding it falls back to the unconditioned semantic score and lands on unrelated subgroups (measured: B3 seed recall 0.50 against the English twin, docs §7.7). *Decoupled multilingual literal grounding* (`query._ground`, after the design in `docs/init_concepts/multilingual_graph_retrieval_architecture.md`) resolves the words the lexical layer left over onto the graph's **literal catalog** before seed scoring; nothing is translated, no language model is consulted, and the structural scoring, the traversal and Neo4j are untouched.
+
+**The catalog** (`query.LiteralCatalog`, built by `build_catalog` from the committed graph): every Metric node's name, raw and humanised (`return_rate`, `return rate`); every distinct condition value with the attributes it occurs under (`phones` → `category`; a value under several columns keeps them all); and two direction anchors, `higher increase growth up` and `lower decrease drop down reduction`, which register nothing and exist so that direction words land on them rather than on a literal. Values of at most 4 upper-case characters are *case-sensitive* (`US`, `EU`, `Q4`). The texts are embedded once with the document-side embedder (as component labels are, [4.4](04_representation.md#44-the-embedding-model)), **centred by the catalog mean and re-normalised** — the embedding space is anisotropic (every literal sits at cosine 0.6–0.85 of every other; *у* and *для* score 0.75–0.81 against `margin` raw), and centring is what makes the cosines discriminative — and indexed by script with a character n-gram TF-IDF (`char_wb`, 3–5). A writer saves the catalog as `state/literals.npz` after every snapshot (batch commit, rebuild, deletion, migrate; `Workspace.save_literals`); a reader loads it when its fingerprint and literal set match the snapshot and embeds it otherwise; the TF-IDF index is rebuilt on load. The catalog is attached to the `DualGraph` lazily (`graph.catalog`), so `status` and other commands never load the model for it.
+
+**Spans.** The question's tokens are grouped into spans of 3, 2 and 1 words, longest first, skipping tokens the lexical layer, the direction lexicons or the relationship words already claimed, spans that start or end with a stop word (≈ 40 English and ≈ 30 Ukrainian question and function words; *для телефонів у* is never tried, *телефонів* is), and one-letter tokens; short upper-case tokens (acronyms) are always tried. An accepted span **claims its tokens**, so overlapping spans are suppressed (non-maximum suppression) and *дні доставки* grounds once, not three times.
+
+**Three layers, the first that accepts wins**:
+
+```text
+A  exact      span == literal text (case-insensitive; acronyms verbatim)
+B  chars      same script, span ≥ 4 chars, same word count: TF-IDF char_wb(3–5) cosine ≥ CHAR_MIN (0.30),  |len(span) − len(literal)| ≤ 3
+C  dense      other script, |words(span) − words(literal)| ≤ 1, on centred unit vectors c:
+              cos = c(span)·c(literal) ≥ GROUNDING_MIN_COSINE (0.30)
+              margin = cos − mean of the 5 highest cosines of the span over the catalog ≥ 0.15     (one-sided local scaling: hubs lose)
+              Lowe: (1 − cos) / (1 − cos₂) ≤ 0.85, cos₂ = best literal with a *different* symbol    (not the raw/humanised twin)
+              an acronym literal needs an upper-case span (США → US; us → nothing)
+```
+
+Layer B handles inflection and typos within a script — *Харкові* → `Харків`, *телефонів* → `телефони`, *fones* → `phones*, *retrun rate* → `return rate` — and the length guard is what rejects *marginally* → `margin` (0.89, but four letters longer). Layer C bridges scripts and never compares a Latin span with a Latin literal (that is layer B's job, and it is why *sales*, *store*, *profit* ground to nothing). A span of several words grounds only onto a literal of about as many words: *телефонів у США* is not `phones`; *дні доставки* is `delivery days`. A direction anchor accepted when the lexicons found no direction sets it.
+
+**What a grounded symbol does.** A metric joins `targets`; a value joins `conditions` as `(attribute, value)` — when the value lives under several columns, the column named within two tokens of the span wins, otherwise the condition is a **wildcard** `("*", value)` that `score_pattern` matches against any column holding the value and never counts as a conflict (so `US` under `origin` and `destination` does not halve the scope score). Every accepted span is recorded in `ParsedQuery.grounding` as `{span, literal, layer, score, symbol}`: the UI shows it as *Understood: маржа → margin · …*, and the benchmark's false-positive rate is computed from it. Because the grounded strings are the canonical literals, a fully grounded Ukrainian question gets the English twin's query vector and the same seeds.
+
+**Measured on Qwen3 → 384 (the demo catalog; `scripts/multilingual_benchmark.py`, §7.7).** Centred cosines of true translations: *телефонів* → `phones` 0.57, *США* → `US` 0.69, *ЄС* → `EU` 0.60, *планшетів* → `tablets` 0.63, *онлайн* → `online` 0.63, *дні доставки* → `delivery days` 0.54, *знижка* → `discount` 0.46, *ноутбуків* → `laptops` 0.48, with margins 0.19–0.45; Ukrainian function words stay ≤ 0.33 with margins ≤ 0.14. Three literals this model cannot bridge are rejected rather than mis-grounded: *маржа* (0.32 to `retail`, `margin` second — Lowe 0.93), *частка повернень* (`return rate` not among the nearest), *роздріб* (`retail` not nearest). Character cosines on the demo catalogs: inflections 0.33–0.83, typos 0.36–0.70; distractors *сегменти* 0.22, *sales* 0.23.
+
+**Constants** (`ltir/query.py`): `CHAR_MIN` 0.30 per script, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4, `STOPWORDS`; `GROUNDING_MIN_COSINE` (0.30) is a `Config` field because it belongs to the embedder, like `MIN_ASSIGN_THRESHOLD`. The design document started from 0.45 for characters and 0.58 for raw cosines; the values above are the ones measured on this embedder and catalog (its own falsification sequence, §7.7). `query.GROUNDING` holds the layer / gate / rule switches that the benchmark flips for that sequence; production never changes them.
 
 ## 7.2 Seeds
 
@@ -194,6 +222,19 @@ Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py
 
 Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.57 → +0.09), separate *Observations* from *Interpretation (hypotheses)*, cite the scope-disjoint analogues reached through `A-1`, and use grouped citations, which are parsed and linked.
 
+**Multilingual grounding benchmark** (`scripts/multilingual_benchmark.py`: 60 questions in four buckets of 15, on the demo and on a copy of the demo with Ukrainian category, city and channel values; every question's twin — the same question with each literal as stored — gives the gold seeds and evidence; the model's own embeddings, no LLM). Seed Recall@3 = gold seeds among the question's seeds; Consistency = Jaccard of the seed sets; Evidence overlap over the gold evidence; direction accuracy against the twin; FPGR = grounded spans whose symbol the twin does not hold:
+
+| Step (the design document's falsification sequence) | B1 English | B2 code-switched | B3 translated | B4 inflections / typos | FPGR |
+|---|---|---|---|---|---|
+| 1 baseline, lexical only | 1.00 / 1.00 | 1.00 / 1.00 | 0.50 / 0.32, direction 0.73 | 0.83 / 0.65 | 0 |
+| 2 + character n-grams | 1.00 | 1.00 | 0.50 (scripts are not bridged) | **0.98 / 0.97** | 0 |
+| 3 + dense, floor only | 1.00 | 1.00 | 0.68 / 0.58 | 0.98 | 0.08 |
+| 4 + margin, Lowe, case gates | 1.00 | 1.00 | 0.74 / 0.66 | 0.98 | **0** |
+| 5 + composite rules and direction anchors | 1.00 / 1.00 | 1.00 / 1.00 | **0.77 / 0.69**, direction **1.00**, evidence overlap 0.83 | 0.98 / 0.97, evidence 1.00 | 0 |
+| 6 Neo4j mirror on (fake driver) vs off | identical seeds and groundings on all 60 questions | | | | |
+
+Cells are Recall@3 / Jaccard. The remaining B3 misses all contain *маржа*, *частка повернень* or *роздріб* (above). Retrieval time per question on the development GPU: 70–90 ms for English and code-switched questions (unchanged), 130–200 ms for a translated one (one embedding pass over its 2–4 unresolved spans).
+
 Prompt size (`scripts/prompt_tokens.py`, demo question, 10 items, scratch run with the default hashing backend — the documents do not depend on the backend, the evidence prompt does through retrieval; XLM-R SentencePiece as a proxy for Gemma's tokenizer, and Qwen3's byte-level BPE):
 
 | Surface | Characters | Non-ASCII | XLM-R tokens | Qwen tokens |
@@ -209,6 +250,7 @@ The documents and the summary grew because they are written for people; no LLM r
 
 | Parameter | Default |
 |---|---|
+| `GROUNDING_MIN_COSINE` | 0.30 (centred cosine floor of the dense grounding layer, [7.1.1](#711-literal-grounding); embedder-specific) |
 | `SEED_TOP_K`, `SEED_MIN_SCORE`, `SEED_RELATIVE_MIN` | 3, 0.25, 0.75 |
 | `STRUCTURAL_HOPS`, `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 1, 5 |
 | `STRUCTURAL_EDGE_DECAY`, `TRAVERSAL_STRUCTURAL_EDGES` | 0.85, `SPECIALIZES,GENERALIZES,CONTRASTS` |
@@ -225,8 +267,9 @@ The documents and the summary grew because they are written for people; no LLM r
 | representation mismatch | refused before retrieval (HTTP 409) |
 
 Limitations worth knowing:
-* The words "associated" and "linked" make a question a relationship question (direction ignored), and the system prompt asks the model to write "is associated with" — a follow-up that reuses the model's wording is parsed as a relationship question.
-* Parsing is lexical plus embedding similarity; paraphrases outside the graph's vocabulary rely on the semantic term alone.
+* "Associated" and "linked" make a question a relationship question (direction ignored) unless they introduce a direction word (*associated with higher …*); a follow-up that reuses the model's "is associated with" without one is parsed as a relationship question.
+* Grounding reaches the literals the embedder knows in the question's language; on the demo, Qwen3 → 384 does not bridge *маржа*, *частка повернень* or *роздріб*, and such a question keeps only the literals it did ground (a wrong literal is never substituted). The thresholds are measured for Qwen3 → 384; another embedder needs `GROUNDING_MIN_COSINE` re-measured (`scripts/multilingual_benchmark.py`) — MiniLM separates its translations at 0.50 (`.env.sample`).
+* Paraphrases outside the graph's vocabulary and its translations rely on the semantic term alone.
 * The LLM runs remotely in the configured deployment: the prompt (subgroup statistics, not rows) leaves the machine; a local server keeps it local.
 
-Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); weak memberships are never walked and every kept RELATED_TO is; paths obey the grammar; results are deterministic; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights.
+Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); weak memberships are never walked and every kept RELATED_TO is; paths obey the grammar; results are deterministic and identical with the Neo4j mirror on or off; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights; a grounded literal is always one the data holds, spelled as the data spells it.

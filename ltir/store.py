@@ -198,6 +198,21 @@ class Workspace:
     def representation(self) -> dict[str, Any] | None:
         return read_json(self.state_dir / "representation.json")
 
+    def save_literals(self, arrays: dict[str, np.ndarray]) -> None:
+        """The literal catalog (docs/07 §7.1.1) as ``state/literals.npz``: texts, kinds, symbols, unit vectors, fingerprint."""
+        path = self.state_dir / "literals.npz"
+        tmp = path.with_name(path.name + ".tmp")
+        with tmp.open("wb") as handle:
+            np.savez_compressed(handle, **arrays)
+        replace_file(tmp, path)
+
+    def load_literals(self) -> dict[str, np.ndarray] | None:
+        path = self.state_dir / "literals.npz"
+        if not path.is_file():
+            return None
+        with retry_sharing(lambda: np.load(path)) as data:
+            return {k: data[k] for k in data.files}
+
     def append(
         self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]], blocks: dict[str, np.ndarray], batch_id: str
     ) -> None:
