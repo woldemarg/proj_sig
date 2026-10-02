@@ -141,15 +141,10 @@ STOPWORDS = frozenset(
     "чому що де який яка які коли як для у в на і та з із зі при про від до це чи має є також там їх цей ця ці ніж між розкажи скажи покажи поясни".split()
 )
 DIRECTION_ANCHORS = (("higher increase growth up", 1), ("lower decrease drop down reduction", -1))  # multilingual sinks for direction words
-CHAR_MIN = {
-    "cyrillic": 0.30,
-    "latin": 0.30,
-}  # char_wb (3–5) TF-IDF cosine floor per script (measured: inflections >= 0.33, typos >= 0.36, distractors <= 0.23)
+CHAR_MIN = 0.30  # char_wb (3–5) TF-IDF cosine floor (measured: inflections >= 0.33, typos >= 0.36, distractors <= 0.23)
 CHAR_MAX_LEN_DIFF = 3  # a same-script surface variant stays about as long as the literal (marginally -> margin is 0.89 but 4 letters longer)
 MARGIN_MIN, MARGIN_K, LOWE_MAX = 0.15, 5, 0.85  # dense gates: local margin over the catalog, Lowe's ratio
 MAX_SPAN, ACRONYM_MAX_LEN = 3, 4
-# ponytail: the falsification switches of docs §7.7 — scripts/multilingual_benchmark.py sets them; production never does
-GROUNDING = {"layers": "ABC", "gates": True, "rules": True}
 
 
 def detect_script(text: str) -> str:
@@ -174,7 +169,6 @@ class LiteralCatalog:
     symbols: list[Any]  # metric name | list of attributes | ±1
     case_sensitive: list[bool]
     vectors: np.ndarray
-    dimensions: list[str]  # dimension names, for attribute resolution of a value shared by several columns
     fingerprint: str
     chars: dict[str, Any] = field(default_factory=dict)  # script -> (TfidfVectorizer, matrix, indices)
     embedder: Any = field(default=None, repr=False, compare=False)  # the model that embedded the catalog (attached by the engine)
@@ -193,7 +187,7 @@ class LiteralCatalog:
             if kind != "direction":
                 by_script.setdefault(self.scripts[i], []).append(i)
         for script, idx in by_script.items():
-            if script in CHAR_MIN:
+            if script != "other":
                 vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))
                 self.chars[script] = (vec, vec.fit_transform([self.texts[i] for i in idx]), idx)
 
@@ -207,7 +201,6 @@ class LiteralCatalog:
             "symbols": np.array(json.dumps(self.symbols, ensure_ascii=False)),
             "case_sensitive": np.array(self.case_sensitive),
             "vectors": self.vectors.astype(np.float32),
-            "dimensions": np.array(self.dimensions),
             "fingerprint": np.array(self.fingerprint),
         }
 
@@ -219,7 +212,6 @@ class LiteralCatalog:
             json.loads(str(a["symbols"])),
             [bool(c) for c in a["case_sensitive"]],
             np.asarray(a["vectors"], dtype=np.float32),
-            [str(d) for d in a["dimensions"]],
             str(a["fingerprint"]),
         )
 
@@ -245,16 +237,15 @@ def catalog_entries(graph: DualGraph) -> tuple[list[str], list[str], list[Any], 
         )
     for text, sign in DIRECTION_ANCHORS:
         texts.append(text), types.append("direction"), symbols.append(sign), case.append(False)
-    dims = sorted({n["props"]["name"] for n in graph.of_kind("Dimension")})
-    return texts, types, symbols, case, dims
+    return texts, types, symbols, case
 
 
 def build_catalog(graph: DualGraph, embedder: Any, fingerprint: str = "") -> LiteralCatalog | None:
     """Embed the graph's literals with the document-side embedder (as component labels are); ``None`` for an empty graph."""
-    texts, types, symbols, case, dims = catalog_entries(graph)
+    texts, types, symbols, case = catalog_entries(graph)
     if not graph.insights:
         return None
-    return LiteralCatalog(texts, types, symbols, case, l2_normalize(embedder.embed(texts)), dims, fingerprint, embedder=embedder)
+    return LiteralCatalog(texts, types, symbols, case, l2_normalize(embedder.embed(texts)), fingerprint, embedder=embedder)
 
 
 def _stem_match(a: str, b: str) -> bool:
@@ -307,7 +298,7 @@ def _direction(tokens: list[str]) -> int:
     votes, i = 0, 0
     while i < len(tokens):
         t = tokens[i]
-        if GROUNDING["rules"] and t in COMPARATIVE_ADVERBS and i + 1 < len(tokens) and _is_direction(tokens[i + 1]):
+        if t in COMPARATIVE_ADVERBS and i + 1 < len(tokens) and _is_direction(tokens[i + 1]):
             votes += COMPARATIVE_ADVERBS[t] * _is_direction(tokens[i + 1])
             i += 2
             continue
@@ -318,7 +309,7 @@ def _direction(tokens: list[str]) -> int:
 
 def _directed_driver(tokens: list[str]) -> bool:
     """``пов'язано з вищим X`` / ``associated with higher X``: a directed driver question, not a relationship one."""
-    return GROUNDING["rules"] and any(
+    return any(
         tokens[i].startswith(DRIVER_VERBS) and i + 2 < len(tokens) and tokens[i + 1] in DRIVER_PREPOSITIONS and _is_direction(tokens[i + 2])
         for i in range(len(tokens))
     )
@@ -345,29 +336,27 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
     """Resolve the unclaimed spans onto catalog literals: exact text (A), same-script character
     n-grams (B), then the multilingual embedding behind the floor / local-margin / ratio / case gates (C).
     An accepted span claims its tokens (non-maximum suppression), so sub-spans never ground again."""
-    layers, gates = GROUNDING["layers"], GROUNDING["gates"]
     floor = config.grounding_min_cosine if config else 0.30
     pending: list[tuple[str, set[int]]] = []
     for span, pos in _spans(raw_tokens, tokens, claimed):
         if pos & claimed:
             continue
         hit = None
-        if "A" in layers:
-            for j, text in enumerate(catalog.texts):
-                if (span == text) if catalog.case_sensitive[j] else (span.lower() == text.lower()):
-                    hit = (j, "exact", 1.0)
-                    break
-        if hit is None and "B" in layers and len(span) >= 4 and (entry := catalog.chars.get(detect_script(span))):
+        for j, text in enumerate(catalog.texts):
+            if (span == text) if catalog.case_sensitive[j] else (span.lower() == text.lower()):
+                hit = (j, "exact", 1.0)
+                break
+        if hit is None and len(span) >= 4 and (entry := catalog.chars.get(detect_script(span))):
             vec, matrix, idx = entry
             sims = np.where(catalog.words[idx] == len(span.split()), (matrix @ vec.transform([span]).T).toarray().ravel(), -1.0)
             best = int(np.argmax(sims))
-            if sims[best] >= CHAR_MIN[detect_script(span)] and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF:
+            if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF:
                 hit = (idx[best], "chars", float(sims[best]))
         if hit is not None:
             _register(q, catalog, hit, span, pos, claimed, raw_tokens, tokens)
         else:
             pending.append((span, pos))
-    if "C" not in layers or not pending:
+    if not pending:
         return
     vectors = l2_normalize(l2_normalize(catalog.embedder.embed([s for s, _ in pending])) - catalog.centre)
     cos = vectors @ catalog.centred.T
@@ -385,13 +374,12 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
         j, s1 = int(order[0]), float(scores[order[0]])
         if not np.isfinite(s1) or s1 < floor:
             continue
-        if gates:
-            others = [i for i in order[1:] if np.isfinite(scores[i]) and catalog.symbol_key(i) != catalog.symbol_key(j)]
-            s2 = float(scores[others[0]]) if others else -1.0  # Lowe: the runner-up must mean something else (not the raw/humanised twin)
-            top = scores[order[: min(MARGIN_K, len(order))]]
-            margin = s1 - float(top[np.isfinite(top)].mean())
-            if margin < MARGIN_MIN or (1.0 - s1) / max(1.0 - s2, 1e-6) > LOWE_MAX or (catalog.case_sensitive[j] and not span.isupper()):
-                continue
+        others = [i for i in order[1:] if np.isfinite(scores[i]) and catalog.symbol_key(i) != catalog.symbol_key(j)]
+        s2 = float(scores[others[0]]) if others else -1.0  # Lowe: the runner-up must mean something else (not the raw/humanised twin)
+        top = scores[order[: min(MARGIN_K, len(order))]]
+        margin = s1 - float(top[np.isfinite(top)].mean())
+        if margin < MARGIN_MIN or (1.0 - s1) / max(1.0 - s2, 1e-6) > LOWE_MAX or (catalog.case_sensitive[j] and not span.isupper()):
+            continue
         _register(q, catalog, (j, "dense", s1), span, pos, claimed, raw_tokens, tokens)
 
 
@@ -401,8 +389,6 @@ def _register(
     j, layer, score = hit
     kind, symbol = catalog.types[j], catalog.symbols[j]
     if kind == "direction":
-        if not GROUNDING["rules"]:
-            return  # direction anchors belong to the composite-rules step of the falsification sequence
         if q.direction == 0 and not q.covariance:
             q.direction = int(symbol)
         symbol = "up" if int(symbol) > 0 else "down"
@@ -475,7 +461,7 @@ def parse_query(text: str, graph: DualGraph, config: Config | None = None) -> Pa
         q.direction = 0  # "breaks down" / "weakens" describe the relationship, not a metric level
     claimed |= {i for i, t in enumerate(tokens) if _is_direction(t) or t.startswith(COVARIANCE_WORDS) or t in COMPARATIVE_ADVERBS}
     catalog = getattr(graph, "catalog", None)
-    if catalog is not None and "A" in GROUNDING["layers"]:
+    if catalog is not None:
         _ground(q, catalog, raw_tokens, tokens, claimed, config)
         q.targets = sorted(q.targets)
     return q

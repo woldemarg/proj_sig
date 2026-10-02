@@ -18,7 +18,6 @@ BG = "#0f172a"  # Deep slate (modern, soft dark mode)
 STYLE = {
     "concept_color": "#f8fafc",  # Crisp white — concepts stand out as anchors
     "concept_size": 6,
-    "chunk_opacity": 0.9,
     "edge_color": "rgba(255, 255, 255, 0.08)",
     "edge_width": 0.5,
     "axis_color": "rgba(148, 163, 184, 0.35)",
@@ -36,29 +35,6 @@ def save_html(fig: go.Figure, filepath: Path | str) -> None:
     )
     css = f"<style>body {{ margin: 0; overflow: hidden; background-color: {BG}; }}</style>"
     path.write_text(html_str.replace("<head>", f"<head>\n{css}", 1), encoding="utf-8")
-
-
-# ColorBrewer "Set3", the 12 colours lac took from seaborn.color_palette("Set3"); cycled beyond 12 labels like seaborn
-SET3 = (
-    "rgb(141, 211, 199)",
-    "rgb(255, 255, 179)",
-    "rgb(190, 186, 218)",
-    "rgb(251, 128, 114)",
-    "rgb(128, 177, 211)",
-    "rgb(253, 180, 98)",
-    "rgb(179, 222, 105)",
-    "rgb(252, 205, 229)",
-    "rgb(217, 217, 217)",
-    "rgb(188, 128, 189)",
-    "rgb(204, 235, 197)",
-    "rgb(255, 237, 111)",
-)
-
-
-def _chunk_colors(labels: list[str]) -> list[str]:
-    """One Set3 colour per distinct label, assigned in sorted label order."""
-    color_map = {label: SET3[i % len(SET3)] for i, label in enumerate(sorted(set(labels)))}
-    return [color_map[label] for label in labels]
 
 
 def _edge_segments(

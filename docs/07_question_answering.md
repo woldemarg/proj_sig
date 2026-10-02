@@ -55,7 +55,7 @@ Layer B handles inflection and typos within a script — *Харкові* → `�
 
 **Measured on Qwen3 → 384 (the demo catalog; `scripts/multilingual_benchmark.py`, §7.7).** Centred cosines of true translations: *телефонів* → `phones` 0.57, *США* → `US` 0.69, *ЄС* → `EU` 0.60, *планшетів* → `tablets` 0.63, *онлайн* → `online` 0.63, *дні доставки* → `delivery days` 0.54, *знижка* → `discount` 0.46, *ноутбуків* → `laptops` 0.48, with margins 0.19–0.45; Ukrainian function words stay ≤ 0.33 with margins ≤ 0.14. Three literals this model cannot bridge are rejected rather than mis-grounded: *маржа* (0.32 to `retail`, `margin` second — Lowe 0.93), *частка повернень* (`return rate` not among the nearest), *роздріб* (`retail` not nearest). Character cosines on the demo catalogs: inflections 0.33–0.83, typos 0.36–0.70; distractors *сегменти* 0.22, *sales* 0.23.
 
-**Constants** (`ltir/query.py`): `CHAR_MIN` 0.30 per script, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4, `STOPWORDS`; `GROUNDING_MIN_COSINE` (0.30) is a `Config` field because it belongs to the embedder, like `MIN_ASSIGN_THRESHOLD`. The design document started from 0.45 for characters and 0.58 for raw cosines; the values above are the ones measured on this embedder and catalog (its own falsification sequence, §7.7). `query.GROUNDING` holds the layer / gate / rule switches that the benchmark flips for that sequence; production never changes them.
+**Constants** (`ltir/query.py`): `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4, `STOPWORDS`; `GROUNDING_MIN_COSINE` (0.30) is a `Config` field because it belongs to the embedder, like `MIN_ASSIGN_THRESHOLD`. The design document started from 0.45 for characters and 0.58 for raw cosines; the values above are the ones measured on this embedder and catalog while the layers were added one at a time (§7.7).
 
 ## 7.2 Seeds
 
@@ -224,7 +224,7 @@ Latency depends on the provider. Answers keep the planted directions (US phones:
 
 **Multilingual grounding benchmark** (`scripts/multilingual_benchmark.py`: 60 questions in four buckets of 15, on the demo and on a copy of the demo with Ukrainian category, city and channel values; every question's twin — the same question with each literal as stored — gives the gold seeds and evidence; the model's own embeddings, no LLM). Seed Recall@3 = gold seeds among the question's seeds; Consistency = Jaccard of the seed sets; Evidence overlap over the gold evidence; direction accuracy against the twin; FPGR = grounded spans whose symbol the twin does not hold:
 
-| Step (the design document's falsification sequence) | B1 English | B2 code-switched | B3 translated | B4 inflections / typos | FPGR |
+| Step (the design document's falsification sequence, measured while the layers were added one at a time; the script runs the finished pipeline) | B1 English | B2 code-switched | B3 translated | B4 inflections / typos | FPGR |
 |---|---|---|---|---|---|
 | 1 baseline, lexical only | 1.00 / 1.00 | 1.00 / 1.00 | 0.50 / 0.32, direction 0.73 | 0.83 / 0.65 | 0 |
 | 2 + character n-grams | 1.00 | 1.00 | 0.50 (scripts are not bridged) | **0.98 / 0.97** | 0 |

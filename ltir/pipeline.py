@@ -11,7 +11,6 @@ completely or is rolled back to the pre-batch checkpoint.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import threading
 import time
@@ -336,7 +335,6 @@ class Engine:
                 raise PipelineError("unknown_batch", batch_id)
             if record["status"] in TERMINAL:
                 return record
-            record["owner_pid"] = os.getpid()
             t0 = time.perf_counter()
             timings: dict[str, float] = {}
             checkpoint = None

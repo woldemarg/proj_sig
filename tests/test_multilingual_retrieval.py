@@ -12,7 +12,6 @@ import pytest
 from conftest import FakeLLM, make_config
 from test_traversal import pattern
 
-from ltir import query as q
 from ltir.graph import DualGraph
 from ltir.pipeline import Engine
 from ltir.query import LiteralCatalog, build_catalog, parse_query, resolve_seeds, score_pattern
@@ -223,7 +222,3 @@ def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch)
     engine.config = replace(cfg, neo4j_enabled=True)
     assert engine.sync_neo4j()["status"] == "ok"
     assert engine.ask(question, use_llm=False).traversal["seeds"] == off
-
-
-def test_grounding_switches_are_production_defaults():
-    assert q.GROUNDING == {"layers": "ABC", "gates": True, "rules": True}

@@ -12,14 +12,8 @@ seeds and evidence are the gold standard (docs §7.7): Seed Recall@3, Cross-ling
 (Jaccard of seed sets), Evidence Overlap, FPGR (grounded spans whose symbol the twin does not
 hold), direction / relationship agreement and the retrieval latency.
 
-The falsification sequence of the architecture document is one run per step::
-
-    python scripts/multilingual_benchmark.py --label baseline --layers A
-    python scripts/multilingual_benchmark.py --label chars    --layers AB
-    python scripts/multilingual_benchmark.py --label dense    --layers ABCraw --rules off
-    python scripts/multilingual_benchmark.py --label gated    --layers ABC    --rules off
     python scripts/multilingual_benchmark.py --label full
-    python scripts/multilingual_benchmark.py --label neo4j    --neo4j fake      # retrieval must not change
+    python scripts/multilingual_benchmark.py --label neo4j --neo4j fake      # retrieval must not change
 
 ``--neo4j fake`` publishes every batch through the tests' in-memory driver (never a live database).
 Results: ``.scratch/results/multilingual_<label>.json``. Never touches ``workspace/``.
@@ -35,7 +29,6 @@ from typing import Any
 
 from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
 
-from ltir import query as query_mod
 from ltir.synth import generate_retail_dataset
 
 UK_VALUES = {
@@ -229,16 +222,8 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="full")
-    parser.add_argument(
-        "--layers",
-        default="ABC",
-        help="grounding layers to enable: A (lexical), B (char n-grams), C (dense); 'Craw' = dense without the margin and ratio gates",
-    )
-    parser.add_argument("--rules", default="on", choices=["on", "off"], help="composite linguistic rules")
     parser.add_argument("--neo4j", default="off", choices=["off", "fake"])
     args = parser.parse_args()
-    if hasattr(query_mod, "GROUNDING"):  # the falsification switches (docs §7.1.1); absent on the baseline code
-        query_mod.GROUNDING.update(layers=args.layers.replace("raw", ""), gates="raw" not in args.layers, rules=args.rules == "on")
     engines = workspaces(args)
     t0 = time.perf_counter()
     rows = run(engines)
