@@ -125,6 +125,7 @@ class Config:
     contrast_min_shift: float = 0.5
 
     # traversal / evidence (docs/07_question_answering.md)
+    grounding_min_cosine: float = 0.30  # dense literal grounding floor on catalog-centred cosines, embedder-specific (docs/07 §7.1.1): Qwen3 0.30
     seed_top_k: int = 3
     seed_min_score: float = 0.25
     seed_relative_min: float = 0.75  # seeds must score >= this fraction of the best seed

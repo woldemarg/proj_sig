@@ -275,6 +275,8 @@ class DualGraph:
 
     def __init__(self, snapshot: dict[str, Any]) -> None:
         self.snapshot = snapshot
+        self._catalog: Any = None  # the literal catalog of docs/07 §7.1.1, attached lazily by the engine (None on hand-built graphs)
+        self._catalog_loader: Any = None
         self.nodes: dict[str, dict[str, Any]] = {n["id"]: n for n in snapshot.get("nodes", [])}
         self.edges: list[dict[str, Any]] = snapshot.get("edges", [])
         self.insights: dict[str, Insight] = {n["id"]: Insight.from_record(n["props"]) for n in self.nodes.values() if n["kind"] == "Pattern"}
@@ -283,6 +285,16 @@ class DualGraph:
         for e in self.edges:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
+
+    @property
+    def catalog(self) -> Any:
+        """``query.LiteralCatalog`` for grounding, built on first use so read-only commands never load the model."""
+        if self._catalog is None and self._catalog_loader is not None:
+            self._catalog, self._catalog_loader = self._catalog_loader(), None
+        return self._catalog
+
+    def set_catalog_loader(self, loader: Any) -> None:
+        self._catalog, self._catalog_loader = None, loader
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]

@@ -91,7 +91,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 80 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 92 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -164,6 +164,7 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Cosine thresholds belong to the embedder: `MIN_ASSIGN_THRESHOLD` is 0.75 for Qwen3 and 0.55 for MiniLM ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); under Qwen3 a few RELATED_TO edges join anchors of unrelated datasets.
 * A workspace built under another representation (versions, embedder or its revision, compute dtype, composition or component settings — the fingerprint, [4.6](docs/04_representation.md#46-representation-identity-and-versions)) is refused with `representation_mismatch`; `python -m ltir migrate --yes` rebuilds it from its stored sources and keeps the old copy as `<workspace>.bak-<time>`.
 * One writer process per workspace: while the web app runs, CLI writers (`ingest`, `demo`, `reset`, `rebuild-graph`, `migrate`) are refused; upload through the app.
+* Ukrainian questions are grounded onto the data's literals through the embedding model (*телефонів* → `phones`, *США* → `US`); the literals Qwen3 cannot bridge on the demo (*маржа*, *частка повернень*, *роздріб*) are left unmatched rather than guessed ([7.1.1](docs/07_question_answering.md#711-literal-grounding)); the thresholds are measured for Qwen3 and must be re-measured for another embedder.
 * Deleting a dataset keeps a theme that still links to another theme even when it has no insight left (its centroid can receive future data); such a theme reads `Attractor k` until it has members again.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
 
@@ -173,11 +174,11 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, fileio, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    sphere, synth, experiment, cli, web/, cypher/)
-  tests/           80 contract / integration / E2E / UI tests
+  tests/           92 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), download_model.py
-                   (setup), the measurement scripts (prompt_tokens, compare_embedders, eval_answers) and their
+                   (setup), the measurement scripts (prompt_tokens, compare_embedders, eval_answers, multilingual_benchmark) and their
                    helpers (scratch.py)
   ltir/engines/    vendored EDA + lac engines (PROVENANCE.md)
   models/          local embedding models, git-ignored (Qwen3-Embedding-0.6B default, paraphrase-multilingual-MiniLM-L12-v2)

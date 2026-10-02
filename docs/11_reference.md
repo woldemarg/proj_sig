@@ -68,6 +68,7 @@ Every field of `ltir/config.py::Config` can be set from the environment by its u
 | guards | `DENSITY_FLOOR` 0.25, `DENSITY_MULTIPLE` 3.0, `MAX_CENTROID_STEP` 0.10, `WARN_ORPHAN_RATE` 0.50, `WARN_MIN_EXTRACTION_YIELD` 0.10, `WARN_AVG_DEGREE` (1.0, 8.0) | [5.6](05_latent_anchors.md#56-stability-guards) |
 | anchor links | `RELATED_TO_PEER_COUNT` 3, `RELATED_TO_MIN_WEIGHT` 0.30 | [5.7](05_latent_anchors.md#57-links-between-anchors) |
 | structural plane | `CONTRAST_MIN_OVERLAP` 0.5, `CONTRAST_MIN_SHIFT` 0.5 | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
+| literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `query.py`: `CHAR_MIN` 0.30 per script, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |
 | seeds | `SEED_TOP_K` 3, `SEED_MIN_SCORE` 0.25, `SEED_RELATIVE_MIN` 0.75 | [7.2](07_question_answering.md#72-seeds) |
 | traversal | `MAX_LATENT_HOPS` 1, `STRUCTURAL_HOPS` 1, `TRAVERSAL_MAX_DEPTH` 5, `MAX_RETRIEVED` 12, `STRUCTURAL_EDGE_DECAY` 0.85, `TRAVERSAL_STRUCTURAL_EDGES` `SPECIALIZES,GENERALIZES,CONTRASTS` | [7.3](07_question_answering.md#73-transversal-traversal) |
 | evidence | `EVIDENCE_MAX_PATTERNS` 10 | [7.4](07_question_answering.md#74-the-evidence-object) |
@@ -103,6 +104,7 @@ Every quantity the system computes, where it is explained and which code compute
 | batch metrics and warnings | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `LatentOntology` (`BatchMetrics`), `observability.apply_health_warnings` |
 | structural edges, contrast overlap, TARGETS weight | [6.1](06_graph_and_storage.md#61-the-structural-plane), [6.2](06_graph_and_storage.md#62-the-graph-schema) | `structural.structural_edges`, `graph._schema_plane` (TARGETS) |
 | query components, seed score | [7.1](07_question_answering.md#71-from-question-to-query), [7.2](07_question_answering.md#72-seeds) | `query.parse_query`, `query.score_pattern` |
+| literal grounding: centred cosine, local margin, Lowe's ratio, char_wb TF-IDF, wildcard scope | [7.1.1](07_question_answering.md#711-literal-grounding) | `query.build_catalog`, `query._ground`, `query.score_pattern` |
 | path score, node rank, scope overlap | [7.3](07_question_answering.md#73-transversal-traversal) | `traversal.traverse` |
 | sphere projection | [8.4](08_interface.md#84-the-latent-sphere) | `sphere.sphere_figure` |
 | recall@k, precision@k, MRR | [10.3](10_verification.md#103-hypothesis-benchmark) | `experiment.run_experiment` |

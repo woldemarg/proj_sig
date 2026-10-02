@@ -594,6 +594,9 @@ function botCard(turn) {
     cit.grounded ? `<span class="chip ok">✓ ${(cit.cited || []).length} sources cited</span>` : `<span class="chip warn">No citations</span>`,
     cross ? `<span class="chip run" title="Reached only through a theme, in a different part of the data">⤳ ${cross} cross-segment</span>` : "",
   ].join("");
+  // literal grounding (docs/07 §7.1.1): which words of the question were read as which data literals
+  const grounded = ((qa.evidence && qa.evidence.parsed && qa.evidence.parsed.grounding) || []).filter((g) => g.symbol !== "up" && g.symbol !== "down");
+  const understood = grounded.length ? `<div class="understood" title="Question words matched to data literals (exact, by characters, or by meaning)">Understood: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
   const evid = items.map((it, i) => {
     const s = it.statistics;
     const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
@@ -611,7 +614,7 @@ function botCard(turn) {
     qa.evidence && qa.evidence.prompt ? ["Prompt", "", `<p class="ev-prefix">The exact evidence the model was shown.</p><pre class="canon">${esc(qa.evidence.prompt)}</pre>`] : null,
   ].filter(Boolean);
   return `<div class="bot-card">${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
-    `<div class="bot-meta">${meta}</div>` +
+    `<div class="bot-meta">${meta}</div>${understood}` +
     `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="false">${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" hidden>${body}</div>`).join("") +
     `</div>`;

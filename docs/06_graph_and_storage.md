@@ -67,6 +67,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `journal/blocks/<batch_id>.npz` | `scope`, `target`, `phenomenon`, `document`, float32 `(n, 384)`; `pattern_ids` | the three blocks of each vector, and the canonical-document embedding the naive text baseline compares questions with | `Workspace.append`; `add_document_vectors` back-fills `document` for an older batch ([7.6](07_question_answering.md#76-baselines)) |
 | `state/concepts.npz`, `state.json`, `orphan_buffer.npz` | lac `ConceptStore` | centroids, counts, ids, timestamps (no text) | `ConceptStore.save` |
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
+| `state/literals.npz` | npz: `texts`, `types`, `symbols` (JSON), `case_sensitive`, `vectors` float32 `(N, 384)`, `dimensions`, `fingerprint` | the literal catalog of [7.1.1](07_question_answering.md#711-literal-grounding), derived from the snapshot; a reader with a stale or missing file embeds it in memory | `save_literals`, after every snapshot a writer builds |
 | `state/sig_state.json` | JSON | the next batch sequence | pipeline |
 | `state/ontology_metrics.csv` | CSV | lac `BatchMetrics` rows | `MetricsRecorder` |
 | `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 2) | `save_graph`, atomically |
