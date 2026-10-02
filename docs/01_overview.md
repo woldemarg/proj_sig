@@ -27,7 +27,7 @@ The benchmark in [10.3](10_verification.md#103-hypothesis-benchmark) measures ex
 | 5 | Latent anchors | vectors stream into a self-organising dictionary of centroids (lac): assignment, orphan buffer, OMP extraction, soft merge, mutual-kNN links | anchors + memberships | [5](05_latent_anchors.md) |
 | 6 | Graph & storage | an exact structural lattice is derived from the scopes; journals, ontology state and a graph snapshot are committed atomically (optional Neo4j mirror) | dual-layer graph | [6](06_graph_and_storage.md) |
 | 7 | Question answering | a question becomes seed insights; a budgeted best-first walk follows lattice edges and anchors; an evidence object is built; the LLM answers from it, or a deterministic summary does | cited answer | [7](07_question_answering.md) |
-| 8 | Interface | a local web app shows the graph, a 3D latent sphere, an insight table, a details drawer and the chat, with the answer's path highlighted | — | [8](08_interface.md) |
+| 8 | Interface | a local web app shows the graph, a 3D latent sphere and an insight table as three views of one knowledge base under one legend, a details drawer and the chat (Ukrainian answers around untouched data literals), with the answer's path highlighted; datasets can be removed again | — | [8](08_interface.md) |
 
 Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](09_operations.md)); stage 7 runs per question.
 
@@ -110,7 +110,7 @@ Every divergence of the vendored code from its origin is listed in [`ltir/engine
 ## 1.7 System-wide guarantees
 
 1. **Traceable.** Every stored insight traces to its dataset, batch, exact EDA selector and covered rows.
-2. **Covered.** Every insight has at least one ACTIVATES edge, and every anchor has at least one member.
+2. **Covered.** Every insight has at least one ACTIVATES edge, and every anchor has at least one member — except an anchor whose last member was deleted while it is still linked to another anchor ([5.11](05_latent_anchors.md#511-removing-patterns-the-orphan-rule)).
 3. **Planes stay separate.** Structural edges depend only on insight metadata; latent edges only on centroids.
 4. **One frame.** Vectors of different representations (model, composition, versions) never share a workspace; a mismatch is refused, not mixed ([4.6](04_representation.md#46-representation-identity-and-versions) lists what the fingerprint covers).
 5. **Atomic batches, one writer.** A batch either commits completely or is rolled back, and one process at a time writes a workspace (the writer lock, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). The Neo4j mirror and the sphere export run after the commit, outside it: their failure is a warning, never a rollback.

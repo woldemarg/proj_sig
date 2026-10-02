@@ -510,6 +510,47 @@ class Engine:
             self._refresh_caches(snapshot, ontology)
             return snapshot
 
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
+        """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06 §6.8).
+
+        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
+        centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
+        rebuilt and the Neo4j mirror synced. Exception-safe through a state + journal checkpoint.
+        """
+        with self._lock:
+            batches = [b for b in self.ws.list_batches() if b.get("dataset_id") == dataset_id]
+            if not batches:
+                raise PipelineError("unknown_dataset", dataset_id)
+            if any(b["status"] not in TERMINAL for b in batches):
+                raise PipelineError("busy", f"dataset {dataset_id} has a batch in progress")
+            self._sphere_generation += 1  # a queued export would draw the old workspace
+            ontology = self.ontology()
+            records, vectors = self.ws.patterns(), self.ws.vectors()
+            kept = [r for r in records if r["dataset_id"] != dataset_id]
+            row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
+            acts = [{**a, "row_id": row_of[a["row_id"]]} for a in self.ws.activations() if a["row_id"] in row_of]
+            cp = self.ws.checkpoint(journal=True)
+            try:
+                dropped = ontology.forget(acts, len(kept))
+                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
+                ontology.save()
+                self.ws.remove_dataset(dataset_id, batches)
+                snapshot = build_snapshot(self.ws, ontology, self.config)
+                self.ws.save_graph(snapshot)
+            except Exception:
+                self.ws.rollback(cp)
+                self.ws.discard_checkpoint(cp)
+                raise
+            self.ws.discard_checkpoint(cp)
+            self._refresh_caches(snapshot, ontology)
+            return {
+                "dataset_id": dataset_id,
+                "batches": [b["batch_id"] for b in batches],
+                "patterns_removed": len(records) - len(kept),
+                "anchors_removed": dropped,
+                "neo4j": self.sync_neo4j(snapshot),
+            }
+
     def reset(self) -> dict[str, Any]:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning)."""
         with self._lock:

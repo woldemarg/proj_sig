@@ -89,7 +89,7 @@ checkpoint → ontology ingest → duplicate guard (duplicate_patterns if a patt
 → optional: Neo4j publish, then the sphere export queued on its own thread (failures there are warnings; the batch stays READY)
 ```
 
-**Checkpoint and rollback.** `checkpoint()` copies `state/` to `checkpoint/` and stores `ChunkJournal.mark()` (the sizes of both logs and the record count). `rollback()` truncates the journal to the mark and restores `state/`; it runs on any failure after the checkpoint. The checkpoint outlives the READY write, so a crash between the two still recovers. Files outside the journal and the state survive a failed batch — `journal/blocks/<batch>.npz`, `covers.npz`, `profile.json`, `rejections.json` and the source copy — and so does a snapshot written just before a failure of the READY save; the next successful batch or `rebuild-graph` replaces it.
+**Checkpoint and rollback.** `checkpoint()` copies `state/` to `checkpoint/` and stores `ChunkJournal.mark()` (the sizes of both logs and the record count). `rollback()` truncates the journal to the mark and restores `state/`; it runs on any failure after the checkpoint. A dataset deletion, which shrinks the journal, checkpoints with `journal=True` — the journal folder is copied too and restored whole ([6.8](#68-deleting-a-dataset)). The checkpoint outlives the READY write, so a crash between the two still recovers. Files outside the journal and the state survive a failed batch — `journal/blocks/<batch>.npz`, `covers.npz`, `profile.json`, `rejections.json` and the source copy — and so does a snapshot written just before a failure of the READY save; the next successful batch or `rebuild-graph` replaces it.
 
 **Committed caches.** `Engine.graph()` and `Engine.frame()` (`LatentFrame`: pattern id → unit vector, anchor id → centroid, pattern id → document vector) are rebuilt from committed state after READY, so readers never see a half-appended journal or a half-saved ontology. An engine that finds an outdated snapshot version rebuilds and writes the snapshot.
 
@@ -135,3 +135,19 @@ Guarantees (tests: `test_structural.py`; `test_persistence.py`: write → reload
 * GENERALIZES = inverse(SPECIALIZES); no transitive SPECIALIZES edges; structural edges connect patterns of one dataset; RELATED_TO connects only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` edges.
 * `journal rows == vector rows == ConceptStore.next_chunk_id`; snapshot ids are identical after reload and after rebuild.
 * `READY` implies that journals, state and snapshot are mutually consistent.
+
+## 6.8 Deleting a dataset
+
+`Engine.delete_dataset(dataset_id)` (web: `DELETE /api/datasets/{id}`, the card's delete control) removes one dataset from the knowledge base while the rest stays intact — the counterpart of `reset`, which removes everything. It is a writer operation under the engine lock, refused with `busy` while one of the dataset's batches is still running and with `unknown_dataset` when no batch carries that id.
+
+```text
+rows of the dataset leave the journal: patterns.jsonl, activations.jsonl and the vector matrix are rewritten
+without them (row ids renumbered in journal order) → ontology.forget: memberships recounted, orphan anchors
+dropped (5.11), next_chunk_id = rows → state saved → datasets/<id>/, journal/blocks/<batch>.npz, the batch
+records (READY, FAILED and SKIPPED alike) and the web upload removed → snapshot rebuilt → caches swapped → Neo4j synced
+```
+
+Dataset-specific entities (patterns, memberships, blocks, covers, profile, source copy, records) always go; the shared entities — anchors and their links — follow the orphan rule of [5.11](05_latent_anchors.md#511-removing-patterns-the-orphan-rule). Structural edges need no treatment: they are derived from the remaining patterns when the snapshot is rebuilt, and the Neo4j publish deletes whatever the snapshot no longer holds ([6.6](#66-neo4j-mirror)). Everything runs behind a checkpoint of `state/` **and** `journal/`; an exception restores both. The window between the journal swap and the state save is not crash-safe (milliseconds; `migrate --yes` rebuilds a workspace that a crash there left inconsistent). A deleted dataset can be uploaded again: its READY record is gone, so the upload is not `SKIPPED`.
+
+Tests (`test_persistence.py::test_delete_dataset_removes_its_knowledge_and_orphan_anchors`): the dataset's patterns, folder, blocks and records disappear; every surviving anchor has a member or a prior link and every removed one had neither; journal rows, vector rows, `next_chunk_id` and the frame agree; the snapshot equals a fresh rebuild; a question still answers; the dataset can be re-ingested; deleting the last dataset empties the ontology and a fresh ingest cold-starts.
+

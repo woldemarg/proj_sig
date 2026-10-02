@@ -21,12 +21,15 @@ const ERROR_HELP = {
   duplicate_patterns: ["Already ingested", "These insights are already in the graph.", ""],
   interrupted: ["Interrupted", "Processing stopped before finishing; nothing partial was kept.", "Upload the file again."],
 };
+// chat content is Ukrainian; data literals (column names, values) stay exactly as the data holds them
 const SUGGESTIONS = [
-  "Why is margin lower for phones in the US?",
-  "What drives higher return rates?",
-  "Tell me about EU laptops margin",
-  "Where does the correlation between discount and margin break down?",
+  "Чому margin нижчий для phones у US?",
+  "Що пов'язано з вищим return_rate?",
+  "Розкажи про margin для laptops у EU",
+  "Де руйнується кореляція між discount і margin?",
 ];
+// sphere traces named after the legend's layer toggles (ltir/sphere.py LAYER_TRACES)
+const SPHERE_LAYERS = { lattice: ["Hierarchy"], contrast: ["Contrasts"], sibling: ["Siblings"], latent: ["Theme links"], activates: ["Memberships", "Memberships (weak)"] };
 const LAYERS = {
   lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]',
   latent: 'edge[type="RELATED_TO"]', activates: 'edge[type="ACTIVATES"]',
@@ -52,6 +55,7 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
   try { localStorage.setItem("sig-theme", t); } catch (e) { /* private mode */ }
   if (S.cy) S.cy.style(graphStyle());
+  renderSphere();  // same palette in 3D
 }
 
 async function refreshHealth() {
@@ -83,9 +87,9 @@ function datasetCard(b) {
   } else if (b.status === "READY") {
     body = `<div class="ds-stats">` +
       `<div class="stat"><b>${num(m.validated_insights, 0)}</b><span>insights</span></div>` +
-      `<div class="stat"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>themes</span></div>` +
+      `<div class="stat" title="Themes first learned from this dataset"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>themes</span></div>` +
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>rows</span></div></div>` +
-      `<div class="ds-note">${num(m.candidate_patterns, 0)} subgroups tested · ${num(m.pruned_total, 0)} filtered out · ${num(m.processing_duration_s, 1)} s</div>` +
+      `<div class="ds-note">${num(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, 0)} columns · ${num(m.candidate_patterns, 0)} subgroups tested · ${num(m.pruned_total, 0)} filtered out · ${num(m.processing_duration_s, 1)} s</div>` +
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Processing failed", b.error.message, ""];
@@ -97,9 +101,20 @@ function datasetCard(b) {
   const chip = running ? `<span class="chip run">Processing</span>` : b.status === "READY" ? `<span class="chip ok">Ready</span>`
     : b.status === "FAILED" ? `<span class="chip bad">Failed</span>` : `<span class="chip">Skipped</span>`;
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+  const del = !running && b.dataset_id ? `<button type="button" class="ds-del" data-del="${esc(b.dataset_id)}" data-name="${esc(b.filename)}" title="Delete this dataset and its insights" aria-label="Delete dataset">` +
+    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>` : "";
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
-    `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}</div>` +
+    `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}${del}</div>` +
     `<div class="ds-sub">${esc(when)}</div>${body}</div>`;
+}
+
+async function deleteDataset(id, name) {
+  if (!confirm(`Delete “${name}” from the knowledge base?\n\nIts insights, vectors and memberships are removed; themes left with no insight and no theme link are removed too.`)) return;
+  try { await api(`/api/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }); setUploadMsg(`Deleted ${name}.`); }
+  catch (err) { setUploadMsg(err.message, true); }
+  if ($("dataset-filter").value === id) $("dataset-filter").value = "";
+  S.lastReady = null;  // force the views to reload
+  refreshBatches();
 }
 
 async function refreshBatches() {
@@ -116,6 +131,7 @@ async function refreshBatches() {
   $("batches").querySelectorAll(".ds.clickable").forEach((el) => el.addEventListener("click", () => {
     const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; loadGraph(); refreshBatches();
   }));
+  $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
   const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b.filename])).entries()];
   const sel = $("dataset-filter"), cur = sel.value;
   sel.innerHTML = `<option value="">All datasets</option>` + ready.map(([id, f]) => `<option value="${esc(id)}">${esc(f)}</option>`).join("");
@@ -145,7 +161,7 @@ function graphStyle() {
   const up = cssVar("--up"), down = cssVar("--down"), cov = cssVar("--cov"), anchor = cssVar("--anchor"), path = cssVar("--path"), bad = cssVar("--bad");
   const surface = cssVar("--surface") || "#fff", muted = cssVar("--muted");
   return [
-    { selector: "node", style: { label: "data(label)", "font-size": 10, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 112, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 7, "text-outline-color": surface, "text-outline-width": 2 } },
+    { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
     { selector: 'node[kind="Pattern"][direction < 0]', style: { "background-color": down } },
     { selector: 'node[kind="Pattern"][ptype="covariance"]', style: { "background-color": cov, shape: "round-rectangle" } },
@@ -251,10 +267,30 @@ function runLayout() {
 
 function layerOn(name) { const b = document.querySelector(`.toggle[data-layer="${name}"]`); return b && b.classList.contains("on"); }
 
+function layerState() { return Object.fromEntries(Object.keys(SPHERE_LAYERS).map((k) => [k, layerOn(k)])); }
+
 function applyVisibility() {
-  const cy = S.cy; if (!cy) return;
-  for (const [name, sel] of Object.entries(LAYERS)) cy.$(sel).toggleClass("hidden", !layerOn(name));
-  cy.$('node[kind="PlaneLabel"]').toggleClass("hidden", $("layout").value !== "dual");
+  const cy = S.cy;
+  if (cy) {
+    for (const [name, sel] of Object.entries(LAYERS)) cy.$(sel).toggleClass("hidden", !layerOn(name));
+    cy.$('node[kind="PlaneLabel"]').toggleClass("hidden", $("layout").value !== "dual");
+  }
+  applySphereLayers();
+}
+
+function applySphereLayers() {
+  /* the sphere page is a same-origin srcdoc frame: restyle its traces in place, no re-render */
+  const win = $("sphere").contentWindow, gd = win && win.document && win.document.querySelector(".plotly-graph-div");
+  if (!gd || !win.Plotly || !gd.data) return;
+  for (const [name, traces] of Object.entries(SPHERE_LAYERS)) {
+    const idx = gd.data.map((t, i) => (traces.includes(t.name) ? i : -1)).filter((i) => i >= 0);
+    if (idx.length) win.Plotly.restyle(gd, { visible: layerOn(name) }, idx);
+  }
+}
+
+function spherePalette() {
+  const v = (n) => cssVar(n);
+  return { bg: v("--sunken"), ink: v("--graph-ink"), muted: v("--muted"), anchor: v("--anchor"), up: v("--up"), down: v("--down"), cov: v("--cov"), path: v("--path"), bad: v("--bad") };
 }
 
 async function loadGraph() {
@@ -263,6 +299,8 @@ async function loadGraph() {
   try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
+  const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
+  $("view-caption").textContent = S.nodes.length ? `${S.nodes.length} insights · ${themes} themes · ${g.edges.length} links` : "";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
@@ -291,6 +329,8 @@ function setView(view) {
   $("table-view").hidden = view !== "table";
   $("sphere-open").hidden = view !== "sphere";
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
+  const columns = document.querySelector('.toggle[data-layer="schema"]');  // column nodes have no vectors: graph only
+  columns.disabled = view === "sphere"; columns.title = view === "sphere" ? "Columns are not drawn in 3D (they have no vectors)" : "Dimension and metric columns (graph only)";
   $("empty-hint").hidden = view === "table" || S.nodes.length > 0;
   if (view === "sphere") renderSphere();
   if (view === "graph" && S.cy) { S.cy.resize(); S.cy.fit(S.cy.elements(":visible"), 40); }
@@ -302,13 +342,14 @@ async function renderSphere(hl = null) {
   if (S.view !== "sphere") return;
   const seq = ++S.sphereSeq;
   const frame = $("sphere");
-  frame.srcdoc = `<body style="background:#0f172a;color:#94a3b8;font:14px system-ui;padding:24px">Projecting insight vectors on the sphere…</body>`;
+  const pal = spherePalette();
+  frame.srcdoc = `<body style="background:${pal.bg};color:${pal.muted};font:14px system-ui;padding:24px">Projecting insight vectors on the sphere…</body>`;
   try {
     const res = await fetch("/api/sphere", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset: ds || null, highlight: hl || (S.qa && S.qa.highlight) || null }) });
+      body: JSON.stringify({ dataset: ds || null, highlight: hl || (S.qa && S.qa.highlight) || null, palette: pal, layers: layerState() }) });
     const html = await res.text();
     if (seq === S.sphereSeq) frame.srcdoc = html;  // ignore stale renders
-  } catch (e) { if (seq === S.sphereSeq) frame.srcdoc = `<body style="background:#0f172a;color:#fca5a5;font:14px system-ui;padding:24px">${esc(e.message)}</body>`; }
+  } catch (e) { if (seq === S.sphereSeq) frame.srcdoc = `<body style="background:${pal.bg};color:${pal.bad};font:14px system-ui;padding:24px">${esc(e.message)}</body>`; }
 }
 
 function renderTable() {
@@ -468,7 +509,7 @@ function md(text, keyTo) {
     const line = raw.trim();
     let m;
     if (!line) { flushPara(); flushList(); continue; }
-    if ((m = line.match(/^#{1,4}\s+(.*)$/)) || (m = line.match(/^(?:<b>)?([A-Z][^:]{2,60}):(?:<\/b>)?$/))) { flushPara(); flushList(); html += `<h4>${inline(m[1])}</h4>`; continue; }
+    if ((m = line.match(/^#{1,4}\s+(.*)$/)) || (m = line.match(/^(?:<b>)?([A-ZА-ЯІЇЄҐ][^:]{2,60}):(?:<\/b>)?$/))) { flushPara(); flushList(); html += `<h4>${inline(m[1])}</h4>`; continue; }
     if ((m = line.match(/^[*\-•]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ul") { flushList(); list = { tag: "ul", items: [] }; } list.items.push(m[1]); continue; }
     if ((m = line.match(/^\d+[.)]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ol") { flushList(); list = { tag: "ol", items: [] }; } list.items.push(m[1]); continue; }
     flushList(); para.push(line);
@@ -515,12 +556,16 @@ function botCard(turn) {
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${renderChain(it)}</div>`;
   }).join("");
-  const hypo = b.transversal_only ? `<div class="hypo"><b>Transversal check:</b> ${b.transversal_only.length} of these insights share no condition with the starting point and were reached only through a theme; ${(b.not_in_naive_topk || []).length} would be missed by plain text search.</div>` : "";
+  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.</div>` : "";
+  const panes = [
+    items.length ? ["Evidence & how it was found", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Click an item to isolate its path in the graph or on the sphere.</p>${hypo}${evid}`] : null,
+    ["Sources", "", `<div class="muted" style="font-size:12.5px">${esc(qa.provenance_footer || "")}</div>`],
+    qa.evidence && qa.evidence.prompt ? ["Prompt", "", `<p class="ev-prefix">The exact evidence the model was shown.</p><pre class="canon">${esc(qa.evidence.prompt)}</pre>`] : null,
+  ].filter(Boolean);
   return `<div class="bot-card">${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>` +
-    (items.length ? `<details class="bot-section" open><summary>Evidence &amp; how it was found <span class="count chip">${items.length}</span></summary><div class="inner">${hypo}${evid}</div></details>` : "") +
-    `<details class="bot-section"><summary>Sources</summary><div class="inner muted" style="font-size:12px">${esc(qa.provenance_footer || "")}</div></details>` +
-    (qa.evidence && qa.evidence.prompt ? `<details class="bot-section"><summary>What the model saw</summary><div class="inner"><pre class="canon">${esc(qa.evidence.prompt)}</pre></div></details>` : "") +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" class="${i ? "" : "active"}">${esc(t)}${c}</button>`).join("")}</div>` +
+    panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" ${i ? "hidden" : ""}>${body}</div>`).join("") +
     `</div>`;
 }
 
@@ -528,11 +573,11 @@ function followUps(turn) {
   const items = (turn.qa.evidence && turn.qa.evidence.items) || [];
   const atts = (turn.qa.evidence && turn.qa.evidence.attractors) || [];
   const out = [];
-  if (atts[0]) out.push(`Where else does “${atts[0].label}” happen?`);
+  if (atts[0]) out.push(`Де ще трапляється «${atts[0].label}»?`);
   const cross = items.find((i) => i.transversal_only);
-  if (cross) out.push(`Tell me about ${cross.scope.map((c) => c.split("=")[1]).join(" ")} ${human(cross.target)}`);
+  if (cross) out.push(`Розкажи про ${cross.target} для ${cross.scope.map((c) => c.split("=")[1]).join(" ")}`);
   const seed = items[0];
-  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`How are ${seed.statistics.covariance.pair.map(human).join(" and ")} related?`);
+  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.join(" і ")}?`);
   return out.slice(0, 3);
 }
 
@@ -564,6 +609,10 @@ function renderThread() {
     const items = turn.qa.evidence.items || [];
     box.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", () => { if (S.view === "table") setView("graph"); focusNodes([a.dataset.pid]); inspect(a.dataset.pid); }));
     box.querySelectorAll(".ev").forEach((el) => el.addEventListener("click", () => highlightPath(turn, items[Number(el.dataset.i)], el)));
+    box.querySelectorAll(".bot-tabs button").forEach((tab) => tab.addEventListener("click", () => {
+      box.querySelectorAll(".bot-tabs button").forEach((t) => t.classList.toggle("active", t === tab));
+      box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = pane.dataset.pane !== tab.dataset.pane; });
+    }));
   });
   t.scrollTop = t.scrollHeight;
 }
@@ -610,7 +659,7 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-  document.querySelectorAll(".toggle[data-layer]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); if (S.qa) highlight(S.qa.highlight); }));
+  document.querySelectorAll(".toggle[data-layer]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); if (S.qa && S.cy) highlight(S.qa.highlight); }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", () => { loadGraph(); refreshBatches(); });
   $("fit-btn").addEventListener("click", () => S.cy && S.cy.fit(S.cy.elements(":visible"), 40));

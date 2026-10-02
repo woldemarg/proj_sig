@@ -25,7 +25,7 @@
       <p class="section-title">Add data</p>
       <form id="upload-form">
         <label class="drop" id="drop">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
           <span class="big">Drop a table here</span>
           <span class="muted">or click to choose · CSV, TSV, Parquet</span>
           <span class="file" id="file-name"></span>
@@ -48,7 +48,7 @@
       <div id="upload-msg" class="msg"></div>
     </div>
     <div class="rail-list">
-      <p class="section-title">Datasets</p>
+      <p class="section-title">Datasets <span class="muted" id="ds-hint">— click one to focus the views on it</span></p>
       <div id="batches"></div>
     </div>
   </aside>
@@ -58,11 +58,15 @@
     <div class="canvas-bar">
       <div class="tabs" id="view-switch" role="tablist">
         <button type="button" data-view="graph" class="active" role="tab">Graph</button>
-        <button type="button" data-view="sphere" role="tab">Sphere 3D</button>
+        <button type="button" data-view="sphere" role="tab">3D Sphere</button>
         <button type="button" data-view="table" role="tab">Insights <span class="count" id="ins-count"></span></button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Dataset"><option value="">All datasets</option></select>
+      <select class="field graph-only" id="layout" aria-label="Layout">
+        <option value="dual">Two planes</option>
+        <option value="force">Force</option>
+      </select>
       <button class="btn ghost sm graph-only" id="fit-btn" title="Fit graph to view">Fit</button>
       <button class="btn ghost sm" id="clear-btn" title="Remove answer highlight" hidden>Clear highlight</button>
       <a class="btn ghost sm sphere-only" id="sphere-open" href="/api/sphere" target="_blank" hidden>Open ↗</a>
@@ -86,30 +90,6 @@
         </table>
       </div>
 
-      <div class="float layers graph-only" id="layers">
-        <select class="field" id="layout" style="height:26px;width:auto;font-size:12px" aria-label="Layout">
-          <option value="dual">Two planes</option>
-          <option value="force">Force</option>
-        </select>
-        <span class="sep"></span>
-        <button class="toggle on" data-layer="lattice" title="SPECIALIZES — narrower subgroup of">Hierarchy</button>
-        <button class="toggle on" data-layer="contrast" title="CONTRASTS — overlapping scope, opposite shift">Contrasts</button>
-        <button class="toggle" data-layer="sibling" title="SIBLING — same parent, different value">Siblings</button>
-        <button class="toggle on" data-layer="latent" title="RELATED_TO — neighbouring themes">Theme links</button>
-        <button class="toggle on" data-layer="activates" title="ACTIVATES — insight belongs to theme">Memberships</button>
-        <button class="toggle" data-layer="schema" title="Dimensions and metrics">Columns</button>
-      </div>
-
-      <div class="float legend graph-only" id="legend">
-        <span><i class="sw anchor"></i>Theme (latent anchor)</span>
-        <span><i class="sw up"></i>Metric higher</span>
-        <span><i class="sw down"></i>Metric lower</span>
-        <span><i class="sw cov"></i>Correlation change</span>
-        <span><i class="ln contrast"></i>Contrast</span>
-        <span><i class="ln rel"></i>Theme link</span>
-        <span><i class="ln path"></i>Answer path</span>
-      </div>
-
       <div class="canvas-empty" id="empty-hint" hidden>
         <div class="inner">
           <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
@@ -127,6 +107,31 @@
         </div>
         <div class="drawer-body" id="inspector"></div>
       </aside>
+    </div>
+
+    <!-- one legend for the graph, the sphere and the table; the link entries are the layer toggles -->
+    <div class="legend-bar" id="legend" aria-label="Legend and layers">
+      <div class="lg"><span class="lg-title">Nodes</span>
+        <span class="key"><i class="sw anchor"></i>Theme</span>
+        <span class="key"><i class="sw up"></i>Metric higher</span>
+        <span class="key"><i class="sw down"></i>Metric lower</span>
+        <span class="key"><i class="sw cov"></i>Correlation change</span>
+      </div>
+      <div class="lg"><span class="lg-title">Links</span>
+        <button type="button" class="key toggle on" data-layer="lattice" title="SPECIALIZES — narrower subgroup of (arrow to the narrower insight)"><i class="ln lattice"></i>Hierarchy</button>
+        <button type="button" class="key toggle on" data-layer="contrast" title="CONTRASTS — overlapping scope, opposite shift"><i class="ln contrast"></i>Contrasts</button>
+        <button type="button" class="key toggle" data-layer="sibling" title="SIBLING — same parent, another value of one column"><i class="ln sibling"></i>Siblings</button>
+        <button type="button" class="key toggle on" data-layer="latent" title="RELATED_TO — neighbouring themes (mutual nearest centroids)"><i class="ln rel"></i>Theme links</button>
+        <button type="button" class="key toggle on" data-layer="activates" title="ACTIVATES — insight belongs to theme; dashed = weak membership (kept for coverage, not walked)"><i class="ln act"></i>Memberships <i class="ln weak"></i></button>
+        <button type="button" class="key toggle" data-layer="schema" title="Dimension and metric columns (graph only)"><i class="sw col"></i>Columns</button>
+      </div>
+      <div class="lg"><span class="lg-title">Answer</span>
+        <span class="key"><i class="ring seed"></i>Seed</span>
+        <span class="key"><i class="ring ev"></i>Evidence</span>
+        <span class="key"><i class="ring cross"></i>Other segment</span>
+        <span class="key"><i class="ln path"></i>Answer path</span>
+      </div>
+      <span class="lg-caption" id="view-caption"></span>
     </div>
   </section>
 

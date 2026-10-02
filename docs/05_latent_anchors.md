@@ -161,7 +161,17 @@ Cosine thresholds belong to the embedder, not to the method. Qwen3 places unrela
 
 `RELATED_TO_MIN_WEIGHT` stays 0.30 for both models. A global floor cannot keep links within datasets: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured: one cross-dataset link with three datasets (`corr(discount~margin) weakens · margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.57 — both "a value metric falls"), three with four datasets. On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. `cross_domain_links` and `cross_domain_evidence` in the script track this; restricting links to anchors that share a dataset is the open design option.
 
-## 5.11 Configuration
+## 5.11 Removing patterns: the orphan rule
+
+Deleting a dataset ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) removes its patterns and their memberships; `LatentOntology.forget(kept_activations, n_rows)` then recounts every anchor's `chunk_count` from the surviving activations and decides which anchors go (`orphan_anchors`):
+
+```text
+anchor dropped  ⇔  no remaining member  ∧  no RELATED_TO link (in the topology as it stood before the deletion)
+```
+
+An anchor that keeps a member stays. An anchor left without members but still linked to another anchor stays too: its centroid keeps its place in the mutual-kNN topology and can receive future insights that align with it, so a later upload of a related dataset joins it instead of minting a new one. Its label becomes `Attractor k` until it has members again. Centroids are never un-averaged — a survivor keeps the position its history gave it — and the row counter follows the rewritten journal. When the last pattern of the workspace goes, every anchor goes with it: an empty knowledge base starts cold again. Accordingly the mass invariant of [5.13](#513-guarantees-and-measured-behaviour) applies to anchors *created* in a batch; an older one may legitimately be empty.
+
+## 5.12 Configuration
 
 lac names, SIG-sized defaults (lac was tuned for thousands of text chunks, SIG sees tens to hundreds of insights):
 
@@ -180,10 +190,10 @@ lac names, SIG-sized defaults (lac was tuned for thousands of text chunks, SIG s
 | `DENSITY_FLOOR`, `DENSITY_MULTIPLE`, `MAX_CENTROID_STEP` | fixed 25 % hub warning | 0.25, 3.0, 0.10 | guards (5.6) |
 | `WARN_ORPHAN_RATE`, `WARN_MIN_EXTRACTION_YIELD`, `WARN_AVG_DEGREE` | hard-coded 0.50, 0.10, (1, 8) | same, configurable | advisory warnings |
 
-## 5.12 Guarantees and measured behaviour
+## 5.13 Guarantees and measured behaviour
 
-Checked after every batch by `check_invariants()` (a violation raises `OntologyError` → the batch fails with `ontology_failure` and the checkpoint is restored): every ingested insight has at least one activation; no anchor has mass 0; centroids are unit-norm. Checked by tests: `next_chunk_id == journal rows == vector rows`, because an insight's `row_id` is its journal row.
+Checked after every batch by `check_invariants()` (a violation raises `OntologyError` → the batch fails with `ontology_failure` and the checkpoint is restored): every ingested insight has at least one activation; no anchor created in the batch has mass 0 (an older anchor may be empty after a deletion, [5.11](#511-removing-patterns-the-orphan-rule)); centroids are unit-norm. Checked by tests: `next_chunk_id == journal rows == vector rows`, because an insight's `row_id` is its journal row.
 
-Tests (`tests/test_ontology.py`): cold start with full coverage, at least three anchors, and the members of each planted cluster sharing one anchor; assignment; orphans → OMP → new anchor; single-orphan nearest fallback; soft merge into an existing anchor; the weight scales the EMA pull; the `τ_density` formula; damping slows an over-represented anchor without changing membership; the trust region caps a move and keeps unit norm; sign repair; state round-trip.
+Tests (`tests/test_ontology.py`): cold start with full coverage, at least three anchors, and the members of each planted cluster sharing one anchor; the orphan rule (a memberless unlinked anchor goes, a linked or populated one stays) and `forget` recounting and renumbering; assignment; orphans → OMP → new anchor; single-orphan nearest fallback; soft merge into an existing anchor; the weight scales the EMA pull; the `τ_density` formula; damping slows an over-represented anchor without changing membership; the trust region caps a move and keeps unit norm; sign repair; state round-trip.
 
 Measured (demo → same-domain batch → `housing.csv`; Qwen3 at 0.75, MiniLM at 0.55): no hub warning, `damped_attractors = 0`, `clamped_attractors = 0` — healthy operation is not altered. The same-domain batch is fully assigned; `housing.csv` arrives entirely as orphans (the advisory orphan-rate warning fires, as it should for a new domain) and OMP mints 11 anchors of its own (MiniLM: 9). Qwen3's labels are less separable than MiniLM's, so the demo's two one-off phenomena share `A-3` where MiniLM gives each a singleton (4 anchors instead of 7), while the three recurring mechanisms keep their own anchors.

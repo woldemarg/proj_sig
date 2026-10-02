@@ -8,7 +8,7 @@ import pytest
 from ltir.config import load_config
 from ltir.engines.lac.observability import density_threshold
 from ltir.engines.lac.ontology_engine import repair_extraction
-from ltir.ontology import LatentOntology
+from ltir.ontology import LatentOntology, orphan_anchors
 
 
 def unit(v):
@@ -160,6 +160,28 @@ def test_sign_repair_flips_anti_aligned_atoms(toy):
     acts = [{"chunk_id": i, "concept_id": 0, "weight": 0.9} for i in range(3)]
     fixed, counts, fixed_acts = repair_extraction(cents, acts, rows, load_config())
     assert float(fixed[0] @ centers[0]) > 0.99 and counts.tolist() == [3] and len(fixed_acts) == 3
+
+
+def test_orphan_rule_keeps_linked_or_populated_anchors():
+    """After a deletion an anchor goes only when it has no member AND no RELATED_TO link (docs §5.11)."""
+    links = [{"source": 0, "target": 1, "weight": 0.5}]
+    # A: no members, no link -> dropped; B: no members but linked -> kept; C: members -> kept
+    assert orphan_anchors({0: 3, 1: 0, 2: 0}, links, [0, 1, 2]) == [2]
+    assert orphan_anchors({}, [], [0, 1]) == [0, 1]
+
+
+def test_forget_recounts_and_renumbers(tmp_path, toy):
+    rng, dim, centers = toy
+    ont = LatentOntology(load_config(), tmp_path)
+    up, _ = ingest(ont, clusters(rng, centers, 4)[0])
+    before, first = ont.attractor_ids, ont.attractor_ids[0]
+    linked = {a for e in ont.topology() for a in (e["source"], e["target"])}
+    keep = [{**a, "row_id": i} for i, a in enumerate(a for a in up.activations if a["attractor_id"] == first)]
+    dropped = ont.forget(keep, len(keep))
+    assert dropped == [a for a in before if a != first and a not in linked]
+    assert ont.store.next_chunk_id == len(keep) and ont.store.chunk_counts[ont.attractor_ids.index(first)] == len(keep)
+    assert all(ont.store.chunk_counts[ont.attractor_ids.index(a)] == 0 for a in ont.attractor_ids if a != first)  # linked survivors
+    assert len(ont.store.embeddings) == len(ont.attractor_ids) == len(ont.store.created_at)
 
 
 def test_state_roundtrip(tmp_path, toy):

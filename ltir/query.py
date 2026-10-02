@@ -97,9 +97,30 @@ POS_WORDS = {
     "stronger",
     "inflated",
 }
+# Ukrainian questions: inflected forms are matched by stem (prefix). Data literals (column names,
+# category values) are matched as typed, in whatever script the data holds them.
+NEG_STEMS = ("нижч", "низьк", "менш", "пада", "спад", "зниж", "зменш", "слабш", "гірш", "скороч", "втрат", "дешевш", "коротш")
+POS_STEMS = ("вищ", "висок", "більш", "зрост", "збільш", "підвищ", "затрим", "повільн", "сильніш", "кращ", "довш", "дорожч")
+WEAKENING_WORDS = ("break", "weak", "decoupl", "lose", "loss", "disappear", "руйн", "слаб", "розпад", "зник", "розрив", "втрач")
 GENERIC_METRIC_WORDS = {"median", "mean", "average", "avg", "total", "number", "num", "count", "percent", "pct", "rate", "value", "score", "index"}
-COVARIANCE_WORDS = ("correl", "relationship", "relation", "coupl", "decoupl", "dependen", "covari", "linked", "associat")
-_TOKEN = re.compile(r"[A-Za-z0-9]+")
+COVARIANCE_WORDS = (
+    "correl",
+    "relationship",
+    "relation",
+    "coupl",
+    "decoupl",
+    "dependen",
+    "covari",
+    "linked",
+    "associat",
+    "кореляц",
+    "зв'яз",
+    "пов'яз",
+    "взаємозв",
+    "залежн",
+    "асоці",
+)
+_TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*")  # letters and digits in any script; underscores split (return_rate -> return, rate)
 
 
 def _stem_match(a: str, b: str) -> bool:
@@ -123,7 +144,7 @@ class ParsedQuery:
 
     def components(self) -> tuple[tuple[str, float], ...]:
         if self.covariance and len(self.targets) >= 2:
-            weakening = any(w in self.text.lower() for w in ("break", "weak", "decoupl", "lose", "loss", "disappear"))
+            weakening = any(w in self.text.lower() for w in WEAKENING_WORDS)
             return ((covariance_label(self.targets[:2]), -2.0 if weakening else 2.0),)
         if not self.direction:
             # no direction word: no signed phenomenon components; the encoder then falls back
@@ -136,7 +157,7 @@ class ParsedQuery:
 
 
 def parse_query(text: str, graph: DualGraph) -> ParsedQuery:
-    raw_tokens = _TOKEN.findall(text)
+    raw_tokens = _TOKEN.findall(text.replace("’", "'").replace("ʼ", "'"))
     tokens = [t.lower() for t in raw_tokens]
     q = ParsedQuery(text=text)
 
@@ -175,8 +196,8 @@ def parse_query(text: str, graph: DualGraph) -> ParsedQuery:
         if hit and (attr, value) not in q.conditions:
             q.conditions.append((attr, value))
 
-    neg = sum(t in NEG_WORDS for t in tokens)
-    pos = sum(t in POS_WORDS for t in tokens)
+    neg = sum(t in NEG_WORDS or t.startswith(NEG_STEMS) for t in tokens)
+    pos = sum(t in POS_WORDS or t.startswith(POS_STEMS) for t in tokens)
     q.direction = int(np.sign(pos - neg))
     q.covariance = any(t.startswith(COVARIANCE_WORDS) for t in tokens)
     if q.covariance:

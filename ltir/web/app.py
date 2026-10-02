@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from ltir.canonical import humanize
 from ltir.config import Config, load_config
-from ltir.pipeline import TERMINAL, Engine
+from ltir.pipeline import TERMINAL, Engine, PipelineError
 from ltir.store import RepresentationMismatch, WorkspaceBusy
 from ltir.synth import DEMO_PATH, write_demo
 
@@ -39,13 +39,17 @@ class QueryIn(BaseModel):
 class SphereIn(BaseModel):
     dataset: str | None = None
     highlight: dict[str, list[str]] | None = None
+    palette: dict[str, str] | None = None  # the UI's theme colours, so both views share one visual language
+    layers: dict[str, bool] | None = None  # the legend toggles' state
 
 
-def _sphere_page(engine: Engine, dataset: str | None, highlight: dict | None) -> HTMLResponse:
+def _sphere_page(
+    engine: Engine, dataset: str | None, highlight: dict | None, palette: dict | None = None, layers: dict | None = None
+) -> HTMLResponse:
     from ltir.sphere import SphereError, sphere_html
 
     try:
-        return HTMLResponse(sphere_html(engine, dataset=dataset or None, highlight=highlight))
+        return HTMLResponse(sphere_html(engine, dataset=dataset or None, highlight=highlight, palette=palette, layers=layers))
     except SphereError as exc:
         return HTMLResponse(f"<body style='background:#0f172a;color:#cbd5e1;font:14px system-ui;padding:24px'>{html.escape(str(exc))}</body>")
 
@@ -208,13 +212,20 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
 
     @app.post("/api/sphere", response_class=HTMLResponse)
     def sphere_highlight(body: SphereIn) -> HTMLResponse:
-        return _sphere_page(engine, body.dataset, body.highlight)
+        return _sphere_page(engine, body.dataset, body.highlight, body.palette, body.layers)
 
     @app.get("/vendor/plotly.min.js")
     def plotly_js() -> FileResponse:
         from ltir.sphere import plotly_js_path
 
         return FileResponse(plotly_js_path(), media_type="application/javascript")
+
+    @app.delete("/api/datasets/{dataset_id}")
+    def delete_dataset(dataset_id: str) -> dict[str, Any]:
+        try:
+            return engine.delete_dataset(dataset_id)
+        except PipelineError as exc:
+            raise HTTPException(404 if exc.code == "unknown_dataset" else 409, str(exc)) from exc
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:

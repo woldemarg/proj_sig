@@ -84,7 +84,8 @@ Exit codes: 0 on success (`SKIPPED` included); 1 for a FAILED `demo` or `ingest`
 | `interrupted` | crash recovery found the batch unfinished; the record keeps its last stage in `stage_times` but gets no `failed_stage` | any |
 | `WorkspaceBusy` (not a batch code) | another writer process holds the workspace; the CLI exits with code 2, the web app does not start | engine start |
 | `busy`, `nothing_to_migrate`, `migration_failed` (not batch codes) | `migrate` refused (a batch is unfinished, or there is no READY batch) or a re-ingest did not end READY; the workspace is unchanged | migrate |
-| `unknown_batch` (not a batch code) | `Engine.process` was given an id with no record | — |
+| `unknown_batch`, `unknown_dataset` (not batch codes) | `Engine.process` was given an id with no record; `Engine.delete_dataset` an id no batch carries (HTTP 404) | — |
+| `busy` (not a batch code) | `delete_dataset` while one of the dataset's batches runs (HTTP 409); also a `migrate` refusal, above | — |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | query |
 

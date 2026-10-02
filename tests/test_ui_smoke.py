@@ -56,9 +56,15 @@ def test_upload_process_render_query(client, demo_csv):
     detail = client.get(f"/api/nodes/{attractor}").json()
     assert detail["node"]["kind"] == "Attractor" and "ACTIVATES (in)" in detail["neighbors"]
 
-    qa = client.post("/api/query", json={"question": "Why is margin lower for phones in the US?", "use_llm": True}).json()
+    qa = client.post("/api/query", json={"question": "Чому margin нижчий для phones у US?", "use_llm": True}).json()
     assert qa["highlight"]["edges"] and qa["highlight"]["seeds"] and qa["answer"]
+    assert qa["evidence"]["parsed"]["targets"] == ["margin"] and qa["evidence"]["parsed"]["direction"] == -1  # literals parsed inside Ukrainian
     assert set(qa["highlight"]["edges"]) <= {e["data"]["id"] for e in g["edges"]}  # highlight ids resolve in the UI graph
+    # delete through the API: the dataset, its graph and its record go; the mirror of the UI is the backend
+    ds = batches[0]["dataset_id"]
+    assert client.delete(f"/api/datasets/{ds}").json()["patterns_removed"] == batches[0]["metrics"]["validated_insights"]
+    assert client.get("/api/batches").json() == [] and client.get("/api/graph").json()["nodes"] == []
+    assert client.delete(f"/api/datasets/{ds}").status_code == 404
     assert client.post("/api/reset").json()["status"] == "reset"
 
 
@@ -99,20 +105,44 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.wait_for_selector("#ins-table tbody tr[data-id]")
             assert page.evaluate("document.querySelectorAll('#ins-table tbody tr[data-id]').length") == page.evaluate("S.nodes.length")
             page.click("#view-switch button[data-view='graph']")
-            # chat: suggestion -> grounded answer with citations and a highlighted retrieval path
-            page.click("text=Why is margin lower for phones in the US?")
+            # chat: a Ukrainian suggestion -> grounded answer with citations and a highlighted retrieval path
+            page.click("text=Чому margin нижчий для phones у US?")
             page.wait_for_selector(".answer-box", timeout=30000)
             assert page.evaluate("S.cy.edges('.hl-edge').length") > 0
             assert page.evaluate("S.cy.nodes('.hl-anchor').length") > 0
             assert page.evaluate("S.cy.nodes('.hl-seed').length") > 0
             assert page.evaluate("document.querySelectorAll('.ev').length") > 0
+            # the evidence is the default chat tab; UI chrome stays English
+            assert page.inner_text(".bot-tabs button.active").startswith("Evidence & how it was found")
+            assert not page.is_hidden(".bot-pane[data-pane='0']") and page.is_hidden(".bot-pane[data-pane='1']")
             # clicking an evidence card opens the details drawer via its citation
             page.click(".answer-box a.cite >> nth=0")
             page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
             assert "insight" in page.inner_text("#drawer-kind").lower()
+            # one legend for every view; its link entries toggle the layers in the graph and in the sphere alike
+            assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-layer='activates']")
+            page.click("#view-switch button[data-view='sphere']")
+            page.wait_for_function(
+                "(() => { const w = document.querySelector('#sphere').contentWindow; return w && w.document.querySelector('.plotly-graph-div') && w.document.querySelector('.plotly-graph-div').data; })()",
+                timeout=60000,
+            )
+            trace_visible = "(() => { const gd = document.querySelector('#sphere').contentWindow.document.querySelector('.plotly-graph-div'); return gd.data.filter(t => t.name === 'Memberships').map(t => t.visible !== false); })()"
+            assert page.is_visible("#legend") and page.evaluate(trace_visible) == [True]
+            assert page.evaluate("document.querySelector('.toggle[data-layer=\"schema\"]').disabled")  # columns have no 3D meaning
+            page.click("#legend .toggle[data-layer='activates']")
+            assert page.evaluate(trace_visible) == [False]
+            page.click("#view-switch button[data-view='graph']")
+            hidden, rest = (page.evaluate(f"S.cy.edges('[type=\"ACTIVATES\"]').not('.hl-edge'){f}.length") for f in (".filter('.hidden')", ""))
+            assert hidden == rest > 0  # off in the graph too (the answer path stays visible by design)
             page.click("#theme-btn")
             assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
             page.screenshot(path=str(tmp_path / "ui.png"))
+            # deleting the dataset from its card empties the views, through the backend
+            page.once("dialog", lambda d: d.accept())
+            page.hover(".ds")
+            page.click(".ds .ds-del")
+            page.wait_for_selector(".empty-rail", timeout=20000)
+            assert page.evaluate("S.cy.nodes().length") == 0 and not engine.graph().of_kind("Pattern")
             browser.close()
             assert not errors, errors
     finally:

@@ -18,14 +18,14 @@ Before retrieval the workspace's fingerprint is checked against the encoder's (`
 
 ## 7.1 From question to query
 
-`parse_query(text, graph)` is deterministic and uses only the graph's vocabulary — no LLM. Tokens are `[A-Za-z0-9]+`, lower-cased; two words stem-match when they are equal, or both have at least 5 characters, share the first 5 and differ in length by at most 3.
+`parse_query(text, graph)` is deterministic and uses only the graph's vocabulary — no LLM. Tokens are runs of letters and digits in any script (underscores split, so `return_rate` is `return`, `rate`; an apostrophe stays inside a word), lower-cased; two words stem-match when they are equal, or both have at least 5 characters, share the first 5 and differ in length by at most 3. Data literals — metric names, condition values — are matched as the data holds them, whatever the language of the sentence around them: *"Чому margin нижчий для phones у US?"* parses like its English twin.
 
 | Element | Rule | Demo question *"Why is margin lower for phones in the US?"* |
 |---|---|---|
 | metrics | name parts are the humanised words of at least 3 letters. A metric matches when all its parts match, or at least two parts including a non-generic word match, or its head word matches and that head is non-generic and unique among the metrics (generic: `median, mean, average, avg, total, number, num, count, percent, pct, rate, value, score, index`). Only the best-covered metrics are kept. "returns" finds `return_rate`, "house values" `median_house_value`, "the median" nothing | `margin` |
 | conditions | a value matches when every word of it stem-matches a token; values of at most 4 upper-case characters (`US`, `EU`) must appear verbatim, so "tell us" is not `US` | `category=phones`, `region=US` |
-| direction | `sign(#positive words − #negative words)` over two lexicons (`lower, drop, erosion, fewer, …` / `higher, rise, delay, slower, …`); 0 without a direction word | −1 |
-| relationship intent | a token starting with `correl, relationship, relation, coupl, decoupl, dependen, covari, linked, associat` makes it a relationship question: the direction is ignored and covariance insights score in the phenomenon slot | no |
+| direction | `sign(#positive words − #negative words)` over two lexicons (`lower, drop, erosion, fewer, …` / `higher, rise, delay, slower, …`) plus Ukrainian stems matched as prefixes (`нижч, менш, спад, зниж, …` / `вищ, більш, зрост, затрим, …`); 0 without a direction word | −1 |
+| relationship intent | a token starting with `correl, relationship, relation, coupl, decoupl, dependen, covari, linked, associat` or `кореляц, зв'яз, пов'яз, взаємозв, залежн, асоці` makes it a relationship question: the direction is ignored and covariance insights score in the phenomenon slot | no |
 
 The query vector uses the composition of [4.3](04_representation.md#43-the-tripartite-vector): scope `attribute = value; …` for the recognised conditions (in recognition order), target `humanize(metric)` joined by `; `, and components `(humanize(metric), direction · 2.0)` per metric — or, for a relationship question with at least two metrics, `("correlation between a and b", ±2.0)` (−2 when the question speaks of breaking, weakening or decoupling). Without a direction word there are no components; the question text, embedded with the query instruction, stands in for every empty block — the system never assumes "higher". `ParsedQuery.to_dict()` is stored in the evidence: `{"text", "targets": ["margin"], "direction": -1, "conditions": ["category=phones", "region=US"], "covariance": false}`.
 
@@ -142,7 +142,7 @@ NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were
 
 Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows.
 
-**The evidence-only summary** (`Evidence.summary`, used whenever there is no LLM answer) starts with `Observations:` and one cited line per item — `- <scope sentence> | <top two shift phrases, or the relationship> | n=<support> [P#]`, with ` (scope-disjoint from the seed, linked via a latent anchor)` for transversal-only items — and ends with `Interpretation (hypotheses): not generated (no language-model answer is available).` Without items it says `- No matching evidence in the graph.`
+**The evidence-only summary** (`Evidence.summary`, used whenever there is no LLM answer) follows the chat's language rule — Ukrainian around untouched literals — and is rendered from the numbers rather than from the English phrases: it starts with `Спостереження:` and has one cited line per item, `- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (…) | n=438 [P1]` (the phenomenon shifts, at most two; a covariance insight shows `кореляція a ~ b: +0.88 загалом → +0.73 у підгрупі`), with ` (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)` for transversal-only items, and ends with `Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).` Without items it says `- У графі немає відповідних свідчень.`
 
 ## 7.5 The language model and citation check
 
@@ -156,14 +156,19 @@ Rules:
 1. Use ONLY the evidence. Do not invent numbers, subgroups, metrics or datasets.
 2. Cite every factual statement with its key, e.g. [P1] or [P2][P4].
 3. Structure the answer in two labelled parts:
-   "Observations:" - what the verified statistics show (medians, shifts in sd, support).
-   "Interpretation (hypotheses):" - possible explanations, explicitly marked as hypotheses.
+   "Спостереження:" - what the verified statistics show (medians, shifts in sd, support).
+   "Інтерпретація (гіпотези):" - possible explanations, explicitly marked as hypotheses.
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
    condition), point out that the same phenomenon recurs in a different part of the data.
 6. If the evidence does not answer the question, say so plainly.
+7. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
+   original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
+   Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
 Be concise (at most ~250 words).
 ```
+
+The language split is deliberate: the prompt (machine-to-machine) stays English, the natural-language answer is Ukrainian, and every literal that exists in the data — in whatever script the data holds it — is reproduced exactly, never translated or transliterated, so a cited value can always be found in the table. The citation check only reads `[P#]` keys, which the rule keeps intact. The same principle holds upstream: ingestion and canonicalisation keep column names and values verbatim ([2.1](02_discovery.md#21-ingestion), [4.2](04_representation.md#42-the-canonical-form)).
 
 **Client** (`OpenAICompatibleLLM`, the only client; tests inject a duck-typed fake with `model`, `generate()` and `health()`): `POST {LLM_BASE_URL}/chat/completions` with `Authorization: Bearer <LLM_API_KEY>` and `X-Title: <LLM_APP_TITLE>` (each header only when set) and the body `{model, messages: [system, user], temperature, max_tokens, stream: false[, reasoning_effort][, provider: {order: LLM_PROVIDER_ORDER, allow_fallbacks: false}]}` — the provider block pins OpenRouter providers. Timeouts: 5 s to connect, `LLM_TIMEOUT_S` (120) for each read, write and pool wait — not a cap on the whole request. Health: `GET {base}/models` (10 s timeout), cached for 15 s — a failed check is cached too, so answers stay evidence-only for up to 15 s after an endpoint recovers; while the endpoint is known to be unreachable, generation fails fast. The code defaults point at a local Ollama (`http://localhost:11434/v1`, `gemma4`); the configured deployment uses OpenRouter (`https://openrouter.ai/api/v1`, `google/gemma-4-26b-a4b-it`, pinned bf16 providers); LM Studio works too.
 

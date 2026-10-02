@@ -20,6 +20,7 @@ loss (rows scaled by w) make strong insights shape attractors more.
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,14 @@ class OntologyError(RuntimeError):
     code = "ontology_failure"
 
 
+def orphan_anchors(members: dict[int, int], links: list[dict[str, Any]], anchors: list[int]) -> list[int]:
+    """Anchors to drop once patterns were removed: no remaining member *and* no RELATED_TO link
+    (docs/05_latent_anchors.md §5.11). A memberless anchor that is still linked stays: its centroid
+    keeps its place in the topology and can receive future insights."""
+    linked = {a for e in links for a in (e["source"], e["target"])}
+    return [a for a in anchors if not members.get(a) and a not in linked]
+
+
 def _tag(edges: Activations, source: str) -> Activations:
     """Label activations with the lifecycle step that produced them (``reroute`` wins)."""
     return [{**e, "source": "reroute" if e.get("rerouted") else source} for e in edges]
@@ -87,6 +96,21 @@ class LatentOntology:
     def save(self) -> None:
         self.store.save(self.state_dir)
 
+    def forget(self, kept_activations: Activations, n_rows: int) -> list[int]:
+        """Dataset deletion: memberships are recounted from the surviving activations (``row_id``
+        already renumbered), orphan anchors are dropped and the row counter follows the journal.
+        Centroids are not un-averaged: a surviving anchor keeps the position its history gave it.
+        Returns the dropped anchor ids."""
+        st = self.store
+        members = Counter(int(a["attractor_id"]) for a in kept_activations)
+        # no pattern left: nothing for a topology to be relative to, the knowledge base starts cold again
+        dropped = orphan_anchors(members, self.topology(), self.attractor_ids) if n_rows else list(self.attractor_ids)
+        st.keep_concepts([a for a in self.attractor_ids if a not in dropped])
+        st.chunk_counts = np.array([members.get(a, 0) for a in self.attractor_ids], dtype=np.int64)
+        st.next_chunk_id = n_rows
+        st.clear_orphan_buffer()  # always empty between batches; the ids would be stale anyway
+        return dropped
+
     def ingest(self, vectors: np.ndarray, weights: np.ndarray, pattern_ids: list[str], *, batch_seq: int, batch_id: str) -> OntologyUpdate:
         """Register one batch of insight vectors; returns ACTIVATES records + metrics."""
         start = time.perf_counter()
@@ -110,7 +134,7 @@ class LatentOntology:
         ext.max_step, ext.clamped = self._clamp_steps(emb_before)
 
         records = self._activation_records(acts, x_unit, row_ids, w, pattern_ids, batch_id)
-        errors = self.check_invariants(records, pattern_ids)
+        errors = self.check_invariants(records, pattern_ids, new_from=n_before)
         if errors:
             raise OntologyError("; ".join(errors))
 
@@ -251,13 +275,16 @@ class LatentOntology:
                 best[key] = rec
         return list(best.values())
 
-    def check_invariants(self, records: Activations, pattern_ids: list[str]) -> list[str]:
+    def check_invariants(self, records: Activations, pattern_ids: list[str], new_from: int = 0) -> list[str]:
+        """Every pattern activates something; no *new* anchor is empty (an older one may be: a linked
+        anchor survives the deletion of its last member, ``forget``); centroids are unit-norm."""
         errors: list[str] = []
         activated = {r["pattern_id"] for r in records}
         missing = [p for p in pattern_ids if p not in activated]
         if missing:
             errors.append(f"{len(missing)} patterns lack ACTIVATES (e.g. {missing[:3]})")
-        if len(self.store.chunk_counts) and int(np.min(self.store.chunk_counts)) == 0:
+        new_counts = self.store.chunk_counts[new_from:]
+        if len(new_counts) and int(np.min(new_counts)) == 0:
             errors.append("attractor with mass 0")
         if self.store.embeddings.size:
             norms = np.linalg.norm(self.store.embeddings, axis=1)

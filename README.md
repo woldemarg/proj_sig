@@ -73,11 +73,11 @@ In `.env`: `NEO4J_ENABLED=true`, `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USER`
 .venv\Scripts\python.exe -m ltir.web          # from the repository root; then open http://127.0.0.1:8765  (Ctrl+C to stop)
 ```
 Startup loads the embedding model onto the GPU (~10 s, `EMBEDDING_DEVICE=cuda`; the header shows `cuda:0`; ≈ 1.2 GB resident, ≈ 1.7 GB peak). The LLM is never loaded by SIG: it is reached only through `LLM_BASE_URL`, so a local 26B model must run in its own server (CPU or partial GPU offload on an 8 GB card). The header shows the LLM, Neo4j and embedding status. Settings come from `.env`; `WEB_PORT` changes the port.
-1. **Add data**: drop a CSV/TSV/Parquet file on the left rail (or click **Try demo**). Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`) and numeric columns split into band dimensions (`median_income:4`).
+1. **Add data**: drop a CSV/TSV/Parquet file on the left rail (or click **Try demo**). Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`) and numeric columns split into band dimensions (`median_income:4`). A dataset card's delete control removes that dataset again — its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. Watch the **batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
-3. **Explore.** *Graph*: the *Two planes* layout shows themes (latent anchors) on top and insights below, grouped by theme; layer toggles for hierarchy / contrasts / siblings / theme links / memberships / columns. *Insights*: a sortable, filterable table. Click any node or row for the details drawer: a one-line reading, shifts with meters, evidence facts, score breakdown, canonical form, connections and provenance. Number-coded columns (store ids, flags) can be declared under *Column options → Treat as categories*; numeric columns can be split into quantile bands.
-4. **Sphere 3D** (toolbar switch). The same insights are shown as embeddings projected on a sphere, using lac's prosphera projector (KernelPCA cosine → sphere), coloured by latent anchor, with RELATED_TO lines. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
-5. **Chat** with the data (or click a suggestion). The answer cites `[P#]` evidence; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; *What the model saw* shows the exact evidence prompt. The switch below the composer turns the LLM explanation off (evidence-only answers).
+3. **Explore.** The three tabs — *Graph*, *3D Sphere*, *Insights* — are views of the same knowledge base under one legend; its link entries switch the layers (hierarchy / contrasts / siblings / theme links / memberships / columns) in the graph and on the sphere alike. *Graph*: the *Two planes* layout shows themes (latent anchors) on top and insights below, grouped by theme. *Insights*: a sortable, filterable table. Click any node or row for the details drawer: a one-line reading, shifts with meters, evidence facts, score breakdown, canonical form, connections and provenance. Number-coded columns (store ids, flags) can be declared under *Column options → Treat as categories*; numeric columns can be split into quantile bands.
+4. **3D Sphere**. The same insights are shown as embeddings projected on a sphere, using lac's prosphera projector (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
+5. **Chat** with the data (or click a suggestion). Questions and answers are in Ukrainian; every data literal — `margin`, `phones`, `US`, ids — stays exactly as the data holds it, so it can always be found in the table. The answer cites `[P#]` evidence and opens on the *Evidence & how it was found* tab; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; the *Prompt* tab shows the exact evidence the model saw. The switch below the composer turns the LLM explanation off (evidence-only answers).
 
 CLI equivalents:
 ```powershell
@@ -91,7 +91,7 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 75 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 78 tests (≈ 85 s)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
@@ -164,6 +164,7 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Cosine thresholds belong to the embedder: `MIN_ASSIGN_THRESHOLD` is 0.75 for Qwen3 and 0.55 for MiniLM ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); under Qwen3 a few RELATED_TO edges join anchors of unrelated datasets.
 * A workspace built under another representation (versions, embedder or its revision, compute dtype, composition or component settings — the fingerprint, [4.6](docs/04_representation.md#46-representation-identity-and-versions)) is refused with `representation_mismatch`; `python -m ltir migrate --yes` rebuilds it from its stored sources and keeps the old copy as `<workspace>.bak-<time>`.
 * One writer process per workspace: while the web app runs, CLI writers (`ingest`, `demo`, `reset`, `rebuild-graph`, `migrate`) are refused; upload through the app.
+* Deleting a dataset keeps a theme that still links to another theme even when it has no insight left (its centroid can receive future data); such a theme reads `Attractor k` until it has members again.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
 
 ## Repository layout
@@ -172,7 +173,7 @@ sig/
   ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
                    structural, graph, store, fileio, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
                    sphere, synth, experiment, cli, web/, cypher/)
-  tests/           75 contract / integration / E2E / UI tests
+  tests/           78 contract / integration / E2E / UI tests
   docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
                    init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
   scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), download_model.py
