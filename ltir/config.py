@@ -8,12 +8,21 @@ sized for tens-to-hundreds of insights instead of thousands of text chunks.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]  # sig/ — everything LTIR needs lives below it
+log = logging.getLogger(__name__)
+# Settings this package does not read; one that is set is named on loading instead of being ignored silently.
+RETIRED = {
+    "LLM_PROVIDER_ORDER": "set GEMMA_PROVIDER in .env.gemma: provider routing is the LLM gateway's (docs/12_architecture.md §12.4)",
+    "LLM_APP_TITLE": "the LLM gateway talks to the provider (docs/12_architecture.md §12.4)",
+    "LLM_REASONING_EFFORT": "the client sends model, messages, temperature and max_tokens only (docs/07_question_answering.md §7.5)",
+    "SPHERE_EXPORT": "the standalone sphere is written on request: python -m ltir sphere (docs/08_interface.md §8.4)",
+}
 
 
 def _load_dotenv(path: Path) -> None:
@@ -125,7 +134,9 @@ class Config:
     contrast_min_shift: float = 0.5
 
     # traversal / evidence (docs/07_question_answering.md)
-    grounding_min_cosine: float = 0.30  # dense literal grounding floor on catalog-centred cosines, embedder-specific (docs/07 §7.1.1): Qwen3 0.30
+    grounding_min_cosine: float = (
+        0.30  # dense literal grounding floor on catalog-centred cosines, embedder-specific (docs/07_question_answering.md §7.1.1): Qwen3 0.30
+    )
     seed_top_k: int = 3
     seed_min_score: float = 0.25
     seed_relative_min: float = 0.75  # seeds must score >= this fraction of the best seed
@@ -137,17 +148,13 @@ class Config:
     traversal_structural_edges: str = "SPECIALIZES,GENERALIZES,CONTRASTS"  # SIBLING stays in the graph
     evidence_max_patterns: int = 10
 
-    # LLM (docs/07_question_answering.md §7.5)
-    llm_base_url: str = "http://localhost:11434/v1"
-    llm_model: str = "gemma4"
-    llm_api_key: str = ""
+    # LLM (docs/07_question_answering.md §7.5): any OpenAI-compatible endpoint; by default the LLM gateway (llm_gateway/)
+    llm_base_url: str = "http://127.0.0.1:8080/v1"
+    llm_model: str = ""  # "" = the one model the endpoint lists (the gateway serves exactly one)
+    llm_api_key: str = ""  # only for an endpoint that needs one; the gateway holds the provider key
     llm_timeout_s: float = 120.0
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1200
-    llm_reasoning_effort: str = ""
-    # OpenRouter provider pinning, comma-separated, no fallbacks: "dekallm/bf16,parasail/bf16"
-    llm_provider_order: str = ""
-    llm_app_title: str = "SIG LTIR"  # OpenRouter X-Title attribution header
 
     # Neo4j (docs/06_graph_and_storage.md §6.6)
     neo4j_enabled: bool = False
@@ -160,7 +167,6 @@ class Config:
     # web
     web_host: str = "127.0.0.1"
     web_port: int = 8765
-    sphere_export: bool = True  # write workspace/graph/sphere.html after each READY batch
 
     @property
     def lattice_edges(self) -> frozenset[str]:
@@ -183,10 +189,14 @@ def load_config(env_file: Path | None = None, **overrides: Any) -> Config:
 
     An empty value clears a string field (``EMBEDDING_QUERY_INSTRUCTION=`` for MiniLM) and
     leaves any other field at its default. ``LTIR_NO_DOTENV=1`` skips ``sig/.env`` (the test
-    suite sets it so developer credentials — OpenRouter key, Neo4j — never leak into tests).
+    suite sets it so developer credentials — the Neo4j password, an LLM key — never leak into tests).
+    A set ``RETIRED`` name is logged with where its job went.
     """
     if env_file is not None or not os.environ.get("LTIR_NO_DOTENV"):
         _load_dotenv(env_file or PROJECT_ROOT / ".env")
+    for name, note in RETIRED.items():
+        if os.environ.get(name):
+            log.warning("%s is set but not read: %s", name, note)
     values: dict[str, Any] = {}
     for f in fields(Config):
         raw = os.environ.get(f.name.upper())

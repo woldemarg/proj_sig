@@ -6,7 +6,7 @@ The hypothesis it makes testable:
 
 > Structurally different subgroups that exhibit related statistical behaviour can be connected through latent attractor concepts. This enables *transversal* retrieval that purely structural graph traversal or naive nearest-neighbour text retrieval does not reliably achieve.
 
-**Documentation:** [`docs/`](docs/README.md) — eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour; start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
+**Documentation:** [`docs/`](docs/README.md) — eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour, and a twelfth on the [architecture](docs/12_architecture.md) (layers, services, containers, reusing the analytical core); start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -15,7 +15,7 @@ The hypothesis it makes testable:
 | Layer | Source | How |
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | [`ltir/engines/eda/main_upd.py`](ltir/engines/eda/main_upd.py), copied from the eda project's `scripts/main_upd.py` | vendored with 3 integration edits and documented numerical repairs; the unused standalone runner and print-only step 5 removed ([`PROVENANCE.md`](ltir/engines/PROVENANCE.md)) |
-| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, journal, metrics), plus the projection of lac's prosphera sphere (recomputed in `ltir/sphere.py`) | [`ltir/engines/lac/`](ltir/engines/lac), copied from the lac project's `v2_orchestrator` | vendored; running-mean centering removed, signed extraction repair, per-attractor EMA damping hooks, config-driven health warnings (`PROVENANCE.md`); SIG drives lac's batch lifecycle with insight vectors |
+| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, journal, metrics), plus the projection of lac's prosphera sphere (recomputed in `ltir/web/sphere.py`) | [`ltir/engines/lac/`](ltir/engines/lac), copied from the lac project's `v2_orchestrator` | vendored; running-mean centering removed, signed extraction repair, per-attractor EMA damping hooks, config-driven health warnings (`PROVENANCE.md`); SIG drives lac's batch lifecycle with insight vectors |
 | Embedding model | [`models/Qwen3-Embedding-0.6B/`](models) (default; Matryoshka-truncated to 384-d, bf16, pinned revision, fetched by `scripts/download_model.py`) or `models/paraphrase-multilingual-MiniLM-L12-v2/` | loaded offline from the folder |
 | New in `ltir/` | adapter (closed intents, duplicate cohorts pruned before validation), insight model, selection & weight, canonicalisation, tripartite encoder, ontology guards, structural lattice, graph, persistence + migration, traversal, evidence, LLM, UI, tests | see [`docs/01_overview.md`](docs/01_overview.md) |
 
@@ -28,42 +28,65 @@ question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO�
          → structured evidence → Gemma 4 (or evidence-only fallback) → cited answer + highlighted path in the UI
 ```
 
+## Architecture
+
+```text
+browser ── HTTP ──> sig (backend)
+                    web: API, chat endpoint, UI, 3D sphere
+                    engine: batch lifecycle, committed state, search, ask
+                    answering + llm_client ───── HTTP ─────> llm (LLM gateway) ── HTTPS ──> upstream model
+                    analytical core: analysis, retrieval      one model, its key,          (OpenRouter, a local server)
+                    storage: workspace volume, Neo4j mirror ─── bolt ───> neo4j (graph mirror)
+```
+
+The package `ltir` is layered by responsibility — `analysis` (table → insights → vectors → anchors → graph), `retrieval` (question → seeds → paths → evidence), `storage` (workspace, Neo4j mirror), the `Engine`, `answering` + `llm_client` (chat), `web` (presentation) — and every import points down the stack (`tests/test_architecture.py`). The LLM sits behind its own gateway service (`llm_gateway/`), and Neo4j runs as its own container. Layers, services, the chat decision and how to reuse the analytical core without the UI: [docs/12_architecture.md](docs/12_architecture.md).
+
 ---
 
 ## Setup
 
 Python **3.12+** (the EDA script uses PEP 701 f-strings).
 
+**Docker** (the three services: backend with UI and chat, LLM gateway, Neo4j)
+```powershell
+.venv\Scripts\python.exe scripts\download_model.py     # once: the embedding model into models/ (or any Python with huggingface_hub)
+copy .env.gemma.sample .env.gemma                        # the gateway's upstream, model and key
+docker compose up -d --build                             # then http://127.0.0.1:8765
+python scripts\compose_check.py                          # verification: its own stack, volumes and ports — runs beside yours
+```
+Neo4j Browser: http://127.0.0.1:17474, connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The containers compute embeddings on the CPU; the local setup below uses the GPU. Commands inside the stack, e.g. a migration: `docker compose stop sig`, then `docker compose run --rm sig python -m ltir migrate --yes`.
+
 **Clean environment**
 ```powershell
 python -m venv .venv                 # from the repository root
 .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126   # or CPU torch
-.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pip install -r requirements-dev.txt     # the runtime (requirements.txt), the gateway's needs, pytest, ruff, playwright
 .venv\Scripts\python.exe scripts\download_model.py   # once: Qwen3-Embedding-0.6B into models/ (1.19 GB)
 ```
-Without a `.env` the code defaults apply (a local Ollama endpoint, Neo4j off, device `auto`). `.env.sample` describes the configured deployment — it turns on OpenRouter, the Neo4j mirror and CUDA — so copy it to `.env` and edit it rather than using it unchanged.
+Without a `.env` the code defaults apply (the LLM gateway on `http://127.0.0.1:8080/v1`, Neo4j off, device `auto`). `.env.sample` describes the configured deployment — it turns on the Neo4j mirror and CUDA — so copy it to `.env` and edit it rather than using it unchanged.
 
 **Self-contained:** at run time the repository needs nothing outside itself. The reused engines are vendored in `ltir/engines/` (origin, hashes and exact differences in [`ltir/engines/PROVENANCE.md`](ltir/engines/PROVENANCE.md)); the embedding models live in `models/` (fetched by `scripts/download_model.py`) and the data in `data/` (the demo file is generated by `python -m ltir demo`; `housing.csv` is a local copy) — both folders are local and git-ignored. `tests/test_self_contained.py` fails if a loaded module or a `sys.path` entry lies outside the repository and the Python environment, if an `ltir` source holds a machine path or a relative path leading out of the repository, or if a path setting resolves outside it. Only pip packages come from the Python environment.
 
 **Reusing an existing environment** that already has torch and sentence-transformers: layer the venv over it without modifying it.
 ```powershell
 <python of that environment> -m venv --system-site-packages .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt   # installs only what the environment lacks
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # installs only what the environment lacks (runtime + test tools)
 ```
 
-### Gemma 4 (OpenRouter)
-The configured deployment calls `google/gemma-4-26b-a4b-it` on OpenRouter with pinned providers. Put this in `.env` (gitignored):
+### Gemma 4 through the LLM gateway
+The backend reaches the LLM only through `LLM_BASE_URL`, by default the LLM gateway (`llm_gateway/`, [12.4](docs/12_architecture.md#124-the-llm-service)), which holds the upstream, the model, its key and the OpenRouter provider pinning. The configured deployment calls `google/gemma-4-26b-a4b-it` on OpenRouter with pinned providers. Put this in `.env.gemma` (gitignored; template `.env.gemma.sample`):
 ```ini
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=google/gemma-4-26b-a4b-it
-LLM_PROVIDER_ORDER=dekallm/bf16,parasail/bf16,nextbit/bf16
-LLM_API_KEY=<your OpenRouter key>
+GEMMA_BASE_URL=https://openrouter.ai/api/v1
+GEMMA_CHAT_ENDPOINT=/chat/completions
+GEMMA_MODEL_NAME=google/gemma-4-26b-a4b-it
+GEMMA_PROVIDER=dekallm/bf16,parasail/bf16,nextbit/bf16
+GEMMA_API_KEY=<your OpenRouter key>
 ```
-Check it with `.venv\Scripts\python.exe -m ltir llm-check`. Any other OpenAI-compatible endpoint also works: Ollama (`http://localhost:11434/v1`, `gemma4`) or LM Studio (`http://localhost:1234/v1`, `google/gemma-4-26b-a4b`).
+On the host, start it with `.venv\Scripts\python.exe -m llm_gateway` (port 8080; it reads the repository's `.env.gemma`) beside the web app; Compose starts it as the `llm` service. Check the chain with `.venv\Scripts\python.exe -m ltir llm-check`. `LLM_BASE_URL` can instead point at any other OpenAI-compatible endpoint (with `LLM_MODEL` and, if needed, `LLM_API_KEY`), e.g. Ollama (`http://localhost:11434/v1`, `gemma4`) or LM Studio (`http://localhost:1234/v1`).
 Without an LLM everything still works: answers fall back to a cited, evidence-only summary, and the LLM health pill turns red.
 
 ### Neo4j mirror
-In `.env`: `NEO4J_ENABLED=true`, `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE=sigv1` (created automatically on multi-database editions; the DBMS must be running). Every READY batch, `rebuild-graph` and `migrate` make the mirror equal to the snapshot (stale nodes and properties are removed), `reset` clears it, and `python -m ltir neo4j-sync` syncs on demand. SIG owns its six node labels in that database: one workspace per database. For exploration in Neo4j Browser, use [`ltir/cypher/queries/transversal.cypher`](ltir/cypher/queries/transversal.cypher). The local journal/state/snapshot is the source of truth; Neo4j failures only produce a warning.
+In `.env`: `NEO4J_ENABLED=true`, `NEO4J_URI=bolt://localhost:7687`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE=sigv1` (created automatically on multi-database editions; the DBMS must be running). Compose runs its own Neo4j Community container with database `neo4j`. Every READY batch, `rebuild-graph` and `migrate` make the mirror equal to the snapshot (stale nodes and properties are removed), `reset` clears it, and `python -m ltir neo4j-sync` syncs on demand. SIG owns its six node labels in that database: one workspace per database. For exploration in Neo4j Browser, use [`ltir/storage/cypher/queries/transversal.cypher`](ltir/storage/cypher/queries/transversal.cypher). The local journal/state/snapshot is the source of truth; Neo4j failures only produce a warning.
 
 ---
 
@@ -76,7 +99,7 @@ Startup loads the embedding model onto the GPU (~10 s, `EMBEDDING_DEVICE=cuda`; 
 1. **Add data**: drop a CSV/TSV/Parquet file on the left rail (or click **Try demo**). Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`) and numeric columns split into band dimensions (`median_income:4`). A dataset card's *Delete* button removes that dataset again — its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. Watch the **batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
 3. **Explore.** The three tabs — *Graph*, *3D Sphere*, *Insights* — are views of the same knowledge base under one legend column; its link switches show the layers (hierarchy and theme links by default; contrasts, siblings, memberships, columns on demand) in the graph and on the sphere alike, and hovering an entry spotlights it. Click any node — in the graph or on the sphere — for the details drawer. Drag the borders between the three columns to resize them. *Graph*: the *Two planes* layout shows themes (latent anchors) on top and insights below, grouped by theme. *Insights*: a sortable, filterable table. Click any node or row for the details drawer: a one-line reading, shifts with meters, evidence facts, score breakdown, canonical form, connections and provenance. Number-coded columns (store ids, flags) can be declared under *Column options → Treat as categories*; numeric columns can be split into quantile bands.
-4. **3D Sphere**. The same insights are shown as embeddings on a sphere, projected as lac's prosphera sphere does it (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. A standalone copy is written to `workspace/graph/sphere.html` in the background after every READY batch.
+4. **3D Sphere**. The same insights are shown as embeddings on a sphere, projected as lac's prosphera sphere does it (KernelPCA cosine → sphere), with the graph's colours and markers (metric higher / lower, correlation change, themes as diamonds) and the same link layers. Rotate, zoom, hover, and click legend entries to toggle anchors or layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on the sphere. *Open* shows the page in its own tab; `python -m ltir sphere` writes a standalone copy (`workspace/graph/sphere.html`).
 5. **Chat** with the data (or click a suggestion). Questions and answers are in Ukrainian; every data literal — `margin`, `phones`, `US`, ids — stays exactly as the data holds it, so it can always be found in the table. The answer cites `[P#]` evidence and its *Evidence & how it was found*, *Sources* and *Prompt* panels open on click; citations open the details drawer. Seeds (gold), visited themes, evidence and **cross-segment** hits (red double ring) are highlighted, with the used paths in amber. Open *Evidence & how it was found* and click a card to isolate its path, e.g. `P → theme A-1 → P`; the *Prompt* tab shows the exact evidence the model saw. The switch below the composer turns the LLM explanation off (evidence-only answers).
 
 CLI equivalents:
@@ -91,17 +114,17 @@ CLI equivalents:
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 93 tests (≈ 85 s)
+.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all 102 tests (≈ 2 min)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
-Markers: `model` (needs the local embedding model) and `browser` (Playwright + an installed Chromium); both skip automatically when unavailable. The test map is in [10.1](docs/10_verification.md#101-test-map). Measurement scripts (prompt tokens, embedder comparison, live answer evaluation) run on throwaway workspaces under `.scratch/` ([10.4](docs/10_verification.md#104-measurement-scripts)); `scripts/download_model.py` is the one setup script.
+Markers: `model` (needs the local embedding model) and `browser` (Playwright + an installed Chromium); both skip automatically when unavailable. In containers: `python scripts\compose_check.py --tests` runs the gate inside the backend image as well ([10.5](docs/10_verification.md#105-quality-gate-and-container-check)). The test map is in [10.1](docs/10_verification.md#101-test-map). Measurement scripts (prompt tokens, embedder comparison, live answer evaluation) run on throwaway workspaces under `.scratch/` ([10.4](docs/10_verification.md#104-measurement-scripts)); `scripts/download_model.py` is the one setup script.
 
 ---
 
 ## Example execution (actual output)
 
-`python -m ltir demo` on `data/demo/retail_synthetic.csv` (5 000 rows, planted phenomena, see [`ltir/synth.py`](ltir/synth.py)):
+`python -m ltir demo` on `data/demo/retail_synthetic.csv` (5 000 rows, planted phenomena, see [`ltir/evaluation/synthetic.py`](ltir/evaluation/synthetic.py)):
 ```text
 B20261001T101326-52a7f7  READY    retail_synthetic.csv  dataset=ds-6e53eb7fb0f9
   rows=5000 candidates=84 validated_insights=28 pruned=22 attractors=4 (+4) orphan_rate=0.00 edges=279 avg_attractor_degree=1.50 duration=12.6s
@@ -171,16 +194,20 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 ## Repository layout
 ```text
 sig/
-  ltir/            package (config, ingestion, discovery, models, quality, canonical, encoder, ontology,
-                   structural, graph, store, fileio, neo4j_sink, query, traversal, evidence, llm, qa, pipeline, migrate,
-                   sphere, synth, experiment, cli, web/, cypher/)
-  tests/           93 contract / integration / E2E / UI tests
-  docs/            eleven chapters in pipeline order (reading guide docs/README.md), kept in sync with the code;
-                   init_concepts/ (the theory documents) and architecture/ (historical reconnaissance)
-  scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), download_model.py
-                   (setup), the measurement scripts (prompt_tokens, compare_embedders, eval_answers, multilingual_benchmark) and their
-                   helpers (scratch.py)
+  ltir/            the package, by layer (docs/01_overview.md §1.6, docs/12_architecture.md): config, models, fileio;
+                   analysis/ (ingestion, discovery, quality, canonical, encoder, ontology, structural, graph);
+                   retrieval/ (question, seeds, traversal, evidence, search); storage/ (workspace, neo4j_mirror, cypher/);
+                   engine, migrate; answering, llm_client; web/ (app, sphere, static/); cli; evaluation/ (synthetic, experiment)
   ltir/engines/    vendored EDA + lac engines (PROVENANCE.md)
+  llm_gateway/     the LLM gateway service (its own Dockerfile and requirements.txt)
+  Dockerfile, compose.yaml, .dockerignore, constraints.txt   the backend image (targets runtime, test), the three services, pinned versions
+  requirements.txt, requirements-dev.txt   the backend's runtime; plus the test tools
+  tests/           102 contract / integration / E2E / UI tests
+  docs/            eleven chapters in pipeline order and the architecture chapter (reading guide docs/README.md), kept in
+                   sync with the code; init_concepts/ (the theory documents)
+  scripts/         check.py quality gate (AGENTS.md Rule 0; ruff configuration in pyproject.toml), compose_check.py (the Docker
+                   check), download_model.py (setup), the measurement scripts (prompt_tokens, compare_embedders, eval_answers,
+                   multilingual_benchmark) and their helpers (scratch.py)
   models/          local embedding models, git-ignored (Qwen3-Embedding-0.6B default, paraphrase-multilingual-MiniLM-L12-v2)
   data/            local data, git-ignored: demo/retail_synthetic.csv (synthetic), housing.csv (realistic)
   workspace/       the knowledge base (created on first run; `ltir migrate --yes` rebuilds it, `ltir reset --yes` deletes it)

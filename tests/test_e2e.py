@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import FakeLLM, make_config
 
@@ -73,7 +75,7 @@ def test_e2e_local_embedding_model(model_engine):
 
 @pytest.mark.model
 def test_hypothesis_apparatus(model_engine):
-    from ltir.experiment import run_experiment
+    from ltir.evaluation.experiment import run_experiment
 
     res = run_experiment(model_engine, k=3)
     s = res["summary"]
@@ -83,12 +85,12 @@ def test_hypothesis_apparatus(model_engine):
 
 
 def test_llm_failure_keeps_knowledge(hashed_engine):
-    llm = hashed_engine._llm
-    hashed_engine._llm = FakeLLM(ok=False)
+    llm = hashed_engine.llm
+    hashed_engine.llm = FakeLLM(ok=False)
     try:
         qa = hashed_engine.ask(QUESTION)
     finally:
-        hashed_engine._llm = llm
+        hashed_engine.llm = llm
     assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
     assert "category=phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
     assert qa.llm["error"] and qa.citations["grounded"]
@@ -113,7 +115,7 @@ def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatc
     """A batch without stored document vectors is embedded on the first question only, and a writer saves them."""
     import numpy as np
 
-    from ltir.pipeline import Engine
+    from ltir.engine import Engine
 
     cfg = make_config(tmp_path / "ws")
     Engine(cfg, llm=FakeLLM()).ingest_file(demo_csv)
@@ -135,9 +137,27 @@ def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatc
     assert set(Engine(cfg, llm=FakeLLM(), recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
 
 
+def test_search_is_the_structured_context_and_ask_logs_it(hashed_engine):
+    """Retrieval stands alone (docs/12_architecture.md §12.3): the same evidence with or without the chat on top."""
+    from ltir.retrieval.search import search
+
+    found = hashed_engine.search(QUESTION)
+    assert (
+        found.evidence.items and found.seeds and set(found.highlight()) == {"seeds", "traversed", "anchors", "evidence", "edges", "transversal_only"}
+    )
+    assert found.evidence.to_prompt().startswith("QUESTION: ")
+    again = search(QUESTION, hashed_engine.committed(), hashed_engine.encoder, hashed_engine.config)  # the reuse API, no engine in between
+    assert [s.pattern_id for s in again.seeds] == [s.pattern_id for s in found.seeds] and again.highlight() == found.highlight()
+    qa = hashed_engine.ask(QUESTION, use_llm=False)
+    assert qa.highlight == found.highlight() and qa.answer_mode == "fallback" and qa.llm["error"] == "disabled"
+    assert 0 < qa.metrics["retrieval_s"] <= qa.metrics["total_s"] and qa.metrics["retrieved_evidence"] == len(found.evidence.items)
+    logged = json.loads(hashed_engine.ws.query_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["question"] == QUESTION and logged["mode"] == "fallback" and logged["seeds"] == qa.highlight["seeds"]
+
+
 def test_empty_graph_answer(tmp_path):
 
-    from ltir.pipeline import Engine
+    from ltir.engine import Engine
 
     qa = Engine(make_config(tmp_path / "empty"), llm=FakeLLM()).ask("anything?")
     assert qa.answer_mode == "empty" and qa.metrics["error"] == "empty_graph"

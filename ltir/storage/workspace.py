@@ -13,9 +13,14 @@ Layout under ``WORKSPACE_DIR``::
     journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks, document vectors, pattern ids
     state/                                 lac ConceptStore.save() + representation.json + sig_state.json
     graph/snapshot.json                    materialised dual-layer graph (derived, rebuildable)
-    graph/literals.npz                     literal-catalog vectors by text (a cache, docs/07 §7.1.1)
+    graph/literals.npz                     literal-catalog vectors by text (a cache, docs/07_question_answering.md §7.1.1)
+    graph/sphere.html                      the standalone 3D sphere, written on request (python -m ltir sphere)
     logs/queries.jsonl                     query observability
+    uploads/<id>_<name>                    files uploaded through the web app
+    experiments/<time>.json                hypothesis experiment results (python -m ltir experiment)
     pending.json                           an unfinished transaction: its intent and checkpoint
+
+Every path below the workspace root is named here and only here: callers use these methods.
 
 Recovery: a batch commit and a dataset deletion each run in ``transaction()``, which
 checkpoints the journal extent, state and snapshot and writes ``pending.json``; an error rolls
@@ -32,9 +37,9 @@ import logging
 import os
 import shutil
 import tempfile
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -43,13 +48,9 @@ import numpy as np
 from ltir.config import Config
 from ltir.engines.lac.chunk_journal import ChunkJournal
 from ltir.fileio import replace_file, retry_sharing
-from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, EmbeddingSpec
+from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, EmbeddingSpec, utc_now
 
-log = logging.getLogger("ltir.store")
-
-
-def utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+log = logging.getLogger(__name__)
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
@@ -121,6 +122,9 @@ def acquire_writer_lock(workspace_dir: Path | str) -> None:
     _HELD_LOCKS[str(path)] = handle
 
 
+TERMINAL = frozenset({"READY", "FAILED", "SKIPPED"})  # final batch states
+
+
 class RepresentationMismatch(RuntimeError):
     code = "representation_mismatch"
 
@@ -138,7 +142,11 @@ class Workspace:
         self.journal_dir = self.root / "journal"
         self.state_dir = self.root / "state"
         self.graph_path = self.root / "graph" / "snapshot.json"
+        self.sphere_path = self.root / "graph" / "sphere.html"
+        self.literals_path = self.root / "graph" / "literals.npz"
         self.query_log = self.root / "logs" / "queries.jsonl"
+        self.uploads_dir = self.root / "uploads"
+        self.experiments_dir = self.root / "experiments"
         self.pending_path = self.root / "pending.json"  # an unfinished transaction (``transaction``)
         for d in (self.registry_dir, self.datasets_dir, self.journal_dir / "blocks", self.state_dir, self.query_log.parent):
             d.mkdir(parents=True, exist_ok=True)
@@ -161,6 +169,10 @@ class Workspace:
     def ready_batch_for(self, dataset_id: str) -> dict[str, Any] | None:
         return next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
 
+    def unfinished_batches(self) -> list[dict[str, Any]]:
+        """Batches not yet READY, FAILED or SKIPPED (queued or running)."""
+        return [b for b in self.list_batches() if b["status"] not in TERMINAL]
+
     def next_batch_seq(self) -> int:
         state = read_json(self.state_dir / "sig_state.json", {"next_batch_seq": 0})
         return int(state["next_batch_seq"])
@@ -172,6 +184,31 @@ class Workspace:
         path = self.datasets_dir / dataset_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def keep_source(self, dataset_id: str, source: Path, filename: str) -> None:
+        """Copy an uploaded file next to the dataset's artefacts (``datasets/<id>/source.<ext>``, provenance)."""
+        copy = self.dataset_dir(dataset_id) / f"source{Path(filename).suffix.lower() or '.csv'}"
+        if not copy.exists():
+            shutil.copyfile(source, copy)
+
+    def source_of(self, dataset_id: str) -> Path | None:
+        """The stored upload of a dataset, or ``None``."""
+        found = sorted((self.datasets_dir / dataset_id).glob("source.*"))
+        return found[0] if found else None
+
+    def save_upload(self, name: str, stream: BinaryIO) -> Path:
+        """Store a file received by the web app under ``uploads/``; returns its path."""
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        dest = self.uploads_dir / f"{uuid.uuid4().hex[:8]}_{Path(name).name}"
+        with dest.open("wb") as f:
+            shutil.copyfileobj(stream, f)
+        return dest
+
+    def save_profile(self, dataset_id: str, profile: dict[str, Any]) -> None:
+        atomic_write_json(self.dataset_dir(dataset_id) / "profile.json", profile)
+
+    def save_rejections(self, dataset_id: str, rejections: list[dict[str, Any]]) -> None:
+        atomic_write_json(self.dataset_dir(dataset_id) / "rejections.json", rejections)
 
     def save_covers(self, dataset_id: str, covers: dict[str, np.ndarray]) -> None:
         np.savez_compressed(self.dataset_dir(dataset_id) / "covers.npz", **{k: np.asarray(v, dtype=np.int64) for k, v in covers.items()})
@@ -210,21 +247,22 @@ class Workspace:
     def representation(self) -> dict[str, Any] | None:
         return read_json(self.state_dir / "representation.json")
 
-    def save_literals(self, arrays: dict[str, np.ndarray]) -> None:
-        """Literal-catalog vectors (docs/07 §7.1.1) as ``graph/literals.npz``: texts, unit vectors, fingerprint. A cache
-        checked on load, so it lives outside ``state/`` and no rollback has to restore it."""
-        path = self.graph_path.with_name("literals.npz")
-        tmp = path.with_name(path.name + ".tmp")
+    def save_literals(self, fingerprint: str, texts: list[str], vectors: np.ndarray) -> None:
+        """Literal-catalog vectors by text (docs/07_question_answering.md §7.1.1) in ``graph/literals.npz``. A cache checked on load (the
+        representation fingerprint), so it lives outside ``state/`` and no rollback has to restore it."""
+        tmp = self.literals_path.with_name(self.literals_path.name + ".tmp")
         with tmp.open("wb") as handle:
-            np.savez_compressed(handle, **arrays)
-        replace_file(tmp, path)
+            np.savez_compressed(handle, texts=np.array(texts), vectors=np.asarray(vectors, dtype=np.float32), fingerprint=np.array(fingerprint))
+        replace_file(tmp, self.literals_path)
 
-    def load_literals(self) -> dict[str, np.ndarray] | None:
-        path = self.graph_path.with_name("literals.npz")
-        if not path.is_file():
-            return None
-        with retry_sharing(lambda: np.load(path)) as data:
-            return {k: data[k] for k in data.files}
+    def load_literals(self, fingerprint: str) -> dict[str, np.ndarray]:
+        """Cached literal vectors (text -> unit vector) written for this representation; ``{}`` otherwise."""
+        if not self.literals_path.is_file():
+            return {}
+        with retry_sharing(lambda: np.load(self.literals_path)) as data:
+            if str(data["fingerprint"]) != fingerprint:
+                return {}
+            return dict(zip(map(str, data["texts"]), data["vectors"]))
 
     def append(
         self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]], blocks: dict[str, np.ndarray], batch_id: str
@@ -247,9 +285,19 @@ class Workspace:
                     out.update(zip(data["pattern_ids"].tolist(), data["document"]))
         return out
 
-    def add_document_vectors(self, batch_id: str, pattern_ids: list[str], vectors: np.ndarray) -> None:
-        """Back-fill a batch's document vectors (``pattern_ids`` in the batch's journal order, so they
-        align with its blocks); the other arrays are kept and the file is replaced atomically."""
+    def save_document_vectors(self, documents: dict[str, np.ndarray], changed: set[str]) -> None:
+        """Back-fill document vectors: every batch holding a ``changed`` pattern gets all its patterns' vectors from
+        ``documents``, in the batch's journal order (the row order of its blocks file)."""
+        by_batch: dict[str, list[str]] = {}
+        for record in self.patterns():
+            if record["id"] in documents:
+                by_batch.setdefault(record["batch_id"], []).append(record["id"])
+        for batch_id, ids in by_batch.items():
+            if changed.intersection(ids):
+                self._write_document_vectors(batch_id, ids, np.stack([documents[i] for i in ids]))
+
+    def _write_document_vectors(self, batch_id: str, pattern_ids: list[str], vectors: np.ndarray) -> None:
+        """One batch's document vectors into its blocks file; the other arrays are kept, the file replaced atomically."""
         path = self.journal_dir / "blocks" / f"{batch_id}.npz"
         arrays: dict[str, np.ndarray] = {}
         if path.is_file():
@@ -349,14 +397,15 @@ class Workspace:
         self.journal.rewrite(patterns, vectors, activations)
 
     def remove_dataset(self, dataset_id: str, batches: list[dict[str, Any]], trash: Path) -> None:
-        """Move a dataset's artefacts — its folder, its batches' blocks, records and web uploads — into
-        ``trash`` (inside the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them."""
+        """Move a dataset's artefacts — its folder, its batches' blocks, records and web uploads, and the standalone
+        sphere page, which may show it — into ``trash`` (inside the checkpoint), so a rollback can put them back and
+        discarding the checkpoint deletes them."""
         root = self.root.resolve()
-        paths = [self.datasets_dir / dataset_id]
+        paths = [self.datasets_dir / dataset_id, self.sphere_path]
         for b in batches:
             source = Path(b.get("source_path") or "")
             paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
-            if source.is_file() and source.resolve().is_relative_to(root / "uploads"):
+            if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()):
                 paths.append(source)
         for path in paths:
             if path.exists():

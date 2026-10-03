@@ -9,20 +9,79 @@ from __future__ import annotations
 
 import os
 import re
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 os.environ["LTIR_NO_DOTENV"] = "1"  # never read sig/.env (API keys, NEO4J_ENABLED) in tests
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from ltir.config import load_config
-from ltir.llm import LLMResponse
+from ltir.evaluation.synthetic import generate_retail_dataset
+from ltir.llm_client import LLMResponse
 from ltir.models import Condition, Insight
-from ltir.synth import generate_retail_dataset
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@contextmanager
+def serve(app) -> Iterator[str]:
+    """Run an ASGI app on a free local port in a background thread; yields its base URL."""
+    import uvicorn
+
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        while not server.started:
+            time.sleep(0.05)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+@pytest.fixture
+def llm_stub():
+    """An OpenAI-compatible endpoint on a local port: ``GET /v1/models`` lists one model; ``POST /v1/chat/completions``
+    records ``{"body", "auth"}`` and answers — a 500 for the message "fail", a 429 with Retry-After for "busy".
+    Yields (base URL ending in /v1, the recorded requests)."""
+    app = FastAPI()
+    seen: list[dict] = []
+
+    @app.get("/v1/models")
+    def models():
+        return {"object": "list", "data": [{"id": "gemma4:latest"}]}
+
+    @app.post("/v1/chat/completions")
+    async def chat(req: Request):
+        body = await req.json()
+        seen.append({"body": body, "auth": req.headers.get("authorization")})
+        last = body["messages"][-1]["content"]
+        if last == "fail":
+            return JSONResponse({"error": {"message": "boom"}}, status_code=500)
+        if last == "busy":
+            return JSONResponse({"error": {"message": "rate limited"}}, status_code=429, headers={"Retry-After": "7"})
+        reply = {"role": "assistant", "content": "Observations: margin is lower [P1]."}
+        return {"model": body["model"], "choices": [{"message": reply}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    with serve(app) as url:
+        yield f"{url}/v1", seen
 
 
 def _model_available(cfg) -> bool:
-    from ltir.encoder import model_folder
+    from ltir.analysis.encoder import model_folder
 
     return (model_folder(cfg) / "modules.json").is_file()
 
@@ -107,14 +166,13 @@ def toy_insight(scope, shifts, **fields) -> Insight:
 
 def make_config(workspace: Path, **overrides):
     overrides.setdefault("neo4j_enabled", False)
-    overrides.setdefault("sphere_export", False)
     return load_config(workspace_dir=workspace, embedding_backend=overrides.pop("embedding_backend", "hashing"), **overrides)
 
 
 @pytest.fixture(scope="session")
 def hashed_engine(tmp_path_factory, demo_csv):
     """Engine with the synthetic demo ingested (hashing embedder) — shared, read-only use."""
-    from ltir.pipeline import Engine
+    from ltir.engine import Engine
 
     engine = Engine(make_config(tmp_path_factory.mktemp("ws_hash")), llm=FakeLLM())
     record = engine.ingest_file(demo_csv)
@@ -125,7 +183,7 @@ def hashed_engine(tmp_path_factory, demo_csv):
 @pytest.fixture(scope="session")
 def model_engine(tmp_path_factory, demo_csv):
     """Engine with the synthetic demo ingested using the real local embedding model."""
-    from ltir.pipeline import Engine
+    from ltir.engine import Engine
 
     engine = Engine(make_config(tmp_path_factory.mktemp("ws_model"), embedding_backend="sentence-transformers"), llm=FakeLLM())
     record = engine.ingest_file(demo_csv)

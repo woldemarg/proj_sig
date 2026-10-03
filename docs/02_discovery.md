@@ -2,7 +2,7 @@
 
 > **In one paragraph.** Ingestion validates the uploaded file, optionally turns number-coded columns into categories and numeric columns into quantile bands, and gives the dataset a content-addressed id. The vendored automatic-EDA engine then searches conjunctions of two and three `attribute = value` selectors in two passes: a cheap screen for robust median shifts and correlation changes, and an expensive bootstrap validation of the best 50. Between the passes the adapter merges selectors that cover identical rows and prunes near-duplicate cohorts, so the bootstrap is spent only on distinct subgroups. The adapter also adds what the EDA does not produce — the direction of each shift, a significance test, provenance — and hands typed candidates to [3. Insights](03_insights.md).
 
-**Code** `ltir/ingestion.py`, `ltir/discovery.py`, `ltir/engines/eda/main_upd.py` · **Tests** `tests/test_discovery_contract.py`, `tests/test_persistence.py` (ingestion failures) · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
+**Code** `ltir/analysis/ingestion.py`, `ltir/analysis/discovery.py`, `ltir/engines/eda/main_upd.py` · **Tests** `tests/test_discovery_contract.py`, `tests/test_persistence.py` (ingestion failures) · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
 
 ---
 
@@ -16,7 +16,7 @@
 | `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* / CLI `--bins` |
 | `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* / CLI `--categories` |
 
-An empty upload field means "workspace default" (`None`); the UI's *Try the demo* sends an explicit `""` for both options, while CLI `demo` uses the workspace defaults and CLI `ingest` passes `None` unless the flag is given (`--bins ""` is an explicit "none").
+An empty upload field means "workspace default" (`None`); the UI's *Try demo* sends an explicit `""` for both options, while CLI `demo` uses the workspace defaults and CLI `ingest` passes `None` unless the flag is given (`--bins ""` is an explicit "none").
 
 Steps, in order:
 
@@ -151,7 +151,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 * `run_discovery(df, config, on_stage=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
 * `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
-* `covers_of(result) → {expression: row positions}` for every distinct cohort; the pipeline persists the covers of the kept insights as `covers.npz`, keyed by pattern id.
+* `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id.
 
 ## 2.6 Configuration
 

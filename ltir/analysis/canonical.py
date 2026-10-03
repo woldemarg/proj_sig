@@ -6,7 +6,7 @@ Two contracts live here and never mix:
   ``components`` (labels are metric names or ``correlation between a and b``; the
   magnitude lives only in the coefficient, never in a label). They define the vector.
 * **readable text** -- the Markdown ``document()`` and the phrase helpers below, shared
-  with the LLM evidence prompt (``ltir/evidence.py``): ASCII only, rounded numbers,
+  with the LLM evidence prompt (``ltir/retrieval/evidence.py``): ASCII only, rounded numbers,
   p-value buckets, shifts in robust standard deviations ("sd").
 
 Structural predicates (scope) and statistical behaviour (phenomenon) are never mixed.

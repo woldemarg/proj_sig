@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from ltir.analysis.ontology import LatentOntology, orphan_anchors
 from ltir.config import load_config
 from ltir.engines.lac.observability import density_threshold
 from ltir.engines.lac.ontology_engine import repair_extraction
-from ltir.ontology import LatentOntology, orphan_anchors
 
 
 def unit(v):

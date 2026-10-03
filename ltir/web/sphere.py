@@ -2,7 +2,7 @@
 
 The projection is lac's prosphera sphere (``_project``: robust scaling -> cosine KernelPCA -> sphere
 scaling), fed with Pattern vectors (the journal rows) + Attractor centroids, and drawn with the
-*same* visual language as the 2D graph (docs/08 §8.3): node colour = metric higher / lower /
+*same* visual language as the 2D graph (docs/08_interface.md §8.3): node colour = metric higher / lower /
 correlation change, theme = diamond, every trace tagged with its legend key, answer markers
 identical to the graph's rings.
 The web UI passes its theme palette and layer state; the standalone export uses the dark palette.
@@ -18,7 +18,7 @@ import numpy as np
 from ltir.models import Insight, attractor_id_of
 
 if TYPE_CHECKING:
-    from ltir.pipeline import Engine
+    from ltir.engine import Engine
 
 PLOTLY_LOCAL = "/vendor/plotly.min.js"
 HOVER = "%{hovertext}<extra></extra>"
@@ -113,7 +113,8 @@ def sphere_figure(
 
     pal = {**DEFAULT_PALETTE, **(palette or {})}
     on = {**LAYER_DEFAULTS, **(layers or {})}
-    g = engine.graph()
+    state = engine.committed()  # one commit: patterns and centroids share one space
+    g, frame = state.graph, state.frame
     pats = [n for n in g.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset]
     if not pats:
         raise SphereError("no insights to project — upload a dataset first")
@@ -124,7 +125,6 @@ def sphere_figure(
     if len(pats) + len(att_ids) < 4:
         raise SphereError("need at least 4 points (insights + themes) for a 3D projection")
 
-    frame = engine.frame()  # committed vectors: patterns and centroids share one space
     P = np.stack([frame.patterns[n["id"]] for n in pats]).astype(np.float64)
     A = np.stack([frame.attractors[attractor_id_of(a)] for a in att_ids]).astype(np.float64)
 
@@ -316,7 +316,7 @@ def sphere_html(
 
 def export_sphere(engine: Engine, output: Path | None = None, dataset: str | None = None) -> Path:
     """Standalone copy like lac's ``ontology_sphere.html`` (plotly from CDN, opens from disk)."""
-    out = output or engine.ws.root / "graph" / "sphere.html"
+    out = output or engine.ws.sphere_path
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(sphere_html(engine, dataset=dataset, plotly_src="cdn"), encoding="utf-8")
     return out

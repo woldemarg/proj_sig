@@ -4,7 +4,7 @@
     python scripts/download_model.py --model <repo> --revision <sha>
 
 The folder name is the last path segment of the repo id (``models/Qwen3-Embedding-0.6B``),
-which is where ``ltir.encoder.model_folder`` loads it from, offline, afterwards.
+which is where ``ltir.analysis.encoder.model_folder`` loads it from, offline, afterwards.
 """
 
 from __future__ import annotations

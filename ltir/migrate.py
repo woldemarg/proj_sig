@@ -17,16 +17,16 @@ from pathlib import Path
 from typing import Any
 
 from ltir.config import Config
-from ltir.pipeline import TERMINAL, Engine, PipelineError
-from ltir.store import Workspace, acquire_writer_lock
+from ltir.engine import Engine, PipelineError
+from ltir.storage.workspace import Workspace, acquire_writer_lock
 
 
 def _source_of(ws: Workspace, batch: dict[str, Any]) -> Path:
     """The stored upload of a READY batch."""
-    found = sorted((ws.datasets_dir / batch["dataset_id"]).glob("source.*"))
-    if not found:
+    source = ws.source_of(batch["dataset_id"])
+    if source is None:
         raise PipelineError("migration_failed", f"batch {batch['batch_id']}: no stored source for dataset {batch['dataset_id']}")
-    return found[0]
+    return source
 
 
 def migrate_workspace(config: Config) -> dict[str, Any]:
@@ -42,7 +42,7 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
     acquire_writer_lock(root)
     old = Workspace(config)
     batches = old.list_batches()
-    busy = [b["batch_id"] for b in batches if b["status"] not in TERMINAL]
+    busy = [b["batch_id"] for b in old.unfinished_batches()]
     if busy:
         raise PipelineError("busy", f"batches in progress: {busy}; stop the web app and retry")
     if old.pending_path.exists():
@@ -53,7 +53,7 @@ def migrate_workspace(config: Config) -> dict[str, Any]:
 
     staging = root.with_name(f"{root.name}.migrating")
     shutil.rmtree(staging, ignore_errors=True)
-    engine = Engine(replace(config, workspace_dir=staging, neo4j_enabled=False, sphere_export=False), recover=False)  # no thread in the folder
+    engine = Engine(replace(config, workspace_dir=staging, neo4j_enabled=False), recover=False)
     report = []
     for batch in ready:
         record = engine.ingest_file(_source_of(old, batch), filename=batch["filename"], bins=batch.get("bins"), categories=batch.get("categories"))

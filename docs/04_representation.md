@@ -2,7 +2,7 @@
 
 > **In one paragraph.** Each insight is written down twice, for two different readers. The *embedding inputs* — the scope string, the target name and a list of signed components such as `("discount", +2.21)` — define the vector and contain no measured numbers and no prose. The *readable text* — a Markdown document and phrase helpers shared with the LLM prompt — is for people and the language model; it enters the vector only in one rare fallback (components that cancel out). The encoder embeds scope and target as sentences and builds the phenomenon as a signed, magnitude-weighted sum of metric-name embeddings, so "margin up" and "margin down" point in opposite directions. The three unit blocks are weighted and concatenated into one 1152-d unit vector, and a fingerprint of the model and composition choices guards the workspace against mixing incompatible vectors.
 
-**Code** `ltir/canonical.py`, `ltir/encoder.py`, `ltir/models.py` (`CanonicalInsight`, `EmbeddingSpec`) · **Tests** `tests/test_canonical_embedding.py` · **Previous** [3. Insights](03_insights.md) · **Next** [5. Latent anchors](05_latent_anchors.md)
+**Code** `ltir/analysis/canonical.py`, `ltir/analysis/encoder.py`, `ltir/models.py` (`CanonicalInsight`, `EmbeddingSpec`) · **Tests** `tests/test_canonical_embedding.py` · **Previous** [3. Insights](03_insights.md) · **Next** [5. Latent anchors](05_latent_anchors.md)
 
 ---
 

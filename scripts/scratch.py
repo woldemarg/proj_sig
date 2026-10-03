@@ -1,7 +1,6 @@
 """Shared helpers for the measurement scripts: throwaway workspaces under ``sig/.scratch/``.
 
-Never touches ``workspace/`` (the user's knowledge base). Neo4j publishing and the
-sphere export are always off here.
+Never touches ``workspace/`` (the user's knowledge base). Neo4j publishing is always off here.
 """
 
 from __future__ import annotations
@@ -16,8 +15,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ltir.config import PROJECT_ROOT, load_config  # noqa: E402
-from ltir.pipeline import Engine  # noqa: E402
-from ltir.synth import generate_retail_dataset  # noqa: E402
+from ltir.engine import Engine  # noqa: E402
+from ltir.evaluation.synthetic import generate_retail_dataset  # noqa: E402
 
 SCRATCH = PROJECT_ROOT / ".scratch"
 DEMO_QUESTION = "Why is margin lower for phones in the US?"
@@ -33,7 +32,7 @@ def scratch_dir(name: str, *, fresh: bool = False) -> Path:
 
 
 def write_demo_csv(folder: Path, seed: int = 7) -> Path:
-    """The synthetic retail dataset (``ltir.synth``) as a CSV inside ``folder``."""
+    """The synthetic retail dataset (``ltir.evaluation.synthetic``) as a CSV inside ``folder``."""
     path = folder / f"retail_synthetic_seed{seed}.csv"
     if not path.exists():
         generate_retail_dataset(5000, seed).to_csv(path, index=False)
@@ -42,7 +41,7 @@ def write_demo_csv(folder: Path, seed: int = 7) -> Path:
 
 def build_engine(workspace: Path, *, llm: Any = None, embedder: Any = None, **overrides: Any) -> Engine:
     """Engine on a scratch workspace; ``overrides`` are ``Config`` fields, ``embedder`` reuses a loaded model."""
-    cfg = load_config(workspace_dir=workspace, neo4j_enabled=False, sphere_export=False, **overrides)
+    cfg = load_config(workspace_dir=workspace, neo4j_enabled=False, **overrides)
     return Engine(cfg, llm=llm, embedder=embedder)
 
 

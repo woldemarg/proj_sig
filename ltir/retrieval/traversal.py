@@ -23,10 +23,10 @@ from typing import Any
 
 import numpy as np
 
+from ltir.analysis.graph import DualGraph
 from ltir.config import Config
-from ltir.graph import DualGraph
 from ltir.models import STRUCTURAL_EDGES, UNDIRECTED_EDGES
-from ltir.query import SeedMatch
+from ltir.retrieval.seeds import SeedMatch
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
 UNDIRECTED = {e.value for e in UNDIRECTED_EDGES}

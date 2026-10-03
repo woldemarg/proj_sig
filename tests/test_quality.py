@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 from conftest import toy_insight
 
+from ltir.analysis.quality import insight_weight, select_insights, weight_factors, with_weight
 from ltir.config import load_config
 from ltir.models import Shift
-from ltir.quality import insight_weight, select_insights, weight_factors, with_weight
 
 
 def make_insight(expr="a=1", conds=(("a", "1"),), z=2.0, stability=0.9, p=1e-10, vu=0.25, emm=0.05, support=300, row_hash=None, target="m"):

@@ -27,8 +27,8 @@ from typing import Any
 
 import numpy as np
 
+from ltir.analysis.encoder import l2_normalize
 from ltir.config import Config
-from ltir.encoder import l2_normalize
 from ltir.engines.lac import observability
 from ltir.engines.lac import ontology_engine as eng
 from ltir.engines.lac.storage import ConceptStore

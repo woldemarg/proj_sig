@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import threading
-
-from conftest import FakeLLM, make_config
 from fastapi.testclient import TestClient
 
-from ltir.sphere import export_sphere, plotly_js_path, sphere_figure
 from ltir.web.app import create_app
+from ltir.web.sphere import export_sphere, plotly_js_path, sphere_figure
 
 
 def test_sphere_uses_the_graphs_visual_language(hashed_engine):
     """The sphere draws what the graph draws: insight classes by colour, themes, the legend's link layers."""
-    from ltir.sphere import LAYER_DEFAULTS
+    from ltir.web.sphere import LAYER_DEFAULTS
 
     fig = sphere_figure(hashed_engine)
     by_name = {t.name: t for t in fig.data if t.name}
@@ -41,50 +38,6 @@ def test_sphere_highlight_and_export(hashed_engine, tmp_path):
     assert {"Answer path", "Seed", "Evidence", "Themes visited"} <= names  # the graph's answer markers
     out = export_sphere(hashed_engine, tmp_path / "sphere.html")
     assert "plotly" in out.read_text(encoding="utf-8").lower()
-
-
-def test_sphere_export_runs_off_the_batch_thread(tmp_path, demo_csv, monkeypatch):
-    """A READY batch returns while its sphere export still runs."""
-    import ltir.sphere as sphere
-    from ltir.pipeline import Engine
-
-    started, release = threading.Event(), threading.Event()
-
-    def slow_export(engine, output=None, dataset=None):
-        started.set()
-        release.wait(30)
-        return tmp_path / "sphere.html"
-
-    monkeypatch.setattr(sphere, "export_sphere", slow_export)
-    engine = Engine(make_config(tmp_path / "ws", sphere_export=True), llm=FakeLLM())
-    record = engine.ingest_file(demo_csv)  # would block here if the export ran on the batch thread
-    assert record["status"] == "READY" and started.wait(30)
-    release.set()
-    engine._sphere_pool.shutdown(wait=True)
-
-
-def test_reset_during_sphere_export_leaves_nothing_behind(tmp_path, demo_csv, monkeypatch):
-    """An export that finishes after a reset neither recreates the batch record nor keeps its page."""
-    import ltir.sphere as sphere
-    from ltir.pipeline import Engine
-
-    started, release = threading.Event(), threading.Event()
-    page = tmp_path / "sphere.html"
-
-    def slow_export(engine, output=None, dataset=None):
-        started.set()
-        release.wait(30)
-        page.write_text("stale", encoding="utf-8")
-        return page
-
-    monkeypatch.setattr(sphere, "export_sphere", slow_export)
-    engine = Engine(make_config(tmp_path / "ws", sphere_export=True), llm=FakeLLM())
-    record = engine.ingest_file(demo_csv)
-    assert started.wait(30)
-    engine.reset()
-    release.set()
-    engine._sphere_pool.shutdown(wait=True)
-    assert engine.ws.load_batch(record["batch_id"]) is None and not page.exists()
 
 
 def test_sphere_api(hashed_engine):

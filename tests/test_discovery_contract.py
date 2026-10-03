@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ltir.discovery import (
+from ltir.analysis.discovery import (
     Candidate,
     DiscoveryError,
     build_insights,
@@ -15,8 +15,8 @@ from ltir.discovery import (
     prune_near_duplicates,
     run_discovery,
 )
+from ltir.analysis.quality import select_insights
 from ltir.models import Condition, pattern_id
-from ltir.quality import select_insights
 
 
 @pytest.fixture(scope="module")

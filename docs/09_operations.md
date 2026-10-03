@@ -2,13 +2,13 @@
 
 > **In one paragraph.** One `Engine` object is the stateful service behind both the CLI and the web app. Every uploaded file runs through it as one *batch*: an explicit sequence of stages from validation to the committed graph, recorded in a batch record that is rewritten atomically at each stage. A batch ends `READY`, `FAILED` (with an error code and the stage it failed in) or `SKIPPED` (the same content and options are already in the workspace). Every tunable lives in one configuration object that reads the environment; failures are codes, never crashes of the service.
 
-**Code** `ltir/pipeline.py` (`Engine`), `ltir/cli.py`, `ltir/config.py` · **Tests** `tests/test_e2e.py`, `tests/test_persistence.py`, `tests/test_ui_smoke.py` · **Previous** [8. Interface](08_interface.md) · **Next** [10. Verification](10_verification.md)
+**Code** `ltir/engine.py` (`Engine`), `ltir/cli.py`, `ltir/config.py` · **Tests** `tests/test_e2e.py`, `tests/test_persistence.py`, `tests/test_ui_smoke.py` · **Previous** [8. Interface](08_interface.md) · **Next** [10. Verification](10_verification.md)
 
 ---
 
 ## 9.1 The batch lifecycle
 
-`Engine(config, *, embedder=None, llm=None, recover=True)`; `Engine.submit(path, filename, bins=None, categories=None)` creates the `UPLOADED` record (`None` = workspace defaults), `Engine.process(batch_id)` runs it, `Engine.ingest_file()` does both. Read-only callers pass `recover=False` ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)).
+`Engine(config, *, embedder=None, llm=None, recover=True)`; `Engine.submit(path, filename, bins=None, categories=None)` creates the `UPLOADED` record (`None` = workspace defaults), `Engine.process(batch_id)` runs it, `Engine.ingest_file()` does both. Read-only callers pass `recover=False` ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). Over the committed state, `Engine.search(question)` returns the evidence for a question without a language model and `Engine.ask(question, use_llm=True)` adds the answer ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)); `Engine.delete_dataset(id)`, `Engine.rebuild_graph()` and `Engine.reset()` (refused with `busy` at once while a batch or a deletion runs or an upload waits) are the other writes. Readers see the committed state through `Engine.committed()` — graph, vectors and literal catalog of one commit, loaded when the engine starts ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)); `graph()` and `frame()` read from it, and `prepared()` returns it with the literal catalog and every document vector filled.
 
 ```text
 UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS → EMBEDDING
@@ -25,9 +25,9 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 | UPDATING_ONTOLOGY | **transaction** (checkpoint + `pending.json`), batch sequence, `LatentOntology.ingest` | [5](05_latent_anchors.md) |
 | BUILDING_GRAPH | pattern records (+ canonical form, embedding metadata), covers | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | PERSISTING | duplicate guard, journal append, state save, representation record, batch sequence commit, snapshot, committed graph and frame loaded | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
-| READY | record saved (the commit point), marker and checkpoint removed; then readers switch to the new graph and frame, the sphere export is queued on a background thread and the optional Neo4j mirror synced (failures there are warnings) | [6.6](06_graph_and_storage.md#66-neo4j-mirror), [8.4](08_interface.md#84-the-latent-sphere) |
+| READY | record saved (the commit point), marker and checkpoint removed; then readers switch to the new graph and frame and the optional Neo4j mirror is synced (a failure there is a warning) | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 
-One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back (`Workspace.transaction`, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`; if the rollback itself fails, the record also carries the warning `rollback failed` and later batches fail with `rollback_pending` until a writer restart has finished it. Nothing after the READY save can turn the batch FAILED: the committed graph and frame were loaded before it, and switching them in is an assignment. A failure to save the record after the Neo4j sync propagates out of `process()`; the batch stays READY on disk. The sphere export runs after `process()` has returned; its failures are logged and never reach the caller.
+One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the web app uses a single worker thread). Any exception before the READY save rolls back (`Workspace.transaction`, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`; if the rollback itself fails, the record also carries the warning `rollback failed` and later batches fail with `rollback_pending` until a writer restart has finished it. Nothing after the READY save can turn the batch FAILED: the committed graph and frame were loaded before it, and switching them in is an assignment. A failure to save the record after the Neo4j sync propagates out of `process()`; the batch stays READY on disk.
 
 **Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}}`. The checkpoint of a committing batch lives in `pending.json`, not in the record.
 
@@ -62,11 +62,12 @@ Exit codes: 0 on success (`SKIPPED` included); 1 for a FAILED `demo` or `ingest`
 
 | Part | Requirement |
 |---|---|
-| Python | 3.12+ (the EDA engine uses PEP 701 f-strings); `pip install -r requirements.txt` (torch first for CUDA) |
+| Python | 3.12+ (the EDA engine uses PEP 701 f-strings); `pip install -r requirements.txt` (torch first for CUDA); `requirements-dev.txt` adds the gateway's needs and the test tools |
 | embedding model | `python scripts/download_model.py` once (Qwen3-Embedding-0.6B into `models/`, pinned revision); loaded offline afterwards ([4.4](04_representation.md#44-the-embedding-model)) |
 | GPU | optional; the embedder takes ≈ 1.2 GB resident, ≈ 1.7 GB peak; set `EMBEDDING_DEVICE` |
-| LLM | any OpenAI-compatible endpoint behind `LLM_BASE_URL` (OpenRouter, Ollama, LM Studio); without one, answers are evidence-only ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
+| LLM | the LLM gateway (`python -m llm_gateway` with `.env.gemma`, or the `llm` container; [12.4](12_architecture.md#124-the-llm-service)) or any other OpenAI-compatible endpoint behind `LLM_BASE_URL`; without one, answers are evidence-only ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
 | Neo4j | optional mirror (`NEO4J_ENABLED=true`, a running DBMS) ([6.6](06_graph_and_storage.md#66-neo4j-mirror)) |
+| Docker | `docker compose up -d --build`: the backend (API, chat, UI), the gateway and Neo4j as three containers; `scripts/compose_check.py` verifies them end to end ([12.5](12_architecture.md#125-containers)) |
 
 ## 9.4 Error codes
 
@@ -99,7 +100,7 @@ The UI maps every code to a plain-language title, cause and tip.
 
 ## 9.6 Guarantees
 
-* Terminal states are final, with the one exception above: a failure between the READY save and the cache swap rewrites READY as FAILED.
+* Terminal states are final: nothing after the READY save can turn a batch FAILED.
 * `READY` implies that journals, state and snapshot are mutually consistent.
 * Idempotent: identical content and options are processed once.
 * Every failure inside a batch is a batch state and every failure inside a question an answer mode or an HTTP error; the service keeps running. Engine-level refusals (`WorkspaceBusy`, migration refusals) are errors of the command, not batch states.

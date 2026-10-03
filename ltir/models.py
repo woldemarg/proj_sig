@@ -9,13 +9,21 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+import numpy as np
 
 # Bumped when stored vectors would no longer be comparable with new ones; a workspace
 # built with another version is refused (``representation_mismatch``) instead of mixed.
 CANONICAL_VERSION = "ltir-canon-4"  # closed-intent scopes; ASCII document; covariance insights cite only the correlation change
 REPRESENTATION_VERSION = "ltir-rep-3"  # Qwen3-Embedding-0.6B (MRL 384, re-normalised); single uncentred frame
+
+
+def utc_now() -> str:
+    """Timestamps of records, snapshots and logs: ISO 8601, UTC, whole seconds."""
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def stable_hash(*parts: Any, length: int = 12) -> str:
@@ -321,3 +329,13 @@ def metric_node_id(dataset_id: str, name: str) -> str:
 
 def dimension_node_id(dataset_id: str, name: str) -> str:
     return f"D:{dataset_id}:{name}"
+
+
+@dataclass(frozen=True)
+class LatentFrame:
+    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid,
+    plus the canonical-document embeddings the naive text baseline compares questions with."""
+
+    patterns: dict[str, np.ndarray]
+    attractors: dict[int, np.ndarray]
+    documents: dict[str, np.ndarray]
