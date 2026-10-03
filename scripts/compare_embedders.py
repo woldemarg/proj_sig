@@ -5,7 +5,7 @@
 Per candidate: (a) contract cosines on synthetic insights — direction (same scope/target,
 opposite shift; must be < 0), cross-scope (same phenomenon, disjoint scopes; high) and
 entity (same scope, different phenomenon; must be below cross-scope), plus the raw label
-cosine ``E(discount)·E(margin)``; (b) the demo hypothesis benchmark (``ltir.experiment``);
+cosine ``E(discount)·E(margin)``; (b) the demo hypothesis benchmark (``ltir.evaluation.experiment``);
 (c) domain separation: a same-domain second batch (demo, seed 8) must be assigned, an
 unrelated batch (``data/housing.csv``) must not join the retail attractors — the smallest
 same-domain and the largest cross-domain assignment alignment show where
@@ -24,12 +24,11 @@ import time
 import numpy as np
 from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
 
-from ltir.canonical import canonicalize
+from ltir.analysis.canonical import canonicalize
+from ltir.analysis.encoder import InsightEncoder, make_text_embedder
 from ltir.config import PROJECT_ROOT, load_config
-from ltir.encoder import InsightEncoder, make_text_embedder
-from ltir.experiment import run_experiment
+from ltir.evaluation.experiment import run_experiment
 from ltir.models import Condition, Insight, Shift
-from ltir.qa import answer_question
 
 QWEN3 = {
     "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
@@ -124,7 +123,7 @@ def domain_separation(engine, root) -> dict[str, float | None]:
     out["cross_domain_links"] = sum(e["type"] == "RELATED_TO" and is_housing[e["source"]] != is_housing[e["target"]] for e in graph.edges)
     foreign = 0
     for question, domain in DOMAIN_QUESTIONS.items():
-        items = answer_question(engine, question, use_llm=False).evidence.get("items", [])
+        items = engine.ask(question, use_llm=False).evidence.get("items", [])
         foreign += sum((graph.insight(i["pattern_id"]).dataset_id == housing) != (domain == "housing") for i in items)
     out["cross_domain_evidence"] = foreign
     return out

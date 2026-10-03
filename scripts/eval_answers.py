@@ -2,8 +2,8 @@
 
     python scripts/eval_answers.py --label baseline
 
-Ingests the demo into a scratch workspace and asks five fixed questions through the LLM
-configured in ``sig/.env`` (values are never printed). About five LLM calls per run.
+Ingests the demo into a scratch workspace and asks five fixed questions through ``LLM_BASE_URL`` (by default the
+LLM gateway, configured in ``.env.gemma``; values are never printed). About five LLM calls per run.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def main() -> int:
     parser.add_argument("--label", default="current", help="name of this run (e.g. baseline, canon3, qwen3)")
     args = parser.parse_args()
     engine = demo_engine("eval_answers")
-    print(f"LLM: {engine.config.llm_model} | embedder: {engine.config.embedding_model}")
+    print(f"LLM: {engine.llm.health()['model']} | embedder: {engine.config.embedding_model}")
     rows = [evaluate(engine, q) for q in QUESTIONS]
     cols = ["mode", "grounded", "cited", "unknown", "evidence", "latency_s", "prompt_tokens", "completion_tokens", "prompt_chars", "prompt_non_ascii"]
     print(f"{'#':<3}" + "".join(f"{c:>18}" for c in cols))

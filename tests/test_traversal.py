@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from conftest import toy_insight
 
+from ltir.analysis.graph import DualGraph
 from ltir.config import load_config
-from ltir.evidence import build_evidence
-from ltir.graph import DualGraph
 from ltir.models import EdgeType, GraphEdge, Shift
-from ltir.query import SeedMatch, parse_query
-from ltir.traversal import traverse
+from ltir.retrieval.evidence import build_evidence
+from ltir.retrieval.question import parse_query
+from ltir.retrieval.seeds import SeedMatch
+from ltir.retrieval.traversal import traverse
 
 
 def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):

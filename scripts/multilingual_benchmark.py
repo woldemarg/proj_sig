@@ -29,7 +29,7 @@ from typing import Any
 
 from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
 
-from ltir.synth import generate_retail_dataset
+from ltir.evaluation.synthetic import generate_retail_dataset
 
 UK_VALUES = {
     "category": {"laptops": "ноутбуки", "phones": "телефони", "tablets": "планшети", "accessories": "аксесуари"},
@@ -147,10 +147,10 @@ def _fake_neo4j(engine: Any) -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
     from test_persistence import _Driver  # noqa: PLC0415
 
-    from ltir import neo4j_sink
+    from ltir.storage import neo4j_mirror
 
-    real = neo4j_sink.publish_snapshot
-    neo4j_sink.publish_snapshot = lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver())
+    real = neo4j_mirror.publish_snapshot
+    neo4j_mirror.publish_snapshot = lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver())
     engine.config = replace(engine.config, neo4j_enabled=True)
     assert engine.sync_neo4j()["status"] == "ok"
 

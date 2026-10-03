@@ -4,7 +4,7 @@ For every pattern S that expresses a planted phenomenon, the *analogues* of S ar
 the other patterns expressing the same phenomenon whose scope shares no condition
 with S. Four retrievers rank all other patterns from S:
 
-    transversal   ltir.traversal (seed forced to S)
+    transversal   ltir.retrieval.traversal (seed forced to S)
     structural    BFS over all structural edges (SPECIALIZES/GENERALIZES/SIBLING/CONTRASTS)
     text_nn       cosine of canonical-document text embeddings (naive vector RAG)
     vector_nn     cosine of LTIR insight vectors (same space, no attractor graph)
@@ -12,7 +12,7 @@ with S. Four retrievers rank all other patterns from S:
 and are scored with recall@k, precision@k (hits over min(k, |analogues|), so a
 case with fewer analogues than k can reach 1.0) and MRR of the first analogue.
 
-Phenomenon membership comes from the *planted* ground truth (``ltir.synth.GROUND_TRUTH``):
+Phenomenon membership comes from the *planted* ground truth (``ltir.evaluation.synthetic.GROUND_TRUTH``):
 a pattern belongs to a mechanism when its scope lies inside one of that mechanism's
 planted scopes. Labels must not be derived from the measured shifts: those are exactly
 what the representation encodes, so shift-based labels would favour vector retrieval
@@ -28,12 +28,12 @@ from typing import Any
 
 import numpy as np
 
-from ltir.models import Insight
-from ltir.pipeline import Engine
-from ltir.query import SeedMatch
-from ltir.store import utc_now
-from ltir.synth import GROUND_TRUTH
-from ltir.traversal import structural_closure, traverse
+from ltir.engine import Engine
+from ltir.evaluation.synthetic import GROUND_TRUTH
+from ltir.models import Insight, utc_now
+from ltir.retrieval.search import CommittedState
+from ltir.retrieval.seeds import SeedMatch
+from ltir.retrieval.traversal import structural_closure, traverse
 
 Truth = dict[str, list[dict[str, str]]]  # mechanism -> planted scopes
 
@@ -63,8 +63,8 @@ def phenomenon_of(ins: Insight, truth: Truth | None = None) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def build_cases(engine: Engine, dataset_id: str | None = None, truth: Truth | None = None) -> list[Case]:
-    g = engine.graph()
+def build_cases(state: CommittedState, dataset_id: str | None = None, truth: Truth | None = None) -> list[Case]:
+    g = state.graph
     pats = [ins for ins in g.insights.values() if dataset_id is None or ins.dataset_id == dataset_id]
     labels = {ins.id: phenomenon_of(ins, truth) for ins in pats}
     conds = {ins.id: {c.expr for c in ins.conditions} for ins in pats}
@@ -92,14 +92,13 @@ def _score(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
 
 
 def run_experiment(engine: Engine, *, k: int = 5, dataset_id: str | None = None, truth: Truth | None = None) -> dict[str, Any]:
-    g = engine.graph()
-    cfg = engine.config
+    state = engine.prepared()  # one commit for the graph, both vector sets and the cases
+    g, cfg = state.graph, engine.config
     truth = truth if truth is not None else planted_scopes()
-    cases = build_cases(engine, dataset_id, truth)
+    cases = build_cases(state, dataset_id, truth)
     ids = [n["id"] for n in g.of_kind("Pattern")]
-    vec_nn = engine.frame().patterns  # the LTIR representation itself, no attractor graph
-    documents = engine.document_vectors()
-    text = {p: documents[p] for p in ids}
+    vec_nn = state.frame.patterns  # the LTIR representation itself, no attractor graph
+    text = {p: state.frame.documents[p] for p in ids}
     wide = replace(cfg, max_retrieved=len(ids))
     weight = {p: g.insight(p).weight for p in ids}
 
@@ -140,7 +139,7 @@ def run_experiment(engine: Engine, *, k: int = 5, dataset_id: str | None = None,
         "labels": "planted ground truth (scope containment)",
         "phenomena": {ph: sum(1 for c in cases if c.phenomenon == ph) for ph in truth},
     }
-    out = engine.ws.root / "experiments"
+    out = engine.ws.experiments_dir
     out.mkdir(parents=True, exist_ok=True)
     (out / f"hypothesis_{result['at'][:19].replace(':', '')}.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result

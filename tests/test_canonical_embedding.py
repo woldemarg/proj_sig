@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 from conftest import toy_insight
 
-from ltir.canonical import canonicalize, describe_scope, format_p, format_value
+from ltir.analysis.canonical import canonicalize, describe_scope, format_p, format_value
+from ltir.analysis.encoder import HashingEmbedder, InsightEncoder, SentenceTransformerEmbedder
 from ltir.config import Config, load_config
-from ltir.encoder import HashingEmbedder, InsightEncoder, SentenceTransformerEmbedder
 from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, Condition, Shift
 
 

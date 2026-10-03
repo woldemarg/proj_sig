@@ -1,0 +1,17 @@
+# Build context = the sources only: no secrets, no models (mounted), no workspaces, no caches.
+.git
+.venv
+**/.env
+**/.env.*
+**/__pycache__
+**/*.py[cod]
+.pytest_tmp
+.pytest_cache
+.ruff_cache
+.scratch
+workspace
+workspace.*
+*.writer.lock
+models
+data
+docs

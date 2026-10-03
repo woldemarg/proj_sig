@@ -1,49 +1,49 @@
-"""End-to-end dataset lifecycle (docs/09_operations.md).
+"""The application service (docs/09_operations.md, docs/12_architecture.md).
+
+``Engine`` orchestrates the analytical core over one workspace for the CLI and the web app:
+the batch lifecycle
 
 UPLOADED -> VALIDATING -> PROFILING -> DISCOVERING -> VALIDATING_INSIGHTS -> EMBEDDING
 -> UPDATING_ONTOLOGY -> BUILDING_GRAPH -> PERSISTING -> READY   (| FAILED | SKIPPED)
 
-``Engine`` is the single stateful service used by the CLI and the web app. Batches
-run strictly one at a time (the ontology is stateful); every batch either commits
-completely or is rolled back to the pre-batch checkpoint.
+(strictly one batch at a time: the ontology is stateful; each commits completely or is rolled
+back), dataset deletion, the committed read state, retrieval (``search``) and chat answers
+(``ask``: retrieval, then the LLM).
 """
 
 from __future__ import annotations
 
 import logging
-import shutil
 import threading
 import time
 import traceback
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
-from ltir.canonical import canonicalize
+from ltir.analysis.canonical import canonicalize
+from ltir.analysis.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
+from ltir.analysis.encoder import InsightEncoder, TextEmbedder, make_text_embedder
+from ltir.analysis.graph import SNAPSHOT_VERSION, DualGraph, build_snapshot
+from ltir.analysis.ingestion import load_dataset
+from ltir.analysis.ontology import LatentOntology, OntologyUpdate
+from ltir.analysis.quality import SelectionResult, select_insights
+from ltir.answering import QAResult, answer, empty_answer
 from ltir.config import Config
-from ltir.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
-from ltir.encoder import InsightEncoder, TextEmbedder, make_text_embedder
-from ltir.graph import SNAPSHOT_VERSION, DualGraph, build_snapshot
-from ltir.ingestion import load_dataset
-from ltir.models import CanonicalInsight, EmbeddingSpec, Insight
-from ltir.ontology import LatentOntology, OntologyUpdate
-from ltir.quality import SelectionResult, select_insights
-from ltir.store import Workspace, acquire_writer_lock, atomic_write_json, utc_now
+from ltir.llm_client import ChatModel, OpenAICompatibleLLM
+from ltir.models import CanonicalInsight, EmbeddingSpec, Insight, LatentFrame, utc_now
+from ltir.retrieval.question import build_catalog
+from ltir.retrieval.search import CommittedState, SearchResult, search
+from ltir.storage.workspace import TERMINAL, Workspace, acquire_writer_lock
 
-if TYPE_CHECKING:
-    from ltir.llm import OpenAICompatibleLLM
-    from ltir.query import LiteralCatalog
+log = logging.getLogger(__name__)
 
-log = logging.getLogger("ltir.pipeline")
-
-TERMINAL = {"READY", "FAILED", "SKIPPED"}
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
 
 
@@ -51,27 +51,6 @@ class PipelineError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-@dataclass(frozen=True)
-class LatentFrame:
-    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid,
-    plus the canonical-document embeddings the naive text baseline compares questions with."""
-
-    patterns: dict[str, np.ndarray]
-    attractors: dict[int, np.ndarray]
-    documents: dict[str, np.ndarray]
-
-    @classmethod
-    def load(cls, ws: Workspace, ontology: LatentOntology) -> LatentFrame:
-        vectors = ws.vectors()
-        st = ontology.store
-        records = ws.patterns()
-        return cls(
-            patterns={r["id"]: vectors[r["row_id"]] for r in records} if len(vectors) else {},
-            attractors={int(c): st.embeddings[i].copy() for i, c in enumerate(st.concept_ids)},
-            documents=ws.document_vectors({r["batch_id"] for r in records}),
-        )
 
 
 @contextmanager
@@ -155,7 +134,7 @@ class Engine:
         config: Config,
         *,
         embedder: TextEmbedder | None = None,
-        llm: OpenAICompatibleLLM | None = None,
+        llm: ChatModel | None = None,
         recover: bool = True,
     ) -> None:
         """A writer (``recover=True``: the web app, CLI demo/ingest/reset/rebuild-graph) takes the
@@ -166,98 +145,122 @@ class Engine:
             acquire_writer_lock(config.workspace_dir)
         self.ws = Workspace(config)
         self.encoder = InsightEncoder(embedder or make_text_embedder(config), config)
-        self._llm = llm
-        self._lock = threading.RLock()
-        self._writer = recover  # holds the writer lock: may write derived files (document back-fill)
-        self._documents_lock = threading.Lock()  # the document back-fill, never the batch lock
-        self._sphere_pool: ThreadPoolExecutor | None = None  # standalone sphere export, off the batch thread
-        self._sphere_generation = 0  # the latest requested export; older queued ones are skipped
-        self._graph: DualGraph | None = None
-        self._frame: LatentFrame | None = None
-        self._catalog: tuple[DualGraph, LiteralCatalog | None] | None = None  # (graph, its literal catalog)
-        self._catalog_lock = threading.Lock()  # never the batch lock: a question does not wait for a batch
+        self.llm: ChatModel = llm or OpenAICompatibleLLM(config)  # building the client does no I/O
+        self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
+        self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
+        self._prepare_lock = threading.Lock()  # catalog build and document back-fill: never the batch lock
         if recover:
             self._recover()
+        self._state = self._load_state()  # the committed graph, vectors and literal catalog, replaced whole per commit
 
-    @property
-    def llm(self) -> OpenAICompatibleLLM:
-        """The configured client, created on first use. Tests inject any object with
-        ``model``, ``generate(system, user) -> LLMResponse`` and ``health(fresh=...)``."""
-        if self._llm is None:
-            from ltir.llm import OpenAICompatibleLLM
+    def committed(self) -> CommittedState:
+        """The committed read state. One object per commit, so a reader never mixes two commits; readers never
+        touch the journal or a lock, so they neither race nor wait for a batch."""
+        return self._state
 
-            self._llm = OpenAICompatibleLLM(self.config)
-        return self._llm
+    def prepared(self) -> CommittedState:
+        """The committed state made ready for questions, once per commit (``_prepare``)."""
+        state = self._state
+        self._prepare(state)
+        return state
 
     def graph(self) -> DualGraph:
-        """Committed graph. Readers never touch the journal, so they cannot race a batch."""
-        if self._graph is None:
-            with self._lock:
-                if self._graph is None:
-                    snap = self.ws.load_graph()
-                    if snap and snap.get("version") != SNAPSHOT_VERSION:
-                        self.rebuild_graph()  # derived data; journals stay the source of truth
-                    else:
-                        self._graph = DualGraph(snap) if snap else DualGraph.empty()
-        return self._graph
-
-    def catalog(self) -> LiteralCatalog | None:
-        """The literal catalog of the committed graph (docs/07 §7.1.1), built on the first question after a commit.
-        Vectors of known literals come from ``graph/literals.npz`` (same fingerprint); a writer saves new ones there."""
-        graph = self.graph()
-        with self._catalog_lock:
-            if self._catalog is None or self._catalog[0] is not graph:
-                from ltir.query import build_catalog
-
-                fingerprint = self.encoder.spec.fingerprint
-                stored = self.ws.load_literals()
-                known = dict(zip(map(str, stored["texts"]), stored["vectors"])) if stored and str(stored["fingerprint"]) == fingerprint else {}
-                catalog = build_catalog(graph, self.encoder.embedder, known)
-                if catalog is not None and self._writer and not known.keys() >= set(catalog.texts):
-                    self.ws.save_literals({"texts": np.array(catalog.texts), "vectors": catalog.vectors, "fingerprint": np.array(fingerprint)})
-                self._catalog = (graph, catalog)
-            return self._catalog[1]
-
-    def document_vectors(self) -> dict[str, np.ndarray]:
-        """Canonical-document embedding of every committed pattern (stored at ingest).
-
-        A pattern without a stored vector (a batch written before documents were embedded) is
-        embedded once: the vector stays on the committed frame and, from a writer engine, is saved
-        into the batch's blocks file, so no later question pays for it again.
-        """
-        frame, graph = self.frame(), self.graph()
-        if all(n["id"] in frame.documents for n in graph.of_kind("Pattern")):
-            return frame.documents
-        with self._documents_lock:
-            missing = [n["id"] for n in graph.of_kind("Pattern") if n["id"] not in frame.documents]
-            if missing:
-                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
-                frame.documents.update(filled)
-                if self._writer:
-                    by_batch: dict[str, list[str]] = defaultdict(list)
-                    for record in self.ws.patterns():  # journal order = the row order of the batch's blocks
-                        if record["id"] in frame.documents:
-                            by_batch[record["batch_id"]].append(record["id"])
-                    for batch_id, ids in by_batch.items():
-                        if any(i in filled for i in ids):
-                            self.ws.add_document_vectors(batch_id, ids, np.stack([frame.documents[i] for i in ids]))
-        return frame.documents
+        return self.committed().graph
 
     def frame(self) -> LatentFrame:
         """Committed pattern vectors and attractor centroids (retrieval and the sphere)."""
-        if self._frame is None:
-            with self._lock:
-                if self._frame is None:
-                    self._frame = LatentFrame.load(self.ws, self.ontology())
-        return self._frame
+        return self.committed().frame
+
+    def _load_state(self) -> CommittedState:
+        """The read state of the saved snapshot; a snapshot of another version is rebuilt (derived data: the journals
+        stay the source of truth; ``RepresentationMismatch`` names the migration when they are outdated too)."""
+        snapshot = self.ws.load_graph()
+        if snapshot and snapshot.get("version") != SNAPSHOT_VERSION:
+            self.ws.check_versions()
+            return self._derive(self.ontology())[1]
+        graph = DualGraph(snapshot) if snapshot else DualGraph.empty()
+        return CommittedState(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
+
+    def _prepare(self, state: CommittedState) -> None:
+        """Fill what a question needs and the commit did not compute: the canonical-document vector of every pattern
+        (stored at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the
+        literal catalog (docs/07_question_answering.md §7.1.1; vectors of known literals from the workspace's literal
+        cache). Both stay on ``state``; a writer saves them, so no later question or restart pays for them again."""
+        graph, documents = state.graph, state.frame.documents
+        with self._prepare_lock:
+            missing = [pid for pid in graph.insights if pid not in documents]
+            if missing:
+                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
+                documents.update(filled)
+                if self._writer:
+                    self.ws.save_document_vectors(documents, set(filled))
+            if state.catalog is None and graph.insights:
+                fingerprint = self.encoder.spec.fingerprint
+                known = self.ws.load_literals(fingerprint)
+                state.catalog = build_catalog(graph, self.encoder.embedder, known)
+                if self._writer and known.keys() != set(state.catalog.texts):  # new literals, or a deleted dataset's gone
+                    self.ws.save_literals(fingerprint, state.catalog.texts, state.catalog.vectors)
 
     def ontology(self) -> LatentOntology:
         return LatentOntology(self.config, self.ws.state_dir)
 
-    def ask(self, question: str, **kwargs: Any):
-        from ltir.qa import answer_question
+    def search(self, question: str) -> SearchResult:
+        """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md §7.1–7.4)."""
+        return self._search(question, self.committed())
 
-        return answer_question(self, question, **kwargs)
+    def ask(self, question: str, *, use_llm: bool = True) -> QAResult:
+        """Chat answer: ``search``, then the LLM (or the evidence-only summary); logged to ``logs/queries.jsonl``."""
+        state = self.committed()
+        if not state.graph.insights:
+            return empty_answer(question)
+        qa = answer(self._search(question, state), self.llm if use_llm else None)
+        self.ws.log_query(
+            {
+                "at": utc_now(),
+                "question": question,
+                "mode": qa.answer_mode,
+                "metrics": qa.metrics,
+                "seeds": qa.highlight["seeds"],
+                "evidence": qa.highlight["evidence"],
+                "citations": qa.citations,
+            }
+        )
+        return qa
+
+    def _search(self, question: str, state: CommittedState) -> SearchResult:
+        start = time.perf_counter()
+        self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
+        self._prepare(state)  # the literal catalog; every document vector for the naive baseline
+        found = search(question, state, self.encoder, self.config)
+        found.seconds = time.perf_counter() - start  # with the preparation of the first question after a commit
+        return found
+
+    def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
+        st = ontology.store
+        return LatentFrame(
+            patterns={r["id"]: vectors[r["row_id"]] for r in records} if len(vectors) else {},
+            attractors={int(c): st.embeddings[i].copy() for i, c in enumerate(st.concept_ids)},
+            documents=self.ws.document_vectors({r["batch_id"] for r in records}),
+        )
+
+    def _derive(self, ontology: LatentOntology, pending: dict[str, Any] | None = None) -> tuple[dict[str, Any], CommittedState]:
+        """The snapshot of the workspace's state (saved) and the read state of the same journal read; ``pending`` (the
+        batch being committed) counts as READY. Runs inside a write, before its commit point."""
+        batches = {b["batch_id"]: b for b in self.ws.list_batches()}
+        if pending is not None:
+            batches[pending["batch_id"]] = {**pending, "status": "READY"}
+        records, vectors = self.ws.patterns(), self.ws.vectors()
+        snapshot = build_snapshot(
+            records=records,
+            activations=self.ws.activations(),
+            vectors=vectors,
+            batches=batches,
+            representation=self.ws.representation() or {},
+            ontology=ontology,
+            config=self.config,
+        )
+        self.ws.save_graph(snapshot)
+        return snapshot, CommittedState(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
     def submit(
         self,
@@ -312,8 +315,7 @@ class Engine:
             t0 = time.perf_counter()
             timings: dict[str, float] = {}
             try:
-                self._enter(record, "VALIDATING")
-                with _clock(timings, "validate_s"):
+                with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = load_dataset(
                         Path(record["source_path"]),
                         self.config,
@@ -321,15 +323,14 @@ class Engine:
                         bins=record.get("bins"),
                         categories=record.get("categories"),
                     )
-                    record["dataset_id"] = loaded.dataset_id
+                    ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
-                    duplicate = self.ws.ready_batch_for(loaded.dataset_id)
+                    duplicate = self.ws.ready_batch_for(ds)
                     if duplicate:
                         return self._skip(record, duplicate)
-                    ds_dir = self._keep_source(record, loaded.dataset_id)
+                    self.ws.keep_source(ds, Path(record["source_path"]), record["filename"])
 
-                self._enter(record, "PROFILING")
-                with _clock(timings, "discover_s"):
+                with self._stage(record, "PROFILING", timings, "discover_s"):
                     result = run_discovery(loaded.frame, self.config, on_stage=lambda s: self._enter(record, s))
                     record["profile"] = {
                         **result.profile.to_dict(),
@@ -337,37 +338,33 @@ class Engine:
                         "bins": loaded.bins,
                         "categorical_overrides": loaded.categories,
                     }
-                    atomic_write_json(ds_dir / "profile.json", record["profile"])
+                    self.ws.save_profile(ds, record["profile"])
 
-                self._enter(record, "VALIDATING_INSIGHTS")
-                with _clock(timings, "select_s"):
+                with self._stage(record, "VALIDATING_INSIGHTS", timings, "select_s"):
                     covers = covers_of(result)
-                    insights = build_insights(result, self.config, dataset_id=loaded.dataset_id, batch_id=batch_id, filename=record["filename"])
+                    insights = build_insights(result, self.config, dataset_id=ds, batch_id=batch_id, filename=record["filename"])
                     selection = select_insights(insights, self.config)
-                    atomic_write_json(ds_dir / "rejections.json", [asdict(r) for r in [*result.rejections, *selection.rejections]])
+                    self.ws.save_rejections(ds, [asdict(r) for r in [*result.rejections, *selection.rejections]])
                     kept = selection.kept
                     if not kept:
                         raise PipelineError("no_viable_insights", f"No insight passed selection ({selection.stats})")
 
-                self._enter(record, "EMBEDDING")
-                with _clock(timings, "embed_s"):
+                with self._stage(record, "EMBEDDING", timings, "embed_s"):
                     canon = [canonicalize(i, self.config, result.profile.rows) for i in kept]
                     enc, spec = self._encode(canon)
                     self.ws.check_representation(spec)  # validate only; recorded at commit
 
-                self._enter(record, "UPDATING_ONTOLOGY")
                 with self.ws.transaction({"batch_id": batch_id}):
-                    with _clock(timings, "ontology_s"):
+                    with self._stage(record, "UPDATING_ONTOLOGY", timings, "ontology_s"):
                         seq = record["batch_seq"] = self.ws.next_batch_seq()
                         ontology = self.ontology()
                         update = ontology.ingest(
                             enc["vector"], np.array([i.weight for i in kept]), [i.id for i in kept], batch_seq=seq, batch_id=batch_id
                         )
 
-                    self._enter(record, "BUILDING_GRAPH")
-                    with _clock(timings, "graph_s"):
+                    with self._stage(record, "BUILDING_GRAPH", timings, "graph_s"):
                         patterns = _pattern_records(kept, canon, update.row_ids, spec)
-                        self.ws.save_covers(loaded.dataset_id, {i.id: covers[i.expression] for i in kept})
+                        self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
                         self._enter(record, "PERSISTING")
                         self._refuse_journaled(kept)
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
@@ -375,9 +372,7 @@ class Engine:
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
-                        snapshot = build_snapshot(self.ws, ontology, self.config, pending=record)
-                        self.ws.save_graph(snapshot)
-                        graph, frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)  # loaded before the commit point
+                        snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
 
                     record["metrics"] = _batch_metrics(result, selection, update, spec, snapshot, timings, t0)
                     record["status"] = "READY"
@@ -385,11 +380,18 @@ class Engine:
                     self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
             except Exception as exc:  # failures before READY were rolled back by the transaction
                 return self._fail(record, exc, t0)
-            record["neo4j"] = self._publish(graph, frame, snapshot)  # committed: nothing below may turn READY into FAILED
+            record["neo4j"] = self._publish(state, snapshot)  # committed: nothing below may turn READY into FAILED
             if record["neo4j"]["status"] == "failed":
                 record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
             self.ws.save_batch(record)
             return record
+
+    @contextmanager
+    def _stage(self, record: dict[str, Any], stage: str, timings: dict[str, float], key: str) -> Iterator[None]:
+        """Enter ``stage`` and record the block's wall time as ``timings[key]``."""
+        self._enter(record, stage)
+        with _clock(timings, key):
+            yield
 
     def _enter(self, record: dict[str, Any], stage: str) -> None:
         """Move the batch to ``stage`` and persist the record (the UI polls it)."""
@@ -405,14 +407,6 @@ class Engine:
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
         self.ws.save_batch(record)
         return record
-
-    def _keep_source(self, record: dict[str, Any], dataset_id: str) -> Path:
-        """Copy the upload next to the dataset artifacts (provenance); returns the dataset dir."""
-        ds_dir = self.ws.dataset_dir(dataset_id)
-        copy = ds_dir / f"source{Path(record['filename']).suffix.lower() or '.csv'}"
-        if not copy.exists():
-            shutil.copyfile(record["source_path"], copy)
-        return ds_dir
 
     def _encode(self, canon: list[CanonicalInsight]) -> tuple[dict[str, np.ndarray], EmbeddingSpec]:
         """Tripartite vectors + their spec; any encoder error becomes ``embedding_failure``."""
@@ -446,52 +440,20 @@ class Engine:
         log.warning("[%s] FAILED %s: %s", record["batch_id"], code, exc)
         return record
 
-    def _publish(self, graph: DualGraph, frame: LatentFrame, snapshot: dict[str, Any]) -> dict[str, Any]:
-        """After a commit (batch or deletion): readers switch to the new state (the literal catalog follows on the
-        next question), the sphere export is queued and the optional Neo4j mirror synced; returns the mirror status."""
-        self._graph, self._frame = graph, frame
-        self._export_sphere()
+    def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """After a commit (batch or deletion): readers switch to the new state in one assignment (the literal catalog
+        follows on the next question) and the optional Neo4j mirror is synced; returns the mirror status."""
+        self._state = state
         return self.sync_neo4j(snapshot)
-
-    def _export_sphere(self) -> None:
-        """Queue the standalone 3D sphere (KernelPCA + Plotly) on its own thread; callers hold ``_lock``.
-
-        The writer returns at once, so the next upload never waits on a plot; when several commits
-        come quickly only the latest export runs. ``/api/sphere`` builds the page on demand.
-        """
-        if not self.config.sphere_export:
-            return
-        self._sphere_generation += 1
-        if self._sphere_pool is None:
-            self._sphere_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltir-sphere")
-        self._sphere_pool.submit(self._write_sphere, self._sphere_generation)
-
-    def _write_sphere(self, generation: int) -> None:
-        """Export unless a newer export or a reset superseded it; a failure is logged, never raised."""
-        if generation != self._sphere_generation:
-            return
-        try:
-            from ltir.sphere import export_sphere
-
-            page = export_sphere(self)
-        except Exception as exc:
-            log.warning("sphere export failed: %s", exc)
-            return
-        with self._lock:  # reset holds it
-            if generation != self._sphere_generation:  # superseded while it ran (a reset must leave nothing behind)
-                page.unlink(missing_ok=True)
 
     def rebuild_graph(self) -> dict[str, Any]:
         with self._lock:
             self.ws.check_versions()
-            ontology = self.ontology()
-            snapshot = build_snapshot(self.ws, ontology, self.config)
-            self.ws.save_graph(snapshot)
-            self._graph, self._frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)
+            snapshot, self._state = self._derive(self.ontology())
             return snapshot
 
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
-        """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06 §6.8).
+        """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06_graph_and_storage.md §6.8).
 
         Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
         centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
@@ -516,30 +478,35 @@ class Engine:
                 dropped = ontology.forget(acts, len(kept))
                 self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
                 ontology.save()
-                snapshot = build_snapshot(self.ws, ontology, self.config)
-                self.ws.save_graph(snapshot)
-                graph, frame = DualGraph(snapshot), LatentFrame.load(self.ws, ontology)
+                snapshot, state = self._derive(ontology)
             return {
                 "dataset_id": dataset_id,
                 "batches": [b["batch_id"] for b in batches],
                 "patterns_removed": len(records) - len(kept),
                 "anchors_removed": dropped,
-                "neo4j": self._publish(graph, frame, snapshot),
+                "neo4j": self._publish(state, snapshot),
             }
 
     def reset(self) -> dict[str, Any]:
-        """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning)."""
-        with self._lock:
-            self._sphere_generation += 1  # drop a queued export of the old workspace
+        """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning). Refused with
+        ``busy``, never queued, while a batch or a deletion runs or an upload waits."""
+        if not self._lock.acquire(blocking=False):
+            raise PipelineError("busy", "a batch or a dataset deletion is running")
+        try:
+            busy = [b["batch_id"] for b in self.ws.unfinished_batches()]
+            if busy:
+                raise PipelineError("busy", f"batches in progress: {busy}")
             self.ws.reset()
-            self._graph = self._frame = self._catalog = None
+            self._state = self._load_state()  # the empty workspace
             return {"neo4j": self.sync_neo4j({"nodes": [], "edges": []})}
+        finally:
+            self._lock.release()
 
     def sync_neo4j(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make the Neo4j mirror equal to ``snapshot`` (default: the committed one) when ``NEO4J_ENABLED``."""
         if not self.config.neo4j_enabled:
             return {"status": "disabled"}
-        from ltir.neo4j_sink import publish_snapshot
+        from ltir.storage.neo4j_mirror import publish_snapshot
 
         snapshot = snapshot if snapshot is not None else self.ws.load_graph() or {"nodes": [], "edges": []}
         try:
@@ -554,8 +521,7 @@ class Engine:
         intent = self.ws.recover()
         if intent is not None:
             log.warning("an interrupted write was rolled back: %s", intent)
-        for record in self.ws.list_batches():
-            if record["status"] not in TERMINAL:
-                record["status"] = "FAILED"
-                record["error"] = {"code": "interrupted", "message": "processing was interrupted; state rolled back"}
-                self.ws.save_batch(record)
+        for record in self.ws.unfinished_batches():
+            record["status"] = "FAILED"
+            record["error"] = {"code": "interrupted", "message": "processing was interrupted; state rolled back"}
+            self.ws.save_batch(record)

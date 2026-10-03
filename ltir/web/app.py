@@ -9,9 +9,7 @@ from __future__ import annotations
 import html
 import importlib
 import logging
-import shutil
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -21,14 +19,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ltir.canonical import humanize
+from ltir.analysis.canonical import humanize
 from ltir.config import Config, load_config
-from ltir.pipeline import TERMINAL, Engine, PipelineError
-from ltir.store import RepresentationMismatch, WorkspaceBusy
-from ltir.synth import DEMO_PATH, write_demo
+from ltir.engine import Engine, PipelineError
+from ltir.evaluation.synthetic import DEMO_PATH, write_demo
+from ltir.storage.workspace import RepresentationMismatch, WorkspaceBusy
 
 STATIC = Path(__file__).parent / "static"
-log = logging.getLogger("ltir.web")
+log = logging.getLogger(__name__)
 
 
 class QueryIn(BaseModel):
@@ -46,7 +44,7 @@ class SphereIn(BaseModel):
 def _sphere_page(
     engine: Engine, dataset: str | None, highlight: dict | None, palette: dict | None = None, layers: dict | None = None
 ) -> HTMLResponse:
-    from ltir.sphere import SphereError, sphere_html
+    from ltir.web.sphere import SphereError, sphere_html
 
     try:
         return HTMLResponse(sphere_html(engine, dataset=dataset or None, highlight=highlight, palette=palette, layers=layers))
@@ -134,7 +132,6 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
     config = config or load_config()
     engine = engine or Engine(config)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltir-batch")
-    uploads = Path(config.workspace_dir) / "uploads"
     app = FastAPI(title="SIG — Latent Transversal Insight Representation")
     app.state.engine = engine
 
@@ -175,10 +172,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
     @app.post("/api/upload")
     async def upload(file: UploadFile = File(...), bins: str = Form(""), categories: str = Form("")) -> JSONResponse:
         name = Path(file.filename or "upload.csv").name
-        uploads.mkdir(parents=True, exist_ok=True)
-        dest = uploads / f"{uuid.uuid4().hex[:8]}_{name}"
-        with dest.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
+        dest = engine.ws.save_upload(name, file.file)
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS)
         record = engine.submit(dest, filename=name, bins=bins.strip() or None, categories=categories.strip() or None)
         return JSONResponse(schedule(record), status_code=202)
@@ -216,7 +210,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
 
     @app.get("/vendor/plotly.min.js")
     def plotly_js() -> FileResponse:
-        from ltir.sphere import plotly_js_path
+        from ltir.web.sphere import plotly_js_path
 
         return FileResponse(plotly_js_path(), media_type="application/javascript")
 
@@ -229,10 +223,10 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fa
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
-        busy = [b["batch_id"] for b in engine.ws.list_batches() if b["status"] not in TERMINAL]
-        if busy:
-            raise HTTPException(409, f"batches in progress: {busy}")
-        return {"status": "reset", **engine.reset()}
+        try:
+            return {"status": "reset", **engine.reset()}
+        except PipelineError as exc:  # busy: a batch is still running
+            raise HTTPException(409, str(exc)) from exc
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

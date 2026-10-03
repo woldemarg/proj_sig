@@ -12,10 +12,11 @@ import pytest
 from conftest import FakeLLM, make_config
 from test_traversal import pattern
 
-from ltir.graph import DualGraph
-from ltir.pipeline import Engine
-from ltir.query import LiteralCatalog, build_catalog, parse_query, resolve_seeds, score_pattern
-from ltir.synth import generate_retail_dataset
+from ltir.analysis.graph import DualGraph
+from ltir.engine import Engine
+from ltir.evaluation.synthetic import generate_retail_dataset
+from ltir.retrieval.question import LiteralCatalog, build_catalog, parse_query
+from ltir.retrieval.seeds import resolve_seeds, score_pattern
 
 
 class DictEmbedder:
@@ -160,7 +161,7 @@ def test_ukrainian_comparatives_and_directed_drivers():
 
 def seeds(engine, question):
     graph = engine.graph()
-    parsed = parse_query(question, graph, engine.config, engine.catalog())
+    parsed = parse_query(question, graph, engine.config, engine.prepared().catalog)
     return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.config))
 
 
@@ -177,22 +178,22 @@ def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
     cfg = make_config(tmp_path / "ws")
     writer = Engine(cfg, llm=FakeLLM())
     assert writer.ingest_file(demo_csv)["status"] == "READY"
-    built = writer.catalog()  # the first question after the commit embeds the literals and saves their vectors
-    stored = writer.ws.load_literals()
-    assert stored is not None and str(stored["fingerprint"]) == writer.encoder.spec.fingerprint
+    built = writer.prepared().catalog  # the first question after the commit embeds the literals and saves their vectors
+    assert writer.ws.load_literals(writer.encoder.spec.fingerprint).keys() == set(built.texts)
+    assert writer.ws.load_literals("another-fingerprint") == {}
     reader = Engine(cfg, llm=FakeLLM(), recover=False)
     calls = []
     original = reader.encoder.embedder.embed
     reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
-    catalog = reader.catalog()
+    catalog = reader.prepared().catalog
     assert isinstance(catalog, LiteralCatalog) and catalog.texts == built.texts and calls == []  # loaded, not re-embedded
-    assert np.allclose(catalog.vectors, built.vectors) and reader.catalog() is catalog  # cached until the next commit
+    assert np.allclose(catalog.vectors, built.vectors) and reader.prepared().catalog is catalog  # cached until the next commit
     assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "graph" / "literals.npz.tmp").exists()
 
 
 @pytest.mark.model
 def test_b3_translated_question_parses_like_english(model_engine):
-    catalog = model_engine.catalog()
+    catalog = model_engine.prepared().catalog
     en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.config, catalog)
     uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.config, catalog)
     assert set(uk.conditions) == set(en.conditions) == {("category", "phones"), ("region", "US")} and uk.direction == en.direction == -1
@@ -212,7 +213,7 @@ def test_b4_inflected_ukrainian_value(tmp_path):
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
     engine = Engine(make_config(tmp_path / "ws", embedding_backend="sentence-transformers"), llm=FakeLLM())
     assert engine.ingest_file(path)["status"] == "READY"
-    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.config, engine.catalog())
+    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.config, engine.prepared().catalog)
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 
@@ -223,15 +224,15 @@ def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch)
 
     from test_persistence import _Driver
 
-    from ltir import neo4j_sink
+    from ltir.storage import neo4j_mirror
 
     cfg = make_config(tmp_path / "ws")
     engine = Engine(cfg, llm=FakeLLM())
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     question = "Чому margin нижчий для phones у US?"
     off = engine.ask(question, use_llm=False).traversal["seeds"]
-    real = neo4j_sink.publish_snapshot
-    monkeypatch.setattr(neo4j_sink, "publish_snapshot", lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver()))
+    real = neo4j_mirror.publish_snapshot
+    monkeypatch.setattr(neo4j_mirror, "publish_snapshot", lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver()))
     engine.config = replace(cfg, neo4j_enabled=True)
     assert engine.sync_neo4j()["status"] == "ok"
     assert engine.ask(question, use_llm=False).traversal["seeds"] == off

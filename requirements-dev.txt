@@ -1,0 +1,6 @@
+# Tests + quality gate (scripts/check.py) on top of the runtime (which also covers llm_gateway/requirements.txt).
+# Pinned: a new linter or test-runner release must not change the gate's verdict on unchanged code.
+-r requirements.txt
+pytest==9.1.1
+ruff==0.16.9
+playwright==1.63.0     # optional: browser smoke test (uses an installed Chromium)

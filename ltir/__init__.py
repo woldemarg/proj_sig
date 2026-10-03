@@ -2,8 +2,6 @@
 
 Pipeline: tabular file -> EDA discovery (ltir/engines/eda) -> validated insights
 -> canonical tripartite vectors -> latent attractor ontology (ltir/engines/lac)
--> dual-layer graph -> transversal traversal -> evidence -> local Gemma 4.
-See docs/README.md (reading guide) and docs/01_overview.md.
+-> dual-layer graph -> transversal traversal -> evidence -> the LLM behind LLM_BASE_URL (by default the LLM gateway).
+See docs/README.md (reading guide), docs/01_overview.md and docs/12_architecture.md (layers and services).
 """
-
-__version__ = "0.1.0"

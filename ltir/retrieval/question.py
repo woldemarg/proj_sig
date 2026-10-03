@@ -1,8 +1,5 @@
-"""Query interpretation and seed resolution (docs/07_question_answering.md §7.1–7.2).
-
-Deterministic parse against the graph vocabulary (metrics, dimension values)
-plus a projection of the question into the insight space with the same
-tripartite composition as patterns. No LLM is involved in retrieval.
+"""Question parsing (docs/07_question_answering.md §7.1): targets, conditions, direction and relationship
+intent, read deterministically against the graph's own vocabulary. No LLM is involved in retrieval.
 
 Literal grounding (§7.1.1): what the lexical pass leaves of a question in any language is
 matched span by span onto the graph's literal catalog — same-script character n-grams, then
@@ -21,11 +18,10 @@ from typing import Any
 
 import numpy as np
 
-from ltir.canonical import covariance_label, humanize
+from ltir.analysis.canonical import covariance_label, humanize
+from ltir.analysis.encoder import TextEmbedder, l2_normalize
+from ltir.analysis.graph import DualGraph
 from ltir.config import Config
-from ltir.encoder import InsightEncoder, l2_normalize
-from ltir.graph import DualGraph
-from ltir.models import Insight
 
 NEG_WORDS = frozenset(
     "lower low lowest decrease decreases decreased decreasing decline declines declining drop drops dropped down fall falls falling less reduced reduce reduction worse worst negative erosion eroded eroding compressed compression shrink shrinking below weak weaker poor smaller shorter fewer cheaper loss losses".split()
@@ -74,7 +70,7 @@ def detect_script(text: str) -> str:
 class LiteralCatalog:
     """The graph's literals as the data holds them, indexed for grounding (§7.1.1): metric names (raw
     and humanised) and condition values (with the attributes they occur under); unit embeddings, and
-    one char_wb TF-IDF index per script. Built by ``build_catalog`` (``Engine.catalog`` keeps the
+    one char_wb TF-IDF index per script. Built by ``build_catalog`` (``Engine.prepared`` keeps the
     vectors in ``graph/literals.npz``, so a known literal is never embedded twice)."""
 
     texts: list[str]
@@ -89,7 +85,7 @@ class LiteralCatalog:
         from sklearn.feature_extraction.text import TfidfVectorizer
 
         # the embedding space is anisotropic (every literal is 0.6–0.85 cosine to every other): centring by the
-        # catalog mean and re-normalising makes cosines discriminative (measured in docs/07 §7.1.1)
+        # catalog mean and re-normalising makes cosines discriminative (measured in docs/07_question_answering.md §7.1.1)
         self.centre = self.vectors.mean(axis=0)
         self.centred = l2_normalize(self.vectors - self.centre)
         self.scripts = [detect_script(t) for t in self.texts]
@@ -115,7 +111,7 @@ def _values(graph: DualGraph) -> dict[str, list[str]]:
     return {v: sorted(a) for v, a in values.items()}
 
 
-def build_catalog(graph: DualGraph, embedder: Any, known: dict[str, np.ndarray] | None = None) -> LiteralCatalog | None:
+def build_catalog(graph: DualGraph, embedder: TextEmbedder, known: dict[str, np.ndarray] | None = None) -> LiteralCatalog | None:
     """The graph's literals, embedded with the document-side embedder (as component labels are); ``known`` maps a
     literal to its unit vector from an earlier build, so only new literals are embedded. ``None`` for an empty graph."""
     if not graph.insights:
@@ -221,7 +217,7 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
     """Resolve the spans the lexical pass left onto catalog literals: same-script character n-grams first,
     then the multilingual embedding behind the floor / local-margin / ratio / case gates. An accepted
     span claims its tokens (non-maximum suppression), so sub-spans never ground again."""
-    floor = config.grounding_min_cosine if config else 0.30
+    floor = (config or Config()).grounding_min_cosine
     pending: list[tuple[str, set[int]]] = []
     for span, pos in _spans(raw_tokens, tokens, claimed):
         if pos & claimed:
@@ -291,7 +287,7 @@ def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, floa
 
 def parse_query(text: str, graph: DualGraph, config: Config | None = None, catalog: LiteralCatalog | None = None) -> ParsedQuery:
     """Targets, conditions, direction and relationship intent of a question. Literals typed as the data holds
-    them match lexically; with ``catalog`` (``Engine.catalog``) the rest of the question is grounded (§7.1.1)."""
+    them match lexically; with ``catalog`` (``Engine.prepared().catalog``) the rest of the question is grounded (§7.1.1)."""
     raw_tokens = _TOKEN.findall(text.replace("’", "'").replace("ʼ", "'"))
     tokens = [t.lower() for t in raw_tokens]
     q = ParsedQuery(text=text)
@@ -339,84 +335,3 @@ def parse_query(text: str, graph: DualGraph, config: Config | None = None, catal
         _ground(q, catalog, raw_tokens, tokens, claimed, config)
         q.targets = sorted(q.targets)
     return q
-
-
-@dataclass
-class SeedMatch:
-    pattern_id: str
-    score: float
-    matched: dict[str, Any]
-
-
-def score_pattern(ins: Insight, query: ParsedQuery, qvec: np.ndarray, vec: np.ndarray | None, config: Config) -> SeedMatch:
-    """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight."""
-    pair = set(ins.covariance.get("pair", []))
-    wanted_targets = set(query.targets)
-    material = [s.robust_z for t in query.targets for s in ins.shifts if s.metric == t and s.magnitude >= config.min_component_z]
-    if ins.target in wanted_targets:
-        target = 1.0
-    elif material:
-        target = 0.7
-    elif pair & wanted_targets:
-        target = 0.6
-    else:
-        target = 0.0
-    if query.covariance:  # relationship questions: the phenomenon slot scores covariance insights
-        direction = 1.0 if ins.phenomenon_type == "covariance" and (not query.targets or pair & wanted_targets) else 0.0
-    elif query.direction and material:
-        direction = 1.0 if np.sign(material[0]) == query.direction else -0.5
-    else:
-        direction = 0.0
-    wanted = set(query.conditions)
-    exact = {(a, v) for a, v in wanted if a != "*"}
-    wanted_attrs = {a for a, _ in exact}
-    conds = {(c.attribute, c.value) for c in ins.conditions}
-    hits = len(conds & exact) + sum(any(v == cv for _, cv in conds) for a, v in wanted if a == "*")  # a wildcard matches any column
-    conflicts = len({a for a, v in conds if a in wanted_attrs and (a, v) not in exact})
-    scope = (hits / len(wanted) if wanted else 0.0) - 0.5 * conflicts
-    semantic = float(vec @ qvec) if vec is not None else 0.0
-    if query.is_lexical:
-        score = 0.35 * target + 0.25 * scope + 0.15 * direction + 0.15 * semantic + 0.10 * ins.weight
-    else:
-        score = 0.7 * semantic + 0.3 * ins.weight
-    return SeedMatch(
-        ins.id,
-        float(score),
-        {
-            "target": target,
-            "scope": round(scope, 3),
-            "direction": direction,
-            "semantic": round(semantic, 3),
-            "weight": round(ins.weight, 3),
-            "scope_conflicts": conflicts,
-        },
-    )
-
-
-def resolve_seeds(
-    query: ParsedQuery,
-    graph: DualGraph,
-    encoder: InsightEncoder,
-    pattern_vectors: dict[str, np.ndarray],
-    config: Config,
-) -> list[SeedMatch]:
-    """Score every Pattern against the parsed query and pick diverse top seeds."""
-    scope_text = "; ".join(f"{a} = {v}" if a != "*" else v for a, v in query.conditions)
-    target_text = "; ".join(humanize(t) for t in query.targets)
-    qvec = encoder.encode_query(scope_text, target_text, query.components(), query.text)
-    scored = sorted(
-        (score_pattern(ins, query, qvec, pattern_vectors.get(pid), config) for pid, ins in graph.insights.items()),
-        key=lambda s: -s.score,
-    )
-    seeds: list[SeedMatch] = []
-    floor = max(config.seed_min_score, config.seed_relative_min * scored[0].score) if scored else 1.0
-    for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds
-        if len(seeds) >= config.seed_top_k or cand.score < floor:
-            break
-        near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES", "GENERALIZES"])}
-        if cand.pattern_id not in near:
-            seeds.append(cand)
-    if not seeds and scored:
-        seeds = [max(scored, key=lambda s: s.matched["semantic"])]
-        seeds[0].matched["fallback"] = "semantic"
-    return seeds

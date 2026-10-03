@@ -2,7 +2,7 @@
 
 > **In one paragraph.** Insight vectors stream batch by batch into the dynamic ontology of the vendored lac engine: a store of unit-norm centroids ("attractors", called latent anchors here and themes in the UI). A new insight joins the anchors it aligns with and pulls their centroids towards itself (an EMA whose step shrinks as an anchor matures); insights that fit nowhere become orphans, from which sparse dictionary learning (OMP) extracts new anchors, merging any that duplicate existing ones. Anchors are linked to their mutual nearest neighbours. Because the phenomenon block dominates the vector, an anchor gathers insights that *behave* alike — "discount up, margin down" — wherever in the data they occur. That is the bridge transversal retrieval walks across.
 
-**Code** `ltir/ontology.py` (`LatentOntology`), `ltir/engines/lac/` (`storage.py`, `ontology_engine.py`, `observability.py`), `ltir/graph.py` (anchor descriptions) · **Tests** `tests/test_ontology.py` · **Previous** [4. Representation](04_representation.md) · **Next** [6. Graph and storage](06_graph_and_storage.md)
+**Code** `ltir/analysis/ontology.py` (`LatentOntology`), `ltir/engines/lac/` (`storage.py`, `ontology_engine.py`, `observability.py`), `ltir/analysis/graph.py` (anchor descriptions) · **Tests** `tests/test_ontology.py` · **Previous** [4. Representation](04_representation.md) · **Next** [6. Graph and storage](06_graph_and_storage.md)
 
 ---
 

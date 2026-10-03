@@ -8,7 +8,7 @@ experiment           cross-dimensional analogue retrieval benchmark (--k)
 rebuild-graph        regenerate graph/snapshot.json from journals + state
 sphere               write the 3D latent sphere HTML (-o FILE, --dataset ID)
 neo4j-sync           make the Neo4j mirror equal to the snapshot (NEO4J_* settings)
-llm-check            probe the local Gemma 4 endpoint
+llm-check            probe the LLM endpoint (LLM_BASE_URL: the gateway by default)
 reset                delete the SIG workspace (--yes)
 migrate              re-ingest every READY batch with the current code; old workspace kept as a backup (--yes)
 serve                start the web UI
@@ -22,13 +22,6 @@ import logging
 import sys
 
 from ltir.config import load_config
-
-
-def _engine(*, writer: bool):
-    """Only writers (demo/ingest/reset/rebuild) may recover interrupted batches."""
-    from ltir.pipeline import Engine
-
-    return Engine(load_config(), recover=writer)
 
 
 def _print_batch(rec: dict) -> None:
@@ -48,7 +41,7 @@ def _print_batch(rec: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Run one command; a busy workspace (another writer holds its lock) is a clean error, exit code 2."""
-    from ltir.store import WorkspaceBusy
+    from ltir.storage.workspace import WorkspaceBusy
 
     try:
         return _run(argv)
@@ -92,7 +85,7 @@ def _run(argv: list[str] | None) -> int:
         serve()
         return 0
     if args.cmd == "llm-check":
-        from ltir.llm import OpenAICompatibleLLM
+        from ltir.llm_client import OpenAICompatibleLLM
 
         llm = OpenAICompatibleLLM(load_config())
         print(json.dumps(llm.health(fresh=True), indent=1))
@@ -116,9 +109,11 @@ def _run(argv: list[str] | None) -> int:
         print(json.dumps(migrate_workspace(cfg), indent=1))
         return 0
 
-    engine = _engine(writer=args.cmd in {"demo", "ingest", "reset", "rebuild-graph"})
+    from ltir.engine import Engine
+
+    engine = Engine(load_config(), recover=args.cmd in {"demo", "ingest", "reset", "rebuild-graph"})  # only writers recover
     if args.cmd == "demo":
-        from ltir.synth import write_demo
+        from ltir.evaluation.synthetic import write_demo
 
         rec = engine.ingest_file(write_demo())
         _print_batch(rec)
@@ -151,7 +146,7 @@ def _run(argv: list[str] | None) -> int:
         print("graph:", json.dumps(engine.graph().snapshot.get("stats", {})))
         return 0
     if args.cmd == "experiment":
-        from ltir.experiment import format_summary, run_experiment
+        from ltir.evaluation.experiment import format_summary, run_experiment
 
         print(format_summary(run_experiment(engine, k=args.k)))
         return 0
@@ -162,12 +157,12 @@ def _run(argv: list[str] | None) -> int:
     if args.cmd == "sphere":
         from pathlib import Path
 
-        from ltir.sphere import export_sphere
+        from ltir.web.sphere import export_sphere
 
         print(export_sphere(engine, Path(args.output) if args.output else None, dataset=args.dataset))
         return 0
     if args.cmd == "neo4j-sync":
-        from ltir.neo4j_sink import publish_snapshot
+        from ltir.storage.neo4j_mirror import publish_snapshot
 
         snap = engine.ws.load_graph()
         if not snap:

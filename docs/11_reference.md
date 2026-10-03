@@ -2,7 +2,7 @@
 
 > **In one paragraph.** Lookup tables for the whole system: one name per concept, the format of every identifier, every tunable with its default and the chapter that explains it, an index of every formula with the code that computes it, and the versioned contracts that decide whether a workspace can be reused.
 
-**Previous** [10. Verification](10_verification.md) · **Start** [Reading guide](README.md)
+**Previous** [10. Verification](10_verification.md) · **Next** [12. Architecture](12_architecture.md) · **Start** [Reading guide](README.md)
 
 ---
 
@@ -68,13 +68,13 @@ Every field of `ltir/config.py::Config` can be set from the environment by its u
 | guards | `DENSITY_FLOOR` 0.25, `DENSITY_MULTIPLE` 3.0, `MAX_CENTROID_STEP` 0.10, `WARN_ORPHAN_RATE` 0.50, `WARN_MIN_EXTRACTION_YIELD` 0.10, `WARN_AVG_DEGREE` (1.0, 8.0) | [5.6](05_latent_anchors.md#56-stability-guards) |
 | anchor links | `RELATED_TO_PEER_COUNT` 3, `RELATED_TO_MIN_WEIGHT` 0.30 | [5.7](05_latent_anchors.md#57-links-between-anchors) |
 | structural plane | `CONTRAST_MIN_OVERLAP` 0.5, `CONTRAST_MIN_SHIFT` 0.5 | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
-| literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `query.py`: `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |
+| literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `retrieval/question.py`: `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |
 | seeds | `SEED_TOP_K` 3, `SEED_MIN_SCORE` 0.25, `SEED_RELATIVE_MIN` 0.75 | [7.2](07_question_answering.md#72-seeds) |
 | traversal | `MAX_LATENT_HOPS` 1, `STRUCTURAL_HOPS` 1, `TRAVERSAL_MAX_DEPTH` 5, `MAX_RETRIEVED` 12, `STRUCTURAL_EDGE_DECAY` 0.85, `TRAVERSAL_STRUCTURAL_EDGES` `SPECIALIZES,GENERALIZES,CONTRASTS` | [7.3](07_question_answering.md#73-transversal-traversal) |
 | evidence | `EVIDENCE_MAX_PATTERNS` 10 | [7.4](07_question_answering.md#74-the-evidence-object) |
-| LLM | `LLM_BASE_URL` `http://localhost:11434/v1`, `LLM_MODEL` `gemma4`, `LLM_API_KEY` "", `LLM_PROVIDER_ORDER` "", `LLM_APP_TITLE` `SIG LTIR`, `LLM_TIMEOUT_S` 120, `LLM_TEMPERATURE` 0.1, `LLM_MAX_TOKENS` 1200, `LLM_REASONING_EFFORT` "" | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) |
+| LLM | `LLM_BASE_URL` `http://127.0.0.1:8080/v1` (the gateway), `LLM_MODEL` "" (the endpoint's model), `LLM_API_KEY` "", `LLM_TIMEOUT_S` 120, `LLM_TEMPERATURE` 0.1, `LLM_MAX_TOKENS` 1200; the upstream, its key and the provider order are the gateway's `GEMMA_*` settings ([12.4](12_architecture.md#124-the-llm-service)) | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) |
 | Neo4j | `NEO4J_ENABLED` false, `NEO4J_URI` `bolt://localhost:7687`, `NEO4J_USER` `neo4j`, `NEO4J_PASSWORD` "", `NEO4J_DATABASE` `sigv1`, `NEO4J_LOAD_BATCH_SIZE` 5000 | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
-| web | `WEB_HOST` 127.0.0.1, `WEB_PORT` 8765, `SPHERE_EXPORT` true | [8](08_interface.md) |
+| web | `WEB_HOST` 127.0.0.1, `WEB_PORT` 8765 | [8](08_interface.md) |
 
 Fixed constants that are not configurable but enter the mathematics: the EDA's 95 % mass and correlation limits, the 1.10 nesting factor, the size floor `n_min`, `ROBUST_Z_CAP` 10, `BOOTSTRAP_RESAMPLES` 20, the JS 0.15 / χ² `0.01 / #categoricals` confounder gate and the 1.5 hidden-shift limit ([2.2](02_discovery.md#22-the-eda-engine-in-five-steps)); `ENCODE_BATCH_SIZE` 16 ([4.4](04_representation.md#44-the-embedding-model)); `HEALTH_TTL_S` 15 ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)).
 
@@ -96,15 +96,15 @@ Every quantity the system computes, where it is explained and which code compute
 | phenomenon components | [4.2](04_representation.md#42-the-canonical-form) | `canonical.canonicalize` |
 | tripartite vector, cosine decomposition | [4.3](04_representation.md#43-the-tripartite-vector) | `encoder.InsightEncoder.encode`, `encode_query` |
 | OMP K-sweep, signed repair | [5.3](05_latent_anchors.md#53-extraction-omp-k-sweep-with-signed-repair) | `ontology_engine.extract_attractors`, `repair_extraction` |
-| adaptive threshold, assignment, EMA with inertia | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans) | `ontology_engine.compute_adaptive_threshold`, `assign_and_update`, `storage.update_concept_centroid` |
+| adaptive threshold, assignment, EMA with inertia | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans) | `ontology_engine.compute_adaptive_threshold`, `assign_and_update`, `ConceptStore.update_concept_centroid` (`engines/lac/storage.py`) |
 | hub threshold, damping, trust region | [5.6](05_latent_anchors.md#56-stability-guards) | `observability.density_threshold`, `LatentOntology._damping`, `_clamp_steps` |
 | mutual kNN links | [5.7](05_latent_anchors.md#57-links-between-anchors) | `ontology_engine.calculate_knn_topology` |
 | signature, label, dispersion, evidence mass | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) | `graph._attractor_nodes` |
-| alignment, strength | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `ontology._activation_records`, `graph._activation_edges` |
+| alignment, strength | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `LatentOntology._activation_records`, `graph._activation_edges` |
 | batch metrics and warnings | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `LatentOntology` (`BatchMetrics`), `observability.apply_health_warnings` |
 | structural edges, contrast overlap, TARGETS weight | [6.1](06_graph_and_storage.md#61-the-structural-plane), [6.2](06_graph_and_storage.md#62-the-graph-schema) | `structural.structural_edges`, `graph._schema_plane` (TARGETS) |
-| query components, seed score | [7.1](07_question_answering.md#71-from-question-to-query), [7.2](07_question_answering.md#72-seeds) | `query.parse_query`, `query.score_pattern` |
-| literal grounding: centred cosine, local margin, Lowe's ratio, char_wb TF-IDF, wildcard scope | [7.1.1](07_question_answering.md#711-literal-grounding) | `Engine.catalog`, `query.build_catalog`, `query._ground`, `query._bind`, `query.score_pattern` |
+| query components, seed score | [7.1](07_question_answering.md#71-from-question-to-query), [7.2](07_question_answering.md#72-seeds) | `question.parse_query`, `seeds.score_pattern` |
+| literal grounding: centred cosine, local margin, Lowe's ratio, char_wb TF-IDF, wildcard scope | [7.1.1](07_question_answering.md#711-literal-grounding) | `Engine.prepared`, `question.build_catalog`, `question._ground`, `question._bind`, `seeds.score_pattern` |
 | path score, node rank, scope overlap | [7.3](07_question_answering.md#73-transversal-traversal) | `traversal.traverse` |
 | sphere projection | [8.4](08_interface.md#84-the-latent-sphere) | `sphere.sphere_figure` |
 | recall@k, precision@k, MRR | [10.3](10_verification.md#103-hypothesis-benchmark) | `experiment.run_experiment` |

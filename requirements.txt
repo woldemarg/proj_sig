@@ -1,31 +1,27 @@
-# SIG / LTIR — Python 3.12+ (ltir/engines/eda/main_upd.py uses PEP 701 f-strings)
-# Tested with the versions noted on the right.
+# SIG backend runtime (the ltir package) — Python 3.12+ (ltir/engines/eda/main_upd.py uses PEP 701 f-strings).
+# Lower bounds only; the exact versions of the verified container image are in constraints.txt.
+# Development tools: requirements-dev.txt; the LLM gateway: llm_gateway/requirements.txt.
 
-numpy>=1.26            # 2.4.6
-pandas>=2.2            # 3.0.3
-scipy>=1.11            # 1.18.0
-scikit-learn>=1.3      # 1.9.0  (lac OMP / MiniBatchDictionaryLearning)
+numpy>=1.26
+pandas>=2.2
+scipy>=1.11
+scikit-learn>=1.3      # lac OMP / MiniBatchDictionaryLearning, the sphere's KernelPCA
 pysubgroup==0.7.7      # EDA selectors (ltir/engines/eda/main_upd.py)
 
-# Local embeddings. Install torch first for CUDA, e.g.
-#   pip install torch --index-url https://download.pytorch.org/whl/cu126
-sentence-transformers>=3.0   # 5.6.0
-transformers>=4.40           # 5.12.1
-regex                        # required by transformers; not always pulled in by an existing environment
+# Local embeddings. Install torch first for the device you run on, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126   (CUDA; the Docker image uses .../whl/cpu)
+sentence-transformers>=3.0
+transformers>=4.40
+regex                  # required by transformers; not always pulled in by an existing environment
 
-# Web UI + LLM client
-fastapi>=0.110         # 0.142.2
-uvicorn>=0.29          # 0.54.0
+# HTTP API + web UI + LLM client
+fastapi>=0.110
+uvicorn>=0.29
 python-multipart>=0.0.9
-httpx>=0.27            # 0.28.1
+httpx>=0.27
 
-# 3D latent sphere (vendored lac projector: ltir/engines/lac/projector.py)
-plotly>=5.0           # 6.8.0
+# 3D latent sphere (ltir/web/sphere.py)
+plotly>=5.0
 
-# Optional Neo4j mirror (NEO4J_ENABLED=true)
-neo4j>=5.0             # 6.2
-
-# Tests + quality gate (scripts/check.py)
-pytest>=8
-ruff>=0.16
-playwright>=1.45       # optional: browser smoke test (uses an installed Chromium)
+# Neo4j mirror (NEO4J_ENABLED=true)
+neo4j>=5.0

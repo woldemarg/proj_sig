@@ -9,10 +9,19 @@ from pathlib import Path
 import pytest
 from conftest import FakeLLM, make_config
 
-from ltir import pipeline as pipeline_mod
-from ltir.graph import DualGraph
-from ltir.neo4j_sink import EDGE_ENDPOINTS, LABELS, edge_query, flatten_props, node_query, publish_snapshot, stale_edge_query, stale_node_query
-from ltir.pipeline import Engine
+from ltir import engine as engine_mod
+from ltir.analysis.graph import DualGraph
+from ltir.engine import Engine
+from ltir.storage.neo4j_mirror import (
+    EDGE_ENDPOINTS,
+    LABELS,
+    edge_query,
+    flatten_props,
+    node_query,
+    publish_snapshot,
+    stale_edge_query,
+    stale_node_query,
+)
 
 
 @pytest.fixture
@@ -90,7 +99,7 @@ def test_failed_batch_rolls_back(engine, demo_csv, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("simulated graph failure")
 
-    monkeypatch.setattr(pipeline_mod, "build_snapshot", boom)
+    monkeypatch.setattr(engine_mod, "build_snapshot", boom)
     rec = engine.ingest_file(demo_csv)
     assert rec["status"] == "FAILED" and rec["error"]["code"] == "internal_error"
     assert rec["failed_stage"] == "PERSISTING"
@@ -133,7 +142,7 @@ class Crash(BaseException):  # the process dies: no except-handler runs
 def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch):
     """A batch that dies after writing its journal leaves the transaction marker; the next writer start rolls
     it back and fails the batch, and the same upload then commits."""
-    monkeypatch.setattr(pipeline_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(Crash()))
+    monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(Crash()))
     with pytest.raises(Crash):
         engine.ingest_file(demo_csv)
     monkeypatch.undo()
@@ -148,7 +157,7 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch)
 def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_path, monkeypatch):
     """A rollback that fails keeps its marker and checkpoint: no later write may overwrite them, and the next
     writer start finishes the rollback."""
-    monkeypatch.setattr(pipeline_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph failure")))
+    monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph failure")))
     monkeypatch.setattr(engine.ws, "rollback", lambda cp: (_ for _ in ()).throw(OSError("disk gone")))
     rec = engine.ingest_file(demo_csv)
     assert rec["status"] == "FAILED" and rec["error"]["message"] == "graph failure" and "rollback failed" in rec["warnings"][-1]
@@ -168,7 +177,7 @@ def test_records_survive_a_concurrent_reader(tmp_path):
     import threading
     import time
 
-    from ltir.store import atomic_write_json, read_json
+    from ltir.storage.workspace import atomic_write_json, read_json
 
     target = tmp_path / "B-test.json"
     atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
@@ -197,6 +206,36 @@ def test_records_survive_a_concurrent_reader(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
+    """A reset during a batch answers ``busy`` at once instead of waiting for the batch lock (the web request
+    would hang for the whole batch); readers keep the committed state meanwhile and the batch still commits."""
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    discover = engine_mod.run_discovery
+
+    def held(*args, **kwargs):
+        started.set()
+        release.wait(timeout=30)  # bounded: a reset that waited would see the batch finish and fail the assertion
+        return discover(*args, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "run_discovery", held)
+    batch = engine.submit(demo_csv)
+    worker = threading.Thread(target=engine.process, args=(batch["batch_id"],))
+    worker.start()
+    try:
+        assert started.wait(timeout=30)
+        with pytest.raises(engine_mod.PipelineError, match="is running") as refused:
+            engine.reset()
+        assert refused.value.code == "busy" and not engine.graph().insights  # the committed (empty) state, read without a lock
+    finally:
+        release.set()
+        worker.join(timeout=120)
+    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.graph().insights
+    engine.reset()
+    assert not engine.graph().insights and not engine.frame().patterns and not engine.ws.list_batches()
+
+
 def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_df, demo_csv):
     """Deleting a dataset removes its patterns, vectors, memberships and artefacts; an anchor survives
     only with a remaining member or a RELATED_TO link; the journal, state and snapshot stay consistent."""
@@ -212,8 +251,14 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     before_members = Counter(e["target"] for e in g.edges if e["type"] == "ACTIVATES" and g.nodes[e["source"]]["props"]["dataset_id"] != ds)
     linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
     anchors_before = {n["id"] for n in g.of_kind("Attractor")}
+    assert any(t.startswith("x_") for t in engine.prepared().catalog.texts)  # the literal cache now holds both datasets' literals
+    engine.ws.sphere_path.write_text("a page that shows the dataset", encoding="utf-8")
 
     out = engine.delete_dataset(ds)
+    catalog = engine.prepared().catalog  # the first question after the deletion rewrites the cache
+    cached = engine.ws.load_literals(engine.encoder.spec.fingerprint)
+    assert set(cached) == set(catalog.texts) and not any(t.startswith("x_") for t in cached)  # its literals are gone
+    assert not engine.ws.sphere_path.exists()
     assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]
     g = engine.graph()
     assert all(n["props"]["dataset_id"] != ds for n in g.of_kind("Pattern"))
@@ -311,7 +356,7 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     import sys
 
     from ltir.config import PROJECT_ROOT
-    from ltir.store import WorkspaceBusy
+    from ltir.storage.workspace import WorkspaceBusy
 
     cfg = make_config(tmp_path / "ws")
     queued = Engine(cfg, llm=FakeLLM(), recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
@@ -319,7 +364,7 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
         [
             sys.executable,
             "-c",
-            "import sys; from ltir.store import acquire_writer_lock; acquire_writer_lock(sys.argv[1]); print('locked', flush=True); sys.stdin.read()",
+            "import sys; from ltir.storage.workspace import acquire_writer_lock; acquire_writer_lock(sys.argv[1]); print('locked', flush=True); sys.stdin.read()",
             str(cfg.workspace_dir),
         ],
         cwd=PROJECT_ROOT,
@@ -344,7 +389,7 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
 
 def test_migrate_rebuilds_an_outdated_workspace(tmp_path, demo_csv):
     from ltir.migrate import migrate_workspace
-    from ltir.store import RepresentationMismatch, atomic_write_json
+    from ltir.storage.workspace import RepresentationMismatch, atomic_write_json
 
     cfg = make_config(tmp_path / "ws")
     old = Engine(cfg, llm=FakeLLM())
@@ -371,7 +416,7 @@ def test_ingestion_failure_states(engine, tmp_path):
 
 
 def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_path):
-    from ltir.ingestion import IngestionError, load_dataset
+    from ltir.analysis.ingestion import IngestionError, load_dataset
 
     table = tmp_path / "t.csv"
     table.write_text("group,value\n" + "".join(f"{'ab'[i % 2]},{i}.5\n" for i in range(60)))

@@ -6,7 +6,7 @@ import inspect
 
 from conftest import toy_insight
 
-from ltir import structural
+from ltir.analysis import structural
 from ltir.config import load_config
 from ltir.models import EdgeType, Shift
 

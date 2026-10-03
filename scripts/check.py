@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LINT_PATHS = ["ltir", "tests", "scripts"]
+LINT_PATHS = ["ltir", "llm_gateway", "tests", "scripts"]
 
 
 def run_step(name: str, cmd: list[str]) -> bool:

@@ -16,7 +16,7 @@ Planted subgroup effects (the ground truth the E2E tests look for):
 
 Columns payment / weekday / store_size carry no signal; order_id is an identifier.
 
-Run ``python -m ltir.synth`` to (re)write ``data/demo/retail_synthetic.csv``.
+Run ``python -m ltir.evaluation.synthetic`` to (re)write ``data/demo/retail_synthetic.csv``.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 The LLM receives *only* this object's ``to_prompt()`` rendering; ``summary()`` is the
 deterministic evidence-only answer used when no LLM answer is available. Both are plain
-ASCII built from the readable-text helpers in ``ltir.canonical`` (docs/04_representation.md §4.2): rounded numbers,
+ASCII built from the readable-text helpers in ``ltir.analysis.canonical`` (docs/04_representation.md §4.2): rounded numbers,
 p-value buckets, shifts in robust standard deviations, prose scopes. Every item has a
 citation key ``[P#]`` that maps back to a Pattern id, its dataset, batch and exact EDA
 selector, so answers are traceable to table slices.
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from ltir.canonical import (
+from ltir.analysis.canonical import (
     describe_covariance,
     describe_scope,
     describe_shift,
@@ -23,11 +23,11 @@ from ltir.canonical import (
     humanize,
     phenomenon_shifts,
 )
+from ltir.analysis.graph import DualGraph, describe_components
 from ltir.config import Config
-from ltir.graph import DualGraph, describe_components
 from ltir.models import dataset_node_id, metric_node_id
-from ltir.query import ParsedQuery
-from ltir.traversal import PathStep, TraversalResult
+from ltir.retrieval.question import ParsedQuery
+from ltir.retrieval.traversal import PathStep, TraversalResult
 
 
 @dataclass

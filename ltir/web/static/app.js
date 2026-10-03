@@ -29,7 +29,7 @@ const SUGGESTIONS = [
   "Де руйнується кореляція між discount і margin?",
 ];
 // The legend (index.html data-key) -> the graph elements of each entry; a sphere trace carries its entry's key as
-// `meta` (ltir/sphere.py), and the toggles (.toggle[data-key]) show or hide their entry in both views.
+// `meta` (ltir/web/sphere.py), and the toggles (.toggle[data-key]) show or hide their entry in both views.
 const MARKS = {
   anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
   down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]',
@@ -577,7 +577,7 @@ function botCard(turn) {
     cit.grounded ? `<span class="chip ok">✓ ${(cit.cited || []).length} sources cited</span>` : `<span class="chip warn">No citations</span>`,
     cross ? `<span class="chip run" title="Reached only through a theme, in a different part of the data">⤳ ${cross} cross-segment</span>` : "",
   ].join("");
-  // literal grounding (docs/07 §7.1.1): which words of the question were read as which data literals
+  // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.evidence && qa.evidence.parsed && qa.evidence.parsed.grounding) || [];
   const understood = grounded.length ? `<div class="understood" title="Question words matched to data literals (by characters or by meaning)">Understood: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
   const evid = items.map((it, i) => {

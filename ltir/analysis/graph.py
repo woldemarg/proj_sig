@@ -1,20 +1,22 @@
 """Dual-layer graph assembly + in-memory index (docs/06_graph_and_storage.md).
 
-The snapshot is *derived* data: it is rebuilt from the journals, dataset
-artifacts and ontology state after every batch, so it can always be
-regenerated (``ltir rebuild-graph``). ACTIVATES alignments are recomputed
-against the *current* centroids so graph weights match the living ontology.
+The snapshot is *derived* data: ``build_snapshot`` turns the journal records, activations and
+vectors, the batch records (a READY one with its dataset's profile) and the ontology state into nodes and edges, so
+it can always be regenerated (``ltir rebuild-graph``). It reads no files: the caller gathers the
+inputs. ACTIVATES alignments are recomputed against the *current* centroids so graph weights
+match the living ontology.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ltir.canonical import headline, humanize
+from ltir.analysis.canonical import headline, humanize
+from ltir.analysis.structural import structural_edges
 from ltir.config import Config
 from ltir.models import (
     EdgeType,
@@ -26,10 +28,11 @@ from ltir.models import (
     dataset_node_id,
     dimension_node_id,
     metric_node_id,
+    utc_now,
 )
-from ltir.ontology import LatentOntology
-from ltir.store import Workspace, read_json, utc_now
-from ltir.structural import structural_edges
+
+if TYPE_CHECKING:  # a type only: readers of the graph (retrieval, the UI) need not import the ontology stack
+    from ltir.analysis.ontology import LatentOntology
 
 SNAPSHOT_VERSION = 2  # Pattern props are the journal Insight record (not a projected schema)
 
@@ -67,9 +70,7 @@ def attractor_signature(members: list[tuple[dict[str, Any], float]]) -> list[tup
     return sorted(((k, v / total) for k, v in agg.items()), key=lambda kv: -abs(kv[1]))
 
 
-def _schema_plane(
-    ws: Workspace, batches: dict[str, dict[str, Any]], insights: list[Insight], config: Config
-) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
+def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], config: Config) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
     """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them."""
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
@@ -80,7 +81,7 @@ def _schema_plane(
         if b.get("status") != "READY":
             continue
         ds = b["dataset_id"]
-        profile = read_json(ws.datasets_dir / ds / "profile.json", {}) or {}
+        profile = b.get("profile") or {}
         nodes[dataset_node_id(ds)] = GraphNode(
             dataset_node_id(ds),
             "Dataset",
@@ -145,13 +146,14 @@ def _schema_plane(
     return nodes, edges
 
 
-def _activation_edges(ws: Workspace, ontology: LatentOntology, by_pid: dict[str, dict[str, Any]]) -> tuple[list[GraphEdge], dict[int, list[Member]]]:
+def _activation_edges(
+    activations: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology, by_pid: dict[str, dict[str, Any]], config: Config
+) -> tuple[list[GraphEdge], dict[int, list[Member]]]:
     """ACTIVATES edges with alignments recomputed against the current centroids, grouped by attractor."""
-    vectors = ws.vectors()
     live = set(ontology.store.concept_ids)
     edges: list[GraphEdge] = []
     members: dict[int, list[Member]] = defaultdict(list)
-    for act in ws.activations():
+    for act in activations:
         pid, aid = act["pattern_id"], int(act["attractor_id"])
         if pid not in by_pid or aid not in live:
             continue
@@ -160,7 +162,7 @@ def _activation_edges(ws: Workspace, ontology: LatentOntology, by_pid: dict[str,
         w = float(rec["weight"])
         # one predicate for coverage and retrieval: below the ontology's alignment floor (rerouted at
         # ingest, or drifted below it since) a membership is coverage only and is not walked
-        weak = bool(act["weak"]) or alignment < ontology.config.min_activation_alignment
+        weak = bool(act["weak"]) or alignment < config.min_activation_alignment
         members[aid].append((rec, alignment, alignment * w))
         edges.append(
             GraphEdge(
@@ -221,24 +223,30 @@ def _attractor_nodes(
     return nodes
 
 
-def build_snapshot(ws: Workspace, ontology: LatentOntology, config: Config, pending: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``pending``: the batch being committed; treated as READY for schema nodes."""
-    batches = {b["batch_id"]: b for b in ws.list_batches()}
-    if pending is not None:
-        batches[pending["batch_id"]] = {**pending, "status": "READY"}
+def build_snapshot(
+    *,
+    records: list[dict[str, Any]],
+    activations: list[dict[str, Any]],
+    vectors: np.ndarray,
+    batches: dict[str, dict[str, Any]],
+    representation: dict[str, Any],
+    ontology: LatentOntology,
+    config: Config,
+) -> dict[str, Any]:
+    """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
+    ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
+    ``profile``); ``representation``: the recorded vector contract."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
-    rep = ws.representation() or {}
-
-    by_pid = {rec["id"]: rec for rec in ws.patterns()}
+    by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
     # The journal record is the pattern contract. Readers rehydrate it with Insight.from_record.
     nodes = {ins.id: GraphNode(ins.id, "Pattern", headline(ins), dict(by_pid[ins.id])) for ins in insights}
-    schema_nodes, edges = _schema_plane(ws, batches, insights, config)
+    schema_nodes, edges = _schema_plane(batches, insights, config)
     nodes.update(schema_nodes)
     edges += structural_edges(insights, config)
-    activates, members = _activation_edges(ws, ontology, by_pid)
+    activates, members = _activation_edges(activations, vectors, ontology, by_pid, config)
     edges += activates
-    nodes.update(_attractor_nodes(ontology, members, seq_to_batch, rep))
+    nodes.update(_attractor_nodes(ontology, members, seq_to_batch, representation))
     for rel in ontology.topology():
         edges.append(
             GraphEdge(
@@ -253,7 +261,7 @@ def build_snapshot(ws: Workspace, ontology: LatentOntology, config: Config, pend
     return {
         "version": SNAPSHOT_VERSION,
         "created_at": utc_now(),
-        "representation": rep,
+        "representation": representation,
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
         "stats": {

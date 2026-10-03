@@ -76,7 +76,7 @@ def test_config_paths_live_inside_the_project():
 def test_sources_hold_no_path_outside_the_repository():
     """No machine path in any string; a climbing relative path only in a docstring, and inside the repository."""
     offenders = []
-    for path in (ROOT / "ltir").rglob("*.py"):
+    for path in [*(ROOT / "ltir").rglob("*.py"), *(ROOT / "llm_gateway").rglob("*.py")]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         docstrings = _docstrings(tree)
         for node in ast.walk(tree):
@@ -93,7 +93,7 @@ def test_sources_hold_no_path_outside_the_repository():
 
 @pytest.mark.model
 def test_embedding_model_loads_from_bundled_copy():
-    from ltir.encoder import SentenceTransformerEmbedder
+    from ltir.analysis.encoder import SentenceTransformerEmbedder
 
     emb = SentenceTransformerEmbedder(load_config())
     emb.embed(["self-contained"])

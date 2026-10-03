@@ -1,4 +1,4 @@
-// Transversal traversal in Neo4j Browser (mirrors ltir/traversal.py, docs/07_question_answering.md §7.3).
+// Transversal traversal in Neo4j Browser (mirrors ltir/retrieval/traversal.py, docs/07_question_answering.md §7.3).
 // Seed Pattern -> ACTIVATES -> Attractor -> RELATED_TO{0,1} -> Attractor <- ACTIVATES <- Pattern,
 // then one lattice hop (SPECIALIZES / GENERALIZES / CONTRASTS). Best path per target. Replace the seed id.
 // Pattern nodes are the Insight record: weight is `weight`. Nested fields (conditions, shifts,

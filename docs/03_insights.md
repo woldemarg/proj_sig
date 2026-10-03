@@ -2,7 +2,7 @@
 
 > **In one paragraph.** A validated candidate becomes an `Insight`: a typed, JSON-serialisable record that names its subgroup, its signed shifts, its scores and its provenance, and that every later stage reads (the graph calls it a `Pattern`). A fixed, ordered rule set decides which insights become persistent knowledge, and an `insight_weight` in `[0.05, 1]` summarises how strong the evidence is. The weight never changes *which* existing anchor an insight is assigned to; it changes how hard the insight pulls on that anchor, how much it shapes the extraction of new anchors, and how high it ranks in retrieval.
 
-**Code** `ltir/models.py` (`Insight`, `Shift`, `Condition`, `Rejection`), `ltir/quality.py` · **Tests** `tests/test_quality.py` · **Previous** [2. Discovery](02_discovery.md) · **Next** [4. Representation](04_representation.md)
+**Code** `ltir/models.py` (`Insight`, `Shift`, `Condition`, `Rejection`), `ltir/analysis/quality.py` · **Tests** `tests/test_quality.py` · **Previous** [2. Discovery](02_discovery.md) · **Next** [4. Representation](04_representation.md)
 
 ---
 
