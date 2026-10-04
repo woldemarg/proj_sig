@@ -1,27 +1,59 @@
-# SIG as three services (docs/12_architecture.md §12.5):
-#   sig    the backend: analytical core, HTTP API with the chat endpoint, web UI  -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
-#   llm    the LLM gateway (OpenAI-compatible) in front of the upstream model   -> reachable only inside the stack (http://llm:8080)
-#   neo4j  the graph mirror (Neo4j Community)                                   -> browser http://127.0.0.1:17474, bolt 127.0.0.1:17687
+# SIG as a suite of services (docs/12_architecture.md), started in dependency order:
+#   model-init         one-shot: the pinned Qwen3 checkpoint into the sig-models volume (from ./models when it verifies)
+#   neo4j              the graph mirror                                  -> browser http://127.0.0.1:17474, bolt 127.0.0.1:17687
+#   llm-model-broker   one OpenAI-compatible endpoint for the upstream model (internal + egress, no host port)
+#   insight-graph      the graph service: analysis, graph building, search (CPU torch; no egress)
+#   evidence-narrator  the chat: the graph's evidence verbalised and citation-checked (no egress)
+#   sig-web-console    nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
 #
-#   docker compose up -d --build        then open http://127.0.0.1:8765
+#   docker compose up -d --build --wait      then open http://127.0.0.1:8765
 #
-# Before the first start: the embedding model in ./models (python scripts/download_model.py) and the gateway's
-# settings in ./.env.gemma (template: .env.gemma.sample). SIG_NEO4J_PASSWORD sets the mirror's password on the
-# first start (default sig-local-password; at least 8 characters); the Neo4j volume keeps it afterwards.
-# Host ports: SIG_WEB_PORT, SIG_NEO4J_HTTP_PORT, SIG_NEO4J_BOLT_PORT (scripts/compose_check.py uses others, so both run side by side).
+# Settings: ./.env (template: .env.sample). Only the broker receives the GEMMA_* provider settings and key. The stack's
+# own Neo4j password is SIG_NEO4J_PASSWORD (default sig-local-password, at least 8 characters; the volume keeps it).
+# Host ports: SIG_WEB_PORT, SIG_NEO4J_HTTP_PORT, SIG_NEO4J_BOLT_PORT (scripts/compose_check.py uses others, side by side).
 
 name: sig
 
+x-no-provider: &no-provider  # .env values that are the broker's alone, blanked where env_file brings them
+  GEMMA_BASE_URL: ""
+  GEMMA_MODEL_NAME: ""
+  GEMMA_CHAT_ENDPOINT: ""
+  GEMMA_API_KEY: ""
+  GEMMA_PROVIDER: ""
+  GEMMA_CONNECT_TIMEOUT_SEC: ""
+  GEMMA_READ_TIMEOUT_SEC: ""
+  LLM_API_KEY: ""  # a key an older .env may still hold; no SIG service but the broker uses one
+
+x-hardened: &hardened
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  init: true
+  restart: unless-stopped
+
 services:
+  model-init:
+    build: { context: ., dockerfile: insight_graph_service/Dockerfile, target: runtime }
+    image: sig/insight-graph:local
+    command: ["python", "-m", "insight_graph_service.core.model_store", "/app/models", "--seed", "/seed"]
+    volumes:
+      - sig-models:/app/models
+      - ./models:/seed:ro  # reused when it verifies, so a clean start needs no download
+    networks: [edge]  # downloads the pinned revision when no verified copy exists
+    <<: *hardened
+    restart: "no"
+
   neo4j:
     image: neo4j:5.26.31-community
-    environment:
+    environment:  # no env_file: the entrypoint turns every NEO4J_* variable into a setting
       NEO4J_AUTH: neo4j/${SIG_NEO4J_PASSWORD:-sig-local-password}
     ports:
       - "127.0.0.1:${SIG_NEO4J_HTTP_PORT:-17474}:7474"
       - "127.0.0.1:${SIG_NEO4J_BOLT_PORT:-17687}:7687"
     volumes:
       - neo4j-data:/data
+    networks: [internal, edge]
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${SIG_NEO4J_PASSWORD:-sig-local-password}", "RETURN 1"]
       interval: 30s
@@ -32,42 +64,80 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  llm:
-    build:
-      context: .
-      dockerfile: llm_gateway/Dockerfile
-    env_file:
-      - path: .env.gemma
-        required: false
+  llm-model-broker:
+    <<: *hardened
+    build: { context: ., dockerfile: llm_model_broker/Dockerfile }
+    environment:  # the provider settings and key reach this container only
+      GEMMA_BASE_URL: ${GEMMA_BASE_URL:-}
+      GEMMA_MODEL_NAME: ${GEMMA_MODEL_NAME:-}
+      GEMMA_CHAT_ENDPOINT: ${GEMMA_CHAT_ENDPOINT:-}
+      GEMMA_API_KEY: ${GEMMA_API_KEY:-}
+      GEMMA_PROVIDER: ${GEMMA_PROVIDER:-}
+      GEMMA_CONNECT_TIMEOUT_SEC: ${GEMMA_CONNECT_TIMEOUT_SEC:-}
+      GEMMA_READ_TIMEOUT_SEC: ${GEMMA_READ_TIMEOUT_SEC:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"  # a local upstream (Ollama, LM Studio) on the host, also on Linux engines
-    init: true
-    restart: unless-stopped
+    networks: [internal, edge]  # the narrator reaches it inside; it reaches the provider outside
 
-  sig:
-    build:
-      context: .
-      target: runtime
-    depends_on:  # both are optional to the backend: the mirror syncs on the next commit, answers fall back without an LLM
-      neo4j:
-        condition: service_started
-      llm:
-        condition: service_started
+  insight-graph:
+    <<: *hardened
+    build: { context: ., dockerfile: insight_graph_service/Dockerfile, target: runtime }
+    image: sig/insight-graph:local
+    env_file:  # the analysis tunables (it reads many; the narrator gets an allow-list)
+      - path: .env
+        required: false
     environment:
-      LLM_BASE_URL: http://llm:8080/v1
+      <<: *no-provider
       NEO4J_ENABLED: "true"
       NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${SIG_NEO4J_PASSWORD:-sig-local-password}
       NEO4J_DATABASE: neo4j  # Community Edition serves one user database
+      WEB_HOST: 0.0.0.0  # the container's own address and port, whatever a host .env says
+      WEB_PORT: "8000"
+      WORKSPACE_DIR: /data/workspace
+      MODEL_DIR: /app/models
+      EMBEDDING_DEVICE: cpu
     volumes:
-      - ./models:/app/models:ro
       - sig-workspace:/data
-    ports:
-      - "127.0.0.1:${SIG_WEB_PORT:-8765}:8765"
-    init: true
+      - sig-models:/app/models:ro
+    depends_on:
+      model-init: { condition: service_completed_successfully }
+      neo4j: { condition: service_healthy }
+    networks: [internal]
     stop_grace_period: 60s  # a running batch gets time to finish; one cut short is rolled back at the next start
-    restart: unless-stopped
+
+  evidence-narrator:
+    <<: *hardened
+    build: { context: ., dockerfile: evidence_narrator_service/Dockerfile }
+    environment:  # an allow-list, no env_file: nothing else from .env (no key) reaches the chat; "" keeps the default
+      INSIGHT_GRAPH_URL: http://insight-graph:8000
+      INSIGHT_GRAPH_TIMEOUT_S: ${INSIGHT_GRAPH_TIMEOUT_S:-}
+      LLM_BASE_URL: http://llm-model-broker:8080/v1
+      LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-}
+    depends_on:
+      insight-graph: { condition: service_healthy }
+      llm-model-broker: { condition: service_healthy }
+    networks: [internal]
+
+  sig-web-console:
+    <<: *hardened
+    build: { context: ., dockerfile: sig_web_console/Dockerfile }
+    ports:
+      - "127.0.0.1:${SIG_WEB_PORT:-8765}:8080"
+    depends_on:
+      insight-graph: { condition: service_healthy }
+      evidence-narrator: { condition: service_healthy }
+    networks: [internal, edge]
+
+networks:
+  internal:
+    internal: true  # no egress
+  edge: {}  # published ports and the way out
 
 volumes:
   neo4j-data:
   sig-workspace:
+  sig-models:

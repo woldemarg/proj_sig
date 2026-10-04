@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from pathlib import Path
 
 import pytest
-from conftest import FakeLLM, make_config
+from conftest import make_config, make_engine
 
-from ltir import engine as engine_mod
-from ltir.analysis.graph import DualGraph
-from ltir.engine import Engine
-from ltir.storage.neo4j_mirror import (
+from graph_query_engine.graph import DualGraph
+from insight_graph_service.core import engine as engine_mod
+from insight_graph_service.core.neo4j_mirror import (
     EDGE_ENDPOINTS,
     LABELS,
     edge_query,
@@ -26,7 +24,7 @@ from ltir.storage.neo4j_mirror import (
 
 @pytest.fixture
 def engine(tmp_path):
-    return Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
+    return make_engine(make_config(tmp_path / "ws"))
 
 
 def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
@@ -46,13 +44,13 @@ def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
         assert (ws.root / rel).is_file(), rel
 
     # reload from disk in a fresh engine -> identical graph; rebuild reproduces it
-    again = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
+    again = make_engine(make_config(tmp_path / "ws"))
 
     def ids(snap):
         return sorted(n["id"] for n in snap["nodes"]), sorted(e["id"] for e in snap["edges"])
 
     assert ids(again.graph().snapshot) == ids(engine.graph().snapshot)
-    assert ids(again.rebuild_graph()) == ids(engine.graph().snapshot)
+    assert ids(again._derive(again.ontology())[0]) == ids(engine.graph().snapshot)
     assert again.ontology().store.next_chunk_id == n
 
     # idempotent re-ingestion of identical content
@@ -75,14 +73,14 @@ def test_graph_consistency(hashed_engine):
     activated = {e["source"] for e in g.edges if e["type"] == "ACTIVATES"}
     assert activated == {nid for nid, k in kinds.items() if k == "Pattern"}
     # one predicate for coverage and retrieval: a membership below the ontology's floor is weak (not walked)
-    floor = hashed_engine.config.min_activation_alignment
+    floor = hashed_engine.settings.topology.min_activation_alignment
     assert all(e["props"]["weak"] or e["weight"] >= floor for e in g.edges if e["type"] == "ACTIVATES")
     assert {e["target"] for e in g.edges if e["type"] == "ACTIVATES"} == {nid for nid, k in kinds.items() if k == "Attractor"}
     spec = {(e["source"], e["target"]) for e in g.edges if e["type"] == "SPECIALIZES"}
     gen = {(e["target"], e["source"]) for e in g.edges if e["type"] == "GENERALIZES"}
     assert spec == gen and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
     # mutual k-NN keeps the latent plane sparse
-    assert counts["RELATED_TO"] <= hashed_engine.config.related_to_peer_count * len(g.of_kind("Attractor")) / 2
+    assert counts["RELATED_TO"] <= hashed_engine.settings.topology.related_to_peer_count * len(g.of_kind("Attractor")) / 2
     # Pattern nodes are the journal record, rehydrated as Insight (one weight, one condition shape).
     journal = {r["id"]: r for r in hashed_engine.ws.patterns()}
     assert set(g.insights) == set(journal)
@@ -128,7 +126,7 @@ def test_committed_batch_stays_ready_when_publish_save_fails(engine, demo_csv, m
 
 def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     assert engine.ingest_file(demo_csv)["status"] == "READY"
-    other = Engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0)), llm=FakeLLM())
+    other = make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0)))
     csv2 = tmp_path / "copy.csv"
     csv2.write_text(demo_csv.read_text().replace("\n", "\n", 1) + "\n")  # different bytes -> new dataset id
     rec = other.ingest_file(csv2)
@@ -147,7 +145,7 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch)
         engine.ingest_file(demo_csv)
     monkeypatch.undo()
     assert engine.ws.patterns() and engine.ws.pending_path.exists()  # half written
-    fresh = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
+    fresh = make_engine(make_config(tmp_path / "ws"))
     (after,) = fresh.ws.list_batches()
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists() and fresh.ontology().store.is_empty
@@ -164,7 +162,7 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_p
     monkeypatch.undo()
     assert engine.ws.pending_path.exists() and engine.ws.patterns()  # the evidence stays
     assert engine.ingest_file(demo_csv)["error"]["code"] == "rollback_pending"
-    fresh = Engine(make_config(tmp_path / "ws"), llm=FakeLLM())
+    fresh = make_engine(make_config(tmp_path / "ws"))
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists()
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
@@ -177,7 +175,7 @@ def test_records_survive_a_concurrent_reader(tmp_path):
     import threading
     import time
 
-    from ltir.storage.workspace import atomic_write_json, read_json
+    from insight_graph_service.core.workspace import atomic_write_json, read_json
 
     target = tmp_path / "B-test.json"
     atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
@@ -240,7 +238,7 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     """Deleting a dataset removes its patterns, vectors, memberships and artefacts; an anchor survives
     only with a remaining member or a RELATED_TO link; the journal, state and snapshot stay consistent."""
     cfg = make_config(tmp_path / "ws")
-    engine = Engine(cfg, llm=FakeLLM())
+    engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     other = tmp_path / "other.csv"  # same rows, other column names: its own metrics, dimensions and anchors
     demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
@@ -252,13 +250,11 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
     anchors_before = {n["id"] for n in g.of_kind("Attractor")}
     assert any(t.startswith("x_") for t in engine.prepared().catalog.texts)  # the literal cache now holds both datasets' literals
-    engine.ws.sphere_path.write_text("a page that shows the dataset", encoding="utf-8")
 
     out = engine.delete_dataset(ds)
     catalog = engine.prepared().catalog  # the first question after the deletion rewrites the cache
     cached = engine.ws.load_literals(engine.encoder.spec.fingerprint)
     assert set(cached) == set(catalog.texts) and not any(t.startswith("x_") for t in cached)  # its literals are gone
-    assert not engine.ws.sphere_path.exists()
     assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]
     g = engine.graph()
     assert all(n["props"]["dataset_id"] != ds for n in g.of_kind("Pattern"))
@@ -275,8 +271,8 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     assert engine.ontology().store.next_chunk_id == len(rows) and set(engine.frame().patterns) == {r["id"] for r in rows}
     assert all(a["row_id"] < len(rows) for a in engine.ws.activations())
     ids = {(n["id"], n["kind"]) for n in g.nodes.values()}
-    assert {(n["id"], n["kind"]) for n in DualGraph(engine.rebuild_graph()).nodes.values()} == ids
-    assert engine.ask("Why is margin lower for phones in the US?", use_llm=False).evidence["items"]
+    assert {(n["id"], n["kind"]) for n in DualGraph(engine._derive(engine.ontology())[0]).nodes.values()} == ids
+    assert engine.evidence("Why is margin lower for phones in the US?").view["evidence"]["items"]
     assert engine.ingest_file(other)["status"] == "READY"  # not a duplicate any more
     # deleting the last dataset empties the knowledge base, and ingestion starts over cleanly
     for b in {b["dataset_id"] for b in engine.ws.list_batches()}:
@@ -289,7 +285,7 @@ def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo
     """The READY record is the commit marker. If writing it fails (a Windows sharing violation that outlasts
     the retry), the batch rolls back completely: journal, state and the snapshot it had already written."""
     cfg = make_config(tmp_path / "ws")
-    engine = Engine(cfg, llm=FakeLLM())
+    engine = make_engine(cfg)
     save = engine.ws.save_batch
 
     def flaky(record):
@@ -308,7 +304,7 @@ def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo
     monkeypatch.setattr(engine.ws, "save_batch", flaky)
     assert engine.ingest_file(other)["status"] == "FAILED"
     assert {n["id"] for n in engine.ws.load_graph()["nodes"]} == before  # the previous snapshot is back
-    fresh = Engine(cfg, llm=FakeLLM(), recover=False)
+    fresh = make_engine(cfg, recover=False)
     assert set(fresh.frame().patterns) == {n["id"] for n in fresh.graph().of_kind("Pattern")}
 
 
@@ -316,7 +312,7 @@ def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypa
     """Deletion is all or nothing: an error rolls it back at once; a crash leaves its marker, and the next
     writer start rolls it back — journal, ontology, snapshot, batch records and dataset folder alike."""
     cfg = make_config(tmp_path / "ws")
-    engine = Engine(cfg, llm=FakeLLM())
+    engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     other = tmp_path / "other.csv"
     demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
@@ -343,32 +339,32 @@ def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypa
         monkeypatch.undo()
         if isinstance(failure, Crash):
             assert engine.ws.pending_path.exists() and state() != before  # half done, marker left
-            Engine(cfg, llm=FakeLLM())  # the next writer start
+            make_engine(cfg)  # the next writer start
         assert state() == before and not engine.ws.pending_path.exists()
     assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
 
 
 def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
-    """One writer per workspace: a CLI writer started while the web app holds the lock is refused
-    and leaves the web app's queued upload alone; readers stay allowed."""
+    """One writer per workspace: a second writer started while the service holds the lock is refused
+    and leaves the service's queued upload alone; readers stay allowed."""
     import os
     import subprocess
     import sys
 
-    from ltir.config import PROJECT_ROOT
-    from ltir.storage.workspace import WorkspaceBusy
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from insight_graph_service.core.workspace import WorkspaceBusy
 
     cfg = make_config(tmp_path / "ws")
-    queued = Engine(cfg, llm=FakeLLM(), recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
+    queued = make_engine(cfg, recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
     holder = subprocess.Popen(  # the web app: another process holding the writer lock
         [
             sys.executable,
             "-c",
-            "import sys; from ltir.storage.workspace import acquire_writer_lock; acquire_writer_lock(sys.argv[1]); print('locked', flush=True); sys.stdin.read()",
+            "import sys; from insight_graph_service.core.workspace import acquire_writer_lock; acquire_writer_lock(sys.argv[1]); print('locked', flush=True); sys.stdin.read()",
             str(cfg.workspace_dir),
         ],
         cwd=PROJECT_ROOT,
-        env={**os.environ, "LTIR_NO_DOTENV": "1"},
+        env=os.environ,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -376,34 +372,83 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     try:
         assert holder.stdout.readline().strip() == "locked"
         with pytest.raises(WorkspaceBusy, match="in use by another writer process"):
-            Engine(cfg, llm=FakeLLM())
-        reader = Engine(cfg, llm=FakeLLM(), recover=False)
+            make_engine(cfg)
+        reader = make_engine(cfg, recover=False)
         assert reader.ws.load_batch(queued["batch_id"])["status"] == "UPLOADED"
     finally:
         holder.stdin.close()
         holder.wait(timeout=30)
     # the holder is gone: the next writer gets the lock and recovers the orphaned upload
-    Engine(cfg, llm=FakeLLM())
-    assert Engine(cfg, llm=FakeLLM(), recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
+    make_engine(cfg)
+    assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
 
 
-def test_migrate_rebuilds_an_outdated_workspace(tmp_path, demo_csv):
-    from ltir.migrate import migrate_workspace
-    from ltir.storage.workspace import RepresentationMismatch, atomic_write_json
+def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo_csv):
+    """Journals of another canonical version cannot be served: the engine starts on the empty state with the
+    reason, refuses writes and questions, never touches the Neo4j mirror, and a reset makes it usable again."""
+    from insight_graph_service.core.workspace import atomic_write_json
 
     cfg = make_config(tmp_path / "ws")
-    old = Engine(cfg, llm=FakeLLM())
-    rec = old.ingest_file(demo_csv)
-    rep_path = old.ws.state_dir / "representation.json"
-    atomic_write_json(rep_path, {**old.ws.representation(), "canonical_version": "ltir-canon-0"})  # an older build
-    with pytest.raises(RepresentationMismatch):
-        old.rebuild_graph()
-    report = migrate_workspace(cfg)
-    assert [b["status"] for b in report["batches"]] == ["READY"] and report["batches"][0]["dataset_id"] == rec["dataset_id"]
-    fresh = Engine(cfg, llm=FakeLLM())
-    assert fresh.ws.representation()["canonical_version"] != "ltir-canon-0" and fresh.rebuild_graph()["stats"]["patterns"] > 0
-    backup = Path(report["backup"])
-    assert json.loads((backup / "state" / "representation.json").read_text(encoding="utf-8"))["canonical_version"] == "ltir-canon-0"
+    old = make_engine(cfg)
+    assert old.ingest_file(demo_csv)["status"] == "READY"
+    atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
+    engine = make_engine(cfg)
+    assert "ltir-canon-0" in engine.problem and not engine.graph().insights
+    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x")):
+        with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
+            write()
+        assert refused.value.code == "workspace_degraded"
+    published = []
+    engine.sync_neo4j = lambda snapshot=None: published.append(snapshot) or {"status": "ok"}
+    assert engine.startup_sync() == {"status": "skipped"} and published == []  # a degraded start never wipes the mirror
+    engine.reset()
+    assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
+    assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
+
+
+def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_csv, monkeypatch):
+    """A rollback that cannot finish leaves the queued uploads failed (no process runs them), so the reset that
+    recovers is never refused as busy."""
+    from insight_graph_service.core.workspace import Workspace
+
+    cfg = make_config(tmp_path / "ws")
+    queued = make_engine(cfg).submit(demo_csv)  # left UPLOADED by a process that died
+    monkeypatch.setattr(Workspace, "recover", lambda self: (_ for _ in ()).throw(OSError("disk gone")))
+    engine = make_engine(cfg)
+    assert "disk gone" in engine.problem and engine.startup_sync() == {"status": "skipped"}
+    assert engine.ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
+    with pytest.raises(engine_mod.PipelineError, match="workspace_degraded|POST /api/reset"):
+        engine.submit(demo_csv)
+    monkeypatch.undo()
+    engine.reset()
+    assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
+
+
+def test_an_unreadable_snapshot_starts_degraded(tmp_path, demo_csv):
+    cfg = make_config(tmp_path / "ws")
+    assert make_engine(cfg).ingest_file(demo_csv)["status"] == "READY"
+    (cfg.workspace_dir / "graph" / "snapshot.json").write_text("{not json", encoding="utf-8")
+    engine = make_engine(cfg)
+    assert engine.problem and not engine.graph().insights  # started: the reset stays reachable
+    engine.reset()
+    assert engine.problem is None and not list((tmp_path).glob("ws.deleting-*"))  # renamed aside, then deleted
+
+
+def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):
+    """The graph service's status mapping: 413 too large, 404 unknown dataset or batch, a column id with '/' resolves."""
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+
+    with TestClient(create_app(hashed_engine)) as client:
+        assert client.delete("/api/datasets/nope").json()["code"] == "unknown_dataset"
+        assert client.get("/api/batches/..%5Cregistry").status_code == 404
+        column = next(n["id"] for n in hashed_engine.graph().nodes.values() if n["kind"] == "Metric")
+        assert client.get(f"/api/nodes/{column}").status_code == 200
+    small = make_engine(make_config(tmp_path / "small", max_upload_mb=0))
+    with TestClient(create_app(small)) as client, open(demo_csv, "rb") as f:
+        refused = client.post("/api/upload", files={"file": ("demo.csv", f, "text/csv")})
+    assert refused.status_code == 413 and refused.json()["code"] == "file_too_large"
 
 
 def test_ingestion_failure_states(engine, tmp_path):
@@ -416,11 +461,11 @@ def test_ingestion_failure_states(engine, tmp_path):
 
 
 def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_path):
-    from ltir.analysis.ingestion import IngestionError, load_dataset
+    from subgroup_miner.ingestion import IngestionError, load_dataset
 
     table = tmp_path / "t.csv"
     table.write_text("group,value\n" + "".join(f"{'ab'[i % 2]},{i}.5\n" for i in range(60)))
-    cfg = make_config(tmp_path / "ws", categorical_columns="Store", bin_columns="price:4")
+    cfg = make_config(tmp_path / "ws", categorical_columns="Store", bin_columns="price:4").miner
     loaded = load_dataset(table, cfg)  # workspace defaults: absent columns are skipped with a warning
     assert loaded.categories == [] and loaded.bins == {}
     assert any("Store" in w and "price" in w for w in loaded.warnings)
@@ -458,7 +503,7 @@ class _Driver:
 def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     snap = hashed_engine.ws.load_graph()
     driver = _Driver()
-    out = publish_snapshot(snap, hashed_engine.config, driver=driver)
+    out = publish_snapshot(snap, hashed_engine.settings, driver=driver)
     queries = [q for q, _ in driver.log]
     assert any("CREATE CONSTRAINT pattern_id_unique" in q for q in queries)
     assert all("CREATE (" not in q for q in queries)  # idempotent: MERGE only
@@ -473,7 +518,7 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     assert {q for q in stale if q.endswith("DELETE r")} == {stale_edge_query(t) for t in EDGE_ENDPOINTS}
     # an empty snapshot (a reset) clears the mirror
     empty = _Driver()
-    publish_snapshot({"nodes": [], "edges": []}, hashed_engine.config, driver=empty)
+    publish_snapshot({"nodes": [], "edges": []}, hashed_engine.settings, driver=empty)
     assert all(p["ids"] == [] for q, p in empty.log if "DETACH DELETE" in q)
     flat = flatten_props({"a": 1, "b": [1, 2], "c": {"x": 1}, "d": None, "e": [{"k": 1}]})
     assert flat == {

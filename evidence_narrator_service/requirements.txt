@@ -1,0 +1,4 @@
+# The narrator: an HTTP service and two HTTP clients (the graph service, the LLM). Exact versions: constraints.txt.
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27

@@ -1,6 +1,8 @@
-# Tests + quality gate (scripts/check.py) on top of the runtime (which also covers llm_gateway/requirements.txt).
-# Pinned: a new linter or test-runner release must not change the gate's verdict on unchanged code.
--r requirements.txt
+# Host development and the quality gate (scripts/check.py): every service's runtime, plus the test tools.
+# Pinned tools: a new linter or test-runner release must not change the gate's verdict on unchanged code.
+-r insight_graph_service/requirements.txt
+-r evidence_narrator_service/requirements.txt
+-r llm_model_broker/requirements.txt
 pytest==9.1.1
 ruff==0.16.9
-playwright==1.63.0     # optional: browser smoke test (uses an installed Chromium)
+playwright==1.63.0     # optional: the browser smoke test (uses an installed Chromium)

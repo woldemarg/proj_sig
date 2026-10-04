@@ -4,10 +4,10 @@ __pycache__/
 .env
 .env.*
 !.env.sample
-!.env.gemma.sample
 workspace/
 workspace.bak-*/
 workspace.migrating/
+workspace.deleting-*/
 *.writer.lock
 .pytest_tmp/
 .pytest_cache/

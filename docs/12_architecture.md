@@ -1,70 +1,111 @@
-# 12. Architecture — layers, services and reuse
+# 12. Architecture — bounded contexts and services
 
-> **In one paragraph.** SIG is one Python package, `ltir`, cut into layers by responsibility, and two more processes beside it. The *analytical core* — `analysis` (a table becomes validated insights, vectors, latent anchors and the dual graph), `retrieval` (a question becomes seeds, transversal paths and an evidence object) and `storage` (the file workspace and the Neo4j mirror) — imports no presentation, chat or LLM code. The `Engine` orchestrates the core over one workspace; `answering` turns a search into a chat answer through `llm_client`; `web` serves the API, the chat endpoint and the UI. The LLM itself sits behind a separate gateway service, and Neo4j runs as its own container. Every cross-layer import is in one table, and a test enforces it.
+> **In one paragraph.** SIG has four libraries and four services of its own, plus Neo4j.
+>
+> **The libraries:**
+> - **`insight_contracts`**, the shared kernel. It holds the insight, the graph vocabulary, the text an insight reads as, and the evidence payload, all in the standard library only.
+> - **`subgroup_miner`** turns a table into validated, weighted insights.
+> - **`attractor_topology`** turns insights into vectors and a living set of latent attractors.
+> - **`graph_query_engine`** turns a question over a compiled graph into evidence.
+>
+> Each library imports only the kernel, so each can be lifted into another project.
+>
+> **The services:**
+> - **`insight_graph_service`** composes the three libraries over one workspace. It owns the batch lifecycle, the dual graph and the Neo4j mirror, and serves the evidence for a question.
+> - **`evidence_narrator_service`** turns that evidence into a checked answer through the LLM.
+> - **`llm_model_broker`** holds the upstream model and its key.
+> - **`sig_web_console`** serves the UI and is the single origin for both APIs.
+>
+> Compose starts them in dependency order, and a test enforces every allowed import.
 
-**Code** `ltir/` (every package below), `llm_gateway/`, `Dockerfile`, `llm_gateway/Dockerfile`, `compose.yaml`, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_llm_gateway.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md)
+**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md)
 
 ---
 
-## 12.1 Layers and responsibilities
+## 12.1 Bounded contexts
 
-| Layer | Path | Responsibility | Owning chapter |
+| Package | Context | Owns | Owning chapter |
 |---|---|---|---|
-| shared contracts | `ltir/config.py`, `ltir/models.py`, `ltir/fileio.py` | every tunable; typed records (`Insight`, `CanonicalInsight`, `EmbeddingSpec`, `LatentFrame`, graph ids and edge types, version strings, `utc_now`); atomic file replacement | [9.3](09_operations.md#93-configuration), [3](03_insights.md), [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
-| vendored engines | `ltir/engines/` | the EDA engine and the lac ontology, as copied and repaired (`PROVENANCE.md`) | [2](02_discovery.md), [5](05_latent_anchors.md) |
-| analytical core | `ltir/analysis/` | `ingestion` (read, validate, bands), `discovery` (profiling, EDA, insight records), `quality` (selection, evidence weight), `canonical` (text contract), `encoder` (embedders, tripartite vectors), `ontology` (latent anchors; keeps lac's state in the directory it is given), `structural` (lattice edges), `graph` (snapshot construction from data, the read index `DualGraph`) | [2](02_discovery.md)–[6](06_graph_and_storage.md) |
-| retrieval | `ltir/retrieval/` | `question` (parse, literal grounding), `seeds` (seed scoring), `traversal` (the transversal walk), `evidence` (the evidence object and its prompt text), `search` (one question end to end over a `CommittedState`, with baselines and highlight groups) | [7](07_question_answering.md) |
-| storage | `ltir/storage/` | `workspace` (the layout below the workspace root and every file in it: journals, state, registry, artefacts, uploads, caches; transactions, recovery, the writer lock), `neo4j_mirror` + `cypher/` | [6](06_graph_and_storage.md) |
-| application | `ltir/engine.py`, `ltir/migrate.py` | `Engine`: the batch lifecycle, deletion, the committed read state, `search` and `ask`; workspace migration | [9](09_operations.md), [6.5](06_graph_and_storage.md#65-versions-and-migration) |
-| chat | `ltir/answering.py`, `ltir/llm_client.py` | the system prompt, the LLM-or-summary answer, the citation check; the OpenAI-compatible client and its `ChatModel` contract | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) |
-| presentation | `ltir/web/` (`app.py`, `web/sphere.py`, `static/`), `ltir/cli.py` | the HTTP API with the chat endpoint, the single-page UI, the 3D sphere; the command line | [8](08_interface.md), [9.2](09_operations.md#92-command-line) |
-| evaluation | `ltir/evaluation/` | `synthetic` (the demo dataset with planted phenomena), `experiment` (the hypothesis experiment) | [10](10_verification.md) |
-| LLM service | `llm_gateway/` | one OpenAI-compatible endpoint in front of the upstream model; owns the provider, the model, its key and the provider routing | [12.4](#124-the-llm-service) |
+| `insight_contracts/` | shared kernel (standard library only) | `insight` (`Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `PhenomenonThresholds`), `graph` (edge types and planes, node ids, `SNAPSHOT_VERSION` and the snapshot schema), `text` (how an insight reads: scope, shift, correlation and validation phrases), `payload` (`EvidencePayload`) | [3](03_insights.md), [6.2](06_graph_and_storage.md#62-the-graph-schema) |
+| `subgroup_miner/` | subgroup and phenomenon discovery | `ingestion` (read, validate, bands), `discovery` (profiling, closed intents, pruning, bootstrap validation, insight records), `selection` (validity rules R1–R3, evidence weight), `lattice` (SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS), `describe` (insights as LLM context), `vendor/eda/` | [2](02_discovery.md), [3](03_insights.md) |
+| `attractor_topology/` | representation and the living attractor space | `canonical` (the embedding inputs), `encoder` (Qwen3-Embedding-0.6B, tripartite vectors), `ontology` (OMP extraction, EMA centroids, mutual-kNN links, ACTIVATES records; its state in the folder it is given), `models` (`CanonicalInsight`, `EmbeddingSpec`, versions), `vendor/lac/` | [4](04_representation.md), [5](05_latent_anchors.md) |
+| `graph_query_engine/` | grounding, seeds, transversal search, evidence | `graph` (`DualGraph`, the read model of a snapshot; `LatentFrame`), `question` (parse, literal catalog, grounding), `seeds`, `traversal`, `evidence` (the prompt and the deterministic summary), `search` (one question over a `CommittedState`; `SearchResult.payload()`), `ports` (the embedder shape it needs) | [7](07_question_answering.md) |
+| `insight_graph_service/` | the aggregate root: graph lifecycle and persistence | `core/` has no web framework: `settings` (one environment for every package), `engine` (batches, admission, deletion, reset, the committed read state, `evidence`), `batch` (admission R4/R7, journal records, metrics), `snapshot` (the dual-graph compiler), `workspace` + `chunk_journal` + `fileio` (the file workspace), `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/` holds `app` (the HTTP API) and `views` (graph, node and sphere JSON) | [6](06_graph_and_storage.md), [9](09_operations.md) |
+| `evidence_narrator_service/` | grounded verbalisation | `narration` (the system prompt, the LLM-or-summary answer, the citation check, the footer), `llm_client` (OpenAI-compatible), `settings`, `app` | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) |
+| `llm_model_broker/` | the upstream model | one OpenAI-compatible endpoint; the provider, the model, its key and the provider routing | [12.4](#124-services-and-contracts) |
+| `sig_web_console/` | presentation and ingress | the static UI (graph, sphere, table, chat), vendored Cytoscape.js and plotly.js (`PROVENANCE.md`), `nginx.conf` | [8](08_interface.md) |
+
+**Thresholds shared by three packages.** The miner, the topology and the query engine must agree on what makes a measurement part of a phenomenon. `PhenomenonThresholds` (`MIN_EMM_SCORE`, `WEIGHT_EMM_REF`, `MIN_COMPONENT_Z`) carries those values, together with the predicates that use them. The service's `load_settings` builds one instance and hands it to every package config. `Settings` refuses three that differ.
 
 ## 12.2 Dependency direction
 
 ```text
-cli -> web, migrate, evaluation, engine, storage, llm_client        the entry point: one command per layer
-web -> engine, evaluation (the demo data), storage (its errors), analysis (labels)
-migrate -> engine, storage            evaluation -> engine, retrieval
-engine -> answering, llm_client, retrieval, analysis, storage
-answering -> retrieval, llm_client    retrieval -> analysis
-analysis -> engines                   storage -> engines, fileio            engines -> fileio
-every layer -> config, models;        llm_gateway -> nothing from ltir
+insight_contracts                       <- every package below (standard library only)
+subgroup_miner, attractor_topology, graph_query_engine  -> insight_contracts only
+insight_graph_service.core              -> the three libraries; no web or HTTP framework; only neo4j_mirror imports the driver
+insight_graph_service.server            -> core (+ attractor_topology, graph_query_engine for types)
+evidence_narrator_service               -> insight_contracts; reaches the graph service and the broker over HTTP
+llm_model_broker                        -> nothing from the repository
 ```
 
-This is the whole set of cross-layer imports, and each points down the stack; `tests/test_architecture.py` holds the same table, resolves relative imports and `from ltir import x`, and fails on any import outside it. The core (`analysis`, `retrieval`, `storage`, plus `config`, `models`, `fileio`, `engines`) imports none of `fastapi`, `uvicorn`, `starlette`, `plotly` or `httpx`, and only `storage/neo4j_mirror.py` imports the Neo4j driver. Graph construction reads no files: `Engine` gathers the journal records, activations, vectors and batch records (each READY one carries its dataset's profile) and passes them to `graph.build_snapshot`. Retrieval reads no files either: `search.search` works on a `CommittedState` — the `DualGraph`, the `LatentFrame` and the literal catalog of one commit.
+`tests/test_architecture.py` holds this table with each package's allowed third-party modules. It resolves relative imports and fails on any import outside it.
 
-## 12.3 Reusing the analytical core
+## 12.3 Using a library on its own
 
-Everything a project needs to turn its tables into a queryable insight graph is `ltir/` without `web/`, `cli.py` and `evaluation/`: the core, `engine.py`, `answering.py` and `llm_client.py` (the engine composes the answer; the client makes a request only when an answer asks the LLM). The runtime dependencies are `requirements.txt` minus FastAPI, uvicorn, python-multipart and plotly (httpx stays, for the client).
+| Use | Library | Example |
+|---|---|---|
+| statistical context for an LLM prompt from a table | `subgroup_miner` | `subgroup_miner/README.md`: `load_dataset` → `run_discovery` → `build_insights` → `select_insights` → `describe` |
+| vectors and latent anchors for insights from any source | `attractor_topology` | `attractor_topology/README.md`: `canonicalize` → `InsightEncoder.encode` → `LatentOntology.ingest` |
+| evidence for a question over a compiled graph | `graph_query_engine` | `graph_query_engine/README.md`: `search(question, CommittedState(...), encoder, QueryConfig())` → `payload()` |
 
-The package is not installed with pip: another project puts the repository root on its `PYTHONPATH` (or vendors `ltir/`), keeps the embedding model where `MODEL_DIR` points (default `<repo>/models`, filled by `scripts/download_model.py`), and gives absolute paths in `load_config(...)` overrides — overrides are taken as given, while paths from the environment resolve against the repository root ([9.3](09_operations.md#93-configuration)).
+The libraries are folders, not pip packages. Another project copies a folder, or puts the repository root on its `PYTHONPATH`, together with `insight_contracts/`, and installs the folder's `requirements.txt`. The service's `requirements.txt` includes the three library files, so each dependency is listed once.
 
-```python
-from ltir.config import load_config
-from ltir.engine import Engine
+## 12.4 Services and contracts
 
-engine = Engine(load_config(workspace_dir="/data/kb", embedding_backend="sentence-transformers"))
-engine.ingest_file("sales.csv", bins="price:4")               # READY / FAILED / SKIPPED record
-found = engine.search("Why is margin lower for phones in the US?")
-found.evidence.items          # typed evidence: scope, shifts, statistics, the path that reached each item
-found.evidence.to_prompt()    # the same evidence as LLM-ready text (docs/07_question_answering.md §7.4)
-found.highlight()             # the node and edge ids it touched
-engine.ask("...", use_llm=True)                                # + the LLM answer and the citation check
-```
+| Service | Routes |
+|---|---|
+| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `GET /api/graph`, `GET /api/nodes/{id}`, `GET /api/sphere` (projected points and edges, JSON), `DELETE /api/datasets/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question) |
+| narrator (`python -m evidence_narrator_service`) | `POST /api/chat/query` (`{question, use_llm}` → the answer), `GET /api/chat/health` (always 200: the LLM and the graph service) |
+| broker (`python -m llm_model_broker`) | `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` |
 
-The pieces work without the engine as well: `ingestion.load_dataset` → `discovery.run_discovery` → `discovery.build_insights` → `quality.select_insights` → `canonical.canonicalize` → `InsightEncoder.encode` give scored, encoded insights for one table; `graph.build_snapshot` builds the dual graph from data; `search.search` answers a question over any `CommittedState`.
+**`EvidencePayload`** (`insight_contracts/payload.py`) is the whole contract between the graph service and the narrator:
+- `question`.
+- `graph_empty`: `true` while the graph holds no insight (an ordinary state).
+- `evidence_prompt`: the LLM-ready evidence.
+- `evidence_summary`: the deterministic, cited observation lines, which the narrator frames as the answer when no LLM answers.
+- `citations`: the citation manifest, each `P#` → `{pattern_id, expression, dataset_id, filename, batch_id}`.
+- `view`: what the console draws: `evidence` (the cards, with `parsed`: targets, direction, conditions, grounding), `traversal` (with the baselines) and `highlight` (node and edge ids per group: `seeds`, `traversed`, `anchors`, `evidence`, `edges`, `transversal_only`).
+- `metrics`: `retrieval_s`, `seed_count`, `traversal_depth`, `visited_states`, `retrieved_evidence`, `anchors_visited`.
 
-## 12.4 The LLM service
+The narrator reads the prompt, the summary, the citation manifest and the metrics. Its answer, `QAResult`, carries `view` untouched for the console:
+- `question`, `answer`, `answer_mode` (`llm`, `fallback` or `empty`).
+- `llm`: `{model, ok, latency_s, error[, usage]}`.
+- `citations`: `{cited [{key, pattern_id}], unknown, uncited, grounded}`.
+- `prompt`: the evidence prompt the model is shown.
+- `view`: the payload's `view` as received.
+- `metrics`: the payload's metrics plus `total_s`, `llm_latency_s` and `prompt_chars`.
+- `provenance_footer`.
 
-`llm_gateway/` is a separate deployable with its own image and requirements (FastAPI, uvicorn, httpx). It serves:
+A missing field fails `EvidencePayload.from_dict`, and the narrator answers 502: a broken contract is an error, not a silent default.
 
-* `GET /health` — liveness, always 200, with `status` `ok` or `unconfigured`, the model and the upstream host;
-* `GET /v1/models` — the one configured model (none while unconfigured);
-* `POST /v1/chat/completions` — OpenAI-compatible: the request's `model` is replaced by the configured model, every other field (`temperature`, `max_tokens`, `top_p`, `stop`, `response_format`, …) is forwarded as sent, `stream: true` and a malformed body are refused (400, not FastAPI's 422). It adds the bearer key and — for OpenRouter — the pinned provider order without fallbacks, and returns the upstream response unchanged. An upstream client error keeps its status and `Retry-After` (a 429 stays a 429), an upstream server error becomes 502, a timeout 504, missing settings 503; error bodies have the OpenAI shape `{"error": {"message", "type"}}`.
+**Status semantics:**
+- **An empty graph is an ordinary state.** `/api/search` answers 200 with `graph_empty: true`, and the narrator answers 200 with `answer_mode: "empty"`.
+- **A workspace that cannot answer** gets 409 with `{detail, code}`; `code` is `representation_mismatch` or `workspace_degraded`. The narrator passes it through as sent.
+- **Every refusal of the graph service** ([9.4](09_operations.md#94-error-codes)) has the body `{detail, code}`: 413 for `file_too_large`, 404 for `unknown_dataset`, 409 for every other code (`busy`, `workspace_degraded`, `representation_mismatch`, `rollback_pending`, …). An unexpected error answers 500 with `code: internal_error`.
+- **An unreachable graph service**, any other status from it, or a payload that breaks the contract gives a 502 from the narrator.
 
-| Setting | Default | Meaning |
+**The broker** replaces the request's `model` with the configured one. Every other field (`temperature`, `max_tokens`, `top_p`, `stop`, `response_format`, …) is forwarded as sent. `stream: true` and a malformed body are refused with a 400, not FastAPI's 422. The broker adds the bearer key and, for OpenRouter, the pinned provider order without fallbacks. Error statuses:
+
+| Situation | Status |
+|---|---|
+| Upstream client error | kept as sent, with `Retry-After` (a 429 stays a 429) |
+| Upstream server error | 502 |
+| Timeout | 504 |
+| Missing settings | 503 |
+
+Error bodies have the OpenAI shape `{"error": {"message", "type"}}`.
+
+| Broker setting | Default | Meaning |
 |---|---|---|
 | `GEMMA_BASE_URL` | — (required) | upstream base URL, e.g. `https://openrouter.ai/api/v1`, or a local Ollama / LM Studio |
 | `GEMMA_MODEL_NAME` | — (required) | upstream model id |
@@ -72,33 +113,81 @@ The pieces work without the engine as well: `ingestion.load_dataset` → `discov
 | `GEMMA_API_KEY` | "" | bearer token for the upstream |
 | `GEMMA_PROVIDER` | "" | OpenRouter provider slugs, tried in order, no fallbacks |
 | `GEMMA_CONNECT_TIMEOUT_SEC`, `GEMMA_READ_TIMEOUT_SEC` | 5, 120 | upstream timeouts |
-| `GATEWAY_HOST`, `GATEWAY_PORT` | `127.0.0.1`, `8080` | where `python -m llm_gateway` listens (`0.0.0.0` in the image) |
+| `BROKER_HOST`, `BROKER_PORT` | `127.0.0.1`, `8080` | where `python -m llm_model_broker` listens (`0.0.0.0` in the image) |
 
-The settings live in `.env.gemma` in the repository root (template `.env.gemma.sample`): Compose passes the file to the `llm` service, and `python -m llm_gateway` reads it wherever it is started. The backend knows only `LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`, the gateway); with `LLM_MODEL` empty it uses the one model the endpoint lists. Replacing the model, the provider or the serving software therefore changes only the gateway's settings; pointing `LLM_BASE_URL` at another OpenAI-compatible endpoint replaces the gateway itself — any gateway that serves `POST /chat/completions`, with `LLM_MODEL` set to the route it expects when it lists no models. The backend never holds the provider key.
+The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or key. Changing the model or the provider therefore changes only the broker's settings. Only the broker reads the `GEMMA_*` settings, and the other services never hold the key: compose passes the broker the `GEMMA_*` values explicitly and keeps them from the other containers ([12.5](#125-containers-and-start-order)), and the other host entry points skip `GEMMA_*` lines when they read `.env`.
 
-## 12.5 Containers
+## 12.5 Containers and start order
 
-| Service | Image | Port (host) | State | Health check | Starts after |
-|---|---|---|---|---|---|
-| `sig` — the backend: API, chat endpoint, UI, analytical core | `Dockerfile` (target `runtime`): `python:3.12.15-slim`, CPU torch, `requirements.txt` pinned by `constraints.txt`, `ltir/` | `127.0.0.1:8765` (`SIG_WEB_PORT`) | volume `sig-workspace` at `/data` (`WORKSPACE_DIR=/data/workspace`); `./models` mounted read-only at `/app/models` | `GET /api/config` (the server listens only after the embedding model is warm) | `neo4j` and `llm` started |
-| `llm` — the LLM gateway | `llm_gateway/Dockerfile`: the same base and pins | none: the backend reaches `http://llm:8080` inside the stack | none; settings from `.env.gemma` | `GET /health` | — |
-| `neo4j` — the graph mirror | `neo4j:5.26.31-community` | browser `127.0.0.1:17474`, bolt `127.0.0.1:17687` (`SIG_NEO4J_HTTP_PORT`, `SIG_NEO4J_BOLT_PORT`) | volume `neo4j-data` | `cypher-shell RETURN 1` | — |
+| # | Service | Image | Waits for | Health | Networks | State |
+|---|---|---|---|---|---|---|
+| 1 | `model-init` | the graph service image | — | runs once, exits 0 | edge | volume `sig-models` (read-write); `./models` read-only as a seed |
+| 1 | `neo4j` | `neo4j:5.26.31-community` | — | `cypher-shell RETURN 1` | internal, edge (ports 17474 / 17687) | volume `neo4j-data` |
+| 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
+| 2 | `insight-graph` | `insight_graph_service/Dockerfile` (CPU torch) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
+| 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
+| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
-docker compose up -d --build                      # then http://127.0.0.1:8765
-docker compose stop sig && docker compose run --rm sig python -m ltir migrate --yes     # a command against the stack's workspace
+docker compose up -d --build --wait               # then http://127.0.0.1:8765
 python scripts/compose_check.py                   # verification: its own project, ports and volumes, beside your stack
 python scripts/compose_check.py --fresh --tests   # clean room: no build cache, pulled base images, the test suite inside the image
 ```
 
-Before the first start: the embedding model in `./models` (`python scripts/download_model.py`) and `.env.gemma`. `SIG_NEO4J_PASSWORD` (default `sig-local-password`, at least 8 characters) sets the mirror's password when its volume is created; the volume keeps it, so a later change needs `ALTER USER` in Neo4j or a new volume. The backend uses database `neo4j`, the one Community Edition serves. Neither Neo4j nor the gateway gates the backend's start: a batch that commits while Neo4j is still starting records the mirror as failed (a warning; the next commit or `neo4j-sync` catches up), and answers fall back to the evidence-only summary while the LLM is unavailable. The backend runs as an unprivileged user and holds the workspace's writer lock inside the volume (`/data/workspace.writer.lock`), so `migrate` can rename the workspace there; it runs under `init` and gets 60 s to stop, so a running batch can finish — one cut short is rolled back at the next start ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). The image computes embeddings on the CPU in the checkpoint's dtype; the representation fingerprint does not depend on the device ([4.6](04_representation.md#46-representation-identity-and-versions)). `constraints.txt` holds the exact package versions both images were verified with; the image's `test` target adds the test tools and runs the quality gate (`scripts/check.py`).
+**Networks.** `internal` has no egress. `edge` publishes ports and has egress: `model-init`, `neo4j`, the broker and the console sit on it; the graph service and the narrator are on `internal` only, with no egress.
 
-**Why three services and not more.** Each container has its own runtime and lifecycle: the backend needs the embedding model, the workspace and the Python data stack; the gateway needs only an HTTP stack and the provider's key, and is replaced when the model or the provider changes; Neo4j is a database with its own storage. The analytical core, retrieval and storage stay modules of the backend: they share the in-memory graph, the vectors and the embedding model, and a process boundary between them would copy that state for no independent scaling or deployment need.
+**Hardening.** Every image except Neo4j runs as an unprivileged user with a read-only root filesystem, a tmpfs at `/tmp`, `no-new-privileges` and no capabilities.
 
-**Chat stays in the backend.** The chat endpoint (`POST /api/query`) is a thin call to `Engine.ask`: retrieval needs the committed graph, the vectors and the embedding model in memory, and the answer needs the evidence it produced. A separate chat service would either load a second copy of the model (≈ 1.2 GB) or forward every question to the backend, and the UI's chat panel is static JavaScript served with the other views. The LLM call — the part with its own runtime, cost and provider — is already behind the gateway.
+**Settings.** The graph service reads `.env` (`env_file`). Its container values are overridden in `environment`: the workspace and model paths, `EMBEDDING_DEVICE=cpu`, the Neo4j address and password (`SIG_NEO4J_PASSWORD`), and blanks for the broker's `GEMMA_*` values and for `LLM_API_KEY`: the graph service reads no LLM key, so a key an `.env` file may still hold never reaches it. The narrator gets no `env_file`, only an allow-list (`INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S`, `LLM_BASE_URL`, `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`), so no key from `.env` reaches it either.
 
-**The UI stays in the backend.** It is three static files (HTML, CSS, JavaScript) with no build step, served by the same FastAPI app as the API it calls; the 3D sphere page is rendered on request by `web/sphere.py`.
+**The model.** `model-init` checks the pinned Qwen3 checkpoint file by file against `core/model_store.py`'s manifest (sizes and SHA-256 values, checked against the Hugging Face Hub):
+- A copy in the volume that verifies is kept.
+- Otherwise a verified seed from `./models` is copied.
+- Otherwise the pinned revision is downloaded.
+- Anything that does not verify stops the start.
 
-## 12.6 Observability
+Before torch loads, the graph service checks presence and sizes again and refuses to start with a message naming the step to run.
 
-Logging is the standard `logging` module: the modules that log use `logging.getLogger(__name__)` (`engine`, `storage.workspace`, `web.app`, `config`; the gateway's logger is `llm_gateway`), and the entry points configure it (`python -m ltir`, `python -m ltir.web`, `python -m llm_gateway`). The domain keeps its own records: the batch record (stage times, metrics, warnings, errors; [9.1](09_operations.md#91-the-batch-lifecycle)), the ontology's metrics CSV ([5](05_latent_anchors.md)), the query log `logs/queries.jsonl` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)), and the per-answer `metrics` of `QAResult` ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)). The gateway logs one line per completion (model, messages, prompt and completion tokens, latency), never the prompt itself. There is no tracing or metrics backend; the Docker health checks cover liveness.
+**Robustness.**
+- **Neo4j at start.** The graph service syncs Neo4j once at start, and never from an empty or degraded workspace.
+- **Stopping.** It gets 60 s to stop, so a running batch can finish; a batch cut short is rolled back at the next start ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)).
+- **Workers.** It runs one uvicorn worker, because the workspace has one writer.
+- **Health.** `/api/health` runs on the event loop, so it answers while a batch runs.
+
+**Memory and versions.** The graph service needs about 2.5 GB of RAM on CPU. `constraints.txt` holds the exact package versions the images were verified with.
+
+**Why these services.** Each one has its own runtime, state and reason to change:
+- **The graph service** holds the embedding model, the workspace and the in-memory graph. Retrieval needs all three, so search lives here, beside the topology it walks.
+- **The narrator** needs only HTTP and the answer rules. It changes with the prompt and the citation policy, and it scales or fails without touching the graph.
+- **The broker** holds the provider key and changes with the model or the provider.
+- **The console** is static files and an edge proxy.
+- **Neo4j** is a database with its own storage.
+
+## 12.6 Storage: files, no SQL database, no blob store
+
+The graph service is the only writer of its workspace volume. The workspace already gives what a database would:
+- atomic file replacement;
+- transactions with checkpoints and rollback;
+- recovery at start;
+- a writer lock ([6.3–6.4](06_graph_and_storage.md#63-the-workspace-on-disk)).
+
+Neo4j mirrors the graph for people and other applications. The narrator is stateless; its query log is one JSON line per answer on its log. Neither SQLite nor Postgres has a consumer. The limitation is explicit: one graph service replica and one worker.
+
+| When this becomes true | Add |
+|---|---|
+| chat history must persist (one narrator instance) | SQLite in the narrator |
+| a second graph replica, or several users' histories | Postgres for the registry and journal, object storage (S3 / MinIO) for uploads and vectors |
+
+## 12.7 Observability
+
+**Logging.** Logging is the standard `logging` module. Every module that logs uses `logging.getLogger(__name__)`, except the broker, which logs as `llm_model_broker`, and the narrator's query log (below); each service's entry point configures it.
+
+**The domain's own records:**
+- **The batch record:** stage times, metrics, warnings and errors ([9.1](09_operations.md#91-the-batch-lifecycle)).
+- **The ontology's metrics CSV** ([5](05_latent_anchors.md)).
+- **The narrator's query log:** logger `evidence_narrator_service.queries`, one JSON line with the time, the question, the mode, the metrics, the cited evidence (the manifest's pattern ids) and the citation check.
+- **Per-answer metrics:** the `metrics` of every answer.
+
+**The broker** logs one line per completion: model, messages, prompt and completion tokens, and latency. It never logs the prompt itself.
+
+**Liveness.** There is no tracing or metrics backend; the Docker health checks cover liveness.

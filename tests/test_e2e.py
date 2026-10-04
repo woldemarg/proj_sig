@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-from conftest import FakeLLM, make_config
+from conftest import FakeLLM, ask, make_config, make_engine
 
 QUESTION = "Why is margin lower for phones in the US?"
 EROSION_ANALOGUES = {
@@ -38,10 +36,11 @@ def _check_pipeline_record(engine):
 
 
 def _check_grounded_answer(engine):
-    qa = engine.ask(QUESTION)
+    llm = FakeLLM()
+    qa = ask(engine, QUESTION, llm)
     assert qa.answer_mode == "llm" and qa.citations["grounded"]
     assert qa.citations["cited"] and not qa.citations["unknown"]
-    items = qa.evidence["items"]
+    items = qa.view["evidence"]["items"]
     assert items[0]["role"] == "seed" and items[0]["scope"] == ["category=phones", "region=US"]
     for it in items:  # provenance down to dataset, batch, pattern, statistics and graph path
         assert it["provenance"]["dataset_id"] and it["provenance"]["batch_id"] and it["provenance"]["expression"]
@@ -52,10 +51,10 @@ def _check_grounded_answer(engine):
         assert [s["edge_type"] for s in it["path"]][:1] == ["ACTIVATES"]
         assert any(s["target"].startswith("A-") for s in it["path"])
     assert {" AND ".join(sorted(it["scope"])) for it in cross} & EROSION_ANALOGUES
-    h = qa.highlight
+    h = qa.view["highlight"]
     assert h["seeds"] and h["anchors"] and h["edges"] and set(h["evidence"]) <= set(h["traversed"])
     assert "Sources:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
-    prompt = engine.llm.prompts[-1]
+    prompt = llm.prompts[-1]
     assert "EVIDENCE (verified statistical observations" in prompt and "[P1]" in prompt
     assert prompt.isascii()  # no byte-fallback symbols reach the LLM (docs/07_question_answering.md §7.4)
     return qa
@@ -70,12 +69,12 @@ def test_e2e_hashing_embedder(hashed_engine):
 def test_e2e_local_embedding_model(model_engine):
     _check_pipeline_record(model_engine)
     qa = _check_grounded_answer(model_engine)
-    assert qa.evidence["attractors"][0]["label"].startswith("discount ↑")
+    assert qa.view["evidence"]["attractors"][0]["label"].startswith("discount ↑")
 
 
 @pytest.mark.model
 def test_hypothesis_apparatus(model_engine):
-    from ltir.evaluation.experiment import run_experiment
+    from experiment import run_experiment
 
     res = run_experiment(model_engine, k=3)
     s = res["summary"]
@@ -85,12 +84,7 @@ def test_hypothesis_apparatus(model_engine):
 
 
 def test_llm_failure_keeps_knowledge(hashed_engine):
-    llm = hashed_engine.llm
-    hashed_engine.llm = FakeLLM(ok=False)
-    try:
-        qa = hashed_engine.ask(QUESTION)
-    finally:
-        hashed_engine.llm = llm
+    qa = ask(hashed_engine, QUESTION, FakeLLM(ok=False))
     assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
     assert "category=phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
     assert qa.llm["error"] and qa.citations["grounded"]
@@ -106,8 +100,8 @@ def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)
         monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
-    qa = hashed_engine.ask("Why is margin lower for phones in the US?", use_llm=False)
-    assert qa.traversal["baselines"]["naive_nearest"]
+    qa = ask(hashed_engine, "Why is margin lower for phones in the US?")
+    assert qa.view["traversal"]["baselines"]["naive_nearest"]
     assert seen and not documents & set(seen)
 
 
@@ -115,49 +109,43 @@ def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatc
     """A batch without stored document vectors is embedded on the first question only, and a writer saves them."""
     import numpy as np
 
-    from ltir.engine import Engine
-
     cfg = make_config(tmp_path / "ws")
-    Engine(cfg, llm=FakeLLM()).ingest_file(demo_csv)
+    make_engine(cfg).ingest_file(demo_csv)
     for path in (cfg.workspace_dir / "journal" / "blocks").glob("*.npz"):  # as written before documents were stored
         with np.load(path) as data:
             kept = {k: data[k] for k in data.files if k not in ("document", "pattern_ids")}
         np.savez_compressed(path, **kept)
-    engine = Engine(cfg, llm=FakeLLM())
+    engine = make_engine(cfg)
     graph = engine.graph()
     documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
     seen: list[str] = []
     original = engine.encoder.embedder.embed
     monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
-    engine.ask("Why is margin lower for phones in the US?", use_llm=False)
+    engine.evidence("Why is margin lower for phones in the US?")
     assert documents <= set(seen)  # filled on the first question
     seen.clear()
-    engine.ask("Why is margin lower for phones in the US?", use_llm=False)
+    engine.evidence("Why is margin lower for phones in the US?")
     assert not documents & set(seen)  # kept on the frame
-    assert set(Engine(cfg, llm=FakeLLM(), recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
+    assert set(make_engine(cfg, recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
 
 
-def test_search_is_the_structured_context_and_ask_logs_it(hashed_engine):
-    """Retrieval stands alone (docs/12_architecture.md §12.3): the same evidence with or without the chat on top."""
-    from ltir.retrieval.search import search
+def test_search_is_the_structured_context_the_narrator_verbalises(hashed_engine):
+    """Retrieval stands alone (docs/12_architecture.md): the same evidence with or without the narrator on top."""
+    from graph_query_engine.search import search
 
     found = hashed_engine.search(QUESTION)
     assert (
         found.evidence.items and found.seeds and set(found.highlight()) == {"seeds", "traversed", "anchors", "evidence", "edges", "transversal_only"}
     )
     assert found.evidence.to_prompt().startswith("QUESTION: ")
-    again = search(QUESTION, hashed_engine.committed(), hashed_engine.encoder, hashed_engine.config)  # the reuse API, no engine in between
+    again = search(QUESTION, hashed_engine.committed(), hashed_engine.encoder, hashed_engine.settings.query)  # the reuse API, no engine in between
     assert [s.pattern_id for s in again.seeds] == [s.pattern_id for s in found.seeds] and again.highlight() == found.highlight()
-    qa = hashed_engine.ask(QUESTION, use_llm=False)
-    assert qa.highlight == found.highlight() and qa.answer_mode == "fallback" and qa.llm["error"] == "disabled"
+    qa = ask(hashed_engine, QUESTION)
+    assert qa.view["highlight"] == found.highlight() and qa.answer_mode == "fallback" and qa.llm["error"] == "disabled"
     assert 0 < qa.metrics["retrieval_s"] <= qa.metrics["total_s"] and qa.metrics["retrieved_evidence"] == len(found.evidence.items)
-    logged = json.loads(hashed_engine.ws.query_log.read_text(encoding="utf-8").splitlines()[-1])
-    assert logged["question"] == QUESTION and logged["mode"] == "fallback" and logged["seeds"] == qa.highlight["seeds"]
 
 
 def test_empty_graph_answer(tmp_path):
 
-    from ltir.engine import Engine
-
-    qa = Engine(make_config(tmp_path / "empty"), llm=FakeLLM()).ask("anything?")
+    qa = ask(make_engine(make_config(tmp_path / "empty")), "anything?")
     assert qa.answer_mode == "empty" and qa.metrics["error"] == "empty_graph"

@@ -1,8 +1,8 @@
 # 3. Insights — record, selection and weight
 
-> **In one paragraph.** A validated candidate becomes an `Insight`: a typed, JSON-serialisable record that names its subgroup, its signed shifts, its scores and its provenance, and that every later stage reads (the graph calls it a `Pattern`). A fixed, ordered rule set decides which insights become persistent knowledge, and an `insight_weight` in `[0.05, 1]` summarises how strong the evidence is. The weight never changes *which* existing anchor an insight is assigned to; it changes how hard the insight pulls on that anchor, how much it shapes the extraction of new anchors, and how high it ranks in retrieval.
+> **In one paragraph.** A validated candidate becomes an `Insight`: a typed, JSON-serialisable record that names its subgroup, its signed shifts, its scores and its provenance, and that every later stage reads (the graph calls it a `Pattern`). A fixed, ordered rule set decides which insights become persistent knowledge — the miner's validity rules say what a finding is, the graph service's admission how many findings a batch adds — and an `insight_weight` in `[0.05, 1]` summarises how strong the evidence is. The weight never changes *which* existing anchor an insight is assigned to; it changes how hard the insight pulls on that anchor, how much it shapes the extraction of new anchors, and how high it ranks in retrieval.
 
-**Code** `ltir/models.py` (`Insight`, `Shift`, `Condition`, `Rejection`), `ltir/analysis/quality.py` · **Tests** `tests/test_quality.py` · **Previous** [2. Discovery](02_discovery.md) · **Next** [4. Representation](04_representation.md)
+**Code** `insight_contracts/insight.py` (`Insight`, `Shift`, `Condition`, `Rejection`, `PhenomenonThresholds`), `subgroup_miner/selection.py`, `insight_graph_service/core/batch.py` (`admit_insights`) · **Tests** `tests/test_selection.py` · **Previous** [2. Discovery](02_discovery.md) · **Next** [4. Representation](04_representation.md)
 
 ---
 
@@ -30,9 +30,9 @@
 | `covariance` | `{"pair": [a, b], "local_corr", "global_corr", "delta"}` or `{}` |
 | `aliases` | selectors merged into this cohort before validation |
 | `weight`, `weight_factors` | `insight_weight`, and the five factors with `null` for unmeasured ones |
-| `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, rows_ref, multiple_testing_family}` |
+| `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, multiple_testing_family}` from the miner, plus `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), which the graph service sets on the journal record |
 
-The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`). What the record does **not** hold: the covered rows themselves (only their positions, in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians — the rows stay in the dataset's source copy (and, for web uploads, in `uploads/`; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). The vectors are stored beside it: the insight vector in `embeddings.mmap`, its three blocks and the document embedding in `journal/blocks/<batch>.npz`.
+The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`) (`batch.pattern_records`). What the record does **not** hold: the covered rows themselves (only their positions, in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians — the rows stay in the uploaded file (`uploads/`; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). The vectors are stored beside it: the insight vector in `embeddings.mmap`, its three blocks and the document embedding in `journal/blocks/<batch>.npz`.
 
 > **Running example** (abridged record of `P-bc4657a04746`):
 > ```text
@@ -48,7 +48,12 @@ The journal adds `row_id` (the vector's row), `canonical` (the canonical form of
 
 ## 3.2 Selection rules
 
-`select_insights(insights, config)` applies a retype step and then rules in a fixed order; every validated candidate is either kept or rejected with exactly one reason. Rejections from discovery and selection are persisted together in `datasets/<id>/rejections.json` and counted in the batch metrics (`pruned`).
+Two owners apply the rules in a fixed order; every validated candidate is either kept or rejected with exactly one reason:
+
+* **Validity** (`subgroup_miner/selection.py::select_insights(insights, config)`, `config` a `MinerConfig`): a retype step, then R1–R3, which decide what a finding is; the survivors are weighed ([3.3](#33-insight-weight)) and returned heaviest first.
+* **Admission** (`insight_graph_service/core/batch.py::admit_insights(ranked, min_weight, budget)`): R4 and R7 over that ranked list, which decide how many findings the graph takes from one batch — the graph service's policy (`Settings`), not the miner's.
+
+Rejections from discovery, validity and admission are persisted together in `datasets/<id>/rejections.json` and counted in the batch metrics (`pruned`).
 
 ```text
 significant = |effect_size| ≥ MIN_EFFECT_Z (0.5)  ∧  p_adjusted ≤ MAX_P_ADJUSTED (0.05)
@@ -62,11 +67,11 @@ emm_ok      = emm_score ≥ MIN_EMM_SCORE (0.08)  ∧  a covariance pair exists
 | retype | if `¬shift_ok ∧ emm_ok`, the insight becomes `covariance` and is retargeted on the pair metric with the larger shift (ties by metric name); its target, effect size and medians follow the new target, and `p_value`, `p_adjusted` and `stability` become `None` — they tested the median shift that failed, not the correlation change | — |
 | R1 support | `support ≥ MIN_SUPPORT_ROWS` (30), on top of the EDA's own size floor | `min_support` |
 | R2/R3 strength and stability | `shift_ok ∨ emm_ok` | `unstable` (significant but not stable), `not_significant` (`|z|` large enough, `p` fails), `weak_effect` (otherwise) |
-| R4 weight | `weight ≥ MIN_INSIGHT_WEIGHT` (0.2) | `low_weight` |
+| R4 weight (admission) | `weight ≥ MIN_INSIGHT_WEIGHT` (0.2) | `low_weight` |
 | R5 identical extent, R6 near duplicate | run in discovery, before validation ([2.3](02_discovery.md#23-deduplication-before-validation)) | `cover_equivalent`, `near_duplicate` |
-| R7 budget | the top `MAX_INSIGHTS_PER_BATCH` (200) by weight (ties by expression) | `budget` |
+| R7 budget (admission) | the top `MAX_INSIGHTS_PER_BATCH` (200) by weight (ties by expression) | `budget` |
 
-If nothing is kept, the batch fails with `no_viable_insights`: the journal and the ontology are untouched (the source copy, `profile.json` and `rejections.json` of the dataset folder are already written).
+If nothing is admitted, the batch fails with `no_viable_insights`: the journal and the ontology are untouched (`profile.json` and `rejections.json` of the dataset folder are already written).
 
 **How the effect gate and the significance gate combine.** They measure different things on purpose. `MIN_EFFECT_Z` asks whether the shift is large against the spread of the whole table (practical relevance, global MAD). The median test asks whether the subgroup's median is pinned down well enough, given the subgroup's own spread and size, after correcting for every cohort and metric the screen looked at — the validated cohorts were chosen by those very shifts, so a family of only the validated primaries would understate the multiplicity, and a standard error on the global spread would overstate the precision of a dispersed subgroup's median. With the subgroup as spread as the table, the test needs
 
@@ -107,7 +112,7 @@ A geometric mean makes the factors complementary: a strong effect cannot buy bac
 | latent ontology | an insight enters as `x = w · x̂`. Cosine assignment ignores the scale, so assignment to an existing anchor does not depend on `w`; the EMA pull on a centroid does, and so does OMP extraction, which runs on the `w`-scaled orphans (reconstruction loss ∝ `w²`) and therefore decides which new anchors appear | [5.5](05_latent_anchors.md#55-how-the-evidence-weight-acts) |
 | ACTIVATES edges | `strength = alignment · w`; an anchor's `evidence_mass = Σ strength` | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) |
 | retrieval | seed score `+ 0.10 · w` (`+ 0.30 · w` for questions without a recognised metric or condition); node rank `= path score · w` | [7.2](07_question_answering.md#72-seeds), [7.3](07_question_answering.md#73-transversal-traversal) |
-| selection | rule R4 | [3.2](#32-selection-rules) |
+| admission | rules R4 and R7 (`admit_insights`) | [3.2](#32-selection-rules) |
 
 ## 3.5 Configuration
 
@@ -115,9 +120,9 @@ A geometric mean makes the factors complementary: a strong effect cannot buy bac
 |---|---|---|
 | `MIN_SUPPORT_ROWS` | 30 | |
 | `MIN_EFFECT_Z`, `MAX_P_ADJUSTED`, `MIN_STABILITY` | 0.5, 0.05, 0.5 | the shift test |
-| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.086. Part of the fingerprint ([4.6](04_representation.md#46-representation-identity-and-versions)): it decides whether a correlation component enters the vector |
-| `MIN_INSIGHT_WEIGHT`, `MAX_INSIGHTS_PER_BATCH` | 0.2, 200 | |
-| `WEIGHT_EFFECT_REF`, `WEIGHT_CONFIDENCE_REF`, `WEIGHT_EMM_REF` | 1.5, 6, 0.08 | saturation scales; `WEIGHT_EMM_REF` also scales the correlation component's coefficient, so it is part of the fingerprint |
+| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.086. A `PhenomenonThresholds` field, shared by the miner, the topology and the query engine; part of the fingerprint ([4.6](04_representation.md#46-representation-identity-and-versions)): it decides whether a correlation component enters the vector |
+| `MIN_INSIGHT_WEIGHT`, `MAX_INSIGHTS_PER_BATCH` | 0.2, 200 | the graph service's admission (`Settings`) |
+| `WEIGHT_EFFECT_REF`, `WEIGHT_CONFIDENCE_REF`, `WEIGHT_EMM_REF` | 1.5, 6, 0.08 | saturation scales; `WEIGHT_EMM_REF` (a `PhenomenonThresholds` field) also scales the correlation component's coefficient, so it is part of the fingerprint |
 | `WEIGHT_EXPONENTS`, `WEIGHT_FLOOR` | (0.35, 0.25, 0.20, 0.10, 0.10), 0.05 | |
 
 ## 3.6 Guarantees

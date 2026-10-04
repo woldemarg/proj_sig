@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIG · Insight Graph</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235b4ce0'/%3E%3Cstop offset='1' stop-color='%23b44ce0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='4' fill='url(%23g)'/%3E%3Cpolygon points='8,3 12.3,5.5 12.3,10.5 8,13 3.7,10.5 3.7,5.5' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script>try { const t = localStorage.getItem("sig-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); document.documentElement.dataset.theme = t; } catch (e) {}</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">SIG</span><span>Insight Graph <small>· latent transversal insights</small></span></div>
+  <div class="spacer"></div>
+  <div class="pills" id="health"></div>
+  <button class="icon-btn" id="theme-btn" title="Toggle light / dark" aria-label="Toggle theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  </button>
+</header>
+
+<main class="app">
+  <!-- ------------------------------------------------ datasets -->
+  <aside class="rail" aria-label="Datasets">
+    <div class="rail-top">
+      <p class="section-title">Add data</p>
+      <form id="upload-form">
+        <label class="drop" id="drop">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <span class="big">Drop a table here</span>
+          <span class="muted">or click to choose · CSV, TSV, Parquet</span>
+          <span class="file" id="file-name"></span>
+          <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
+        </label>
+        <details class="adv">
+          <summary>Column options</summary>
+          <label class="small" for="categories">Treat as categories</label>
+          <input class="field" id="categories" placeholder="e.g. Store, Holiday_Flag">
+          <div class="hint">Number-coded columns to slice by (IDs, flags).</div>
+          <label class="small" for="bins">Split numbers into bands</label>
+          <input class="field" id="bins" placeholder="e.g. median_income:4">
+          <div class="hint">Quantile bands become a dimension; the source column stops being a metric.</div>
+        </details>
+        <div class="rail-actions">
+          <button type="submit" class="btn" id="upload-btn" disabled>Analyse</button>
+          <button type="button" class="btn ghost" id="demo-btn">Try demo</button>
+        </div>
+      </form>
+      <div id="upload-msg" class="msg"></div>
+      <button type="button" class="btn ghost sm" id="reset-btn" hidden>Reset workspace</button>
+    </div>
+    <div class="rail-list">
+      <p class="section-title">Datasets <span class="muted">— click one to focus the views on it</span></p>
+      <div id="batches"></div>
+    </div>
+    <div class="col-resize" data-col="rail" title="Drag to resize · double-click to reset"></div>
+  </aside>
+
+  <!-- ------------------------------------------------ canvas -->
+  <section class="canvas" aria-label="Knowledge graph">
+    <div class="canvas-bar">
+      <div class="tabs" id="view-switch" role="tablist">
+        <button type="button" data-view="graph" class="active" role="tab">Graph</button>
+        <button type="button" data-view="sphere" role="tab">3D Sphere</button>
+        <button type="button" data-view="table" role="tab">Insights <span class="count" id="ins-count"></span></button>
+      </div>
+      <div class="spacer"></div>
+      <select class="field" id="dataset-filter" aria-label="Dataset"><option value="">All datasets</option></select>
+      <select class="field graph-only" id="layout" aria-label="Layout">
+        <option value="dual">Two planes</option>
+        <option value="force">Force</option>
+      </select>
+      <button class="btn ghost sm" id="fit-btn" title="Fit the graph / reset the sphere camera">Fit</button>
+      <button class="btn ghost sm" id="legend-btn" title="Show or hide the legend" aria-pressed="true">Legend</button>
+      <button class="btn ghost sm" id="clear-btn" title="Remove answer highlight" hidden>Clear highlight</button>
+    </div>
+
+    <div class="canvas-body">
+    <!-- one legend for the graph, the sphere and the table; the link entries are the layer toggles of both views -->
+    <aside class="legend-col" id="legend" aria-label="Legend and layers">
+      <div class="lg-caption" id="view-caption"></div>
+      <section class="lg"><h5>Nodes <small>hover to spot</small></h5>
+        <div class="key" data-key="anchor"><i class="sw anchor"></i><span>Theme</span><b data-n="anchor"></b></div>
+        <div class="key" data-key="up"><i class="sw up"></i><span>Metric higher</span><b data-n="up"></b></div>
+        <div class="key" data-key="down"><i class="sw down"></i><span>Metric lower</span><b data-n="down"></b></div>
+        <div class="key" data-key="cov"><i class="sw cov"></i><span>Correlation change</span><b data-n="cov"></b></div>
+      </section>
+      <section class="lg"><h5>Links <small>click to show / hide</small></h5>
+        <button type="button" class="key toggle on" data-key="lattice" title="SPECIALIZES — a narrower subgroup of a broader one (the arrow points to the broader insight)"><i class="ln lattice"></i><span>Hierarchy</span><b data-n="lattice"></b></button>
+        <button type="button" class="key toggle on" data-key="latent" title="RELATED_TO — neighbouring themes (mutual nearest centroids)"><i class="ln rel"></i><span>Theme links</span><b data-n="latent"></b></button>
+        <button type="button" class="key toggle" data-key="contrast" title="CONTRASTS — overlapping scope, opposite shift"><i class="ln contrast"></i><span>Contrasts</span><b data-n="contrast"></b></button>
+        <button type="button" class="key toggle" data-key="sibling" title="SIBLING — same parent, another value of one column"><i class="ln sibling"></i><span>Siblings</span><b data-n="sibling"></b></button>
+        <button type="button" class="key toggle" data-key="activates" title="ACTIVATES — insight belongs to theme; dashed = weak membership (kept for coverage, not walked)"><i class="ln act"></i><span>Memberships</span><b data-n="activates"></b></button>
+        <button type="button" class="key toggle" data-key="schema" title="Dimension and metric columns (graph only)"><i class="sw col"></i><span>Columns</span><b data-n="schema"></b></button>
+      </section>
+      <section class="lg"><h5>Answer</h5>
+        <div class="key" data-key="seed"><i class="ring seed"></i><span>Seed</span><b data-n="seed"></b></div>
+        <div class="key" data-key="ev"><i class="ring ev"></i><span>Evidence</span><b data-n="ev"></b></div>
+        <div class="key" data-key="cross"><i class="ring cross"></i><span>Other segment</span><b data-n="cross"></b></div>
+        <div class="key" data-key="path"><i class="ln path"></i><span>Answer path</span><b data-n="path"></b></div>
+      </section>
+    </aside>
+
+    <div class="view">
+      <div id="cy"></div>
+      <div id="sphere" role="img" aria-label="Latent insight sphere" hidden></div>
+
+      <div class="table-wrap" id="table-view" hidden>
+        <div class="table-tools">
+          <input class="field" id="table-search" placeholder="Filter insights by scope, metric or theme…">
+          <span class="muted" id="table-summary"></span>
+        </div>
+        <table class="ins" id="ins-table">
+          <thead><tr>
+            <th data-k="scope">Where</th><th data-k="target">Metric</th><th data-k="effect" class="num">Effect</th>
+            <th data-k="support" class="num">Rows</th><th data-k="weight" class="num sorted">Evidence</th><th data-k="anchor_label">Theme</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="canvas-empty" id="empty-hint" hidden>
+        <div class="inner">
+          <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
+          <h3>No insights yet</h3>
+          <p>Add a table on the left — or try the demo dataset — and SIG will discover statistically validated insights, group them into themes and draw the graph here.</p>
+        </div>
+      </div>
+
+      <aside class="float drawer" id="drawer" hidden aria-label="Details">
+        <div class="drawer-head">
+          <div style="flex:1;min-width:0"><div class="kind" id="drawer-kind"></div><h3 id="drawer-title"></h3></div>
+          <button class="icon-btn" id="drawer-close" aria-label="Close details">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="drawer-body" id="inspector"></div>
+      </aside>
+    </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ chat -->
+  <aside class="chat" aria-label="Ask">
+    <div class="col-resize" data-col="chat" title="Drag to resize · double-click to reset"></div>
+    <div class="chat-head">
+      <div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.5l-.8-2-1.9-.8 1.9-.8z"/></svg></div>
+      <div style="flex:1;min-width:0"><div class="title">Ask your data</div><div class="sub">Answers cite the insights they rely on</div></div>
+      <button class="linkish" id="new-chat" title="Start a new conversation">New chat</button>
+    </div>
+    <div class="thread" id="thread" aria-live="polite"></div>
+    <form class="composer" id="ask-form">
+      <div class="composer-box">
+        <textarea id="question" rows="1" placeholder="Ask about a metric, a segment or a pattern…"></textarea>
+        <button class="send" id="ask-btn" type="submit" aria-label="Send" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="composer-foot">
+        <label class="switch"><input type="checkbox" id="use-llm" checked><span class="track"></span><span id="llm-label">Gemma 4 explanation</span></label>
+        <span>Enter to send · Shift+Enter new line</span>
+      </div>
+    </form>
+  </aside>
+</main>
+<script src="/vendor/cytoscape.min.js"></script>
+<script src="/vendor/plotly-gl3d.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

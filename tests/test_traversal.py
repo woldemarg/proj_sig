@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from conftest import toy_insight
 
-from ltir.analysis.graph import DualGraph
-from ltir.config import load_config
-from ltir.models import EdgeType, GraphEdge, Shift
-from ltir.retrieval.evidence import build_evidence
-from ltir.retrieval.question import parse_query
-from ltir.retrieval.seeds import SeedMatch
-from ltir.retrieval.traversal import traverse
+from graph_query_engine.config import QueryConfig
+from graph_query_engine.evidence import build_evidence
+from graph_query_engine.graph import DualGraph
+from graph_query_engine.question import parse_query
+from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.traversal import traverse
+from insight_contracts import EdgeType, GraphEdge, Shift
 
 
 def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):
@@ -33,7 +33,7 @@ def pattern(pid, conds, target="margin", z=-1.5, w=0.8, dataset="ds1"):
             "filename": "toy.csv",
             "batch_id": "B1",
             "expression": " AND ".join(conds),
-            "engine": "ltir/engines/eda/main_upd.py",
+            "engine": "subgroup_miner/vendor/eda/main_upd.py",
         },
     )
     props = ins.to_record()
@@ -91,7 +91,7 @@ def toy():
 
 
 def run(graph, **over):
-    cfg = load_config(**over)
+    cfg = QueryConfig(**over)
     return traverse(graph, [SeedMatch("P1", 1.0, {})], cfg), cfg
 
 
@@ -157,4 +157,4 @@ def test_evidence_object_is_structured_and_traceable(toy):
     assert prompt.isascii() and 'A1 "margin down"' in prompt and "adjusted p < 0.001" in prompt
     assert "scope: region is EU and category is phones" in prompt
     assert any("latent anchors" in n for n in ev.notes)
-    assert ev.key_to_pattern["P1"] == "P1"
+    assert ev.items[0].key == ev.items[0].pattern_id == "P1"

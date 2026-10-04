@@ -8,11 +8,15 @@ from dataclasses import replace
 import numpy as np
 import pytest
 from conftest import toy_insight
+from doubles import HashingEmbedder
 
-from ltir.analysis.canonical import canonicalize, describe_scope, format_p, format_value
-from ltir.analysis.encoder import HashingEmbedder, InsightEncoder, SentenceTransformerEmbedder
-from ltir.config import Config, load_config
-from ltir.models import CANONICAL_VERSION, REPRESENTATION_VERSION, Condition, Shift
+from attractor_topology.canonical import canonicalize
+from attractor_topology.encoder import InsightEncoder, SentenceTransformerEmbedder
+from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION
+from insight_contracts import Condition, Shift
+from insight_contracts.text import describe_scope, format_p, format_value
+from insight_graph_service.core.settings import load_env_file, load_settings
+from subgroup_miner.config import MinerConfig
 
 
 def insight(scope, shifts, emm=0.05, ptype="shift", cov=None):
@@ -32,7 +36,7 @@ def insight(scope, shifts, emm=0.05, ptype="shift", cov=None):
 
 
 def test_canonical_sections_are_separate():
-    cfg = load_config()
+    cfg = load_settings().topology
     c = canonicalize(insight({"region": "EU", "category": "laptops"}, [("margin", -2.3), ("discount", 1.2), ("delivery_days", 0.1)]), cfg, 5000)
     assert c.version == CANONICAL_VERSION
     assert c.target == "margin"
@@ -52,7 +56,7 @@ def test_canonical_sections_are_separate():
 
 
 def test_embedding_labels_carry_no_numbers():
-    cfg = load_config()
+    cfg = load_settings().topology
     c = canonicalize(insight({"region": "EU"}, [("discount", 0.2)], emm=0.3, ptype="covariance"), cfg)
     assert all(not any(ch.isdigit() for ch in label) for label, _ in c.components)  # magnitudes live in the coefficients
 
@@ -65,7 +69,7 @@ def test_text_number_rules():
 
 
 def test_covariance_canonical_component():
-    cfg = load_config()
+    cfg = load_settings().topology
     c = canonicalize(insight({"region": "EU"}, [("discount", 0.2)], emm=0.3, ptype="covariance"), cfg)
     assert c.phenomenon.startswith("correlation between discount and margin weakens from -0.60 overall to +0.10 in the subgroup")
     label, coef = c.components[-1]
@@ -80,13 +84,13 @@ def test_covariance_canonical_component():
 
 @pytest.fixture(params=["hashing", pytest.param("model", marks=pytest.mark.model)])
 def encoder(request):
-    cfg = load_config()
+    cfg = load_settings().topology
     emb = HashingEmbedder() if request.param == "hashing" else SentenceTransformerEmbedder(cfg)
     return InsightEncoder(emb, cfg)
 
 
 def test_embedding_contract(encoder):
-    cfg = load_config()
+    cfg = load_settings().topology
     cans = [
         canonicalize(insight({"region": "EU", "category": "laptops"}, [("margin", 2.0)]), cfg),
         canonicalize(insight({"region": "EU", "category": "laptops"}, [("margin", -2.0)]), cfg),
@@ -113,7 +117,7 @@ def test_embedding_contract(encoder):
 
 
 def test_fingerprint_changes_with_representation_choices():
-    cfg = load_config()
+    cfg = load_settings().topology
     a = InsightEncoder(HashingEmbedder(), cfg).spec
     b = InsightEncoder(HashingEmbedder(), replace(cfg, block_weights=(1.0, 1.0, 1.0))).spec
     c = InsightEncoder(HashingEmbedder(dim=128), cfg).spec
@@ -122,7 +126,7 @@ def test_fingerprint_changes_with_representation_choices():
     variants = [a, b, c, d, e]
     # settings that shape the components, the compute dtype and the checkpoint revision
     for field, value in (("min_component_z", 1.0), ("min_emm_score", 0.2), ("weight_emm_ref", 0.2)):
-        variants.append(InsightEncoder(HashingEmbedder(), replace(cfg, **{field: value})).spec)
+        variants.append(InsightEncoder(HashingEmbedder(), replace(cfg, thresholds=replace(cfg.thresholds, **{field: value}))).spec)
     variants += [replace(a, compute_dtype="bfloat16"), replace(a, model_revision="97b0c614")]
     assert len({v.fingerprint for v in variants}) == len(variants)
 
@@ -145,22 +149,19 @@ class RecordingEmbedder(HashingEmbedder):
         return super().embed(texts)
 
 
-def test_env_file_switches_to_the_minilm_block(tmp_path, monkeypatch):
-    """The documented MiniLM block applies verbatim: an empty value clears the instruction."""
+def test_env_file_values_apply(tmp_path, monkeypatch):
+    """A ``.env`` value overrides its default; an empty non-string value keeps the default."""
     monkeypatch.setattr(os, "environ", dict(os.environ))  # the dotenv loader writes into os.environ
     env = tmp_path / ".env"
-    env.write_text(
-        "EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2\nEMBEDDING_TRUNCATE_DIM=0\nEMBEDDING_QUERY_INSTRUCTION=\nMIN_ASSIGN_THRESHOLD=0.55\nVALIDATION_BUDGET=\n",
-        encoding="utf-8",
-    )
-    cfg = load_config(env)
-    assert (cfg.embedding_model, cfg.embedding_truncate_dim, cfg.embedding_query_instruction) == ("paraphrase-multilingual-MiniLM-L12-v2", 0, "")
-    assert cfg.min_assign_threshold == 0.55
-    assert cfg.validation_budget == Config().validation_budget  # an empty non-string value keeps the default
+    env.write_text("MIN_ASSIGN_THRESHOLD=0.55\nVALIDATION_BUDGET=\n", encoding="utf-8")
+    load_env_file(env)
+    cfg = load_settings()
+    assert cfg.topology.min_assign_threshold == 0.55
+    assert cfg.miner.validation_budget == MinerConfig().validation_budget  # an empty non-string value keeps the default
 
 
 def test_query_instruction_only_reaches_free_question_text():
-    cfg = load_config()
+    cfg = load_settings().topology
     emb = RecordingEmbedder()
     enc = InsightEncoder(emb, cfg)
     question = "Why is margin lower for phones in the US?"

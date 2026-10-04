@@ -1,0 +1,10 @@
+# The graph service: the three libraries it composes, plus its HTTP API and the Neo4j mirror.
+# Exact versions of the verified image: constraints.txt.
+-r ../subgroup_miner/requirements.txt
+-r ../attractor_topology/requirements.txt
+-r ../graph_query_engine/requirements.txt
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+neo4j>=5.0
+huggingface_hub>=0.23   # model provisioning (core/model_store.py)

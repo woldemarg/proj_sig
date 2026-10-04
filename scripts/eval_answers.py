@@ -3,7 +3,7 @@
     python scripts/eval_answers.py --label baseline
 
 Ingests the demo into a scratch workspace and asks five fixed questions through ``LLM_BASE_URL`` (by default the
-LLM gateway, configured in ``.env.gemma``; values are never printed). About five LLM calls per run.
+LLM model broker, configured in ``.env``; values are never printed). About five LLM calls per run.
 """
 
 from __future__ import annotations
@@ -11,6 +11,10 @@ from __future__ import annotations
 import argparse
 
 from scratch import demo_engine, save_result
+
+from evidence_narrator_service.llm_client import OpenAICompatibleLLM
+from evidence_narrator_service.narration import answer
+from evidence_narrator_service.settings import NarratorSettings
 
 QUESTIONS = [
     "Why is margin lower for phones in the US?",
@@ -21,18 +25,18 @@ QUESTIONS = [
 ]
 
 
-def evaluate(engine, question: str) -> dict:
+def evaluate(engine, llm, question: str) -> dict:
     """One question: answer mode, grounding, citations, latency and token usage."""
-    qa = engine.ask(question, use_llm=True)
+    qa = answer(engine.evidence(question), llm)
     usage = qa.llm.get("usage") or {}
-    prompt = qa.evidence.get("prompt", "")
+    prompt = qa.prompt
     return {
         "question": question,
         "mode": qa.answer_mode,
         "grounded": bool(qa.citations.get("grounded")),
         "cited": len(qa.citations.get("cited", [])),
         "unknown": len(qa.citations.get("unknown", [])),
-        "evidence": len(qa.evidence.get("items", [])),
+        "evidence": len(qa.view["evidence"].get("items", [])),
         "latency_s": qa.llm.get("latency_s"),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
@@ -48,8 +52,9 @@ def main() -> int:
     parser.add_argument("--label", default="current", help="name of this run (e.g. baseline, canon3, qwen3)")
     args = parser.parse_args()
     engine = demo_engine("eval_answers")
-    print(f"LLM: {engine.llm.health()['model']} | embedder: {engine.config.embedding_model}")
-    rows = [evaluate(engine, q) for q in QUESTIONS]
+    llm = OpenAICompatibleLLM(NarratorSettings.from_env())
+    print(f"LLM: {llm.health()['model']} | embedder: {engine.encoder.embedder.model_id}")
+    rows = [evaluate(engine, llm, q) for q in QUESTIONS]
     cols = ["mode", "grounded", "cited", "unknown", "evidence", "latency_s", "prompt_tokens", "completion_tokens", "prompt_chars", "prompt_non_ascii"]
     print(f"{'#':<3}" + "".join(f"{c:>18}" for c in cols))
     for i, r in enumerate(rows, 1):

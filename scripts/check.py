@@ -10,21 +10,20 @@ run reports the whole picture. Works the same on Windows, macOS and Linux.
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LINT_PATHS = ["ltir", "llm_gateway", "tests", "scripts"]
+LINT_PATHS = ["."]  # pyproject.toml excludes what is not ours (vendor, static, models, workspaces)
 
 
 def run_step(name: str, cmd: list[str]) -> bool:
     """Run one step from the repo root; prints its outcome and returns success."""
     print(f"\n=== {name}: {' '.join(cmd[1:])}", flush=True)
     start = time.perf_counter()
-    code = subprocess.call(cmd, cwd=ROOT, env={**os.environ, "LTIR_NO_DOTENV": "1"})
+    code = subprocess.call(cmd, cwd=ROOT)
     print(f"=== {name}: {'ok' if code == 0 else f'FAILED (exit {code})'} in {time.perf_counter() - start:.1f}s", flush=True)
     return code == 0
 
@@ -34,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quick", action="store_true", help="skip the model-backed and browser tests")
     args = parser.parse_args(argv)
     py = sys.executable
-    pytest_cmd = [py, "-m", "pytest", "-q", "-p", "no:warnings"]
+    pytest_cmd = [py, "-m", "pytest"]  # options in pytest.ini
     if args.quick:
         pytest_cmd += ["-m", "not model and not browser"]
     steps = [

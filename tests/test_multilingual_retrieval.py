@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import FakeLLM, make_config
+from conftest import make_config, make_engine
 from test_traversal import pattern
 
-from ltir.analysis.graph import DualGraph
-from ltir.engine import Engine
-from ltir.evaluation.synthetic import generate_retail_dataset
-from ltir.retrieval.question import LiteralCatalog, build_catalog, parse_query
-from ltir.retrieval.seeds import resolve_seeds, score_pattern
+from graph_query_engine.graph import DualGraph
+from graph_query_engine.question import LiteralCatalog, build_catalog, parse_query
+from graph_query_engine.seeds import resolve_seeds, score_pattern
+from insight_graph_service.core.demo import generate_retail_dataset
 
 
 class DictEmbedder:
@@ -129,7 +128,7 @@ def test_shared_value_binds_the_named_column_or_a_wildcard(tmp_path):
     ask = grounded(g)
     for p in (ask("Чому маржа нижча для США?"), parse_query("Why is margin lower in the US?", g)):
         assert ("*", "US") in p.conditions and len(p.conditions) == 1  # US lives under region and origin: any column
-        s = score_pattern(g.insight("P1"), p, np.zeros(1), None, make_config(tmp_path))
+        s = score_pattern(g.insight("P1"), p, np.zeros(1), None, make_config(tmp_path).query)
         assert s.matched["scope"] == 1.0 and s.matched["scope_conflicts"] == 0
     for p in (ask("Чому маржа нижча для США за region?"), parse_query("Why is margin lower for US by region?", g)):
         assert p.conditions == [("region", "US")]
@@ -161,8 +160,8 @@ def test_ukrainian_comparatives_and_directed_drivers():
 
 def seeds(engine, question):
     graph = engine.graph()
-    parsed = parse_query(question, graph, engine.config, engine.prepared().catalog)
-    return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.config))
+    parsed = parse_query(question, graph, engine.settings.query, engine.prepared().catalog)
+    return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.settings.query))
 
 
 def test_b1_b2_code_switched_questions_seed_identically(hashed_engine):
@@ -176,12 +175,12 @@ def test_b1_b2_code_switched_questions_seed_identically(hashed_engine):
 
 def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
     cfg = make_config(tmp_path / "ws")
-    writer = Engine(cfg, llm=FakeLLM())
+    writer = make_engine(cfg)
     assert writer.ingest_file(demo_csv)["status"] == "READY"
     built = writer.prepared().catalog  # the first question after the commit embeds the literals and saves their vectors
     assert writer.ws.load_literals(writer.encoder.spec.fingerprint).keys() == set(built.texts)
     assert writer.ws.load_literals("another-fingerprint") == {}
-    reader = Engine(cfg, llm=FakeLLM(), recover=False)
+    reader = make_engine(cfg, recover=False)
     calls = []
     original = reader.encoder.embedder.embed
     reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
@@ -194,13 +193,13 @@ def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
 @pytest.mark.model
 def test_b3_translated_question_parses_like_english(model_engine):
     catalog = model_engine.prepared().catalog
-    en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.config, catalog)
-    uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.config, catalog)
+    en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.settings.query, catalog)
+    uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.settings.query, catalog)
     assert set(uk.conditions) == set(en.conditions) == {("category", "phones"), ("region", "US")} and uk.direction == en.direction == -1
     assert {x["literal"] for x in uk.grounding} >= {"phones", "US"}  # маржа itself is the one literal this model confuses (§7.1.1)
     assert set(seeds(model_engine, "Why is margin lower for phones in the US?")) <= set(seeds(model_engine, "Чому маржа нижча для телефонів у США?"))
     for distractor in ("tell us about margins", "Did sales change marginally?", "Де низька ціна?"):
-        p = parse_query(distractor, model_engine.graph(), model_engine.config, catalog)
+        p = parse_query(distractor, model_engine.graph(), model_engine.settings.query, catalog)
         assert ("region", "US") not in p.conditions and "margin" not in [x["literal"] for x in p.grounding], distractor
 
 
@@ -211,9 +210,9 @@ def test_b4_inflected_ukrainian_value(tmp_path):
     df["category"] = df["category"].map({"laptops": "ноутбуки", "phones": "телефони", "tablets": "планшети", "accessories": "аксесуари"})
     path = tmp_path / "uk.csv"
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
-    engine = Engine(make_config(tmp_path / "ws", embedding_backend="sentence-transformers"), llm=FakeLLM())
+    engine = make_engine(make_config(tmp_path / "ws"), embedder=None)
     assert engine.ingest_file(path)["status"] == "READY"
-    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.config, engine.prepared().catalog)
+    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.prepared().catalog)
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 
@@ -224,15 +223,15 @@ def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch)
 
     from test_persistence import _Driver
 
-    from ltir.storage import neo4j_mirror
+    from insight_graph_service.core import neo4j_mirror
 
     cfg = make_config(tmp_path / "ws")
-    engine = Engine(cfg, llm=FakeLLM())
+    engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     question = "Чому margin нижчий для phones у US?"
-    off = engine.ask(question, use_llm=False).traversal["seeds"]
+    off = engine.evidence(question).view["traversal"]["seeds"]
     real = neo4j_mirror.publish_snapshot
     monkeypatch.setattr(neo4j_mirror, "publish_snapshot", lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver()))
-    engine.config = replace(cfg, neo4j_enabled=True)
-    assert engine.sync_neo4j()["status"] == "ok"
-    assert engine.ask(question, use_llm=False).traversal["seeds"] == off
+    engine.settings = replace(cfg, neo4j_enabled=True)
+    assert engine.sync_neo4j(engine.committed().graph.snapshot)["status"] == "ok"
+    assert engine.evidence(question).view["traversal"]["seeds"] == off

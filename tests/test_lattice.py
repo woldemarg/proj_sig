@@ -1,0 +1,74 @@
+"""Deterministic structural plane (docs/06_graph_and_storage.md §6.1)."""
+
+from __future__ import annotations
+
+import inspect
+
+from conftest import toy_insight
+
+from insight_contracts import EdgeType, Shift
+from subgroup_miner import lattice
+from subgroup_miner.config import MinerConfig
+
+
+def ins(pid, scope, shifts, dataset="d"):
+    shifts = [Shift(m, z, 0, 0, 1) for m, z in shifts]
+    return toy_insight(sorted(scope.items()), shifts, id=pid, dataset_id=dataset, expression=pid, stability=1, p_value=0, p_adjusted=0)
+
+
+def edges_of(items, etype):
+    return {(e.source, e.target) for e in lattice.structural_edges(items, MinerConfig()) if e.type == etype}
+
+
+def test_specializes_uses_covering_relations_only():
+    a = ins("A", {"r": "EU"}, [("m", 1.0)])
+    b = ins("B", {"r": "EU", "c": "lap"}, [("m", 2.0)])
+    c = ins("C", {"r": "EU", "c": "lap", "ch": "on"}, [("m", 3.0)])
+    spec = edges_of([a, b, c], EdgeType.SPECIALIZES)
+    assert spec == {("B", "A"), ("C", "B")}  # no transitive C->A
+    assert edges_of([a, b, c], EdgeType.GENERALIZES) == {(t, s) for s, t in spec}  # exact inverse
+
+
+def test_sibling_requires_same_parent_and_partition_attribute():
+    a = ins("A", {"r": "EU", "c": "lap"}, [("m", 1.0)])
+    b = ins("B", {"r": "EU", "c": "pho"}, [("m", 1.0)])
+    c = ins("C", {"r": "US", "ch": "on"}, [("m", 1.0)])
+    d = ins("D", {"r": "EU", "c": "tab"}, [("m", 1.0)], dataset="other")
+    sib = edges_of([a, b, c, d], EdgeType.SIBLING)
+    assert sib == {("A", "B")}
+    e = next(e for e in lattice.structural_edges([a, b], MinerConfig()) if e.type == EdgeType.SIBLING)
+    assert e.props["parent_scope"] == ["r=EU"] and e.props["partition_attribute"] == "c"
+
+
+def test_contrasts_need_overlap_same_metric_and_opposite_shift():
+    parent = ins("A", {"r": "EU", "c": "lap"}, [("margin", 1.1)])
+    child = ins("B", {"r": "EU", "c": "lap", "ch": "ret"}, [("margin", -0.9)])
+    same_dir = ins("C", {"r": "EU", "c": "pho"}, [("margin", 0.8)])
+    disjoint = ins("D", {"r": "US", "c": "tv"}, [("margin", -2.0)])
+    tiny = ins("E", {"r": "EU", "c": "tab"}, [("margin", -0.2)])
+    items = [parent, child, same_dir, disjoint, tiny]
+    con = edges_of(items, EdgeType.CONTRASTS)
+    assert ("A", "B") in con  # specialisation reverses the effect
+    assert ("B", "C") in con  # overlapping scope (r=EU), opposite margin shift
+    assert not any("D" in pair for pair in con)  # no shared condition
+    assert not any("E" in pair for pair in con)  # |z| below CONTRAST_MIN_SHIFT
+    rel = {(e.source, e.target): e.props["relation"] for e in lattice.structural_edges(items, MinerConfig()) if e.type == EdgeType.CONTRASTS}
+    assert rel[("A", "B")] == "specialization_reversal"
+
+
+def test_contrast_relation_is_sibling_only_for_a_sibling_pair():
+    a = ins("A", {"r": "EU", "c": "lap"}, [("m", 1.0)])
+    sibling = ins("B", {"r": "EU", "c": "pho"}, [("m", -1.0)])  # one differing value of the same attribute
+    other = ins("C", {"r": "EU", "ch": "on"}, [("m", -1.0)])  # same size, different attribute: not a sibling
+    rel = {
+        (e.source, e.target): e.props["relation"]
+        for e in lattice.structural_edges([a, sibling, other], MinerConfig())
+        if e.type == EdgeType.CONTRASTS
+    }
+    assert rel[("A", "B")] == "sibling" and rel[("A", "C")] == "overlap"
+
+
+def test_structural_plane_never_uses_embeddings():
+    assert list(inspect.signature(lattice.structural_edges).parameters) == ["insights", "config"]
+    src = inspect.getsource(lattice)
+    assert "import numpy" not in src and "encoder" not in src and "ontology" not in src

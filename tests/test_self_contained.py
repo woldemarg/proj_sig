@@ -13,11 +13,20 @@ from dataclasses import fields
 from pathlib import Path
 
 import pytest
+from conftest import ask
 
-import ltir
-from ltir.config import PROJECT_ROOT, Config, load_config
+from insight_graph_service.core.settings import PROJECT_ROOT, load_settings
 
 ROOT = PROJECT_ROOT.resolve()
+PACKAGES = [
+    "insight_contracts",
+    "subgroup_miner",
+    "attractor_topology",
+    "graph_query_engine",
+    "insight_graph_service",
+    "evidence_narrator_service",
+    "llm_model_broker",
+]
 # the interpreter, its standard library and site-packages (also of a base environment the venv is layered on)
 ENVIRONMENT = sorted(
     {
@@ -50,13 +59,15 @@ def _docstrings(tree: ast.AST) -> set[int]:
 
 
 def test_loaded_code_comes_from_the_repository_or_the_environment(hashed_engine):
-    import ltir.engines.eda.main_upd as eda
-    import ltir.engines.lac.ontology_engine as ontology_engine
+    import attractor_topology.vendor.lac.ontology_engine as ontology_engine
+    import subgroup_miner.vendor.eda.main_upd as eda
 
-    for mod in pkgutil.walk_packages(ltir.__path__, "ltir."):
-        if not mod.name.endswith("__main__"):
-            importlib.import_module(mod.name)
-    hashed_engine.ask("Why is margin lower for phones in the US?")  # exercises discovery->ontology->QA code paths
+    for name in PACKAGES:
+        package = importlib.import_module(name)
+        for mod in pkgutil.walk_packages(package.__path__, f"{name}."):
+            if not mod.name.endswith("__main__"):
+                importlib.import_module(mod.name)
+    ask(hashed_engine, "Why is margin lower for phones in the US?")  # exercises discovery->ontology->evidence->narration
     allowed = [ROOT, *(Path(r).resolve() for r in ENVIRONMENT if r)]
     loaded = [m.__name__ for m in list(sys.modules.values()) if getattr(m, "__file__", None) and not _inside(m.__file__, allowed)]
     assert loaded == []
@@ -66,17 +77,18 @@ def test_loaded_code_comes_from_the_repository_or_the_environment(hashed_engine)
 
 
 def test_config_paths_live_inside_the_project():
-    cfg = load_config()
-    for f in fields(Config):
-        value = getattr(cfg, f.name)
-        if isinstance(value, Path):
-            assert Path(value).resolve().is_relative_to(ROOT), f.name
+    settings = load_settings()
+    for section in (settings, settings.miner, settings.topology, settings.query):
+        for f in fields(section):
+            value = getattr(section, f.name)
+            if isinstance(value, Path):
+                assert Path(value).resolve().is_relative_to(ROOT), f.name
 
 
 def test_sources_hold_no_path_outside_the_repository():
     """No machine path in any string; a climbing relative path only in a docstring, and inside the repository."""
     offenders = []
-    for path in [*(ROOT / "ltir").rglob("*.py"), *(ROOT / "llm_gateway").rglob("*.py")]:
+    for path in [p for name in PACKAGES for p in (ROOT / name).rglob("*.py")]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         docstrings = _docstrings(tree)
         for node in ast.walk(tree):
@@ -93,8 +105,8 @@ def test_sources_hold_no_path_outside_the_repository():
 
 @pytest.mark.model
 def test_embedding_model_loads_from_bundled_copy():
-    from ltir.analysis.encoder import SentenceTransformerEmbedder
+    from attractor_topology.encoder import SentenceTransformerEmbedder
 
-    emb = SentenceTransformerEmbedder(load_config())
+    emb = SentenceTransformerEmbedder(load_settings().topology)
     emb.embed(["self-contained"])
-    assert Path(emb.source).resolve().is_relative_to(ROOT / "models")
+    assert emb.local.resolve().is_relative_to(ROOT / "models") and emb.dim == 384

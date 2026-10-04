@@ -2,25 +2,25 @@
 
 > **In one paragraph.** Ingestion validates the uploaded file, optionally turns number-coded columns into categories and numeric columns into quantile bands, and gives the dataset a content-addressed id. The vendored automatic-EDA engine then searches conjunctions of two and three `attribute = value` selectors in two passes: a cheap screen for robust median shifts and correlation changes, and an expensive bootstrap validation of the best 50. Between the passes the adapter merges selectors that cover identical rows and prunes near-duplicate cohorts, so the bootstrap is spent only on distinct subgroups. The adapter also adds what the EDA does not produce — the direction of each shift, a significance test, provenance — and hands typed candidates to [3. Insights](03_insights.md).
 
-**Code** `ltir/analysis/ingestion.py`, `ltir/analysis/discovery.py`, `ltir/engines/eda/main_upd.py` · **Tests** `tests/test_discovery_contract.py`, `tests/test_persistence.py` (ingestion failures) · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
+**Code** `subgroup_miner/ingestion.py`, `subgroup_miner/discovery.py`, `subgroup_miner/vendor/eda/main_upd.py`, `subgroup_miner/config.py` (`MinerConfig`) · **Tests** `tests/test_discovery_contract.py`, `tests/test_persistence.py` (ingestion failures, column options), `tests/test_subgroup_miner_standalone.py` · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
 
 ---
 
 ## 2.1 Ingestion
 
-`load_dataset(path, config, filename=, bins=, categories=)` turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings)`.
+`load_dataset(path, config, filename=, bins=, categories=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings)`.
 
 | Input | Form | Source |
 |---|---|---|
-| file | `.csv`, `.tsv`, `.txt`, `.parquet` | UI upload (saved under `WORKSPACE_DIR/uploads/`) or a CLI path |
-| `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* / CLI `--bins` |
-| `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* / CLI `--categories` |
+| file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
+| `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* = the form field `bins` of `POST /api/upload` |
+| `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* = the form field `categories` |
 
-An empty upload field means "workspace default" (`None`); the UI's *Try demo* sends an explicit `""` for both options, while CLI `demo` uses the workspace defaults and CLI `ingest` passes `None` unless the flag is given (`--bins ""` is an explicit "none").
+An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Try demo*) sends an explicit `""` for both options; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
 
-Steps, in order:
+Before a batch exists, `Engine.upload` refuses a file above `MAX_UPLOAD_MB` (200): it deletes the upload and raises `file_too_large`, which the API answers with HTTP 413. Steps, in order:
 
-1. **File and size.** A missing file or a file above `MAX_UPLOAD_MB` (200) → `unsupported_file`.
+1. **File.** A missing file → `unsupported_file`.
 2. **Options.** The band and category specs are parsed before the file is read; a malformed spec → `invalid_options`.
 3. **Type and parse.** Unknown extensions → `unsupported_file`. CSV and `.txt` use delimiter sniffing (`sep=None`, python engine), TSV a tab, Parquet `read_parquet` (without pyarrow installed: `unreadable_file`). Parser errors → `unreadable_file`. pandas' default NA parsing applies: a literal `NA` becomes missing, which is why the synthetic region is called `US`, not `NA`.
 4. **Shape.** Fewer than 2 columns or fewer than `MIN_ROWS` (50) rows → `invalid_schema`.
@@ -33,9 +33,9 @@ The dataset id is a pure function of the bytes and the applied options:
 dataset_id = "ds-" + sha256( file bytes ‖ repr(sorted(bins.items())) [‖ repr(sorted(categories)) when any apply] )[:12]
 ```
 
-Identical content with identical options always gets the same id; a second upload of it is `SKIPPED` ([9.1](09_operations.md#91-the-batch-lifecycle)). The frame keeps the file's row order, so EDA row positions are file rows. The source file is copied to `datasets/<dataset_id>/source.<ext>` for provenance and for [migration](06_graph_and_storage.md#65-versions-and-migration). Semantic typing (identifiers, categoricals, redundant columns) is not done here: it is EDA step 1.
+Identical content with identical options always gets the same id; a second upload of it is `SKIPPED` ([9.1](09_operations.md#91-the-batch-lifecycle)). The frame keeps the file's row order, so EDA row positions are file rows. The file itself is not copied: an upload stays under `uploads/`, and the batch record's `source_path` names it (provenance; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). Semantic typing (identifiers, categoricals, redundant columns) is not done here: it is EDA step 1.
 
-> **Running example.** `retail_synthetic.csv`: 5,000 rows × 11 columns, no bands, no overrides → `ds-6e53eb7fb0f9`. On real data the options matter: the HR attrition sample needs `--categories Education,JobLevel,StockOptionLevel,EnvironmentSatisfaction,JobSatisfaction` (its dimensions are integer-coded), `housing.csv` needs `--bins median_income:4,housing_median_age:4` (only one native categorical).
+> **Running example.** `retail_synthetic.csv`: 5,000 rows × 11 columns, no bands, no overrides → `ds-6e53eb7fb0f9`. On real data the options matter: `housing.csv` needs `bins=median_income:4,housing_median_age:4` (only one native categorical).
 
 ## 2.2 The EDA engine in five steps
 
@@ -107,7 +107,7 @@ The adapter seeds the RNG once before the whole step, so a cohort's resamples de
 
 > **Running example.** Profiling keeps the numerics `discount, margin, delivery_days, return_rate` and the categoricals `region, category, channel, payment, weekday, store_size`, and drops `order_id` as an identifier. Step 2 keeps `region, category, channel`; the planted noise columns `payment, weekday, store_size` fall below the median power. The search space has 88 conjunctions; 84 pass the size screen (four rare `partner` slices do not); the top 50 are validated. `category=='phones' AND region=='US'` covers 438 rows, its top shifts are discount and margin, its bootstrap stability is 0.974, and it has no confounders (the demo dimensions are drawn independently).
 
-The vendored engine differs from upstream in a set of local, commented numerical repairs — the MAD fallback and cap, constant categoricals dropped before the nesting rule (which needs an informative coarser column), ε² instead of η², the 95 %-mass rule, the over-budget truncation, NaN-aware EMM, the full-size bootstrap, confounders gated by a chi-square test and named by the level with the largest share gain, signed hidden shifts — each listed with its reason in [`PROVENANCE.md`](../ltir/engines/PROVENANCE.md).
+The vendored engine differs from upstream in a set of local, commented numerical repairs — the MAD fallback and cap, constant categoricals dropped before the nesting rule (which needs an informative coarser column), ε² instead of η², the 95 %-mass rule, the over-budget truncation, NaN-aware EMM, the full-size bootstrap, confounders gated by a chi-square test and named by the level with the largest share gain, signed hidden shifts — each listed with its reason in [`subgroup_miner/vendor/PROVENANCE.md`](../subgroup_miner/vendor/PROVENANCE.md).
 
 ## 2.3 Deduplication before validation
 
@@ -144,20 +144,20 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | significance | two-sided asymptotic median test on the primary metric, `se = 1.2533 · 1.4826 · MAD(y_S) / √n` with the subgroup MAD computed like the EDA's (zero-MAD fallback included); if that is 0, the global MAD; if that is 0 too, `se = sd(y_S) / √n`. `z = (med_S − med) / se`, `p = 2 · Φ̄(|z|)` (`p = 1` for `n < 2` or a zero or non-finite `se`); `p_adjusted = min(1, p · n_tests)` | the EDA has no p-values; selection and weight need one. Bonferroni over overlapping cohorts is conservative, never anti-conservative |
 | stability | `final_sd / sd_raw = 1 − min(CV, 0.9)` | recovers the bootstrap factor that step 4b folds into `final_sd` |
 | determinism | `np.random.seed(EDA_RANDOM_SEED)` before step 4b | `DataFrame.sample` uses the global RNG; same data and config → identical insights |
-| provenance | dataset, file, batch, engine path, steps, exact selector, `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), size of the testing family | traceability |
+| provenance | dataset, file, batch, engine path (`subgroup_miner/vendor/eda/main_upd.py`), steps, exact selector, size of the testing family; the graph service adds `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`) to the journal record | traceability |
 
 ## 2.5 Contracts
 
 * `run_discovery(df, config, on_stage=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
 * `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
-* `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id.
+* `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id, and points each journal record's `provenance.rows_ref` at them (`Workspace.covers_ref`).
 
 ## 2.6 Configuration
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `MIN_ROWS`, `MAX_UPLOAD_MB` | 50, 200 | ingestion limits |
+| `MIN_ROWS`, `MAX_UPLOAD_MB` | 50, 200 | ingestion limits (`MAX_UPLOAD_MB` is the graph service's upload limit, a `Settings` field) |
 | `BIN_COLUMNS`, `CATEGORICAL_COLUMNS` | "", "" | workspace defaults for bands and categorical overrides |
 | `COMPUTE_BUDGET` | 5000 | maximum conjunctions in the search space (EDA default) |
 | `VALIDATION_BUDGET` | 50 | cohorts sent to the bootstrap (EDA default) |
@@ -169,7 +169,8 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 
 | Code | Raised by | Meaning |
 |---|---|---|
-| `unsupported_file`, `unreadable_file`, `invalid_options`, `invalid_schema`, `no_numeric_targets` | `IngestionError` | file type/size, parse error, bad options, too few rows or columns, no numeric column |
+| `file_too_large` | `PipelineError` (`Engine.upload`) | an upload above `MAX_UPLOAD_MB`; refused with HTTP 413 before a batch is registered |
+| `unsupported_file`, `unreadable_file`, `invalid_options`, `invalid_schema`, `no_numeric_targets` | `IngestionError` | missing file or unsupported type, parse error, bad options, too few rows or columns, no numeric column |
 | `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); empty search space or nothing passed pass 1 |
 | `internal_error` | `DiscoveryError` | a closed intent that does not contain its own selector (an invariant check that should never fire) |
 
@@ -186,6 +187,5 @@ Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame i
 |---|---|---|---|---|
 | demo (`retail_synthetic.csv`) | 84 → 84 | 0 | 50 | 28 |
 | `housing.csv` with two bands | 102 → 102 | 0 | 50 | 40 |
-| HR attrition sample with five category overrides | 143 → 135 (8 merged by closure) | 9 | 50 | — |
 
-On the demo and on `housing.csv`, no profiled categorical is constant on another's subgroups (the demo dimensions are drawn independently; housing has one native categorical and two bands), so there is no implied condition and closure finds nothing to merge (the same held for an adapted Walmart sample). On the HR attrition sample, closure and pruning free 17 bootstrap slots for distinct cohorts and give 8 cohorts implied conditions. The HR and Walmart files are not shipped with the repository; their rows are a measurement from development.
+On the demo and on `housing.csv`, no profiled categorical is constant on another's subgroups (the demo dimensions are drawn independently; housing has one native categorical and two bands), so there is no implied condition and closure finds nothing to merge. The toy frames of [2.7](#27-failure-modes-and-guarantees) exercise both merges: closure with an implied column, and near-duplicate pruning.

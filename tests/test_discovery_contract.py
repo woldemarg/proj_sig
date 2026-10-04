@@ -6,7 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ltir.analysis.discovery import (
+from insight_contracts import Condition, pattern_id
+from subgroup_miner.config import MinerConfig
+from subgroup_miner.discovery import (
     Candidate,
     DiscoveryError,
     build_insights,
@@ -15,15 +17,12 @@ from ltir.analysis.discovery import (
     prune_near_duplicates,
     run_discovery,
 )
-from ltir.analysis.quality import select_insights
-from ltir.models import Condition, pattern_id
+from subgroup_miner.selection import select_insights
 
 
 @pytest.fixture(scope="module")
 def discovered(demo_df):
-    from ltir.config import load_config
-
-    cfg = load_config()
+    cfg = MinerConfig()
     res = run_discovery(demo_df, cfg)
     insights = build_insights(res, cfg, dataset_id="ds-test", batch_id="B-test", filename="retail.csv")
     return cfg, res, insights
@@ -53,7 +52,7 @@ def test_insight_fields_and_provenance(discovered):
     for ins in insights:
         assert ins.id == pattern_id("ds-test", ins.conditions)
         assert ins.dataset_id == "ds-test" and ins.batch_id == "B-test"
-        assert ins.provenance["engine"] == "ltir/engines/eda/main_upd.py"
+        assert ins.provenance["engine"] == "subgroup_miner/vendor/eda/main_upd.py"
         assert ins.provenance["expression"] == ins.expression
         assert ins.support == len(covers[ins.expression])
         assert ins.target == ins.shifts[0].metric  # primary = largest |shift|
@@ -80,7 +79,7 @@ def test_discovery_is_deterministic(demo_df, discovered):
 
 def test_selection_keeps_planted_phenomena(discovered):
     cfg, res, insights = discovered
-    kept = {i.scope_expr: i for i in select_insights(insights, cfg).kept}
+    kept = {" AND ".join(c.expr for c in i.conditions): i for i in select_insights(insights, cfg).kept}
     # local anomaly + stronger specialization
     parent = kept["category=laptops AND region=EU"]
     child = kept["category=laptops AND channel=online AND region=EU"]
@@ -116,9 +115,7 @@ def implied_warehouse_frame(n: int = 1500, seed: int = 3) -> pd.DataFrame:
 
 
 def test_identical_extents_merge_before_validation():
-    from ltir.config import load_config
-
-    cfg = load_config()
+    cfg = MinerConfig()
     res = run_discovery(implied_warehouse_frame(), cfg)
     merged = [r for r in res.rejections if r.reason == "cover_equivalent"]
     assert res.pass1_subgroups - len(res.candidates) == len(merged) >= 1
@@ -156,9 +153,7 @@ def test_closed_intents_follow_extent_order(discovered):
 
 
 def test_failure_modes():
-    from ltir.config import load_config
-
-    cfg = load_config()
+    cfg = MinerConfig()
     only_cats = pd.DataFrame({"a": ["x", "y"] * 50, "b": ["p", "q", "r", "s"] * 25})
     with pytest.raises(DiscoveryError) as exc:
         run_discovery(only_cats, cfg)

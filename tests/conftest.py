@@ -1,13 +1,12 @@
 """Shared fixtures (docs/10_verification.md §10.1).
 
-* ``hashing`` backend: fast, offline, deterministic — used by most contract tests.
-* ``model`` marker: tests that need the real local sentence-transformers model;
-  skipped automatically when the model cache is missing.
+* the hashing double (``doubles.HashingEmbedder``): fast, offline, deterministic — used by most contract tests;
+  ``make_engine`` injects it.
+* ``model`` marker: tests that need the bundled Qwen3 embedding model; skipped automatically when it is missing.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import socket
 import threading
@@ -16,16 +15,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-os.environ["LTIR_NO_DOTENV"] = "1"  # never read sig/.env (API keys, NEO4J_ENABLED) in tests
-
 import pytest
+from doubles import HashingEmbedder
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from ltir.config import load_config
-from ltir.evaluation.synthetic import generate_retail_dataset
-from ltir.llm_client import LLMResponse
-from ltir.models import Condition, Insight
+from evidence_narrator_service.llm_client import LLMResponse
+from insight_contracts import Condition, Insight
+from insight_graph_service.core.demo import generate_retail_dataset
+from insight_graph_service.core.settings import load_settings
 
 
 def free_port() -> int:
@@ -35,11 +33,11 @@ def free_port() -> int:
 
 
 @contextmanager
-def serve(app) -> Iterator[str]:
-    """Run an ASGI app on a free local port in a background thread; yields its base URL."""
+def serve(app, port: int | None = None) -> Iterator[str]:
+    """Run an ASGI app on a local port (a free one by default) in a background thread; yields its base URL."""
     import uvicorn
 
-    port = free_port()
+    port = port or free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -74,23 +72,20 @@ def llm_stub():
         if last == "busy":
             return JSONResponse({"error": {"message": "rate limited"}}, status_code=429, headers={"Retry-After": "7"})
         reply = {"role": "assistant", "content": "Observations: margin is lower [P1]."}
-        return {"model": body["model"], "choices": [{"message": reply}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        return {"model": body.get("model", "gemma4:latest"), "choices": [{"message": reply}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
 
     with serve(app) as url:
         yield f"{url}/v1", seen
 
 
-def _model_available(cfg) -> bool:
-    from ltir.analysis.encoder import model_folder
-
-    return (model_folder(cfg) / "modules.json").is_file()
-
-
 def pytest_collection_modifyitems(config, items):
-    cfg = load_config()
-    if _model_available(cfg):
+    from attractor_topology.encoder import model_folder
+    from insight_graph_service.core.model_store import problems
+
+    folder = model_folder(load_settings().topology.model_dir)
+    if not problems(folder, hashes=False):
         return
-    skip = pytest.mark.skip(reason=f"embedding model {cfg.embedding_model} not found in {cfg.model_dir}")
+    skip = pytest.mark.skip(reason=f"embedding model missing or incomplete in {folder}")
     for item in items:
         if "model" in item.keywords:
             item.add_marker(skip)
@@ -166,15 +161,27 @@ def toy_insight(scope, shifts, **fields) -> Insight:
 
 def make_config(workspace: Path, **overrides):
     overrides.setdefault("neo4j_enabled", False)
-    return load_config(workspace_dir=workspace, embedding_backend=overrides.pop("embedding_backend", "hashing"), **overrides)
+    return load_settings(workspace_dir=workspace, **overrides)
+
+
+def make_engine(config, *, embedder="hashing", recover: bool = True):
+    """An Engine for tests: the hashing double unless ``embedder=None`` (the bundled Qwen) or another embedder."""
+    from insight_graph_service.core.engine import Engine
+
+    return Engine(config, embedder=HashingEmbedder() if embedder == "hashing" else embedder, recover=recover)
+
+
+def ask(engine, question: str, llm=None):
+    """A chat answer composed in-process as the two services compose it over HTTP: the engine's evidence, narrated."""
+    from evidence_narrator_service.narration import answer
+
+    return answer(engine.evidence(question), llm)
 
 
 @pytest.fixture(scope="session")
 def hashed_engine(tmp_path_factory, demo_csv):
-    """Engine with the synthetic demo ingested (hashing embedder) — shared, read-only use."""
-    from ltir.engine import Engine
-
-    engine = Engine(make_config(tmp_path_factory.mktemp("ws_hash")), llm=FakeLLM())
+    """Engine with the synthetic demo ingested (hashing double) — shared, read-only use."""
+    engine = make_engine(make_config(tmp_path_factory.mktemp("ws_hash")))
     record = engine.ingest_file(demo_csv)
     assert record["status"] == "READY", record.get("error")
     return engine
@@ -182,10 +189,8 @@ def hashed_engine(tmp_path_factory, demo_csv):
 
 @pytest.fixture(scope="session")
 def model_engine(tmp_path_factory, demo_csv):
-    """Engine with the synthetic demo ingested using the real local embedding model."""
-    from ltir.engine import Engine
-
-    engine = Engine(make_config(tmp_path_factory.mktemp("ws_model"), embedding_backend="sentence-transformers"), llm=FakeLLM())
+    """Engine with the synthetic demo ingested using the bundled Qwen3 embedding model."""
+    engine = make_engine(make_config(tmp_path_factory.mktemp("ws_model")), embedder=None)
     record = engine.ingest_file(demo_csv)
     assert record["status"] == "READY", record.get("error")
     return engine

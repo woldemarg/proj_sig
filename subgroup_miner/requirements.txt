@@ -1,0 +1,5 @@
+# subgroup_miner: its own third-party dependencies (exact versions of the verified image: constraints.txt)
+numpy>=1.26
+pandas>=2.2
+scipy>=1.11
+pysubgroup==0.7.7

@@ -1,51 +1,47 @@
-"""3D latent sphere: lac's prosphera projection, drawn in the graph's language (docs/08_interface.md §8.4)."""
+"""The latent sphere as data (docs/08_interface.md §8.4): the graph service projects; the console draws."""
 
 from __future__ import annotations
 
+import numpy as np
+from conftest import ask, make_config, make_engine
 from fastapi.testclient import TestClient
 
-from ltir.web.app import create_app
-from ltir.web.sphere import export_sphere, plotly_js_path, sphere_figure
+from insight_graph_service.server.app import create_app
+from insight_graph_service.server.views import project_to_sphere, sphere_points
 
 
-def test_sphere_uses_the_graphs_visual_language(hashed_engine):
-    """The sphere draws what the graph draws: insight classes by colour, themes, the legend's link layers."""
-    from ltir.web.sphere import LAYER_DEFAULTS
+def sphere(engine):
+    return sphere_points(engine.committed(), engine.settings.topology.random_seed)
 
-    fig = sphere_figure(hashed_engine)
-    by_name = {t.name: t for t in fig.data if t.name}
+
+def test_the_sphere_holds_every_insight_and_its_themes(hashed_engine):
+    d = sphere(hashed_engine)
     g = hashed_engine.graph()
-    assert len(by_name["Themes"].x) == len(g.of_kind("Attractor")) and by_name["Themes"].marker.symbol == "diamond"
-    classes = [by_name[n] for n in ("Metric higher", "Metric lower", "Correlation change") if n in by_name]
-    assert sum(len(t.x) for t in classes) == len(g.of_kind("Pattern"))
-    assert {i for t in classes for i in t.customdata} == {n["id"] for n in g.of_kind("Pattern")}  # click -> drawer
-    assert list(by_name["Themes"].customdata) == sorted((n["id"] for n in g.of_kind("Attractor")), key=lambda a: int(a[2:]))
-    assert max(abs(float(v)) for t in classes for v in list(t.x) + list(t.y) + list(t.z)) <= 1.0 + 1e-9  # on/inside the unit sphere
-    for key, visible in LAYER_DEFAULTS.items():  # every layer the legend toggles exists and starts in the toggle's state
-        traces = [t for t in fig.data if t.meta == key]
-        assert traces and all(bool(t.visible) is visible for t in traces), key
-    assert {"anchor", "up", "down"} <= {t.meta for t in fig.data}  # the legend's keys, not its display names, tag the traces
-    assert fig.layout.showlegend is False and fig.layout.title.text is None  # the shared legend strip explains it
-    flipped = sphere_figure(hashed_engine, layers={"sibling": True, "lattice": False}, palette={"bg": "#ffffff"})
-    vis = {t.name: bool(t.visible) for t in flipped.data if t.name}
-    assert vis["Siblings"] and not vis["Hierarchy"] and flipped.layout.template.layout.paper_bgcolor != fig.layout.template.layout.paper_bgcolor
+    patterns = [p for p in d["points"] if p["kind"] == "Pattern"]
+    themes = [p for p in d["points"] if p["kind"] == "Attractor"]
+    assert {p["id"] for p in patterns} == {n["id"] for n in g.of_kind("Pattern")} and d["message"] is None
+    assert [a["id"] for a in themes] == sorted((n["id"] for n in g.of_kind("Attractor")), key=lambda a: int(a[2:]))
+    assert all(np.linalg.norm(p["xyz"]) <= 1.0 + 1e-6 for p in d["points"])  # on or inside the unit ball
+    assert {p["cls"] for p in patterns} <= {"up", "down", "cov"} and all(p["hover"] for p in d["points"])
+    placed = {p["id"] for p in d["points"]}
+    assert all(e["source"] in placed and e["target"] in placed for e in d["edges"])
+    assert {"ACTIVATES", "RELATED_TO", "SPECIALIZES"} <= {e["type"] for e in d["edges"]}
 
 
-def test_sphere_highlight_and_export(hashed_engine, tmp_path):
-    qa = hashed_engine.ask("Why is margin lower for phones in the US?")
-    fig = sphere_figure(hashed_engine, highlight=qa.highlight)
-    names = {t.name for t in fig.data}
-    assert {"Answer path", "Seed", "Evidence", "Themes visited"} <= names  # the graph's answer markers
-    out = export_sphere(hashed_engine, tmp_path / "sphere.html")
-    assert "plotly" in out.read_text(encoding="utf-8").lower()
+def test_an_answer_path_resolves_on_the_sphere(hashed_engine):
+    """Every highlighted edge between placed nodes is in the sphere's edges: the console can draw the answer's path."""
+    qa = ask(hashed_engine, "Why is margin lower for phones in the US?")
+    d = sphere(hashed_engine)
+    placed, edges = {p["id"] for p in d["points"]}, {e["id"]: e for e in d["edges"]}
+    by_id = {e["id"]: e for e in hashed_engine.graph().edges}
+    drawable = [i for i in qa.view["highlight"]["edges"] if by_id[i]["source"] in placed and by_id[i]["target"] in placed]
+    assert drawable and all(i in edges for i in drawable) and set(qa.view["highlight"]["seeds"]) <= placed
 
 
-def test_sphere_api(hashed_engine):
-    with TestClient(create_app(hashed_engine.config, hashed_engine)) as client:
-        page = client.get("/api/sphere")
-        assert page.status_code == 200 and "/vendor/plotly.min.js" in page.text and "plotly-graph-div" in page.text
-        post = client.post(
-            "/api/sphere", json={"dataset": None, "highlight": {"seeds": [], "edges": []}, "palette": {"bg": "#f4f5f9"}, "layers": {"sibling": True}}
-        )
-        assert post.status_code == 200
-        assert client.get("/vendor/plotly.min.js").status_code == 200 and plotly_js_path().is_file()
+def test_the_projection_is_deterministic_and_the_api_serves_it(hashed_engine, tmp_path):
+    vectors = np.random.RandomState(0).normal(size=(12, 8))
+    assert np.array_equal(project_to_sphere(vectors, 42), project_to_sphere(vectors, 42))
+    with TestClient(create_app(hashed_engine)) as client:
+        assert client.get("/api/sphere").json()["points"]
+    cfg = make_config(tmp_path / "empty")
+    assert "upload a dataset" in sphere(make_engine(cfg))["message"]

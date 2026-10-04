@@ -2,7 +2,7 @@
 
 > **In one paragraph.** Each insight is written down twice, for two different readers. The *embedding inputs* — the scope string, the target name and a list of signed components such as `("discount", +2.21)` — define the vector and contain no measured numbers and no prose. The *readable text* — a Markdown document and phrase helpers shared with the LLM prompt — is for people and the language model; it enters the vector only in one rare fallback (components that cancel out). The encoder embeds scope and target as sentences and builds the phenomenon as a signed, magnitude-weighted sum of metric-name embeddings, so "margin up" and "margin down" point in opposite directions. The three unit blocks are weighted and concatenated into one 1152-d unit vector, and a fingerprint of the model and composition choices guards the workspace against mixing incompatible vectors.
 
-**Code** `ltir/analysis/canonical.py`, `ltir/analysis/encoder.py`, `ltir/models.py` (`CanonicalInsight`, `EmbeddingSpec`) · **Tests** `tests/test_canonical_embedding.py` · **Previous** [3. Insights](03_insights.md) · **Next** [5. Latent anchors](05_latent_anchors.md)
+**Code** `attractor_topology/canonical.py`, `attractor_topology/encoder.py`, `attractor_topology/models.py` (`CanonicalInsight`, `EmbeddingSpec`), `insight_contracts/text.py` (the readable phrases), `insight_graph_service/core/model_store.py` (the model on disk) · **Tests** `tests/test_canonical_embedding.py`, `tests/test_model_store.py` · **Previous** [3. Insights](03_insights.md) · **Next** [5. Latent anchors](05_latent_anchors.md)
 
 ---
 
@@ -16,11 +16,11 @@ Text appears in three tiers. Only the third shapes similarity — apart from one
 | rendering | text derived from the record: the canonical document, headlines and labels, hover text, the evidence prompt and the evidence-only summary | stored next to the record (the document) or computed on demand | people, the LLM, the naive text baseline |
 | embedding input | three short strings per insight — scope text, target text and the component labels | the vector in `journal/embeddings.mmap`, its blocks in `journal/blocks/*.npz` | retrieval, the ontology, the sphere |
 
-The canonical document is also embedded once at ingest (`document` in the batch's blocks file; a batch written before that is back-filled on the first question, [7.6](07_question_answering.md#76-baselines)), but only for the naive text baseline and the benchmark's `text_nn` ranker: that vector never enters the ontology or retrieval. Keeping the tiers apart is what lets the prompt be rewritten for readability without moving a single vector, and keeps measured magnitudes out of the embedded strings, where their tokenisation would only add noise. Renderings come in two flavours: the **LLM serializer** (ASCII prose with rounded numbers, [7.4](07_question_answering.md#74-the-evidence-object)) and **visual labels** (compact labels for graph nodes and cards — the headline is ASCII, the UI labels use `·` and arrows, [8.5](08_interface.md#85-text-shown-to-people)).
+The canonical document is also embedded once at ingest (`document` in the batch's blocks file; a pattern without a stored document vector is embedded once, on the first question, [7.6](07_question_answering.md#76-baselines)), but only for the naive text baseline and the benchmark's `text_nn` ranker: that vector never enters the ontology or retrieval. Keeping the tiers apart is what lets the prompt be rewritten for readability without moving a single vector, and keeps measured magnitudes out of the embedded strings, where their tokenisation would only add noise. Renderings come in two flavours: the **LLM serializer** (ASCII prose with rounded numbers, [7.4](07_question_answering.md#74-the-evidence-object)) and **visual labels** (compact labels for graph nodes and cards — the headline is ASCII, the UI labels use `·` and arrows, [8.5](08_interface.md#85-text-shown-to-people)).
 
 ## 4.2 The canonical form
 
-`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)`, version `ltir-canon-4`.
+`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)` (`config` a `TopologyConfig`), version `ltir-canon-4` (`CANONICAL_VERSION`). The readable phrases come from the shared kernel (`insight_contracts/text.py`), so the canonical form, the evidence prompt and the miner's LLM context read alike; which shifts and which correlation change belong to the phenomenon is decided by `PhenomenonThresholds` (`insight_contracts/insight.py`).
 
 **Embedding inputs.**
 
@@ -30,7 +30,7 @@ The canonical document is also embedded once at ingest (`document` in the batch'
 | `target` | `humanize(target)` (underscores → spaces) | `discount` |
 | `components` | `(humanize(metric), signed robust z)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (0.5) — none for a covariance insight, whose median shift failed the shift test; plus `("correlation between a and b", sign · EMM_COMPONENT_WEIGHT · emm_score / WEIGHT_EMM_REF)` when the correlation change is material | `[("discount", 2.21), ("margin", −1.10)]` |
 
-The correlation change is material when a covariance pair exists and the insight is covariance-typed or has `emm_score ≥ MIN_EMM_SCORE` (`has_material_covariance`). Its sign is `−1` when the correlation reverses (both `|C_ij|` and `|C_S,ij|` above 0.1 with opposite signs — this test comes first, so `−0.2 → +0.9` is a reversal), otherwise `+1` when `|corr|` grows and `−1` when it does not. With `EMM_COMPONENT_WEIGHT = 0.5`, an EMM score of 0.14 becomes a component of 0.875, comparable to a 0.9 sd shift. The strings carry names and condition values only: no magnitude, median or p-value ever reaches an embedded string — the magnitude lives in the coefficient. (A column name or a condition value can itself contain digits: `Store = 12`, `median_income_band = q4`.) Structural predicates (scope) and statistical behaviour (phenomenon) never share a string.
+The target and the shifts above `MIN_COMPONENT_Z` are `PhenomenonThresholds.phenomenon_shifts` (a shift is `material` from `|z| ≥ MIN_COMPONENT_Z`). The correlation change is material when a covariance pair exists and the insight is covariance-typed or has `emm_score ≥ MIN_EMM_SCORE` (`PhenomenonThresholds.has_material_covariance`). Its sign is `−1` when the correlation reverses (both `|C_ij|` and `|C_S,ij|` above 0.1 with opposite signs — this test comes first, so `−0.2 → +0.9` is a reversal), otherwise `+1` when `|corr|` grows and `−1` when it does not. With `EMM_COMPONENT_WEIGHT = 0.5`, an EMM score of 0.14 becomes a component of 0.875, comparable to a 0.9 sd shift. The strings carry names and condition values only: no magnitude, median or p-value ever reaches an embedded string — the magnitude lives in the coefficient. (A column name or a condition value can itself contain digits: `Store = 12`, `median_income_band = q4`.) Structural predicates (scope) and statistical behaviour (phenomenon) never share a string.
 
 **Readable text.** Fixed number rules (`format_value`, `format_p`): values below 1,000 with 4 significant digits (`.4g`: trailing zeros dropped, so `19.0` prints as `19`, and values below 0.0001 switch to exponent notation), values from 1,000 rounded to integers with thousands separators; shifts `±x.xx sd`; correlations `±0.xx`; p-values bucketed as `< 0.001`, `< 0.01`, `< 0.05` or two decimals; shares as one-decimal percentages. Magnitude words: `mild < 1 ≤ moderate < 2 ≤ strong < 3 ≤ extreme`. The text is ASCII as long as the data is: column names, values and confounder strings pass through verbatim.
 
@@ -102,25 +102,25 @@ The fallback fires whenever the component sum has a norm below `1e-9` — also w
 
 | Property | Value |
 |---|---|
-| default model | `Qwen/Qwen3-Embedding-0.6B`, loaded offline from `models/Qwen3-Embedding-0.6B/` (pinned revision, fetched once by `scripts/download_model.py`, 1.19 GB bf16) |
-| alternative | `paraphrase-multilingual-MiniLM-L12-v2` (native 384-d) from `models/paraphrase-multilingual-MiniLM-L12-v2/`; the hashing backend (`EMBEDDING_BACKEND=hashing`) is a deterministic offline stand-in for tests |
-| folder rule | `model_folder(config) = MODEL_DIR / <last path segment of EMBEDDING_MODEL>`, used when it holds a `modules.json`; otherwise the name is resolved through the Hugging Face cache under `MODEL_DIR` — offline (`HF_HUB_OFFLINE=1` is set by default), so only an existing cache resolves |
-| Matryoshka truncation | `EMBEDDING_TRUNCATE_DIM = 384` keeps the first 384 of 1024 dimensions; every row is then **re-normalised** (`E(x) = normalize(f(x)_{:384})`) — a slice of a unit vector is shorter than 1, and the decomposition above assumes unit blocks |
-| query instruction | `embed_queries` prefixes `Instruct: {EMBEDDING_QUERY_INSTRUCTION}\nQuery: `; `embed` (documents, labels, recognised query strings) does not |
-| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16 for Qwen3, fp32 for MiniLM), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the embedder (one per engine) |
-| device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0`); Qwen3 takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB |
+| model | `Qwen/Qwen3-Embedding-0.6B` (`QWEN_MODEL`) at the pinned revision `QWEN_REVISION`, 1.19 GB bf16 — the only embedder (`attractor_topology/encoder.py::SentenceTransformerEmbedder`) |
+| on disk | `model_folder(MODEL_DIR)` = `MODEL_DIR/Qwen3-Embedding-0.6B/`, loaded offline (`HF_HUB_OFFLINE=1` is set by default, so nothing is fetched at run time); loading needs its `modules.json` |
+| provisioning | `python -m insight_graph_service.core.model_store [MODEL_DIR] [--seed DIR]` (without a folder: the service's `MODEL_DIR`, read from the environment, then `.env`) checks the folder file by file against a manifest of sizes and SHA-256 values at the pinned revision: a copy that verifies is kept, otherwise a verified seed is copied, otherwise the pinned revision is downloaded; it exits non-zero unless the result verifies. The graph service checks presence and sizes against the same manifest before it opens the workspace or loads the model, and refuses to start (exit code 3) with a message naming that command |
+| Matryoshka truncation | `TRUNCATE_DIM = 384` keeps the first 384 of 1024 dimensions; every row is then **re-normalised** (`E(x) = normalize(f(x)_{:384})`) — a slice of a unit vector is shorter than 1, and the decomposition above assumes unit blocks |
+| query instruction | `embed_queries` prefixes `Instruct: {QUERY_TASK}\nQuery: `; `embed` (documents, labels, recognised query strings) does not |
+| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the embedder (one per engine) |
+| device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0`; the containers use `cpu`); the model takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB; on the CPU the encoder leaves half of the cores to the rest of the batch |
 
 **Where the instruction goes.** Qwen3 is instruction-aware, but the prefix is applied **only** to free question text — the stand-in for an unrecognised scope or target block and for an empty component sum — and to the naive text baseline. Recognised scope and target strings and every component label are embedded exactly as for documents, because the signed composition needs the identical `E(label)` on both sides to keep its exact ±1 geometry. This forgoes the instruction gain on structured queries by design.
 
-**Device boundary.** The embedder is the only model SIG loads. The language model is never loaded in-process; it is reached only through `LLM_BASE_URL` (a hosted endpoint, or a local server that must run with CPU or partial GPU offload on an 8 GB card). The web app logs the device and free GPU memory after warm-up. Batches of 16 bound the transient peak: the embedding stage also embeds every new pattern's full document for the text baseline ([7.6](07_question_answering.md#76-baselines)), which peaked at 3.4 GB with batches of 64 and runs faster at 16.
+**Device boundary.** The embedder is the only model SIG's services load. The language model is never loaded in-process; the narrator reaches it only through `LLM_BASE_URL` (by default the LLM model broker, [12.4](12_architecture.md#124-services-and-contracts); behind it a hosted endpoint, or a local server that must run with CPU or partial GPU offload on a small consumer GPU). The graph service logs the device and free GPU memory after warm-up. Batches of 16 bound the transient peak: the embedding stage also embeds every new pattern's full document for the text baseline ([7.6](07_question_answering.md#76-baselines)), which peaked at 3.4 GB with batches of 64 and runs faster at 16.
 
-The hashing backend is a deterministic stand-in (word and character-trigram hashing into 256 dimensions); it maps text without any `[a-z0-9]` character to a zero vector, so it is for tests, not for data.
+**The test double.** Tests inject `tests/doubles.py::HashingEmbedder` through `Engine(settings, embedder=…)`: a deterministic stand-in (word and character-trigram hashing into 384 dimensions, the production block width; model id `hashing-ngram-384`) that needs no model. It maps text without any `[a-z0-9]` character to a zero vector, so it is for tests, not for data. Tests marked `model` use the real checkpoint.
 
 ## 4.5 Embedder comparison
 
-`scripts/compare_embedders.py` on the demo, then a same-domain second batch (demo seed 8) and `housing.csv`, each model at its calibrated assignment threshold (RTX 4060):
+The measurement that chose Qwen3: Qwen3-Embedding-0.6B against `paraphrase-multilingual-MiniLM-L12-v2` (native 384-d) on the demo, then a same-domain second batch (demo seed 8) and `housing.csv`, each model at its calibrated assignment threshold:
 
-| Metric | MiniLM-L12 (384) | Qwen3 → 384 (default) | Qwen3 (1024) |
+| Metric | MiniLM-L12 (384) | Qwen3 → 384 (SIG) | Qwen3 (1024) |
 |---|---|---|---|
 | direction cosine (must be < 0) | −0.329 | −0.329 | −0.329 |
 | cross-scope, same phenomenon | 0.955 | 0.971 | 0.969 |
@@ -137,46 +137,48 @@ The hashing backend is a deterministic stand-in (word and character-trigram hash
 
 Reading: the composition fixes the direction contract (−0.33 for any model). Qwen3 ranks analogues higher at small `k` and makes the naive baseline much stronger. Its cosines between unrelated texts sit higher (label cosine 0.71 vs 0.43), with two consequences: the two one-off phenomena of the demo share one anchor ([5.13](05_latent_anchors.md#513-guarantees-and-measured-behaviour)), and MiniLM's assignment threshold would let half of an unrelated dataset join retail anchors, so Qwen3 runs at 0.75 ([5.10](05_latent_anchors.md#510-calibration-per-embedder)). Truncation to 384 costs nothing measurable against 1024.
 
-Switching to MiniLM: `EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2`, `EMBEDDING_TRUNCATE_DIM=0`, `EMBEDDING_QUERY_INSTRUCTION=` (an empty value clears a text setting) and `MIN_ASSIGN_THRESHOLD=0.55`; then migrate the workspace ([6.5](06_graph_and_storage.md#65-versions-and-migration)).
-
 ## 4.6 Representation identity and versions
 
 `InsightEncoder.spec → EmbeddingSpec`:
 
-| Field | Default value |
+| Field | Value |
 |---|---|
-| `model_id` | `Qwen/Qwen3-Embedding-0.6B` (or `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, `hashing-ngram-256`) |
-| `model_revision` | `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` — read from `models/<folder>/REVISION` (written by `scripts/download_model.py`); `""` when the folder has none |
+| `model_id` | `Qwen/Qwen3-Embedding-0.6B` (the test double: `hashing-ngram-384`) |
+| `model_revision` | `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` — `QWEN_REVISION`, the revision `model_store` provisions and verifies (the test double: `""`) |
 | `truncate_dim`, `query_instruction` | 384, `Instruct: Given a quantitative analysis question, retrieve relevant statistical subgroup patterns\nQuery: ` |
 | `block_dim`, `dim` | 384, 1152 |
 | `dtype`, `compute_dtype`, `normalization` | `float32` (storage), `bfloat16` (the model's computation), `l2(block) -> weighted concat -> l2` |
 | `block_weights`, `emm_component_weight` | (0.45, 0.55, 1.0), 0.5 |
-| `min_component_z`, `min_emm_score`, `weight_emm_ref` | 0.5, 0.08, 0.08 — the canonicalisation settings that decide which components exist and how large the correlation component is |
-| `canonical_version`, `representation_version` | `ltir-canon-4`, `ltir-rep-3` |
+| `min_component_z`, `min_emm_score`, `weight_emm_ref` | 0.5, 0.08, 0.08 — the `PhenomenonThresholds` that decide which components exist and how large the correlation component is |
+| `canonical_version`, `representation_version` | `ltir-canon-4`, `ltir-rep-3` (`CANONICAL_VERSION`, `REPRESENTATION_VERSION` in `attractor_topology/models.py`) |
 | `fingerprint` | `sha1` of all of the above, first 10 hex (`3d08cee697` for the defaults) |
 
-The spec is written to `state/representation.json` when the first batch commits; every pattern record carries `{fingerprint, model_id, dim, representation_version}`. Two checks refuse a mismatch instead of comparing vectors from different spaces: `check_representation` compares the fingerprint (ingestion and queries; HTTP 409 on `/api/query`), and `check_versions` compares the two version strings without loading a model (graph rebuilds). `CANONICAL_VERSION` covers [4.2](#42-the-canonical-form); `REPRESENTATION_VERSION` covers [4.3](#43-the-tripartite-vector). Renderings can change without a bump; anything that changes an embedded string, a coefficient or the composition must bump a version.
+The spec is written to `state/representation.json` when the first batch commits; every pattern record carries `{fingerprint, model_id, dim, representation_version}`. Two checks refuse a mismatch instead of comparing vectors from different spaces:
 
-**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in and the storage dtype, the truncation, the query instruction, the block weights and the correlation component weight, the normalisation, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch` until the workspace is migrated ([6.5](06_graph_and_storage.md#65-versions-and-migration)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either; the phenomenon sentence of the fallback is covered by `CANONICAL_VERSION`.
+* `Workspace.check_representation` compares the fingerprint, at ingestion (the batch fails with `representation_mismatch`) and for every question (`POST /api/search` answers 409 with `code: representation_mismatch`).
+* `Workspace.check_versions` compares the two version strings without loading a model when the engine opens the workspace; journals of another version make the graph service start degraded ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)).
+
+`CANONICAL_VERSION` covers [4.2](#42-the-canonical-form); `REPRESENTATION_VERSION` covers [4.3](#43-the-tripartite-vector). Renderings can change without a bump; anything that changes an embedded string, a coefficient or the composition must bump a version.
+
+**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in and the storage dtype, the truncation, the query instruction, the block weights and the correlation component weight, the normalisation, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch`; the workspace is reset (`POST /api/reset`) and the data ingested again ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either; the phenomenon sentence of the fallback is covered by `CANONICAL_VERSION`.
 
 ## 4.7 Configuration
 
 | Parameter | Default | Changes the fingerprint |
 |---|---|---|
-| `EMBEDDING_BACKEND` | `sentence-transformers` | yes (model id) |
-| `EMBEDDING_MODEL`, `MODEL_DIR` | `Qwen/Qwen3-Embedding-0.6B`, `models` | the model id: yes; `MODEL_DIR` only through the folder's `REVISION` |
-| `EMBEDDING_TRUNCATE_DIM` | 384 | yes |
-| `EMBEDDING_QUERY_INSTRUCTION` | retrieval task sentence | yes |
+| `MODEL_DIR` | `models` | no (where the checkpoint is read; its revision is the pinned constant) |
 | `EMBEDDING_DEVICE` | `auto` | no (the model runs in its checkpoint dtype on every device) |
 | `BLOCK_WEIGHTS`, `EMM_COMPONENT_WEIGHT` | (0.45, 0.55, 1.0), 0.5 | yes |
 | `MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF` | 0.5, 0.08, 0.08 | yes (they decide the components) |
 
+The model, its revision, the truncation and the query task are constants of `attractor_topology/encoder.py` (`QWEN_MODEL`, `QWEN_REVISION`, `TRUNCATE_DIM`, `QUERY_TASK`), not settings: changing one is a code change that changes the fingerprint, and the checkpoint manifest in `insight_graph_service/core/model_store.py` changes with the revision.
+
 ## 4.8 Guarantees and failure modes
 
 * Embedding inputs contain only conditions (scope) and metric names (target, labels): no measured numbers, no prose — except the fallback phenomenon sentence when components cancel. The readable text is a pure function of the insight and the config, and ASCII for ASCII data.
-* Every row and every block is unit-norm, also after truncation (the hashing backend excepted for text without `[a-z0-9]`); `dim = 3 · block_dim`; identical input gives identical output.
+* Every row and every block is unit-norm, also after truncation (the test double excepted for text without `[a-z0-9]`); `dim = 3 · block_dim`; identical input gives identical output.
 * The query instruction never reaches component labels or recognised scope/target strings.
 * The fingerprint changes whenever any input that shapes a stored vector changes ([4.6](#46-representation-identity-and-versions)).
-* Model load or encode errors become `embedding_failure` (the batch fails before the journal or the ontology changes; the dataset folder's source copy, `profile.json` and `rejections.json` are already written); a fingerprint change becomes `representation_mismatch`.
+* Model load or encode errors become `embedding_failure` (the batch fails before the journal or the ontology changes; the dataset folder's `profile.json` and `rejections.json` are already written); a fingerprint change becomes `representation_mismatch`. A model folder that is missing or incomplete stops the graph service at its start, before the workspace is opened.
 
-Tests: `test_canonical_sections_are_separate`, `test_embedding_labels_carry_no_numbers`, `test_text_number_rules`, `test_covariance_canonical_component`, `test_embedding_contract` (hashing and the real model: shape, dtype, unit norms, stability, direction separation, cross-scope similarity), `test_fingerprint_changes_with_representation_choices`, `test_query_instruction_only_reaches_free_question_text`, `test_env_file_switches_to_the_minilm_block`.
+Tests: `test_canonical_sections_are_separate`, `test_embedding_labels_carry_no_numbers`, `test_text_number_rules`, `test_covariance_canonical_component`, `test_embedding_contract` (the test double and the real model: shape, dtype, unit norms, stability, direction separation, cross-scope similarity), `test_fingerprint_changes_with_representation_choices`, `test_query_instruction_only_reaches_free_question_text`; `tests/test_model_store.py` (a verified seed is copied, a same-size corrupt file is caught by its hash and repaired from the seed while the service's size check passes it; the local checkpoint matches the pinned manifest).

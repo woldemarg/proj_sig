@@ -14,12 +14,12 @@ from typing import Any
 # scripts run from scripts/; the package lives one level up (not pip-installed)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ltir.config import PROJECT_ROOT, load_config  # noqa: E402
-from ltir.engine import Engine  # noqa: E402
-from ltir.evaluation.synthetic import generate_retail_dataset  # noqa: E402
+from insight_graph_service.core.demo import generate_retail_dataset  # noqa: E402
+from insight_graph_service.core.engine import Engine  # noqa: E402
+from insight_graph_service.core.settings import PROJECT_ROOT, load_env_file, load_settings  # noqa: E402
 
+load_env_file()  # the measurements use the configured settings (.env), like the service
 SCRATCH = PROJECT_ROOT / ".scratch"
-DEMO_QUESTION = "Why is margin lower for phones in the US?"
 
 
 def scratch_dir(name: str, *, fresh: bool = False) -> Path:
@@ -31,32 +31,31 @@ def scratch_dir(name: str, *, fresh: bool = False) -> Path:
     return path
 
 
-def write_demo_csv(folder: Path, seed: int = 7) -> Path:
-    """The synthetic retail dataset (``ltir.evaluation.synthetic``) as a CSV inside ``folder``."""
-    path = folder / f"retail_synthetic_seed{seed}.csv"
+def write_demo_csv(folder: Path) -> Path:
+    """The synthetic retail dataset (``insight_graph_service.core.demo``) as a CSV inside ``folder``."""
+    path = folder / "retail_synthetic_seed7.csv"
     if not path.exists():
-        generate_retail_dataset(5000, seed).to_csv(path, index=False)
+        generate_retail_dataset(5000, 7).to_csv(path, index=False)
     return path
 
 
-def build_engine(workspace: Path, *, llm: Any = None, embedder: Any = None, **overrides: Any) -> Engine:
-    """Engine on a scratch workspace; ``overrides`` are ``Config`` fields, ``embedder`` reuses a loaded model."""
-    cfg = load_config(workspace_dir=workspace, neo4j_enabled=False, **overrides)
-    return Engine(cfg, llm=llm, embedder=embedder)
+def build_engine(workspace: Path, *, embedder: Any = None) -> Engine:
+    """Engine on a scratch workspace; ``embedder`` reuses a loaded model."""
+    return Engine(load_settings(workspace_dir=workspace, neo4j_enabled=False), embedder=embedder)
 
 
-def ingest_ready(engine: Engine, path: Path, **options: Any) -> dict[str, Any]:
+def ingest_ready(engine: Engine, path: Path) -> dict[str, Any]:
     """Run one batch; exits with the batch status and error unless it ends READY."""
-    record = engine.ingest_file(path, **options)
+    record = engine.ingest_file(path)
     if record["status"] != "READY":
         raise SystemExit(f"{path.name}: {record['status']} {record.get('error')}")
     return record
 
 
-def demo_engine(name: str, *, llm: Any = None, **overrides: Any) -> Engine:
+def demo_engine(name: str) -> Engine:
     """Fresh scratch workspace with the demo ingested."""
     root = scratch_dir(name, fresh=True)
-    engine = build_engine(root / "ws", llm=llm, **overrides)
+    engine = build_engine(root / "ws")
     ingest_ready(engine, write_demo_csv(root))
     return engine
 

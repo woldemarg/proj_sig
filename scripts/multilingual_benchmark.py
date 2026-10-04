@@ -13,23 +13,21 @@ seeds and evidence are the gold standard (docs §7.7): Seed Recall@3, Cross-ling
 hold), direction / relationship agreement and the retrieval latency.
 
     python scripts/multilingual_benchmark.py --label full
-    python scripts/multilingual_benchmark.py --label neo4j --neo4j fake      # retrieval must not change
 
-``--neo4j fake`` publishes every batch through the tests' in-memory driver (never a live database).
 Results: ``.scratch/results/multilingual_<label>.json``. Never touches ``workspace/``.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
 
-from ltir.evaluation.synthetic import generate_retail_dataset
+from evidence_narrator_service.narration import answer
+from insight_graph_service.core.demo import generate_retail_dataset
 
 UK_VALUES = {
     "category": {"laptops": "ноутбуки", "phones": "телефони", "tablets": "планшети", "accessories": "аксесуари"},
@@ -124,7 +122,7 @@ def write_uk_csv(folder: Path) -> Path:
     return path
 
 
-def workspaces(args: argparse.Namespace) -> dict[str, Any]:
+def workspaces() -> dict[str, Any]:
     root = scratch_dir("multilingual")
     engines: dict[str, Any] = {}
     shared = None
@@ -133,26 +131,8 @@ def workspaces(args: argparse.Namespace) -> dict[str, Any]:
         shared = engine.encoder.embedder  # one loaded model for both workspaces
         if not engine.graph().of_kind("Pattern"):
             ingest_ready(engine, writer(root))
-        if args.neo4j == "fake":
-            _fake_neo4j(engine)
         engines[name] = engine
     return engines
-
-
-def _fake_neo4j(engine: Any) -> None:
-    """Turn the Neo4j mirror on through the tests' in-memory driver and publish the snapshot: the mirror path
-    runs, no database is touched, and retrieval must come out identical (the document's step 6)."""
-    from dataclasses import replace
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
-    from test_persistence import _Driver  # noqa: PLC0415
-
-    from ltir.storage import neo4j_mirror
-
-    real = neo4j_mirror.publish_snapshot
-    neo4j_mirror.publish_snapshot = lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver())
-    engine.config = replace(engine.config, neo4j_enabled=True)
-    assert engine.sync_neo4j()["status"] == "ok"
 
 
 def symbols(parsed: dict[str, Any]) -> set[str]:
@@ -165,16 +145,16 @@ def run(engines: dict[str, Any]) -> list[dict[str, Any]]:
 
     def ask(ws: str, q: str):
         if (ws, q) not in cache:
-            cache[(ws, q)] = engines[ws].ask(q, use_llm=False)
+            cache[(ws, q)] = answer(engines[ws].evidence(q), None)
         return cache[(ws, q)]
 
     for bucket, ws, q, twin in QUESTIONS:
         gold, qa = ask(ws, twin), ask(ws, q)
-        gold_seeds = {s["pattern_id"] for s in gold.traversal["seeds"]}
-        seeds = {s["pattern_id"] for s in qa.traversal["seeds"]}
-        gold_ev = {i["pattern_id"] for i in gold.evidence["items"]}
-        ev = {i["pattern_id"] for i in qa.evidence["items"]}
-        parsed, gold_parsed = qa.evidence["parsed"], gold.evidence["parsed"]
+        gold_seeds = {s["pattern_id"] for s in gold.view["traversal"]["seeds"]}
+        seeds = {s["pattern_id"] for s in qa.view["traversal"]["seeds"]}
+        gold_ev = {i["pattern_id"] for i in gold.view["evidence"]["items"]}
+        ev = {i["pattern_id"] for i in qa.view["evidence"]["items"]}
+        parsed, gold_parsed = qa.view["evidence"]["parsed"], gold.view["evidence"]["parsed"]
         wanted = symbols(gold_parsed)
         grounding = parsed.get("grounding", [])  # a condition grounds to one symbol per column
         false = [g for g in grounding if not any(s in wanted for s in (g["symbol"] if isinstance(g["symbol"], list) else [g["symbol"]]))]
@@ -221,9 +201,8 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="full")
-    parser.add_argument("--neo4j", default="off", choices=["off", "fake"])
     args = parser.parse_args()
-    engines = workspaces(args)
+    engines = workspaces()
     t0 = time.perf_counter()
     rows = run(engines)
     summary = summarise(rows)

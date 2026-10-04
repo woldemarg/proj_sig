@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ltir.analysis.ontology import LatentOntology, orphan_anchors
-from ltir.config import load_config
-from ltir.engines.lac.observability import density_threshold
-from ltir.engines.lac.ontology_engine import repair_extraction
+from attractor_topology.config import TopologyConfig
+from attractor_topology.ontology import LatentOntology, orphan_anchors
+from attractor_topology.vendor.lac.observability import density_threshold
+from attractor_topology.vendor.lac.ontology_engine import repair_extraction
 
 
 def unit(v):
@@ -16,11 +16,16 @@ def unit(v):
     return (v / np.linalg.norm(v)).astype(np.float32)
 
 
+DIM = 1152  # the production insight vector (3 x 384)
+
+
 def clusters(rng, centers, per, noise=0.05):
+    """``per`` noisy copies of each centre; ``noise`` is the spread a 48-d toy would get, scaled to DIM so the cluster
+    geometry (cosine to the centre) does not depend on the dimension."""
     rows, labels = [], []
     for k, c in enumerate(centers):
         for _ in range(per):
-            rows.append(unit(c + rng.normal(0, noise, c.shape)))
+            rows.append(unit(c + rng.normal(0, noise * np.sqrt(48 / c.size), c.shape)))
             labels.append(k)
     return np.stack(rows), labels
 
@@ -28,7 +33,7 @@ def clusters(rng, centers, per, noise=0.05):
 @pytest.fixture
 def toy():
     rng = np.random.RandomState(0)
-    dim = 48
+    dim = DIM
     centers = [unit(rng.normal(size=dim)) for _ in range(3)]
     return rng, dim, centers
 
@@ -40,7 +45,7 @@ def ingest(ont, x, w=None, seq=0, prefix="p"):
 
 def test_cold_start_creates_attractors_with_full_activation_coverage(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = load_config()
+    cfg = TopologyConfig()
     ont = LatentOntology(cfg, tmp_path)
     x, labels = clusters(rng, centers, 6)
     up, ids = ingest(ont, x)
@@ -58,7 +63,7 @@ def test_cold_start_creates_attractors_with_full_activation_coverage(tmp_path, t
 
 def test_assignment_orphans_and_new_concepts(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = load_config()
+    cfg = TopologyConfig()
     ont = LatentOntology(cfg, tmp_path)
     ingest(ont, clusters(rng, centers[:2], 6)[0])
     n0 = len(ont.attractor_ids)
@@ -80,7 +85,7 @@ def test_assignment_orphans_and_new_concepts(tmp_path, toy):
 def test_soft_merge_absorbs_redundant_new_atoms(tmp_path, toy):
     rng, dim, centers = toy
     # strict assignment, permissive merge: near-miss orphans are absorbed, not minted
-    cfg = load_config(min_assign_threshold=0.97, max_assign_threshold=0.99, soft_merge_low=0.5)
+    cfg = TopologyConfig(min_assign_threshold=0.97, max_assign_threshold=0.99, soft_merge_low=0.5)
     ont = LatentOntology(cfg, tmp_path)
     ingest(ont, clusters(rng, centers[:1], 4, noise=0.01)[0])
     n0 = len(ont.attractor_ids)
@@ -92,7 +97,7 @@ def test_soft_merge_absorbs_redundant_new_atoms(tmp_path, toy):
 
 def test_insight_weight_scales_centroid_pull(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = load_config()
+    cfg = TopologyConfig()
     probe = unit(centers[0] + 0.5 * rng.normal(size=dim) / np.sqrt(dim))
     moves = []
     for w, sub in ((1.0, "strong"), (0.1, "weak")):
@@ -107,7 +112,7 @@ def test_insight_weight_scales_centroid_pull(tmp_path, toy):
 
 
 def test_density_threshold_scales_with_attractor_count():
-    cfg = load_config()
+    cfg = TopologyConfig()
     assert density_threshold(3, cfg) == 1.0  # three themes: no single one is a hub by share alone
     assert density_threshold(7, cfg) == pytest.approx(3 / 7)  # the demo's 32 % theme is below it
     assert density_threshold(40, cfg) == cfg.density_floor and density_threshold(0, cfg) == 1.0
@@ -126,7 +131,7 @@ def test_damping_slows_an_over_represented_attractor(tmp_path, toy):
     rng, dim, centers = toy
     probe = clusters(np.random.RandomState(5), [unit(centers[0] + 0.6 * unit(rng.normal(size=dim)))], 4, noise=0.02)[0]
     moves, sources = {}, {}
-    for name, cfg in (("free", load_config()), ("damped", load_config(density_multiple=1.0))):
+    for name, cfg in (("free", TopologyConfig()), ("damped", TopologyConfig(density_multiple=1.0))):
         ont, hub = _skewed_ontology(tmp_path / name, np.random.RandomState(1), centers, cfg)
         before = ont.centroid(hub).copy()
         up, _ = ingest(ont, probe, seq=1)
@@ -139,7 +144,7 @@ def test_damping_slows_an_over_represented_attractor(tmp_path, toy):
 
 def test_trust_region_caps_a_batch_move(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = load_config(max_centroid_step=0.002)
+    cfg = TopologyConfig(max_centroid_step=0.002)
     ont = LatentOntology(cfg, tmp_path)
     ingest(ont, clusters(rng, centers, 4)[0])
     before = ont.store.embeddings.copy()
@@ -158,7 +163,7 @@ def test_sign_repair_flips_anti_aligned_atoms(toy):
     rows = clusters(rng, centers[:1], 3, noise=0.01)[0]
     cents = -centers[0][None, :]  # OMP returned the atom with the "wrong" sign
     acts = [{"chunk_id": i, "concept_id": 0, "weight": 0.9} for i in range(3)]
-    fixed, counts, fixed_acts = repair_extraction(cents, acts, rows, load_config())
+    fixed, counts, fixed_acts = repair_extraction(cents, acts, rows, TopologyConfig())
     assert float(fixed[0] @ centers[0]) > 0.99 and counts.tolist() == [3] and len(fixed_acts) == 3
 
 
@@ -172,7 +177,7 @@ def test_orphan_rule_keeps_linked_or_populated_anchors():
 
 def test_forget_recounts_and_renumbers(tmp_path, toy):
     rng, dim, centers = toy
-    ont = LatentOntology(load_config(), tmp_path)
+    ont = LatentOntology(TopologyConfig(), tmp_path)
     up, _ = ingest(ont, clusters(rng, centers, 4)[0])
     before, first = ont.attractor_ids, ont.attractor_ids[0]
     linked = {a for e in ont.topology() for a in (e["source"], e["target"])}
@@ -186,7 +191,7 @@ def test_forget_recounts_and_renumbers(tmp_path, toy):
 
 def test_state_roundtrip(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = load_config()
+    cfg = TopologyConfig()
     ont = LatentOntology(cfg, tmp_path)
     ingest(ont, clusters(rng, centers, 4)[0])
     ont.save()
