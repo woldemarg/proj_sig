@@ -11,7 +11,8 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
 
-Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked).
+Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
+``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 2  # Pattern props are the journal Insight record (not a projected schema)
+SNAPSHOT_VERSION = 3  # 3: CO_OCCURS edges in the latent plane; 2: Pattern props are the journal Insight record
 
 
 class EdgeType(str, Enum):
@@ -32,18 +33,21 @@ class EdgeType(str, Enum):
     TARGETS = "TARGETS"
     ACTIVATES = "ACTIVATES"
     RELATED_TO = "RELATED_TO"
+    CO_OCCURS = "CO_OCCURS"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
 
 
 STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.GENERALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS}
-UNDIRECTED_EDGES = {EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.RELATED_TO}
+LATENT_EDGES = {EdgeType.RELATED_TO, EdgeType.CO_OCCURS}  # anchor <-> anchor: centroid neighbours, shared members
+UNDIRECTED_EDGES = {EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.RELATED_TO, EdgeType.CO_OCCURS}
 EDGE_PLANE = {
     EdgeType.SPECIALIZES: "structural",
     EdgeType.GENERALIZES: "structural",
     EdgeType.SIBLING: "structural",
     EdgeType.CONTRASTS: "structural",
     EdgeType.RELATED_TO: "latent",
+    EdgeType.CO_OCCURS: "latent",
     EdgeType.ACTIVATES: "bridge",
     EdgeType.HAS_SCOPE: "schema",
     EdgeType.TARGETS: "schema",

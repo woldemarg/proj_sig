@@ -70,7 +70,7 @@ A `K` with `dead(K) > MAX_DEAD_CONCEPT_RATIO` (0.25) is skipped while no `K` has
 
 **Adaptive threshold** (`compute_adaptive_threshold`): with fewer than 10 anchors `τ = MIN_ASSIGN_THRESHOLD` (0.75, calibrated for Qwen3 — [5.10](#510-calibration-per-embedder)); otherwise `τ = clip(percentile_85(off-diagonal cos(c_j, c_k)), MIN_ASSIGN_THRESHOLD, MAX_ASSIGN_THRESHOLD = 0.80)` — anchor-to-anchor similarity is a loose upper bound for insight-to-anchor similarity.
 
-**Assignment** (`assign_and_update`): `sim_ij = cos(x_i, c_j)`, one similarity matrix per batch against the centroids as the batch found them (the EMA updates of earlier rows in the batch do not change later rows' assignment). If `max_j sim_ij ≥ τ`, the row activates every anchor among its `TOP_K_ASSIGN` (2) best with `sim_ij ≥ τ` and `sim_ij ≥ MIXTURE_RATIO (0.9) · max_j sim_ij` — an insight can belong to two anchors when it mixes two phenomena — and each activation updates that centroid. Otherwise the row is an orphan.
+**Assignment** (`assign_and_update`): `sim_ij = cos(x_i, c_j)`, one similarity matrix per batch against the centroids as the batch found them (the EMA updates of earlier rows in the batch do not change later rows' assignment). If `max_j sim_ij ≥ τ`, the row activates every anchor among its `TOP_K_ASSIGN` (2) best with `sim_ij ≥ τ` and `sim_ij ≥ MIXTURE_RATIO (0.8) · max_j sim_ij` — an insight can belong to two anchors when it mixes two phenomena — and each activation updates that centroid. Otherwise the row is an orphan.
 
 **EMA with concept inertia** (`ConceptStore.update_concept_centroid`), per activation:
 
@@ -97,11 +97,11 @@ None of the guards freezes learning or diverts rows to the orphan buffer: both w
 
 ```text
 τ_density = max(DENSITY_FLOOR 0.25, DENSITY_MULTIPLE 3.0 / N_anchors)          hub threshold: 3 × the uniform share
-share_j   = count_j / next_chunk_id   (before the batch)        d_j = min(1, τ_density / share_j)        EMA damping
+share_j   = count_j / Σ_k count_k   (memberships, before the batch)        d_j = min(1, τ_density / share_j)        EMA damping
 Δ_j = c_j(after) − c_j(before);  if ‖Δ_j‖ > MAX_CENTROID_STEP (0.10):   c_j ← normalize(c_j(before) + (MAX_CENTROID_STEP / ‖Δ_j‖) · Δ_j)
 ```
 
-* **Adaptive hub threshold.** A fixed 25 % hub rule flagged the demo's largest theme on every run; `τ_density` scales with the number of anchors (the demo's largest theme holds 10 of 28 = 36 % with 4 anchors, `τ = 75 %`).
+* **Adaptive hub threshold.** A fixed 25 % hub rule flagged the demo's largest theme on every run; `τ_density` scales with the number of anchors (the demo's largest theme holds 10 of 28 memberships = 36 % with 4 anchors, `τ = 75 %`). Shares count memberships, so they sum to 1 however many anchors an insight joins.
 * **Per-anchor damping.** An over-represented anchor keeps accepting members — assignment, orphan routing and extraction are unchanged — but its centroid moves proportionally less, so a hub cannot be dragged towards the mean of everything it absorbs. Damping uses `N` and the shares from before the batch; the reported `density_threshold` and the hub warning use `N` after it.
 * **Trust region.** After the batch, a pre-existing centroid whose move exceeds `MAX_CENTROID_STEP` is pulled back onto that radius; alignments are measured against the final centroids. Calibrated on a same-domain second batch: largest healthy move 0.010 with Qwen3 (0.023 with MiniLM in the embedder comparison of [4.5](04_representation.md#45-embedder-comparison)), so the limit leaves at least 4× headroom.
 
@@ -112,6 +112,27 @@ Telemetry per batch: `density_threshold`, `damped_attractors` (anchors with `d_j
 `calculate_knn_topology`: with `k = min(RELATED_TO_PEER_COUNT (3), n − 1)`, an undirected RELATED_TO edge `(j, k)` exists when **each** anchor is in the other's top-`k` by cosine and `cos(c_j, c_k) > RELATED_TO_MIN_WEIGHT` (0.30); the weight is the cosine; edges are stored from the smaller to the larger id and recomputed from scratch after every batch.
 
 Mutual nearest neighbours keep the latent plane sparse (at most `k · N / 2` edges) and suppress hubs, at a price: **an anchor can end up with no link at all** — when its nearest anchors all have closer neighbours of their own. No invariant requires a link; only insights must be covered. In a workspace with four datasets, for example, the retail anchor `discount ↑ · margin ↓` ranked sixth among the neighbours of its nearest anchor (five anchors from other datasets were closer to that one), so it had no RELATED_TO edge. On the demo alone three of the four anchors are linked (A-0–A-1 0.61, A-0–A-2 0.55, A-1–A-2 0.31); `A-3` has none — its best cosine to another anchor is 0.06, below `RELATED_TO_MIN_WEIGHT`. The sphere view flattens 1152 dimensions into three, so visual proximity there is only a rough guide to these cosines.
+
+**Co-memberships and co-occurrence links.** A second kind of link joins anchors that describe the same insights. Extraction keeps one atom per insight (5.3), so the snapshot compiler gives each insight the memberships the assignment rule (5.4) gives it against the current centroids: its top `TOP_K_ASSIGN` (2) anchors, each within `MIXTURE_RATIO` (0.8) of its best alignment and above `MIN_ACTIVATION_ALIGNMENT`. They are ACTIVATES edges with `source: co_membership`, compiled at every commit and stored neither in the journal nor in the concept store. A **CO_OCCURS** link then joins two anchors that share non-weak members (`snapshot.co_occurrence_edges`), with the weight of lac's combined graph:
+
+```text
+W[p, j] = a_j · a_j / Σ_k a_k        a = current alignments of p's non-weak memberships
+w(j, k) = min(1, Σ_p W[p, j] · W[p, k])        shared = number of insights p        undirected, smaller → larger id
+```
+
+lac normalises the engine weights of one extraction, which share a scale. Here a journal membership carries an OMP coefficient (about 6 to 8 at `DICTIONARY_INPUT_SCALE` 10) and a compiled one a cosine, so every membership counts with its alignment, the weight the assignment rule gives. The cap keeps every traversal factor ≤ 1 (7.3). A link exists only between anchors that share an insight.
+
+Why one atom per insight at extraction and the second membership from the assignment rule (measured on throwaway workspaces with the hypothesis benchmark of [10.3](10_verification.md#103-hypothesis-benchmark), the demo and demo → same-domain batch → `housing.csv`):
+
+| Configuration | demo recall@5 / MRR | grown recall@5 / MRR | lowest anchor purity (demo) | grown: components / efficiency / CO_OCCURS |
+|---|---|---|---|---|
+| one membership per insight (before co-memberships) | 0.729 / 0.581 | 0.283 / 0.502 | 1.00 | 3 / 0.306 / 1 |
+| `CONCEPTS_PER_CHUNK` 2 (`MIXTURE_RATIO` 0.8 or 0.9, peers 3 or 5) | 0.264 / 0.320 | 0.132 / 0.231 | 0.53 | 1 / 0.72–0.80 / 10–11 |
+| `CONCEPTS_PER_CHUNK` 3 | 0.264 / 0.320 | 0.132 / 0.231 | 0.50 | 1 / 0.64–0.73 / 20–26 |
+| **co-memberships, `MIXTURE_RATIO` 0.8** | **0.729 / 0.581** | **0.283 / 0.502** | 0.83 | 3 / 0.322 / 10 |
+| co-memberships, `MIXTURE_RATIO` 0.9 | 0.729 / 0.581 | 0.283 / 0.502 | 0.83 | 3 / 0.306 / 5 |
+
+Two or three atoms per insight make anchors mixtures of phenomena: the grown graph becomes one component, but analogue recall@5 falls to about a third on the demo and to half after growth. These rows include the co-memberships the compiler always adds; without them, two atoms reached 0.590 / 0.521 on the demo. Co-memberships keep the anchors and the benchmark and add co-occurrence links; 0.8 is the ratio that adds the most links without moving the benchmark (0.7 halved the grown benchmark: recall@5 0.132, MRR 0.235). Purity is the share of an anchor's members that come from its most frequent planted phenomenon, over anchors with at least three labelled members. On the demo they add one membership and one link (A-0–A-1, 0.19).
 
 ## 5.8 How an anchor is described
 
@@ -132,11 +153,11 @@ evidence_mass    = Σ_i strength_i          dispersion = 1 − mean_i alignment_
 | `centroid` | `{dim, norm, representation_version, fingerprint}` — the vector contract, not the vector | |
 | `description` (prompt only) | `graph_query_engine.graph.describe_components(signature)` over `insight_contracts.text.describe_component`: the two strongest entries as ASCII prose (`<label> up` / `down`, `correlation between a and b strengthens` / `weakens`) joined by ` and `; falls back to the label | `discount up and margin down` |
 
-The prompt line reads `- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.61)`; the UI drawer says `A recurring pattern learned from 9 insights across 9 different subgroups.` followed by the signature. An anchor's name can change when new members arrive; its id `A-k` and its centroid identity do not, so labels are never used as keys.
+The prompt line reads `- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.19, shared members), A-0 (0.61)`; the UI drawer says `A recurring pattern learned from 9 insights across 9 different subgroups.` followed by the signature. An anchor's name can change when new members arrive; its id `A-k` and its centroid identity do not, so labels are never used as keys.
 
 ## 5.9 Activation records and batch metrics
 
-**Activation record** (`ontology.activation_record`, journal and graph): `{pattern_id, attractor_id, alignment, strength, engine_weight, source, weak, batch_id, row_id}` with `source ∈ {cold_start, assign, omp, absorbed, nearest, reroute}`. One record per (pattern, anchor), the best alignment kept:
+**Activation record** (`ontology.activation_record`, journal and graph): `{pattern_id, attractor_id, alignment, strength, engine_weight, source, weak, batch_id, row_id}` with `source ∈ {cold_start, assign, omp, absorbed, nearest, reroute}`; the snapshot adds compiled `co_membership` edges (5.7), which are not records. One record per (pattern, anchor), the best alignment kept:
 
 ```text
 alignment_at_ingest = cos(x̂_i, c_j)  against the final centroid of that batch        strength = alignment · w_i
@@ -159,7 +180,7 @@ Cosine thresholds belong to the embedder, not to the method. Qwen3 places unrela
 
 **Rule:** the floor lies between the two measured values — above the largest alignment of an unrelated batch to an existing anchor, below the smallest alignment of a same-domain batch — so an unrelated dataset arrives as orphans while a related one is assigned. A different embedding model (a code change in `attractor_topology/encoder.py`, [4.7](04_representation.md#47-configuration)) needs both values measured again and the floor reset, together with `GROUNDING_MIN_COSINE` ([7.1.1](07_question_answering.md#711-literal-grounding)). With 10 or more anchors the adaptive threshold is `clip(p85, MIN, MAX)`, so the floor still applies.
 
-`RELATED_TO_MIN_WEIGHT` is 0.30 for both models of the comparison. A global floor cannot keep links within datasets: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured: one cross-dataset link with three datasets (`corr(discount~margin) weakens · margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.57 — both "a value metric falls"), three with four datasets. On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. Restricting links to anchors that share a dataset is the open design option.
+`RELATED_TO_MIN_WEIGHT` is 0.30 for both models of the comparison. The floor does not separate datasets, and is not meant to: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured: one cross-dataset link with three datasets (`corr(discount~margin) weakens · margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.57 — both "a value metric falls"), three with four datasets. On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. Such links are bridges, not noise: the knowledge base integrates datasets that describe related phenomena, so an anchor of another dataset is a legitimate transversal step, and evidence reached over it carries its dataset (`provenance.dataset_id`, [7.4](07_question_answering.md#74-the-evidence-object)). Co-occurrence links never cross datasets on their own: an insight belongs to one dataset, so its co-memberships join anchors its dataset populates.
 
 ## 5.11 Removing patterns: the orphan rule
 
@@ -169,7 +190,7 @@ Deleting a dataset ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) remove
 anchor dropped  ⇔  no remaining member  ∧  no RELATED_TO link (in the topology as it stood before the deletion)
 ```
 
-An anchor that keeps a member stays. An anchor left without members but still linked to another anchor stays too: its centroid keeps its place in the mutual-kNN topology and can receive future insights that align with it, so a later upload of a related dataset joins it instead of minting a new one. Its label becomes `Attractor k` until it has members again. Centroids are never un-averaged — a survivor keeps the position its history gave it — and the row counter follows the rewritten journal. When the last pattern of the workspace goes, every anchor goes with it: an empty knowledge base starts cold again. Accordingly the mass invariant of [5.13](#513-guarantees-and-measured-behaviour) applies to anchors *created* in a batch; an older one may legitimately be empty.
+A CO_OCCURS link needs a member on both sides, so it never keeps a memberless anchor; the rule reads RELATED_TO only. An anchor that keeps a member stays. An anchor left without members but still linked to another anchor stays too: its centroid keeps its place in the mutual-kNN topology and can receive future insights that align with it, so a later upload of a related dataset joins it instead of minting a new one. Its label becomes `Attractor k` until it has members again. Centroids are never un-averaged — a survivor keeps the position its history gave it — and the row counter follows the rewritten journal. When the last pattern of the workspace goes, every anchor goes with it: an empty knowledge base starts cold again. Accordingly the mass invariant of [5.13](#513-guarantees-and-measured-behaviour) applies to anchors *created* in a batch; an older one may legitimately be empty.
 
 ## 5.12 Configuration
 
@@ -177,14 +198,15 @@ lac names, SIG-sized defaults (lac was tuned for thousands of text chunks, SIG s
 
 | Parameter | lac | SIG | Reason |
 |---|---|---|---|
-| `CONCEPTS_PER_CHUNK` | 2 | **1** | one dominant phenomenon per insight at extraction; mixtures come from `TOP_K_ASSIGN` |
+| `CONCEPTS_PER_CHUNK` | 2 | **1** | one dominant phenomenon per insight at extraction; a second membership comes from the assignment rule (co-memberships, 5.7) — two or three atoms blur the anchors (measured, 5.7) |
 | `DICTIONARY_K_MIN` / `_STEP` | 20 / 20 | **4 / 2** | tens of insights |
 | `MAX_CONCEPT_COUNT` | 200 | **40** | |
 | `RELATED_TO_PEER_COUNT` | 7 | **3** | small anchor sets would become near-complete graphs |
 | `RELATED_TO_MIN_WEIGHT` | 0.15 | **0.30** | composite vectors have a higher baseline similarity |
 | `MIN` / `MAX_ASSIGN_THRESHOLD` | 0.30 / 0.45 | **0.75 / 0.80** | same reason; the floor is calibrated for the embedder (5.10) |
 | `SOFT_MERGE_LOW` | 0.55 | **0.85** | phenomenon clusters are tight (0.93–0.99) |
-| `CENTROID_ALPHA` 0.05, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.9, `ADAPTIVE_PERCENTILE` 85, `ORPHAN_BUFFER_MIN_FACTOR` 3, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `RANDOM_SEED` 42 | lac | lac | unchanged |
+| `MIXTURE_RATIO` | 0.90 | **0.80** | also the co-membership rule of the snapshot; 0.8 adds the most co-occurrence links without moving the benchmark (5.7) |
+| `CENTROID_ALPHA` 0.05, `TOP_K_ASSIGN` 2, `ADAPTIVE_PERCENTILE` 85, `ORPHAN_BUFFER_MIN_FACTOR` 3, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `RANDOM_SEED` 42 | lac | lac | unchanged |
 | centering | running mean | **none** | lac's frame moved between batches, so stored and query vectors would drift apart; SIG keeps one frame |
 | `DICTIONARY_INPUT_SCALE`, `MIN_ACTIVATION_ALIGNMENT` | — | 10, 0.20 | adapter repairs (5.3) |
 | `DENSITY_FLOOR`, `DENSITY_MULTIPLE`, `MAX_CENTROID_STEP` | fixed 25 % hub warning | 0.25, 3.0, 0.10 | guards (5.6) |

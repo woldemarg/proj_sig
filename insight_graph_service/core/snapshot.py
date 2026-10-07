@@ -2,7 +2,8 @@
 ``graph_query_engine.graph.DualGraph``.
 
 The snapshot is *derived* data: ``build_snapshot`` turns the journal records, activations and
-vectors, the batch records (a READY one with its dataset's profile) and the ontology state into nodes and edges, so
+vectors, the batch records (a READY one with its dataset's profile) and the ontology state into nodes and edges (the
+co-memberships and the CO_OCCURS links between anchors are compiled here), so
 it can always be regenerated (the engine rebuilds a snapshot of another version when it opens the workspace). It reads no files: the caller gathers the
 inputs. ACTIVATES alignments are recomputed against the *current* centroids so graph weights
 match the living ontology.
@@ -10,6 +11,7 @@ match the living ontology.
 
 from __future__ import annotations
 
+import itertools
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +23,7 @@ from insight_contracts import (
     GraphEdge,
     GraphNode,
     Insight,
+    attractor_id_of,
     attractor_node_id,
     batch_node_id,
     dataset_node_id,
@@ -165,6 +168,56 @@ def _activation_edges(
     return edges, members
 
 
+def _co_memberships(
+    activations: list[dict[str, Any]], by_pid: dict[str, dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology, settings: Settings
+) -> list[dict[str, Any]]:
+    """The memberships the assignment rule gives each insight against the current centroids — its top ``TOP_K_ASSIGN``
+    anchors, each within ``MIXTURE_RATIO`` of its best alignment and above the floor — that its journal activations do not
+    already name, in the journal's activation shape (``source: co_membership``; compiled, never journaled). Extraction keeps
+    one atom per insight, so an insight's second theme comes from here (docs/05_latent_anchors.md §5.7)."""
+    topo, ids = settings.topology, sorted(ontology.attractor_ids)
+    if not ids:
+        return []
+    have = {(a["pattern_id"], int(a["attractor_id"])) for a in activations}
+    recs = list(by_pid.values())
+    centroids = np.stack([ontology.centroid(a) for a in ids]).astype(np.float64)
+    cos = vectors[[r["row_id"] for r in recs]].astype(np.float64) @ centroids.T
+    return [
+        {
+            "pattern_id": rec["id"],
+            "attractor_id": ids[j],
+            "engine_weight": None,
+            "alignment": None,
+            "source": "co_membership",
+            "batch_id": rec["batch_id"],
+            "weak": False,
+        }
+        for rec, row in zip(recs, cos)
+        for j in np.argsort(-row)[: topo.top_k_assign]
+        if row[j] >= max(topo.min_activation_alignment, topo.mixture_ratio * row.max()) and (rec["id"], ids[j]) not in have
+    ]
+
+
+def co_occurrence_edges(activates: list[GraphEdge]) -> list[GraphEdge]:
+    """CO_OCCURS links between anchors that share non-weak members (docs/05_latent_anchors.md §5.7). With ``a`` the
+    current alignments of insight p's non-weak memberships, ``W[p, j] = a_j · a_j / Σ_k a_k``: lac v3's combined-graph
+    weight with the assignment rule's membership weight (the cosine), one scale for journal and compiled memberships alike.
+    The pair weight is ``min(1, Σ_p W[p, j]·W[p, k])`` — the cap keeps traversal factors ≤ 1 — and ``shared`` counts the insights."""
+    rows: dict[str, dict[int, float]] = defaultdict(dict)
+    for e in activates:
+        if not e.props["weak"] and e.weight > 0:
+            rows[e.source][attractor_id_of(e.target)] = e.weight
+    pairs: dict[tuple[int, int], list[float]] = defaultdict(list)
+    for row in rows.values():
+        total = sum(row.values())
+        for j, k in itertools.combinations(sorted(row), 2):
+            pairs[(j, k)].append(row[j] ** 2 * row[k] ** 2 / total**2)
+    return [
+        GraphEdge(attractor_node_id(j), attractor_node_id(k), EdgeType.CO_OCCURS, min(1.0, sum(v)), {"kind": "co_occurrence", "shared": len(v)})
+        for (j, k), v in sorted(pairs.items())
+    ]
+
+
 def _attractor_nodes(
     ontology: LatentOntology, members: dict[int, list[Member]], seq_to_batch: dict[Any, str], rep: dict[str, Any]
 ) -> dict[str, GraphNode]:
@@ -224,8 +277,9 @@ def build_snapshot(
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
     edges += structural_edges(insights, settings.miner)
-    activates, members = _activation_edges(activations, vectors, ontology, by_pid, settings)
-    edges += activates
+    compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
+    activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
+    edges += activates + co_occurrence_edges(activates)
     nodes.update(_attractor_nodes(ontology, members, seq_to_batch, representation))
     for rel in ontology.topology():
         edges.append(

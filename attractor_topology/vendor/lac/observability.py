@@ -119,7 +119,7 @@ def avg_related_to_degree(edge_count: int, concept_count: int) -> float:
 
 
 def max_concept_density_pct(store: ConceptStore) -> float:
-    total = store.next_chunk_id
+    total = int(store.chunk_counts.sum())  # memberships: shares sum to 1 for any CONCEPTS_PER_CHUNK
     if total == 0 or len(store.chunk_counts) == 0:
         return 0.0
     return float(np.max(store.chunk_counts)) / total * 100.0

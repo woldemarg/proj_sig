@@ -37,8 +37,9 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 | Edge | From → to | Plane | Weight and properties |
 |---|---|---|---|
 | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS | Pattern → Pattern | structural | [6.1](#61-the-structural-plane) |
-| ACTIVATES | Pattern → Attractor | bridge | `alignment` with the **current** centroid (also the weight); `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `batch_id`, `weak` — the membership was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest, or its current alignment is below that floor; it counts for coverage and is not walked |
+| ACTIVATES | Pattern → Attractor | bridge | `alignment` with the **current** centroid (also the weight); `strength`, `insight_weight`, `engine_weight`, `alignment_at_ingest`, `source`, `batch_id`, `weak` — the membership was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest, or its current alignment is below that floor; it counts for coverage and is not walked. `source: co_membership` marks a membership compiled with the assignment rule ([5.7](05_latent_anchors.md#57-links-between-anchors)) |
 | RELATED_TO | Attractor → Attractor (smaller → larger id) | latent | mutual-kNN cosine; `kind: mutual_knn` |
+| CO_OCCURS | Attractor → Attractor (smaller → larger id) | latent | `min(1, Σ_p W[p, j]·W[p, k])` over shared non-weak members ([5.7](05_latent_anchors.md#57-links-between-anchors)); `kind: co_occurrence`, `shared` |
 | HAS_SCOPE | Pattern → Dimension | schema | 1.0; `value` |
 | TARGETS | Pattern → Metric | schema | `min(1, |z| / 3)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (`PhenomenonThresholds.material`); `role` primary / secondary, `z`, medians |
 | DISCOVERED_IN | Pattern → Batch | provenance | 1.0 |
@@ -46,7 +47,7 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 
 Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datasets reuse column names with different meanings. Activations that point to an unjournaled pattern or a dead anchor are skipped when the snapshot is built.
 
-> **Running example.** The demo snapshot holds 28 Pattern, 4 Attractor and the schema nodes, and 279 edges: SPECIALIZES 24, GENERALIZES 24, SIBLING 37, CONTRASTS 16, ACTIVATES 28, RELATED_TO 3, HAS_SCOPE 70, TARGETS 48, DISCOVERED_IN 28, OF_DATASET 1.
+> **Running example.** The demo snapshot holds 28 Pattern, 4 Attractor and the schema nodes, and 281 edges: SPECIALIZES 24, GENERALIZES 24, SIBLING 37, CONTRASTS 16, ACTIVATES 29 (28 records and 1 co-membership), RELATED_TO 3, CO_OCCURS 1, HAS_SCOPE 70, TARGETS 48, DISCOVERED_IN 28, OF_DATASET 1.
 
 ## 6.3 The workspace on disk
 
@@ -68,13 +69,13 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
 | `state/sig_state.json` | JSON | the next batch sequence | `Workspace.commit_batch_seq` |
 | `state/ontology_metrics.csv` | CSV | lac `BatchMetrics` rows | `MetricsRecorder` |
-| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 2) | `save_graph`, atomically |
+| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 3) | `save_graph`, atomically |
 | `graph/literals.npz` | npz: `texts`, `vectors` float32 `(N, 384)`, `fingerprint` | the embeddings of the literal catalog ([7.1.1](07_question_answering.md#711-literal-grounding)) by text — a cache: the catalog itself is rebuilt from the graph, a text it lacks (or a file of another fingerprint) is embedded again; outside `state/`, so no rollback restores it | `Workspace.save_literals`, from `Engine.prepared` of a writer on the first question after a commit that changed the literals |
 | `pending.json` + `checkpoint/` | `{batch_id` or `dataset_id, checkpoint}`; copies of `state/`, the snapshot and, for a deletion, `journal/` and the moved-aside files | the unfinished transaction ([6.4](#64-commit-rollback-and-recovery)) | `Workspace.transaction`; both removed at its end |
 
 **Atomic replacement on Windows.** Batch records, the snapshot and the other JSON files, the blocks files and the vector matrix are written beside the target and renamed over it (`fileio.replace_file`). On Windows that rename fails while another handle has the target open, and opening the target fails while it is being renamed over — both as `PermissionError` (WinError 5). The console polls the batch records while the worker rewrites them, so the rename and the readers (`read_json`, the blocks and matrix loaders) retry with a short backoff for up to `fileio.SHARING_RETRY_S` (2 s, a module constant); a reader holds a file for microseconds. Elsewhere a `PermissionError` is raised at once. Without the retry, a batch would fail with that error in the middle of a stage.
 
-The snapshot is **derived data**: every commit regenerates it from the journals, the registry (each READY record carries its dataset's profile) and the concept store, recomputing ACTIVATES alignments against the current centroids and RELATED_TO from the topology; an engine that starts on a snapshot of another `SNAPSHOT_VERSION` regenerates it the same way ([6.4](#64-commit-rollback-and-recovery)). Raw rows are stored only in the uploaded file under `uploads/`, which stays until the dataset's deletion or a reset.
+The snapshot is **derived data**: every commit regenerates it from the journals, the registry (each READY record carries its dataset's profile) and the concept store, recomputing ACTIVATES alignments against the current centroids, compiling the co-memberships and CO_OCCURS links ([5.7](05_latent_anchors.md#57-links-between-anchors)) and RELATED_TO from the topology; an engine that starts on a snapshot of another `SNAPSHOT_VERSION` regenerates it the same way ([6.4](#64-commit-rollback-and-recovery)). Raw rows are stored only in the uploaded file under `uploads/`, which stays until the dataset's deletion or a reset.
 
 ## 6.4 Commit, rollback and recovery
 
@@ -114,7 +115,7 @@ With `NEO4J_ENABLED=true`, every publish makes `NEO4J_DATABASE` equal to the sna
 
 * before the write, each as its own statement: `CREATE DATABASE <db> IF NOT EXISTS WAIT` (errors ignored: an edition without multi-database support, or a user without the right, uses the database as configured), then unique constraints on all six labels (`cypher/ensure_constraints.cypher`);
 * in one write transaction, parameterised `UNWIND … MERGE (n:Label {id}) SET n = props, n.id = id` (the props include the node's `label`) and `MERGE (s)-[r:TYPE]->(t) SET r = props, r.weight = …`, batched by `NEO4J_LOAD_BATCH_SIZE` — properties are **replaced**, so a property that disappeared or became `None` is removed (`None` values are never written);
-* then every node of the six labels whose id the snapshot does not hold is deleted with its relationships, and every relationship of the ten types whose (source, target) pair it does not hold is deleted — stale anchors, links and patterns never linger;
+* then every node of the six labels whose id the snapshot does not hold is deleted with its relationships, and every relationship of the eleven types whose (source, target) pair it does not hold is deleted — stale anchors, links and patterns never linger;
 * nested properties are stored as JSON strings in `<key>_json` (`conditions_json`, `shifts_json`, `canonical_json`, `signature_json`, `centroid_json`, …).
 
 Publishing happens after every READY batch and after every dataset deletion; `POST /api/reset` publishes an empty snapshot, which clears the mirror. When the graph service starts, `Engine.startup_sync` publishes the committed snapshot once — a commit made while Neo4j was down reaches it — but only from a healthy, non-empty workspace: a degraded or empty start never wipes the mirror. It runs on the batch worker thread under the engine's write lock, so it never interleaves with a batch's, a deletion's or a reset's own sync. SIG owns its six labels in that database: one workspace per database, and no other data under those labels. A Neo4j failure leaves the batch READY with `neo4j.status = failed` and the warning `graph persistence (Neo4j) failed`; a deletion and a reset report it in their response (`neo4j.status`) and go on. `insight_graph_service/core/cypher/queries/transversal.cypher` approximates the traversal of [7.3](07_question_answering.md#73-transversal-traversal) for the Browser: the same walkable edges, one latent hop and one lattice hop, the best path per target, but no budgeted best-first search.
@@ -129,7 +130,7 @@ Publishing happens after every READY batch and after every dataset deletion; `PO
 
 Guarantees (tests: `test_lattice.py`; `test_persistence.py`: write → reload → rebuild equality, idempotent re-ingest, graph consistency, rollback after a simulated failure, a failed READY save that rolls back the snapshot too, a failed rollback that blocks writes until recovered, representation mismatch, a batch killed after its journal append and recovered, a record rewritten under a concurrent reader, a reset refused while a batch runs, a second writer process refused while the first keeps its queue, an outdated workspace that starts degraded — writes and questions refused, no mirror sync at its start — and is usable again after a reset, a failed recovery that starts degraded, a batch that stays READY when a post-commit save fails, the Neo4j mirror equal to the snapshot — replaced properties, stale nodes and relationships deleted, an empty snapshot clearing it — against a fake driver):
 
-* GENERALIZES = inverse(SPECIALIZES); no transitive SPECIALIZES edges; structural edges connect patterns of one dataset; RELATED_TO connects only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` edges.
+* GENERALIZES = inverse(SPECIALIZES); no transitive SPECIALIZES edges; structural edges connect patterns of one dataset; RELATED_TO and CO_OCCURS connect only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` RELATED_TO edges, and every CO_OCCURS endpoint has a non-weak member.
 * `journal rows == vector rows == ConceptStore.next_chunk_id`; snapshot ids are identical after reload and after rebuild.
 * `READY` implies that journals, state and snapshot are mutually consistent; no transaction starts while `pending.json` exists.
 

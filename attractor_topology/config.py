@@ -33,7 +33,7 @@ class TopologyConfig:
     random_seed: int = 42
     centroid_alpha: float = 0.05
     top_k_assign: int = 2
-    mixture_ratio: float = 0.90
+    mixture_ratio: float = 0.80  # also the co-membership rule of the snapshot (docs/05_latent_anchors.md §5.7)
     adaptive_percentile: float = 85.0
     # cosine thresholds are embedder-specific (docs/05_latent_anchors.md §5.10), calibrated for Qwen3
     min_assign_threshold: float = 0.75

@@ -200,13 +200,14 @@ class LatentOntology:
         return acts, _Extraction(extracted=len(cents), kept=len(cents))
 
     def _damping(self) -> np.ndarray:
-        """Per-attractor EMA multiplier d_j = min(1, tau / share_j): an over-represented attractor
-        keeps its members but moves less (docs/05_latent_anchors.md §5.6); all ones before any share exists."""
+        """Per-attractor EMA multiplier d_j = min(1, tau / share_j), share_j = its memberships over all memberships: an
+        over-represented attractor keeps its members but moves less (docs/05_latent_anchors.md §5.6); all ones before any share exists."""
         st = self.store
-        if st.is_empty or st.next_chunk_id == 0:
+        total = st.chunk_counts.sum()
+        if st.is_empty or total == 0:
             return np.ones(len(st.concept_ids))
         tau = observability.density_threshold(len(st.concept_ids), self.config)
-        share = st.chunk_counts.astype(np.float64) / st.next_chunk_id
+        share = st.chunk_counts.astype(np.float64) / total
         return np.minimum(1.0, tau / np.maximum(share, 1e-12))
 
     def _clamp_steps(self, before: np.ndarray | None) -> tuple[float | None, int]:

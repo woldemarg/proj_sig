@@ -17,7 +17,7 @@ from typing import Any
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.traversal import PathStep, TraversalResult
+from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
 from insight_contracts import dataset_node_id, metric_node_id
 from insight_contracts.text import (
     describe_covariance,
@@ -27,6 +27,8 @@ from insight_contracts.text import (
     format_value,
     humanize,
 )
+
+LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occurrence link from a centroid neighbour
 
 
 @dataclass
@@ -92,7 +94,7 @@ class Evidence:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
             for a in self.attractors:
-                rel = ", ".join(f"{r['id']} ({r['weight']:.2f})" for r in a["related"]) or "none"
+                rel = ", ".join(f"{r['id']} ({r['weight']:.2f}{LINK_NOTE.get(r['type'], '')})" for r in a["related"]) or "none"
                 lines.append(
                     f'- {a["id"]} "{a["description"]}": {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes; related: {rel}'
                 )
@@ -208,7 +210,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
     attractors = []
     for a in result.attractors:
         node = graph.nodes[a.node_id]
-        related = [{"id": other, "weight": round(e["weight"], 3)} for e, other in graph.incident(a.node_id, ["RELATED_TO"])]
+        related = [{"id": other, "weight": round(e["weight"], 3), "type": e["type"]} for e, other in graph.incident(a.node_id, LATENT)]
         attractors.append(
             {
                 "id": a.node_id,

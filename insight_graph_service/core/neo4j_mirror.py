@@ -3,7 +3,7 @@
 Follows lac's publisher pattern (constraints + parameterised UNWIND/MERGE) with
 the SIG schema. The local journal/state is the source of truth and every publish makes
 the mirror equal to the snapshot: properties are replaced, not merged, and nodes of the
-six SIG labels and relationships of the ten SIG types that the snapshot no longer holds
+six SIG labels and relationships of the eleven SIG types that the snapshot no longer holds
 are deleted (after a reset, a rebuild or a recomputed topology). SIG owns
 these labels in ``NEO4J_DATABASE``: one workspace per database.
 """
@@ -27,6 +27,7 @@ EDGE_ENDPOINTS = {
     "TARGETS": ("Pattern", "Metric"),
     "ACTIVATES": ("Pattern", "Attractor"),
     "RELATED_TO": ("Attractor", "Attractor"),
+    "CO_OCCURS": ("Attractor", "Attractor"),
     "DISCOVERED_IN": ("Pattern", "Batch"),
     "OF_DATASET": ("Batch", "Dataset"),
 }

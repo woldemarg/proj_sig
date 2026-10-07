@@ -38,9 +38,9 @@ Each library imports only the shared kernel; `tests/test_architecture.py` enforc
 ```text
 file → ingestion → EDA pass 1 (reused) → closed intents, identical / near-duplicate cohorts merged → EDA pass 2 validation
      → validity rules + insight_weight → admission → canonical scope / target / signed components → tripartite vectors
-     → lac ontology (reused, with density damping + trust region): attractors, ACTIVATES, RELATED_TO
+     → lac ontology (reused, with density damping + trust region): attractors, ACTIVATES (+ compiled co-memberships), RELATED_TO + CO_OCCURS
      → structural lattice: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS → journals + state + graph snapshot (+ Neo4j)
-question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO→ Attractor ←ACTIVATES─ Pattern ─lattice→ …
+question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO | CO_OCCURS→ Attractor ←ACTIVATES─ Pattern ─lattice→ …
          → evidence payload → Gemma 4 (or evidence-only fallback) → cited answer + highlighted path in the console
 ```
 
@@ -157,14 +157,14 @@ curl -X POST http://127.0.0.1:8765/api/reset                                    
 ```text
 {"batch_id": "B20261004T005725-2b9928", "dataset_id": "ds-6e53eb7fb0f9", "filename": "retail_synthetic.csv", …, "status": "READY", …,
  "metrics": {"input_rows": 5000, …, "candidate_patterns": 84, "validated_candidates": 50, "validated_insights": 28, …, "pruned_total": 22, …,
-             "attractors_total": 4, "attractors_new": 4, "orphan_rate": 0.0, …, "avg_attractor_degree": 1.5, "graph_edges": 279, …,
+             "attractors_total": 4, "attractors_new": 4, "orphan_rate": 0.0, …, "avg_attractor_degree": 1.5, "graph_edges": 281, …,
              "processing_duration_s": 12.613771399999678}, …}
 ```
 Latent anchors learned, each a recurring phenomenon across scopes:
 
 | Attractor | Patterns | Planted phenomenon |
 |---|---|---|
-| `delivery days ↑ · return rate ↑` | 10 | delay → returns (APAC∧online, US∧laptops∧retail, …) |
+| `delivery days ↑ · return rate ↑` | 11 (one is a co-membership) | delay → returns (APAC∧online, US∧laptops∧retail, …) |
 | `discount ↑ · margin ↓` | 9 | discount erosion (US∧phones, EU∧tablets∧retail, APAC∧tablets, …) |
 | `margin ↑` | 7 | EU laptops uplift + stronger online specialisation |
 | `corr(discount~margin) weakens · margin ↓` | 2 | the two one-off phenomena: correlation break EU∧phones and contrasting subgroup EU∧laptops∧retail |
@@ -208,8 +208,8 @@ Labels come from the planted ground truth (scope containment), not from the meas
 | new attractors | 11 (e.g. `longitude ↓ · latitude ↑`, 8 patterns) |
 
 - **Ingested after the demo,** this batch exercised lac's streaming path. All 40 insights were orphans for the unrelated retail attractors at the calibrated `MIN_ASSIGN_THRESHOLD` of 0.75, and the orphan buffer triggered OMP extraction.
-- **Cross-dataset links.** One RELATED_TO edge links a retail anchor and a housing anchor (0.57).
-- **Evidence stayed local.** On six retail and housing questions the evidence stayed within its own dataset ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)).
+- **Cross-dataset links are bridges.** One RELATED_TO edge joins a retail anchor and a housing anchor (0.57: both "a value metric falls"). The knowledge base integrates datasets that describe related phenomena, so such a link is a legitimate transversal path; evidence reached over it is labelled with its dataset ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)). On six retail and housing questions no such path entered the evidence.
+- **Co-occurrence links.** The two batches carry 10 CO_OCCURS links between anchors that share member insights, next to 15 RELATED_TO ([5.7](docs/05_latent_anchors.md#57-links-between-anchors)).
 
 ---
 
@@ -218,7 +218,7 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Gemma 4 runs remotely on OpenRouter: the evidence prompt (subgroup statistics, not raw rows) leaves the machine; use Ollama or LM Studio for fully local inference.
 * The EDA searches only 2- and 3-conjunctions of equality selectors (no single selectors, no numeric intervals); numeric dimensions need explicit bands.
 * Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics — conservative, not a permutation test. A correlation-change insight has no median test: it is validated by its correlation change alone.
-* The embedder is Qwen3-Embedding-0.6B and the cosine thresholds are calibrated for it ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); under Qwen3 a few RELATED_TO edges join anchors of unrelated datasets.
+* The embedder is Qwen3-Embedding-0.6B and the cosine thresholds are calibrated for it ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); another embedder needs them measured again.
 * **Workspaces from another representation are not migrated (proof-of-concept scope).** A workspace written by another canonical or representation version starts degraded (409 `workspace_degraded`, [6.5](docs/06_graph_and_storage.md#65-versions-degraded-start-and-reset)); one with another representation fingerprint ([4.6](docs/04_representation.md#46-representation-identity-and-versions)) fails batches at EMBEDDING and refuses questions (409 `representation_mismatch`). `POST /api/reset` starts either over.
 * One graph service replica and one worker per workspace (a writer lock): the file workspace is the store ([12.6](docs/12_architecture.md#126-storage-files-no-sql-database-no-blob-store)).
 * Ukrainian questions are grounded onto the data's literals through the embedding model (*телефонів* → `phones`, *США* → `US`). The literals Qwen3 cannot bridge on the demo (*маржа*, *частка повернень*, *роздріб*) are left unmatched rather than guessed ([7.1.1](docs/07_question_answering.md#711-literal-grounding)).

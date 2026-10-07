@@ -1,14 +1,14 @@
 // Transversal traversal in Neo4j Browser (mirrors graph_query_engine/traversal.py, docs/07_question_answering.md §7.3).
-// Seed Pattern -> ACTIVATES -> Attractor -> RELATED_TO{0,1} -> Attractor <- ACTIVATES <- Pattern,
+// Seed Pattern -> ACTIVATES -> Attractor -> (RELATED_TO|CO_OCCURS){0,1} -> Attractor <- ACTIVATES <- Pattern,
 // then one lattice hop (SPECIALIZES / GENERALIZES / CONTRASTS). Best path per target. Replace the seed id.
 // Pattern nodes are the Insight record: weight is `weight`. Nested fields (conditions, shifts,
 // canonical) are stored as <field>_json.
-// Walks the edges the ontology kept: every RELATED_TO, every ACTIVATES except weak (coverage-only) ones.
+// Walks every RELATED_TO and CO_OCCURS link and every ACTIVATES except weak (coverage-only) ones.
 :param seed => 'P-bc4657a04746';
 
 MATCH (seed:Pattern {id: $seed})-[up:ACTIVATES]->(a1:Attractor)
 WHERE NOT coalesce(up.weak, false)
-OPTIONAL MATCH (a1)-[rel:RELATED_TO]-(a2:Attractor)
+OPTIONAL MATCH (a1)-[rel:RELATED_TO|CO_OCCURS]-(a2:Attractor)
 WITH seed, up, a1, [{a: a1, w: 1.0}] + [x IN collect({a: a2, w: rel.weight}) WHERE x.a IS NOT NULL] AS hops
 UNWIND hops AS hop
 MATCH (target:Pattern)-[down:ACTIVATES]->(anchor:Attractor)

@@ -9,17 +9,20 @@ import pytest
 from conftest import make_config, make_engine
 
 from graph_query_engine.graph import DualGraph
+from insight_contracts import LATENT_EDGES, EdgeType, GraphEdge
 from insight_graph_service.core import engine as engine_mod
 from insight_graph_service.core.neo4j_mirror import (
     EDGE_ENDPOINTS,
     LABELS,
     edge_query,
     flatten_props,
+    load_cypher,
     node_query,
     publish_snapshot,
     stale_edge_query,
     stale_node_query,
 )
+from insight_graph_service.core.snapshot import co_occurrence_edges
 
 
 @pytest.fixture
@@ -66,8 +69,8 @@ def test_graph_consistency(hashed_engine):
     for e in g.edges:
         if e["type"] == "ACTIVATES":
             assert kinds[e["source"]] == "Pattern" and kinds[e["target"]] == "Attractor"
-        if e["type"] == "RELATED_TO":
-            assert kinds[e["source"]] == kinds[e["target"]] == "Attractor" and e["source"] != e["target"]
+        if e["type"] in {"RELATED_TO", "CO_OCCURS"}:
+            assert kinds[e["source"]] == kinds[e["target"]] == "Attractor" and e["source"] != e["target"] and 0 < e["weight"] <= 1
         if e["type"] in {"SPECIALIZES", "GENERALIZES", "SIBLING", "CONTRASTS"}:
             assert kinds[e["source"]] == kinds[e["target"]] == "Pattern"
     activated = {e["source"] for e in g.edges if e["type"] == "ACTIVATES"}
@@ -81,6 +84,9 @@ def test_graph_consistency(hashed_engine):
     assert spec == gen and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
     # mutual k-NN keeps the latent plane sparse
     assert counts["RELATED_TO"] <= hashed_engine.settings.topology.related_to_peer_count * len(g.of_kind("Attractor")) / 2
+    # a co-occurrence link needs a member insight on both sides
+    members = {e["target"] for e in g.edges if e["type"] == "ACTIVATES" and not e["props"]["weak"]}
+    assert all({e["source"], e["target"]} <= members for e in g.edges if e["type"] == "CO_OCCURS")
     # Pattern nodes are the journal record, rehydrated as Insight (one weight, one condition shape).
     journal = {r["id"]: r for r in hashed_engine.ws.patterns()}
     assert set(g.insights) == set(journal)
@@ -527,3 +533,21 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
         "c_json": json.dumps({"x": 1}),
         "e_json": json.dumps([{"k": 1}]),
     }
+
+
+def test_co_occurrence_edges_from_memberships():
+    """W[p, j] = a_j^2 / sum_k a_k over the non-weak alignments; weak memberships do not count; the pair weight is capped at 1."""
+
+    def act(pid, aid, alignment, weak=False):
+        return GraphEdge(pid, f"A-{aid}", EdgeType.ACTIVATES, alignment, {"weak": weak})
+
+    edges = co_occurrence_edges([act("P1", 0, 0.9), act("P1", 1, 0.6), act("P2", 0, 0.8), act("P2", 1, 0.1, weak=True), act("P3", 1, 0.95)])
+    assert [(e.source, e.target, e.type) for e in edges] == [("A-0", "A-1", EdgeType.CO_OCCURS)]
+    assert edges[0].weight == pytest.approx((0.9**2 / 1.5) * (0.6**2 / 1.5)) and edges[0].props == {"kind": "co_occurrence", "shared": 1}
+    many = [act(f"P{i}", j, 1.0) for i in range(5) for j in (0, 1)]  # five insights split evenly: 5 x 0.25
+    assert [(e.weight, e.props["shared"]) for e in co_occurrence_edges(many)] == [(1.0, 5)]
+
+
+def test_cypher_walks_the_latent_edge_set():
+    query = load_cypher("queries/transversal")
+    assert "[rel:RELATED_TO|CO_OCCURS]" in query and all(e.value in query for e in LATENT_EDGES)

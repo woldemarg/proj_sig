@@ -25,6 +25,8 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | admission | — | — | the graph's policy over valid insights: the R4 weight floor and the R7 batch budget (`batch.admit_insights`, [3.2](03_insights.md#32-selection-rules)) |
 | ACTIVATES | membership | activation | pattern → anchor edge; `alignment` (cosine) and `strength` (alignment × weight) |
 | RELATED_TO | theme link | RELATED_TO | mutual nearest-neighbour edge between anchors ([5.7](05_latent_anchors.md#57-links-between-anchors)) |
+| CO_OCCURS | co-occurring themes | — | link between anchors that share member insights ([5.7](05_latent_anchors.md#57-links-between-anchors)) |
+| co-membership | — | — | a membership the snapshot compiles with the assignment rule (`source: co_membership`, [5.7](05_latent_anchors.md#57-links-between-anchors)) |
 | seed | match | — | a pattern resolved directly from the question ([7.2](07_question_answering.md#72-seeds)) |
 | transversal, `transversal_only` | via theme, other segment | — | reached through the latent plane; `transversal_only` = and sharing no condition with any seed |
 | frame (`LatentFrame`) | — | — | the single space of unit insight vectors and centroids; no centering |
@@ -74,7 +76,7 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | `MinerConfig` — structural lattice | `CONTRAST_MIN_OVERLAP` 0.5, `CONTRAST_MIN_SHIFT` 0.5 | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | `TopologyConfig` (`attractor_topology/config.py`) — representation | `MODEL_DIR` (`models`), `EMBEDDING_DEVICE` auto, `BLOCK_WEIGHTS` (0.45, 0.55, 1.0), `EMM_COMPONENT_WEIGHT` 0.5 | [4.3](04_representation.md#43-the-tripartite-vector), [4.4](04_representation.md#44-the-embedding-model) |
 | `TopologyConfig` — extraction | `CONCEPTS_PER_CHUNK` 1, `DICTIONARY_K_MIN` 4, `DICTIONARY_K_STEP` 2, `MAX_CONCEPT_COUNT` 40, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `DICTIONARY_INPUT_SCALE` 10, `RANDOM_SEED` 42, `SOFT_MERGE_LOW` 0.85, `MIN_ACTIVATION_ALIGNMENT` 0.20 | [5.3](05_latent_anchors.md#53-extraction-omp-k-sweep-with-signed-repair) |
-| `TopologyConfig` — assignment | `MIN_ASSIGN_THRESHOLD` 0.75, `MAX_ASSIGN_THRESHOLD` 0.80, `ADAPTIVE_PERCENTILE` 85, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.90, `CENTROID_ALPHA` 0.05, `ORPHAN_BUFFER_MIN_FACTOR` 3 | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans), [5.10](05_latent_anchors.md#510-calibration-per-embedder) |
+| `TopologyConfig` — assignment | `MIN_ASSIGN_THRESHOLD` 0.75, `MAX_ASSIGN_THRESHOLD` 0.80, `ADAPTIVE_PERCENTILE` 85, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.80, `CENTROID_ALPHA` 0.05, `ORPHAN_BUFFER_MIN_FACTOR` 3 | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans), [5.10](05_latent_anchors.md#510-calibration-per-embedder) |
 | `TopologyConfig` — guards | `DENSITY_FLOOR` 0.25, `DENSITY_MULTIPLE` 3.0, `MAX_CENTROID_STEP` 0.10, `WARN_ORPHAN_RATE` 0.50, `WARN_MIN_EXTRACTION_YIELD` 0.10, `WARN_AVG_DEGREE` (1.0, 8.0) | [5.6](05_latent_anchors.md#56-stability-guards) |
 | `TopologyConfig` — anchor links | `RELATED_TO_PEER_COUNT` 3, `RELATED_TO_MIN_WEIGHT` 0.30 | [5.7](05_latent_anchors.md#57-links-between-anchors) |
 | `QueryConfig` (`graph_query_engine/config.py`) — literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `graph_query_engine/question.py`: `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |
@@ -118,6 +120,7 @@ Every quantity the system computes, where it is explained and which code compute
 | adaptive threshold, assignment, EMA with inertia | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans) | `ontology_engine.py`: `compute_adaptive_threshold`, `assign_and_update`; `attractor_topology/vendor/lac/storage.py::ConceptStore.update_concept_centroid` |
 | hub threshold, damping, trust region | [5.6](05_latent_anchors.md#56-stability-guards) | `attractor_topology/vendor/lac/observability.py::density_threshold`; `attractor_topology/ontology.py`: `LatentOntology._damping`, `LatentOntology._clamp_steps` |
 | mutual kNN links | [5.7](05_latent_anchors.md#57-links-between-anchors) | `ontology_engine.py::calculate_knn_topology` |
+| co-memberships, co-occurrence links | [5.7](05_latent_anchors.md#57-links-between-anchors) | `insight_graph_service/core/snapshot.py`: `_activation_edges`, `co_occurrence_edges` |
 | signature, label, dispersion, evidence mass | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) | `insight_graph_service/core/snapshot.py`: `attractor_signature`, `_attractor_nodes` |
 | alignment, strength | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `attractor_topology/ontology.py::LatentOntology._activation_records`, `insight_graph_service/core/snapshot.py::_activation_edges` |
 | batch metrics and warnings | [5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics) | `attractor_topology/ontology.py::LatentOntology` (`BatchMetrics`), `observability.py::apply_health_warnings` |
@@ -139,7 +142,7 @@ Two version strings in `attractor_topology/models.py` and one fingerprint decide
 | `CANONICAL_VERSION` | `ltir-canon-4` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients (covariance insights cite only their correlation change) ([4.2](04_representation.md#42-the-canonical-form)) |
 | `REPRESENTATION_VERSION` | `ltir-rep-3` | what is embedded and how it is composed: block layout, re-normalisation, the uncentred frame ([4.3](04_representation.md#43-the-tripartite-vector)) |
 | fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, storage and compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
-| `SNAPSHOT_VERSION` | 2 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
+| `SNAPSHOT_VERSION` | 3 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 
 How the engine treats a stored workspace ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)):
 - **Another version.** Journals written under another `CANONICAL_VERSION` or `REPRESENTATION_VERSION` give a degraded start ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)).

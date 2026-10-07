@@ -132,7 +132,7 @@ The measurement that chose Qwen3: Qwen3-Embedding-0.6B against `paraphrase-multi
 | `MIN_ASSIGN_THRESHOLD` | 0.55 | 0.75 | 0.75 |
 | same-domain batch: orphan rate / smallest alignment | 0 / 0.842 | 0 / 0.788 | 0 / 0.761 |
 | housing batch: orphan rate (Qwen3 at 0.55 in brackets) | 1.0 | 1.0 (0.53; largest alignment 0.71) | 1.0 |
-| RELATED_TO edges retail ↔ housing / evidence items from the other domain (6 questions) | 0 / 0 | 1 / 0 | 3 / 0 |
+| RELATED_TO links retail ↔ housing (bridges, [5.10](05_latent_anchors.md#510-calibration-per-embedder)) / evidence items from the other dataset (6 questions) | 0 / 0 | 1 / 0 | 3 / 0 |
 | peak VRAM over the run | 493 MB | 1,720 MB | 1,720 MB |
 
 Reading: the composition fixes the direction contract (−0.33 for any model). Qwen3 ranks analogues higher at small `k` and makes the naive baseline much stronger. Its cosines between unrelated texts sit higher (label cosine 0.71 vs 0.43), with two consequences: the two one-off phenomena of the demo share one anchor ([5.13](05_latent_anchors.md#513-guarantees-and-measured-behaviour)), and MiniLM's assignment threshold would let half of an unrelated dataset join retail anchors, so Qwen3 runs at 0.75 ([5.10](05_latent_anchors.md#510-calibration-per-embedder)). Truncation to 384 costs nothing measurable against 1024.

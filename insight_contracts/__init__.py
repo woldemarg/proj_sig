@@ -7,6 +7,7 @@ two services exchange them.
 
 from insight_contracts.graph import (
     EDGE_PLANE,
+    LATENT_EDGES,
     SNAPSHOT_VERSION,
     STRUCTURAL_EDGES,
     UNDIRECTED_EDGES,
@@ -25,6 +26,7 @@ from insight_contracts.payload import EvidencePayload
 
 __all__ = [
     "EDGE_PLANE",
+    "LATENT_EDGES",
     "SNAPSHOT_VERSION",
     "STRUCTURAL_EDGES",
     "UNDIRECTED_EDGES",

@@ -120,6 +120,25 @@ def test_transversal_path_pattern_attractor_attractor_pattern(toy):
     assert res.patterns[0].node_id == "P1" and res.patterns[0].route == "seed"
 
 
+def test_co_occurrence_link_is_walked_and_named_in_evidence(toy):
+    """A4 shares member insights with A1 (CO_OCCURS 0.25): P7 is reached through it, discounted by its weight."""
+    nodes = toy.snapshot["nodes"] + [
+        pattern("P7", ["region=MEA", "category=tv"]),
+        {"id": "A4", "kind": "Attractor", "label": "tv", "props": {"n_patterns": 1, "distinct_scopes": 1, "signature": []}},
+    ]
+    edges = toy.snapshot["edges"] + [edge("A1", "A4", "CO_OCCURS", 0.25, kind="co_occurrence", shared=1), edge("P7", "A4", "ACTIVATES", 0.9)]
+    graph = DualGraph({"nodes": nodes, "edges": edges})
+    res, cfg = run(graph)
+    p7 = {r.node_id: r for r in res.patterns}["P7"]
+    assert [s.edge_type for s in p7.path] == ["ACTIVATES", "CO_OCCURS", "ACTIVATES"] and p7.route == "transversal"
+    assert p7.score == pytest.approx(1.0 * 0.9 * 0.25 * 0.9 * 0.8)
+    assert "P7" not in {r.node_id for r in run(graph, max_latent_hops=0)[0].patterns}
+    ev = build_evidence(parse_query("Why is margin lower for phones in the EU?", graph), res, graph, cfg)
+    a1 = next(a for a in ev.attractors if a["id"] == "A1")
+    assert {"id": "A4", "weight": 0.25, "type": "CO_OCCURS"} in a1["related"]
+    assert "A4 (0.25, shared members)" in ev.to_prompt()
+
+
 def test_latent_hop_budget_and_depth(toy):
     res, _ = run(toy, max_latent_hops=0)
     assert "P3" not in {r.node_id for r in res.patterns}

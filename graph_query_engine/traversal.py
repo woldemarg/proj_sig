@@ -2,10 +2,10 @@
 
 Path grammar (regular), from each seed Pattern::
 
-    P0 (structural){0,h}  --ACTIVATES-->  A (RELATED_TO){0,L}  --ACTIVATES^-1-->  P1 (structural){0,h}
+    P0 (structural){0,h}  --ACTIVATES-->  A (RELATED_TO|CO_OCCURS){0,L}  --ACTIVATES^-1-->  P1 (structural){0,h}
 
 i.e. optional structural drill-up/down at the seed, ascend into the latent plane,
-move laterally across mutual-kNN attractors, descend into (possibly structurally
+move laterally to neighbouring (mutual-kNN) or co-occurring attractors, descend into (possibly structurally
 disjoint) patterns, then optional structural expansion there. Best-first search
 maximises the product of edge factors (alignment, relation weight, structural
 decay); node ranking multiplies by the pattern's Insight.weight.
@@ -26,9 +26,10 @@ import numpy as np
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
-from insight_contracts import STRUCTURAL_EDGES, UNDIRECTED_EDGES
+from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
+LATENT = {e.value for e in LATENT_EDGES}
 UNDIRECTED = {e.value for e in UNDIRECTED_EDGES}
 SEED_SCORE_FLOOR = 1e-3
 
@@ -149,8 +150,8 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
                         push(score * e["weight"], other, "A", 0, 0, seed, step(e, other, e["weight"]))
         elif phase == "A":
             if l_cnt < config.max_latent_hops:
-                # every RELATED_TO the ontology kept (mutual kNN above related_to_min_weight) is walkable
-                for e, other in graph.incident(node, ["RELATED_TO"]):
+                # every RELATED_TO the ontology kept and every compiled CO_OCCURS is walkable; its weight is the factor
+                for e, other in graph.incident(node, LATENT):
                     push(score * e["weight"], other, "A", 0, l_cnt + 1, seed, step(e, other, e["weight"]))
             for e, other in graph.incident(node, ["ACTIVATES"]):
                 if e["target"] == node and other not in seed_ids and not e["props"].get("weak"):

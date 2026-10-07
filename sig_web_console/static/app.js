@@ -34,7 +34,7 @@ const MARKS = {
   anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
   down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]',
   lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]',
-  latent: 'edge[type="RELATED_TO"]', activates: 'edge[type="ACTIVATES"]',
+  latent: 'edge[type="RELATED_TO"], edge[type="CO_OCCURS"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
 };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
@@ -182,6 +182,7 @@ function graphStyle() {
     { selector: 'edge[type="ACTIVATES"]', style: { "line-color": anchor, width: "mapData(weight, 0, 1, 0.4, 2)", opacity: 0.22 } },
     { selector: 'edge[type="ACTIVATES"][?weak]', style: { "line-style": "dashed" } },
     { selector: 'edge[type="RELATED_TO"]', style: { "curve-style": "unbundled-bezier", "control-point-distances": "data(cpd)", "control-point-weights": 0.5, "line-color": anchor, width: "mapData(weight, 0, 1, 1, 6)", opacity: 0.75, label: "data(weight)", "font-size": 8.5, color: anchor, "text-background-color": surface, "text-background-opacity": 0.9, "text-background-padding": 2 } },
+    { selector: 'edge[type="CO_OCCURS"]', style: { "line-style": "dashed", "line-color": anchor, width: "mapData(weight, 0, 1, 1, 4)", opacity: 0.6 } },
     { selector: 'edge[type="HAS_SCOPE"], edge[type="TARGETS"], edge[type="DISCOVERED_IN"], edge[type="OF_DATASET"]', style: { "line-color": edge, width: 0.6, opacity: 0.5 } },
     { selector: ".hidden", style: { display: "none" } },
     { selector: ".faded", style: { opacity: 0.09 } },
@@ -198,10 +199,10 @@ function graphStyle() {
 }
 
 function attractorOrder(cy) {
-  /* greedy chain: strongly RELATED_TO themes end up adjacent on the latent row */
+  /* greedy chain: strongly linked themes (RELATED_TO or CO_OCCURS) end up adjacent on the latent row */
   const atts = cy.nodes('[kind="Attractor"]').toArray();
   if (!atts.length) return [];
-  const w = (a, b) => { let m = 0; a.edgesWith(b).filter('[type="RELATED_TO"]').forEach((e) => { m = Math.max(m, e.data("weight")); }); return m; };
+  const w = (a, b) => { let m = 0; a.edgesWith(b).filter(MARKS.latent).forEach((e) => { m = Math.max(m, e.data("weight")); }); return m; };
   atts.sort((a, b) => b.data("n_patterns") - a.data("n_patterns"));
   const order = [atts.shift()];
   while (atts.length) {
@@ -281,6 +282,7 @@ function applyVisibility() {
 const HOVER = "%{hovertext}<extra></extra>";
 const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, dash
   ["latent", "RELATED_TO", "Theme links", "anchor", 4, null],
+  ["latent", "CO_OCCURS", "Co-occurring themes", "anchor", 2.5, "dash"],
   ["lattice", "SPECIALIZES", "Hierarchy", "muted", 2, null],
   ["contrast", "CONTRASTS", "Contrasts", "bad", 2, "dash"],
   ["sibling", "SIBLING", "Siblings", "muted", 1.5, "dot"],
@@ -583,11 +585,11 @@ async function inspect(id) {
   }
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
-    const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes",
+    const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
       "SPECIALIZES": "Narrower version of", "GENERALIZES": "Broader version of", "SPECIALIZES (in)": "Narrower insights", "GENERALIZES (in)": "Broader insights",
       "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/ACTIVATES|RELATED|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
+      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
       items.map((it) => `<div class="nb" data-id="${esc(it.id)}"><span>${esc(it.label)}</span><span class="muted">${num(Number(it.weight))}</span></div>`).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;
@@ -622,7 +624,7 @@ function renderChain(item) {
   if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">matched your question</span></div>`;
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
-    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast" }[st.edge_type] || st.edge_type;
+    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", CO_OCCURS: "co-occurring theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast" }[st.edge_type] || st.edge_type;
     html += `<span class="e">→ ${esc(label)} ${num(st.weight)} →</span><span class="n ${st.target.startsWith("A-") ? "A" : ""}">${esc(st.target)}</span>`;
   }
   return `<div class="chain">${html}</div>`;

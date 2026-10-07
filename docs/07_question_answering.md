@@ -80,7 +80,7 @@ and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in 
 `traverse(graph, seeds, config)` is a best-first search over a regular path grammar:
 
 ```text
-P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO){0,L}  <--ACTIVATES--  P1 (lattice){0,h}
+P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO|CO_OCCURS){0,L}  <--ACTIVATES--  P1 (lattice){0,h}
 h = STRUCTURAL_HOPS (1)     L = MAX_LATENT_HOPS (1)     total length ≤ TRAVERSAL_MAX_DEPTH (5)
 ```
 
@@ -90,6 +90,7 @@ Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES
 |---|---|---|
 | ACTIVATES, pattern → anchor | the membership is not `weak` | alignment |
 | RELATED_TO, anchor → anchor | every link the ontology kept (mutual kNN above `RELATED_TO_MIN_WEIGHT`, 0.30) | weight |
+| CO_OCCURS, anchor → anchor | every compiled co-occurrence link (anchors sharing members, [5.7](05_latent_anchors.md#57-links-between-anchors)) | weight (≤ 1) |
 | ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
 | lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS |
 
@@ -106,7 +107,7 @@ The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` 
 
 Because the skip rule for seeds covers only SPECIALIZES and GENERALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
 
-> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and six tablet insights in EU and APAC that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 65 search states, 13 retrieved patterns, 2 anchors.
+> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and five tablet insights that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 67 search states, 13 retrieved patterns, 2 anchors.
 
 ## 7.4 The evidence object
 
@@ -129,7 +130,7 @@ Evidence(
         path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
         attractors=[{attractor, alignment, label}], transversal_only=True,
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
-    attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight}], signature}],
+    attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight, type}], signature}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],
     datasets=[{dataset_id, filename, rows, batch_id}], provenance=[{key, ...}], notes=[...])
 ```
@@ -153,8 +154,8 @@ METRIC BASELINES (whole dataset):
 - return rate: median 0.0555, MAD 0.0101
 
 LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
-- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.61)
-- A-0 "delivery days up and return rate up": 10 patterns over 10 distinct scopes; related: A-2 (0.55), A-1 (0.61)
+- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.19, shared members), A-0 (0.61)
+- A-0 "delivery days up and return rate up": 11 patterns over 11 distinct scopes; related: A-1 (0.19, shared members), A-2 (0.55), A-1 (0.61)
 
 EVIDENCE (verified statistical observations; cite as [P#]):
 [P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)
@@ -271,4 +272,4 @@ Limitations worth knowing:
 * Paraphrases outside the graph's vocabulary and its translations rely on the semantic term alone.
 * The LLM runs remotely in the configured deployment: the prompt (subgroup statistics, not rows) leaves the machine; a local server keeps it local.
 
-Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); weak memberships are never walked and every kept RELATED_TO is; paths obey the grammar; results are deterministic and identical with the Neo4j mirror on or off; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights; a grounded literal is always one the data holds, spelled as the data spells it.
+Guarantees: every retrieved node has a path from a seed whose steps are graph edges (their `edge_id`s resolve in the snapshot and the UI); weak memberships are never walked and every kept RELATED_TO and compiled CO_OCCURS is; paths obey the grammar; results are deterministic and identical with the Neo4j mirror on or off; citation keys map one-to-one to pattern ids; every item carries dataset, batch, selector and pattern id; every number in the prompt comes from the stored insights; a grounded literal is always one the data holds, spelled as the data spells it.

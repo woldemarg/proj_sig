@@ -38,7 +38,7 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
                                     │                         │
    structural plane                 │                         ▼
    SPECIALIZES / GENERALIZES /      │           latent plane: anchors (vendored lac)
-   SIBLING / CONTRASTS  ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO (anchor ↔ anchor)
+   SIBLING / CONTRASTS  ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO / CO_OCCURS (anchor ↔ anchor)
                     │                                         │
                     └──────► graph snapshot + journals + state (+ Neo4j mirror) ◄┘
                                           │
@@ -52,7 +52,7 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
 | | Structural plane | Latent phenomenon plane |
 |---|---|---|
 | Nodes | `Pattern` (one validated insight); `Dimension`, `Metric` as schema anchors | `Attractor` = latent anchor = "theme" in the UI: a living unit-norm centroid |
-| Edges | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts | RELATED_TO — mutual nearest neighbours among centroids |
+| Edges | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
 | Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight); a *weak* membership (rerouted, or now aligned below `MIN_ACTIVATION_ALIGNMENT`) counts for coverage but is not walked | |
 | Schema and provenance | `Dimension`, `Metric`, `Dataset`, `Batch` nodes; HAS_SCOPE, TARGETS (Pattern → schema), DISCOVERED_IN, OF_DATASET (provenance) — never walked by retrieval | |
 | Never | embeddings never create structural edges | scope predicates never create latent edges |
@@ -124,7 +124,7 @@ The repository is split into bounded contexts: four libraries, which import only
 
 1. **Traceable.** Every stored insight traces to its dataset, batch, exact EDA selector and covered rows.
 2. **Covered.** Every insight has at least one ACTIVATES edge, and every anchor has at least one member — except an anchor whose last member was deleted while it is still linked to another anchor ([5.11](05_latent_anchors.md#511-removing-patterns-the-orphan-rule)).
-3. **Planes stay separate.** Structural edges depend only on insight metadata; latent edges only on centroids.
+3. **Planes stay separate.** Structural edges depend only on insight metadata; latent edges come from centroids (RELATED_TO) and from shared memberships (CO_OCCURS), never from scope predicates.
 4. **One frame.** Vectors of different representations (model, composition, versions) never share a workspace; a mismatch is refused, not mixed ([4.6](04_representation.md#46-representation-identity-and-versions) lists what the fingerprint covers), and a workspace written by another version starts degraded until it is reset ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)).
 5. **Atomic batches, one writer.** A batch either commits completely or is rolled back, and one process at a time writes a workspace (the writer lock, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). The Neo4j mirror runs after the commit, outside it: its failure is a warning, never a rollback.
 6. **Grounded answers.** The LLM sees only the evidence object; every citation is checked against it, and a provenance footer is built without the LLM.
