@@ -380,6 +380,7 @@ class Engine:
             "min_cell_points": ctx.min_cell_points,
             "base": "H3 cells holding at least one point",
             "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
+            "glossary": ctx.glossary,
         }
 
     def _save_geo(self, ds: str, loaded: Any) -> None:

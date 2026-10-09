@@ -124,3 +124,16 @@ def test_geo_batch_end_to_end(tmp_path):
     one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
     assert len(one["cells"]) == patterns[0]["support"] and 0 < len(one["points"]) <= one["n_points"]
     assert engine.geo_datasets()[0]["dataset_id"] == record["dataset_id"]
+
+
+def test_geo_evidence_speaks_plain_language(tmp_path):
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    record = engine.process(engine.submit(path, geo="auto")["batch_id"])
+    glossary = record["profile"]["geo"]["glossary"]
+    assert glossary["lisa_points=hot spot"].startswith("a hot spot") and "busiest" in glossary["neighbours_points_band=q4"]
+    prompt = engine.evidence("Що відрізняє зони hot spot від решти?").evidence_prompt
+    assert "PLAIN LANGUAGE" in prompt
+    scopes = [line for line in prompt.splitlines() if line.startswith("[P")]
+    assert scopes and not any("neighbours_points_band" in line or "lisa_points" in line for line in scopes)

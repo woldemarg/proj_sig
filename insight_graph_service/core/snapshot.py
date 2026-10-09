@@ -69,7 +69,13 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
             dataset_node_id(ds),
             "Dataset",
             b.get("filename", ds),
-            {"dataset_id": ds, "filename": b.get("filename"), "rows": profile.get("rows"), "columns": profile.get("columns")},
+            {
+                "dataset_id": ds,
+                "filename": b.get("filename"),
+                "rows": profile.get("rows"),
+                "columns": profile.get("columns"),
+                **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+            },
         )
         nodes[batch_node_id(bid)] = GraphNode(
             batch_node_id(bid),

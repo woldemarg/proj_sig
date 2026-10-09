@@ -27,20 +27,18 @@ const GeoMap = {
   },
 
   suggestions() {
+    /* questions in everyday words: no column names, only a category value the data holds */
     if (!G.data) return [];
-    const seen = new Set(), out = [];
-    for (const p of [...G.data.patterns].sort((a, b) => b.weight - a.weight)) {
-      if (p.phenomenon_type === "covariance" || seen.has(p.target)) continue;
-      seen.add(p.target);
-      out.push(`Де ${human(p.target)} ${p.effect_size > 0 ? "вища" : "нижча"}, ніж зазвичай?`);
-      if (out.length === 2) break;
-    }
-    const hot = G.data.patterns.find((p) => p.scope.some((s) => s.includes("hot spot")));
-    if (hot) out.unshift("Що відрізняє зони hot spot від решти?");
-    const named = (p) => p.scope.filter((s) => !/= (no cluster|missing)$/.test(s));
-    const far = G.data.patterns.find((p) => (p.spatial.colocated || []).length && named(p).length >= 2 && !named(p).some((s) => s.includes("neighbours")));
-    if (far) out.push(`Що ще відбувається там, де ${named(far).map((s) => s.replace(" = ", " ")).join(" і ")}?`);
-    return out.slice(0, 4);
+    const scopes = G.data.patterns.flatMap((p) => p.scope);
+    const glossary = (G.datasets.find((d) => d.dataset_id === G.ds) || {}).glossary || {};
+    const out = [];
+    if (scopes.some((s) => s.endsWith("= hot spot"))) out.push("Що особливого в найгарячіших зонах, де подій найбільше?");
+    const share = [...G.data.patterns].sort((a, b) => b.weight - a.weight)
+      .find((p) => p.phenomenon_type !== "covariance" && p.effect_size > 0 && / is (.+?)(?: \(|$)/.test(glossary[p.target] || ""));
+    if (share) out.push(`Де частіше трапляється «${glossary[share.target].match(/ is (.+?)(?: \(|$)/)[1]}»?`);
+    if (scopes.some((s) => /= q1$/.test(s))) out.push("Що відбувається там, де подій найменше?");
+    if (G.data.patterns.length > 3) out.push("Які зони схожі між собою, хоча розташовані в різних місцях?");
+    return out;
   },
 
   onAnswer(qa) {
@@ -67,14 +65,24 @@ const GeoMap = {
   clear() {
     stopTour();
     if (!G.map || !G.map.getSource("cells")) return;
-    setStates(G.hl, "hl", 0); setStates(G.focus, "focus", false); G.hl = []; G.focus = []; G.evidence = [];
+    setStates(G.hl, "hl", 0); setStates(G.focus, "focus", false); G.hl = []; G.focus = []; G.evidence = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
     G.map.getSource("pts").setData(empty());
     $("map-card").hidden = true; renderTourBar();
   },
 
+  unfocus() {
+    if (!G.map || !G.map.getSource("pts")) return;
+    stopTour();
+    setStates(G.focus, "focus", false); G.focus = []; G.focusId = null;
+    G.map.getSource("pts").setData(empty());
+    $("map-card").hidden = true;
+    document.querySelectorAll("#map-tour .tk").forEach((b) => b.classList.remove("on"));
+  },
+
   async focusPattern(pid) {
     const p = G.patterns[pid]; if (!p || !G.map) return;
+    G.focusId = pid;
     setStates(G.focus, "focus", false);
     G.focus = p.rows; setStates(G.focus, "focus", true);
     fitRows(p.rows, 90);
@@ -216,7 +224,7 @@ function wireHud() {
   $("lyr-pts").addEventListener("change", (e) => vis(["pts-halo", "pts-core"], e.target.checked));
   $("lyr-borders").addEventListener("change", (e) => vis(["border", "border-glow", "admin1", "river", "lake"], e.target.checked));
   $("lyr-labels").addEventListener("change", placeDensity);
-  $("map-card-close").addEventListener("click", () => { $("map-card").hidden = true; setStates(G.focus, "focus", false); G.focus = []; G.map.getSource("pts").setData(empty()); });
+  $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
 }
 
 function shiftText(p, item) {
@@ -243,9 +251,12 @@ function renderTourBar() {
   if (!G.evidence.length) { bar.hidden = true; return; }
   bar.hidden = false;
   bar.innerHTML = `<button type="button" class="tour-play" title="Fly through the evidence">${G.tour ? "■" : "▶"} TOUR</button>` +
-    G.evidence.map((i) => `<button type="button" class="tk ${i.statistics.effect_size >= 0 ? "up" : "down"}" data-pid="${esc(i.pattern_id)}" title="${esc(i.scope.join(" · "))}">${esc(i.key)}</button>`).join("");
+    G.evidence.map((i) => `<button type="button" class="tk ${i.statistics.effect_size >= 0 ? "up" : "down"} ${i.pattern_id === G.focusId ? "on" : ""}" data-pid="${esc(i.pattern_id)}" title="${esc(i.scope.join(" · "))}">${esc(i.key)}</button>`).join("") +
+    `<button type="button" class="tour-clear" title="Remove the answer from the map (Esc removes only the focus)">✕ CLEAR</button>`;
   bar.querySelector(".tour-play").addEventListener("click", () => (G.tour ? stopTour() : startTour()));
-  bar.querySelectorAll(".tk").forEach((b) => b.addEventListener("click", () => { stopTour(); GeoMap.focusPattern(b.dataset.pid); }));
+  bar.querySelector(".tour-clear").addEventListener("click", () => GeoMap.clear());
+  // a second click on the focused key unfocuses it
+  bar.querySelectorAll(".tk").forEach((b) => b.addEventListener("click", () => { stopTour(); b.dataset.pid === G.focusId ? GeoMap.unfocus() : GeoMap.focusPattern(b.dataset.pid); }));
 }
 
 function startTour() {

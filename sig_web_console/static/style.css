@@ -286,6 +286,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .map-tour .tour-play { color: #ffb000; border-color: #ffb000; letter-spacing: .1em; font-weight: 700; }
 .map-tour .tk.up { border-color: #ff8a3d88; } .map-tour .tk.down { border-color: #36d6ff88; }
 .map-tour .tk.on { background: #ffb000; color: #05080d; border-color: #ffb000; }
+.map-tour .tour-clear { color: #8592ab; } .map-tour .tour-clear:hover { color: #ff6b6b; border-color: #ff6b6b; }
 .map-card { position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 2; width: min(460px, 70%); background: rgba(8, 12, 19, .92); border: 1px solid #263248; border-top: 2px solid #ffb000; border-radius: 4px; padding: 9px 12px 10px; font-size: 11.5px; box-shadow: 0 10px 40px rgba(0, 0, 0, .6); }
 .mc-head { display: flex; justify-content: space-between; color: #ffb000; font-weight: 700; letter-spacing: .12em; }
 .mc-x { background: none; border: 0; color: #8592ab; cursor: pointer; font-size: 16px; line-height: 1; }

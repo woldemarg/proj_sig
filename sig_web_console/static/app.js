@@ -681,6 +681,7 @@ function botCard(turn) {
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];
+  if (items.length && GeoMap.has(items[0].pattern_id)) return GeoMap.suggestions().filter((q) => q !== turn.question).slice(0, 3);
   const atts = (turn.qa.view.evidence && turn.qa.view.evidence.attractors) || [];
   const out = [];
   if (atts[0]) out.push(`Де ще трапляється «${atts[0].label}»?`);
@@ -839,7 +840,7 @@ function init() {
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat = []; S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); GeoMap.clear(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeDrawer(); if (S.view === "map") GeoMap.unfocus(); } });
   initResize();
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
   renderThread(); refreshHealth(); refreshBatches();

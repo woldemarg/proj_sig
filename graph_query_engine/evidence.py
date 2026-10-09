@@ -70,6 +70,7 @@ class Evidence:
 
     def to_prompt(self) -> str:
         p = self.parsed
+        plain = self.plain_language()
         lines = [f"QUESTION: {self.query}"]
         parsed_bits = []
         if p.get("targets"):
@@ -86,10 +87,14 @@ class Evidence:
         lines.append("DATASETS:")
         for d in self.datasets:
             lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}")
+        if plain:
+            lines.append("")
+            lines.append("PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):")
+            lines.extend(f"- {meaning}" for _, meaning in plain)
         lines.append("")
         lines.append("METRIC BASELINES (whole dataset):")
         for m in self.metrics:
-            lines.append(f"- {humanize(m['metric'])}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
+            lines.append(f"- {self.reword(humanize(m['metric']))}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         if self.attractors:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
@@ -102,13 +107,14 @@ class Evidence:
         lines.append("EVIDENCE (verified statistical observations; cite as [P#]):")
         for it in self.items:
             s = it.statistics
-            lines.append(f"[{it.key}] role={it.role} | scope: {it.scope_text} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
-            lines.append(f"     shifts: {'; '.join(it.shift_text) or 'no validated median shift'}")
+            scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
+            lines.append(f"[{it.key}] role={it.role} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
+            lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
             if it.relationship:
-                lines.append(f"     relationship: {it.relationship} (divergence {s['emm_score']:.2f})")
+                lines.append(f"     relationship: {self.reword(it.relationship)} (divergence {s['emm_score']:.2f})")
             lines.append(
                 f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
-                f" | confounders: {', '.join(s['drivers']) or 'none detected'}"
+                f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
             )
             spatial = it.provenance.get("spatial")
             if spatial:
@@ -121,6 +127,31 @@ class Evidence:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
         return "\n".join(lines)
+
+    def _glossary(self) -> dict[str, str]:
+        return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
+
+    def reword(self, text: str) -> str:
+        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning."""
+        for col, meaning in sorted(self._glossary().items(), key=lambda kv: -len(kv[0])):
+            if "=" not in col:
+                text = text.replace(humanize(col), meaning).replace(col, meaning)
+        return text
+
+    def reword_condition(self, condition: str) -> str:
+        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>'."""
+        glossary = self._glossary()
+        attribute, _, value = condition.partition("=")
+        return glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
+
+    def plain_language(self) -> list[tuple[str, str]]:
+        """(column, meaning) for the derived columns the evidence names, from the datasets' glossaries."""
+        glossary = self._glossary()
+        named: list[str] = []
+        for it in self.items:
+            named += [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]]
+            named += it.statistics["covariance"].get("pair", [])
+        return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
         """The verified observations, cited: one ``- …`` line each, in Ukrainian around untouched literals (or the
@@ -236,6 +267,8 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
         batch = next((it.provenance["batch_id"] for it in items if it.provenance["dataset_id"] == ds), None)
         datasets.append({"dataset_id": ds, "filename": dnode["props"].get("filename"), "rows": dnode["props"].get("rows"), "batch_id": batch})
+        if dnode["props"].get("glossary"):
+            datasets[-1]["glossary"] = dnode["props"]["glossary"]
     for r in chosen:  # baselines of the metrics the prompt actually mentions
         ins = graph.insight(r.node_id)
         named = [s.metric for s in config.thresholds.phenomenon_shifts(ins)]

@@ -137,7 +137,7 @@ Evidence(
 
 Rendering happens here, with the configuration: `shift_text` holds the phenomenon shifts only (the target and `|z| ≥ MIN_COMPONENT_Z`), `relationship` appears only when the correlation change is material, the scope is prose, and an anchor's `description` comes from its signature ([5.8](05_latent_anchors.md#58-how-an-anchor-is-described)). `metrics` holds the global median and MAD of every metric the prompt mentions. A note lists the items that share no scope condition with the seeds (they may still be structurally reachable; `structural_distance` says how far), or says that no pattern matched.
 
-**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (verified statistical observations; cite as [P#]):` with one block per item, key first (scope and support; `shifts:`; `relationship:` when material; `validation:` — bootstrap stability and adjusted p, or for a covariance insight `correlation change (divergence score …) | no median test` — with the insight weight and confounders; `retrieved via:`); `NOTE:`. There is no free-form graph dump. From the demo:
+**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; for a geo dataset `PLAIN LANGUAGE (…):` (below); `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (verified statistical observations; cite as [P#]):` with one block per item, key first (scope and support; `shifts:`; `relationship:` when material; `validation:` — bootstrap stability and adjusted p, or for a covariance insight `correlation change (divergence score …) | no median test` — with the insight weight and confounders; `retrieved via:`); `NOTE:`. There is no free-form graph dump. From the demo:
 
 ```text
 QUESTION: Why is margin lower for phones in the US?
@@ -172,6 +172,8 @@ NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were
 
 Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows.
 
+**Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `asset category Бомбер (every such event also has: rating type drone, asset category generalised БпЛА)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 8 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
+
 **The evidence-only summary** (`Evidence.summary`, carried as the payload's `evidence_summary`) follows the chat's language rule — Ukrainian around untouched literals — and is rendered from the numbers rather than from the English phrases: one cited line per item, `- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (…) | n=438 [P1]` (the phenomenon shifts, at most two; a covariance insight shows `кореляція a ~ b: +0.88 загалом → +0.73 у підгрупі`), with ` (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)` for transversal-only items; without items, `- У графі немає відповідних свідчень.` Whenever there is no LLM answer, the narrator frames these lines as the answer: `Спостереження:` before them and `Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).` after them (`narration._explain`).
 
 ## 7.5 The language model and citation check
@@ -205,6 +207,12 @@ Rules:
 7. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
    original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
    Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
+   The one exception is rule 8.
+8. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
+   already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
+   values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
+   9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
+   transversal, latent or anchor; say "зони" for map cells and "схожа картина в інших зонах" for recurrences.
 Be concise (at most ~250 words).
 ```
 

@@ -25,6 +25,14 @@ _GEOJSON = re.compile(r'"coordinates"\s*:\s*\[\s*' + _NUM + r"\s*,\s*" + _NUM)
 _WKT = re.compile(r"^\s*POINT\s*\(\s*" + _NUM + r"\s+" + _NUM + r"\s*\)\s*$", re.IGNORECASE)
 LISA_LABELS = {(True, True): "hot spot", (False, False): "cold spot", (True, False): "high outlier", (False, True): "low outlier"}
 LISA_COLUMN = "lisa_points"
+LISA_WORDS = {
+    "hot spot": "a hot spot: a busy cell surrounded by busy cells",
+    "cold spot": "a cold spot: a quiet cell surrounded by quiet cells",
+    "high outlier": "a busy cell surrounded by quiet cells",
+    "low outlier": "a quiet cell surrounded by busy cells",
+    "no cluster": "not part of a busy or quiet cluster",
+}
+QUARTERS = {"q1": "among the quietest quarter", "q2": "below the middle", "q3": "above the middle", "q4": "among the busiest quarter"}
 NO_CLUSTER = "no cluster"  # not "none": a bare English word grounds onto unrelated question words
 COUNTER = "points"
 PLACE_PURITY = 0.9  # mean top-level share per dense cell above which a categorical describes the place
@@ -55,6 +63,7 @@ class SpatialContext:
     conditions: list[str] = field(default_factory=list)  # the neighbourhood dimensions, always searched
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1)
+    glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
 
     def neighbours(self, row: int) -> np.ndarray:
         return self.nbr_idx[self.nbr_ptr[row] : self.nbr_ptr[row + 1]]
@@ -217,6 +226,7 @@ def build_cells(
     warnings = [f"geo: {int((~ok).sum())} rows without a valid point ignored"] if (~ok).any() else []
 
     out: dict[str, np.ndarray] = {COUNTER: counts}
+    glossary = {COUNTER: "number of events in the map cell"}
     counters = [COUNTER]
     dropped: list[str] = []
     categorical: dict[str, pd.Series] = {}
@@ -232,11 +242,14 @@ def build_cells(
                 pd.Series(t.astype("datetime64[D]")).groupby(codes).nunique().reindex(range(len(cells)), fill_value=0).to_numpy(float)
             )
             counters.append(f"{col}_active_days")
+            glossary[f"{col}_active_days"] = f"number of different days with events in the cell (by {_words(col)})"
+            glossary[f"{col}_late_share"] = f"share of the cell's events that happened in the second half of the period (by {_words(col)})"
             late = pd.Series(np.where(good, t > mid, np.nan)).groupby(codes).mean().reindex(range(len(cells))).to_numpy(float)
             out[f"{col}_late_share"] = np.where(dense, late, np.nan)
         elif pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
             med = values.groupby(codes).median().reindex(range(len(cells))).to_numpy(float)
             out[f"{col}_median"] = np.where(dense, med, np.nan)
+            glossary[f"{col}_median"] = f"typical (median) {_words(col)} of the cell's events"
         else:
             text = values.astype("string")
             levels = text.dropna().value_counts()
@@ -254,6 +267,7 @@ def build_cells(
         table = _level_counts(categorical[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
         out[f"{col}_mode"] = np.where(total > 0, table.columns.to_numpy()[table.to_numpy().argmax(axis=1)], "missing")
+        glossary[f"{col}_mode"] = f"the most frequent {_words(col)} among the cell's events"
     for col in share_cols:
         table = _level_counts(categorical[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
@@ -263,6 +277,7 @@ def build_cells(
                 share = np.where(dense & (total > 0), table[level].to_numpy(float) / total, np.nan)
             if np.nanmean((share > 0) & (share < 1)) >= MIN_MIXED_SHARE:
                 out[f"share_{col}_{level}"] = share
+                glossary[f"share_{col}_{level}"] = f"share of the cell's events whose {_words(col)} is {level}" + _kind_of(col, level, categorical)
     if dropped:
         warnings.append(f"geo: columns not aggregated (too many or too few levels, or determining a share column): {dropped}")
 
@@ -277,6 +292,11 @@ def build_cells(
             continue
         out[name] = lag
         lag_columns.append(name)
+        band, by = f"{name}_band", glossary[metric]
+        glossary[band] = f"how busy the six surrounding cells are ({by}), in quarters of all cells"
+        for q, words in QUARTERS.items():
+            glossary[f"{band}={q}"] = f"the surrounding cells are {words} ({by})"
+        glossary[f"{band}=missing"] = "no surrounding cell has events"
         derived[f"{name}_band"] = counters  # every counter measures the same activity
     neighbourhood = [*derived, LISA_COLUMN]
     for col, others in nested.items():
@@ -284,6 +304,8 @@ def build_cells(
             derived[f"{col}_mode"] = [m for o in others for m in out if m.startswith(f"share_{o}_")]
     out[LISA_COLUMN] = local_moran(np.log1p(counts), ptr, idx, lisa_permutations, seed)
     derived[LISA_COLUMN] = counters
+    glossary[LISA_COLUMN] = "whether the cell and its neighbours form a cluster of many or few events"
+    glossary.update({f"{LISA_COLUMN}={k}": v for k, v in LISA_WORDS.items()})
     table = pd.DataFrame(out)
     ctx = SpatialContext(
         resolution=resolution,
@@ -299,8 +321,26 @@ def build_cells(
         conditions=neighbourhood,
         derived_from=derived,
         moran={m: moran_i(out[m], ptr, idx) for m in metrics},
+        glossary={k: v for k, v in glossary.items() if k.split("=", 1)[0] in table.columns or k.split("=", 1)[0] in derived},
     )
     return table, ctx, warnings
+
+
+def _words(name: str) -> str:
+    return str(name).replace("_", " ")
+
+
+def _kind_of(col: str, level: str, categorical: dict[str, pd.Series]) -> str:
+    """' (all of them: <column> <value>, ...)' for coarser columns whose value is fixed among ``level``'s rows."""
+    rows = (categorical[col] == level).fillna(False).to_numpy(bool)
+    hints = []
+    for other, text in categorical.items():
+        if other == col or text.nunique() >= categorical[col].nunique():
+            continue
+        top = text[rows].value_counts(normalize=True)
+        if len(top) and top.iloc[0] >= FUNCTIONAL_SHARE:
+            hints.append(f"{_words(other)} {top.index[0]}")
+    return f" (every such event also has: {', '.join(hints[:3])})" if hints else ""
 
 
 def _level_counts(text: pd.Series, codes: np.ndarray, n_cells: int) -> pd.DataFrame:
