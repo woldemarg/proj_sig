@@ -19,3 +19,4 @@ models/**
 !models/.gitkeep
 data/**
 !data/.gitkeep
+.DS_Store
