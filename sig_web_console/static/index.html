@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SIG · Insight Graph</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235b4ce0'/%3E%3Cstop offset='1' stop-color='%23b44ce0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='4' fill='url(%23g)'/%3E%3Cpolygon points='8,3 12.3,5.5 12.3,10.5 8,13 3.7,10.5 3.7,5.5' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/vendor/maplibre-gl.css">
   <link rel="stylesheet" href="/style.css">
   <script>try { const t = localStorage.getItem("sig-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
@@ -39,6 +40,9 @@
           <label class="small" for="bins">Split numbers into bands</label>
           <input class="field" id="bins" placeholder="e.g. median_income:4">
           <div class="hint">Quantile bands become a dimension; the source column stops being a metric.</div>
+          <label class="small" for="geo">Spatial analysis (H3 cells)</label>
+          <input class="field" id="geo" placeholder="e.g. auto@7 · geometry · lat,lon">
+          <div class="hint">Rows are points: analyse H3 cells instead — <span class="mono">auto</span> finds a GeoJSON/WKT point or lat/lon columns; <span class="mono">@7</span> is the resolution.</div>
         </details>
         <div class="rail-actions">
           <button type="submit" class="btn" id="upload-btn" disabled>Analyse</button>
@@ -62,6 +66,7 @@
         <button type="button" data-view="graph" class="active" role="tab">Graph</button>
         <button type="button" data-view="sphere" role="tab">3D Sphere</button>
         <button type="button" data-view="table" role="tab">Insights <span class="count" id="ins-count"></span></button>
+        <button type="button" data-view="map" role="tab" id="map-tab" hidden>Map</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Dataset"><option value="">All datasets</option></select>
@@ -89,6 +94,7 @@
         <button type="button" class="key toggle on" data-key="latent" title="RELATED_TO — neighbouring themes (mutual nearest centroids); CO_OCCURS (dashed) — themes that share member insights"><i class="ln rel"></i><span>Theme links</span><b data-n="latent"></b></button>
         <button type="button" class="key toggle" data-key="contrast" title="CONTRASTS — overlapping scope, opposite shift"><i class="ln contrast"></i><span>Contrasts</span><b data-n="contrast"></b></button>
         <button type="button" class="key toggle" data-key="sibling" title="SIBLING — same parent, another value of one column"><i class="ln sibling"></i><span>Siblings</span><b data-n="sibling"></b></button>
+        <button type="button" class="key toggle" data-key="colocated" title="CO_LOCATED — geo insights whose H3 cells overlap (one-ring dilated)"><i class="ln colocated"></i><span>Same place</span><b data-n="colocated"></b></button>
         <button type="button" class="key toggle" data-key="activates" title="ACTIVATES — insight belongs to theme; dashed = weak membership (kept for coverage, not walked)"><i class="ln act"></i><span>Memberships</span><b data-n="activates"></b></button>
         <button type="button" class="key toggle" data-key="schema" title="Dimension and metric columns (graph only)"><i class="sw col"></i><span>Columns</span><b data-n="schema"></b></button>
       </section>
@@ -103,6 +109,31 @@
     <div class="view">
       <div id="cy"></div>
       <div id="sphere" role="img" aria-label="Latent insight sphere" hidden></div>
+      <div class="map-wrap" id="map-view" hidden>
+        <div id="map"></div>
+        <div class="map-hud">
+          <div class="hud-tag">GEO-LTIR · SPATIAL INSIGHTS</div>
+          <div class="hud-title" id="map-title"></div>
+          <div class="hud-meta" id="map-meta"></div>
+          <label class="hud-lbl" for="map-metric">Colour cells by</label>
+          <select class="hud-field" id="map-metric"></select>
+          <div id="map-ramp"></div>
+          <div class="hud-layers">
+            <label><input type="checkbox" id="lyr-cells" checked> Cells</label>
+            <label><input type="checkbox" id="lyr-lisa" checked> <i class="lg-hot"></i>Hot / <i class="lg-cold"></i>cold spots</label>
+            <label><input type="checkbox" id="lyr-pts" checked> Events</label>
+            <label><input type="checkbox" id="lyr-borders" checked> Borders</label>
+            <label><input type="checkbox" id="lyr-labels" checked> Places</label>
+          </div>
+          <div class="hud-keys"><span><i class="lg-up"></i>metric higher</span><span><i class="lg-down"></i>metric lower</span><span><i class="lg-focus"></i>focus</span></div>
+        </div>
+        <div class="map-tour" id="map-tour" hidden></div>
+        <div class="map-card" id="map-card" hidden>
+          <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Close">×</button></div>
+          <div id="map-card-body"></div>
+        </div>
+        <div class="map-cursor mono" id="map-cursor"></div>
+      </div>
 
       <div class="table-wrap" id="table-view" hidden>
         <div class="table-tools">
@@ -164,6 +195,8 @@
 </main>
 <script src="/vendor/cytoscape.min.js"></script>
 <script src="/vendor/plotly-gl3d.min.js"></script>
+<script src="/vendor/maplibre-gl.js"></script>
 <script src="/app.js"></script>
+<script src="/geo.js"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, parse_geo
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -29,6 +30,8 @@ class LoadedDataset:
     categories: list[str] = field(default_factory=list)
     derived_columns: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    geo: str | None = None  # the applied geo option, "<locator>@<resolution>"
+    spatial: SpatialContext | None = None  # rows are H3 cells when set
 
 
 def parse_bins(spec: str | None) -> dict[str, int]:
@@ -50,12 +53,14 @@ def parse_columns(spec: str | None) -> list[str]:
     return [c.strip() for c in (spec or "").split(",") if c.strip()]
 
 
-def dataset_fingerprint(payload: bytes, bins: dict[str, int], categories: list[str] | None = None) -> str:
+def dataset_fingerprint(payload: bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None) -> str:
     """Content-addressed dataset id: same bytes + same derivation options -> same id."""
     h = hashlib.sha256(payload)
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
         h.update(repr(sorted(categories)).encode("utf-8"))
+    if geo:
+        h.update(f"geo={geo}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -120,20 +125,30 @@ def load_dataset(
     filename: str | None = None,
     bins: str | None = None,
     categories: str | None = None,
+    geo: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
-    dataset does not have are skipped); an explicit value is applied strictly."""
+    dataset does not have are skipped); an explicit value is applied strictly. ``geo`` turns the
+    point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
     bin_spec = parse_bins(bins if bins is not None else config.bin_columns)
     cat_spec = parse_columns(categories if categories is not None else config.categorical_columns)
+    try:
+        geo_spec = parse_geo(geo, config.geo_resolution) if geo else None
+    except SpatialError as exc:
+        raise IngestionError("invalid_options", str(exc)) from exc
     frame = read_table(path)
     if frame.shape[1] < 2:
         raise IngestionError("invalid_schema", "Need at least one categorical and one numeric column")
     if len(frame) < config.min_rows:
         raise IngestionError("invalid_schema", f"Only {len(frame)} rows (MIN_ROWS={config.min_rows})")
     warnings = []
+    spatial = None
+    if geo_spec:
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
+        warnings += geo_warnings
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical")
     frame = apply_categories(frame, cats)
     bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin")
@@ -148,10 +163,36 @@ def load_dataset(
         warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats),
+        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats, geo=_geo_text(geo_spec)),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,
         derived_columns=derived,
         warnings=warnings,
+        geo=_geo_text(geo_spec),
+        spatial=spatial,
     )
+
+
+def _geo_text(spec: tuple[str, int] | None) -> str | None:
+    return f"{spec[0]}@{spec[1]}" if spec else None
+
+
+def _to_cells(frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
+    """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions."""
+    try:
+        cells, ctx, warnings = build_cells(
+            frame,
+            *spec,
+            min_cell_points=config.min_cell_points,
+            share_max_levels=config.geo_share_max_levels,
+            mode_max_levels=config.geo_mode_max_levels,
+            lisa_permutations=config.geo_lisa_permutations,
+            seed=config.eda_random_seed,
+        )
+    except SpatialError as exc:
+        raise IngestionError("invalid_options", str(exc)) from exc
+    if len(cells) < config.min_rows:
+        raise IngestionError("invalid_schema", f"Only {len(cells)} H3 cells at resolution {spec[1]} (MIN_ROWS={config.min_rows})")
+    cells, _ = apply_bins(cells, {c: 4 for c in ctx.lag_columns})
+    return cells, ctx, warnings

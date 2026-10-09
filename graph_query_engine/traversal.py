@@ -31,6 +31,7 @@ from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
 LATENT = {e.value for e in LATENT_EDGES}
 UNDIRECTED = {e.value for e in UNDIRECTED_EDGES}
+WEIGHTED_HOPS = {"CONTRASTS", "CO_LOCATED"}  # hops whose weight (scope / cell overlap) scales the path score
 SEED_SCORE_FLOOR = 1e-3
 
 
@@ -142,7 +143,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
                         continue  # both directions are materialised; follow out-edges only
                     if phase == "P1" and other in seed_ids:
                         continue
-                    factor = config.structural_edge_decay * (e["weight"] if e["type"] == "CONTRASTS" else 1.0)
+                    factor = config.structural_edge_decay * (e["weight"] if e["type"] in WEIGHTED_HOPS else 1.0)
                     push(score * factor, other, phase, s_cnt + 1, l_cnt, seed, step(e, other, e["weight"]))
             if phase == "P0":
                 for e, other in graph.incident(node, ["ACTIVATES"]):

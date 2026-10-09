@@ -22,7 +22,7 @@ class QueryConfig:
     traversal_max_depth: int = 5
     max_retrieved: int = 12
     structural_edge_decay: float = 0.85
-    traversal_structural_edges: str = "SPECIALIZES,GENERALIZES,CONTRASTS"  # SIBLING stays in the graph
+    traversal_structural_edges: str = "SPECIALIZES,GENERALIZES,CONTRASTS,CO_LOCATED"  # SIBLING stays in the graph
     evidence_max_patterns: int = 10
 
     @property

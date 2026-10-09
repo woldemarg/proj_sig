@@ -64,8 +64,8 @@ def create_app(engine: Engine) -> FastAPI:
     def run(job, *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
-    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None) -> JSONResponse:
-        record = engine.upload(name, stream, bins=bins, categories=categories)
+    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None) -> JSONResponse:
+        record = engine.upload(name, stream, bins=bins, categories=categories, geo=geo)
         run(engine.process, record["batch_id"])
         return JSONResponse(record, status_code=202)
 
@@ -98,9 +98,9 @@ def create_app(engine: Engine) -> FastAPI:
         return record
 
     @app.post("/api/upload")
-    def upload(file: UploadFile = File(...), bins: str = Form(""), categories: str = Form("")) -> JSONResponse:
-        # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS)
-        return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None)
+    def upload(file: UploadFile = File(...), bins: str = Form(""), categories: str = Form(""), geo: str = Form("")) -> JSONResponse:
+        # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
+        return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None, geo.strip() or None)
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -124,6 +124,18 @@ def create_app(engine: Engine) -> FastAPI:
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
         return sphere_points(engine.committed(), settings.topology.random_seed, dataset or None)
+
+    @app.get("/api/geo")
+    def geo_datasets() -> list[dict[str, Any]]:
+        return engine.geo_datasets()
+
+    @app.get("/api/geo/{dataset_id}/cells")
+    def geo_cells(dataset_id: str) -> dict[str, Any]:
+        return engine.geo_cells(dataset_id)
+
+    @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
+    def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:

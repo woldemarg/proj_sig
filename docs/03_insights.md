@@ -69,6 +69,7 @@ emm_ok      = emm_score ≥ MIN_EMM_SCORE (0.08)  ∧  a covariance pair exists
 | R2/R3 strength and stability | `shift_ok ∨ emm_ok` | `unstable` (significant but not stable), `not_significant` (`|z|` large enough, `p` fails), `weak_effect` (otherwise) |
 | R4 weight (admission) | `weight ≥ MIN_INSIGHT_WEIGHT` (0.2) | `low_weight` |
 | R5 identical extent, R6 near duplicate | run in discovery, before validation ([2.3](02_discovery.md#23-deduplication-before-validation)) | `cover_equivalent`, `near_duplicate` |
+| geo datasets: no self-explanation | in `build_insights`: a candidate whose only shifts are of metrics its own conditions are computed from ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)) | `tautological` |
 | R7 budget (admission) | the top `MAX_INSIGHTS_PER_BATCH` (200) by weight (ties by expression) | `budget` |
 
 If nothing is admitted, the batch fails with `no_viable_insights`: the journal and the ontology are untouched (`profile.json` and `rejections.json` of the dataset folder are already written).

@@ -8,13 +8,14 @@
 
 ## 2.1 Ingestion
 
-`load_dataset(path, config, filename=, bins=, categories=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings)`.
+`load_dataset(path, config, filename=, bins=, categories=, geo=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings, geo, spatial)`.
 
 | Input | Form | Source |
 |---|---|---|
 | file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
 | `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* = the form field `bins` of `POST /api/upload` |
 | `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* = the form field `categories` |
+| `geo` | `auto`, `<column>` or `<lat>,<lon>`, optionally `@<resolution>`; `None` = a plain table | UI *Spatial analysis (H3 cells)* = the form field `geo`; rows become H3 cells first ([2.9](#29-spatial-datasets-the-geo-option)) |
 
 An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Try demo*) sends an explicit `""` for both options; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
 
@@ -148,7 +149,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 
 ## 2.5 Contracts
 
-* `run_discovery(df, config, on_stage=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
+* `run_discovery(df, config, on_stage=None, spatial=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections, spatial)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges (and `tautological` ones of a geo dataset, added by `build_insights`); `spatial` (a `SpatialContext`) switches on [2.9](#29-spatial-datasets-the-geo-option).
 * `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
 * `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id, and points each journal record's `provenance.rows_ref` at them (`Workspace.covers_ref`).
@@ -163,7 +164,9 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `VALIDATION_BUDGET` | 50 | cohorts sent to the bootstrap (EDA default) |
 | `MIN_SEARCH_DIMENSIONS` | 3 | dimension back-fill floor in step 2 |
 | `REDUNDANCY_JACCARD` | 0.88 | near-duplicate threshold |
-| `EDA_RANDOM_SEED` | 42 | bootstrap seed |
+| `EDA_RANDOM_SEED` | 42 | bootstrap seed (and the LISA permutations of a geo dataset) |
+| `GEO_RESOLUTION`, `MIN_CELL_POINTS` | 7, 5 | H3 resolution when the geo option names none; points below which a cell's intensive metrics are NaN ([2.9](#29-spatial-datasets-the-geo-option)) |
+| `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_LISA_PERMUTATIONS`, `GEO_COLOCATION_MIN` | 8, 40, 99, 0.3 | categorical roles, the LISA test, the `CO_LOCATED` overlap |
 
 ## 2.7 Failure modes and guarantees
 
@@ -189,3 +192,37 @@ Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame i
 | `housing.csv` with two bands | 102 → 102 | 0 | 50 | 40 |
 
 On the demo and on `housing.csv`, no profiled categorical is constant on another's subgroups (the demo dimensions are drawn independently; housing has one native categorical and two bands), so there is no implied condition and closure finds nothing to merge. The toy frames of [2.7](#27-failure-modes-and-guarantees) exercise both merges: closure with an implied column, and near-duplicate pruning.
+
+## 2.9 Spatial datasets (the geo option)
+
+An upload with the `geo` option (form field `geo` of `POST /api/upload`, `Engine.submit(geo=)`, `load_dataset(geo=)`) holds **points**, one per row. Ingestion turns them into a table with **one row per occupied H3 cell** (`subgroup_miner/spatial.py`, `build_cells`) before bands and categories apply; discovery then mines cells exactly as it mines any table. Without the option nothing below runs and a dataset is processed — and identified — as before.
+
+**The option.** `auto`, `<column>` (GeoJSON `Point` or WKT `POINT (x y)` text) or `<lat>,<lon>` (numeric), each optionally followed by `@<resolution>` (0–15; default `GEO_RESOLUTION` 7). `auto` takes the first text column whose first 200 non-null values parse as points for at least 95 %, otherwise the numeric pair whose names contain a `lat`/`latitude` and a `lon`/`lng`/`long`/`longitude` token. A spec that cannot be applied is `invalid_options`; rows without a valid point are ignored with a warning. The applied option enters the dataset id (`… ‖ "geo=<locator>@<resolution>"`).
+
+**Column roles follow the dtypes only** (no column name is interpreted):
+
+| Source column | Cell column(s) | Kind |
+|---|---|---|
+| (every point) | `points` — the number of points in the cell | counter, every cell |
+| datetime (or text that parses as dates, ≥ 8 characters) | `<col>_active_days` (distinct days); `<col>_late_share` (share of points after the midpoint of the whole period) | counter; intensive |
+| numeric | `<col>_median` | intensive |
+| categorical, 2–`GEO_MODE_MAX_LEVELS` (40) levels, *place-like* (mean top-level share over dense cells ≥ 0.9) or with more than `GEO_SHARE_MAX_LEVELS` (8) levels | `<col>_mode` — the cell's most frequent level | dimension |
+| categorical, mixed within cells, ≤ `GEO_SHARE_MAX_LEVELS` levels | `share_<col>_<level>` per level (a binary column: its rarer level) present strictly between 0 and 1 in at least 10 % of dense cells | intensive |
+| more levels, or a single one (identifiers, free text) | — (listed in a warning) | dropped |
+
+A mode column nested in a share column (one column's level fixes the other's for ≥ 98 % of the rows, either direction) is dropped: its mode would restate those shares. **Intensive** columns are NaN in cells with fewer than `MIN_CELL_POINTS` (5) points — medians and shares of one to four points are noise — while counters are kept for every cell, so quiet cells stay part of the comparison. **The baseline of every shift is the set of cells holding at least one point** (the profile's `geo.base`).
+
+**Neighbourhood conditions** are computed on all cells before any NaN rule and become text dimensions (the miner is unchanged):
+
+| Column | Definition |
+|---|---|
+| `neighbours_<counter>_band` | the mean of the counter over the cell's ring-1 neighbours (`h3.grid_ring`, the cell itself excluded; a neighbour without points counts as 0), cut into quartile bands `q1…q4` by `apply_bins` |
+| `lisa_points` | local Moran's I of `log1p(points)` with row-standardised ring-1 weights over the occupied cells; conditional permutation test (`GEO_LISA_PERMUTATIONS` 99, seed `EDA_RANDOM_SEED`), folded `p ≤ 0.05` → `hot spot` (high, high neighbours), `cold spot`, `high outlier`, `low outlier`; otherwise `no cluster` |
+
+These conditions are always among the searched dimensions: they are prepended to step 2's choice (so a geo dataset searches up to six dimensions plus its neighbourhood conditions; `COMPUTE_BUDGET` still bounds the conjunctions). A condition never explains what it is computed from (`SpatialContext.derived_from`): a neighbourhood condition never explains a counter, and a mode condition never explains the shares of a column it is nested with (≥ 90 % of the rows). Such shifts — and a covariance pair holding such a metric — are removed before the primary target is chosen; a candidate left without shifts is rejected as `tautological`.
+
+**Spatial autocorrelation.** Neighbouring cells are not independent, so the median test of [2.4](#24-what-the-adapter-adds) runs on an effective sample size: `n_eff = n · (1 − ρ) / (1 + ρ)` with `ρ = max(0, I)`, `I` the global Moran's I of the primary metric over the cells (row-standardised ring-1 weights over present, non-NaN neighbours) — the one-parameter approximation of Clifford, Richardson & Hémon (1989); Dutilleul's (1993) modification estimates the covariance structure instead and is not used. `se = 1.2533 · 1.4826 · MAD / √n_eff`. Each insight records `provenance.spatial = {resolution, cells, moran_i, n_eff, p_adjusted_iid}` (the Bonferroni-adjusted p without the correction), and the profile's `geo.sac = {validated, significant_iid, significant_corrected, admitted}` counts the validated candidates with `p_adjusted ≤ MAX_P_ADJUSTED` without and with the correction. The step-4b bootstrap still resamples cells independently, so `stability` remains optimistic for spatial data (a block bootstrap over cell neighbourhoods is the known upgrade).
+
+After admission the graph service adds `compactness` (the share of the extent's neighbour links that stay inside the extent; 1 = one solid block, a scattered extent is not penalised) and `colocated` (up to three other insights of the dataset whose ring-1-dilated extents overlap by `|A ∩ B| / min(|A|, |B|) ≥ GEO_COLOCATION_MIN` (0.3); the `CO_LOCATED` edges of [6.1](06_graph_and_storage.md#61-the-structural-plane)), and stores the cell table, the point → cell map and the neighbour graph as `datasets/<ds>/geo.npz` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)).
+
+> **Measured** on a month of point events (322,843 points, `geo=auto@7`): 13,403 cells (8,023 below `MIN_CELL_POINTS`), 2,260 `hot spot` cells; global Moran's I of the metrics 0.18–0.90; of 50 validated candidates 39 are significant without and 26 with the `n_eff` correction (26 insights admitted); ingestion and discovery ≈ 12 s on a laptop CPU.

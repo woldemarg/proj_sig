@@ -70,6 +70,7 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | Section, group | Parameter (default) | Explained in |
 |---|---|---|
 | `MinerConfig` (`subgroup_miner/config.py`) — ingestion | `MIN_ROWS` 50, `BIN_COLUMNS` "", `CATEGORICAL_COLUMNS` "" | [2.1](02_discovery.md#21-ingestion) |
+| `MinerConfig` — spatial datasets | `GEO_RESOLUTION` 7, `MIN_CELL_POINTS` 5, `GEO_SHARE_MAX_LEVELS` 8, `GEO_MODE_MAX_LEVELS` 40, `GEO_LISA_PERMUTATIONS` 99, `GEO_COLOCATION_MIN` 0.3 | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
 | `MinerConfig` — discovery | `COMPUTE_BUDGET` 5000, `VALIDATION_BUDGET` 50, `MIN_SEARCH_DIMENSIONS` 3, `EDA_RANDOM_SEED` 42, `REDUNDANCY_JACCARD` 0.88 | [2](02_discovery.md) |
 | `MinerConfig` — validity rules | `MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_STABILITY` 0.5 | [3.2](03_insights.md#32-selection-rules) |
 | `MinerConfig` — weight | `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_CONFIDENCE_REF` 6, `WEIGHT_EXPONENTS` (0.35, 0.25, 0.20, 0.10, 0.10), `WEIGHT_FLOOR` 0.05 | [3.3](03_insights.md#33-insight-weight) |
@@ -81,10 +82,10 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | `TopologyConfig` — anchor links | `RELATED_TO_PEER_COUNT` 3, `RELATED_TO_MIN_WEIGHT` 0.30 | [5.7](05_latent_anchors.md#57-links-between-anchors) |
 | `QueryConfig` (`graph_query_engine/config.py`) — literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `graph_query_engine/question.py`: `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |
 | `QueryConfig` — seeds | `SEED_TOP_K` 3, `SEED_MIN_SCORE` 0.25, `SEED_RELATIVE_MIN` 0.75 | [7.2](07_question_answering.md#72-seeds) |
-| `QueryConfig` — traversal | `MAX_LATENT_HOPS` 1, `STRUCTURAL_HOPS` 1, `TRAVERSAL_MAX_DEPTH` 5, `MAX_RETRIEVED` 12, `STRUCTURAL_EDGE_DECAY` 0.85, `TRAVERSAL_STRUCTURAL_EDGES` `SPECIALIZES,GENERALIZES,CONTRASTS` | [7.3](07_question_answering.md#73-transversal-traversal) |
+| `QueryConfig` — traversal | `MAX_LATENT_HOPS` 1, `STRUCTURAL_HOPS` 1, `TRAVERSAL_MAX_DEPTH` 5, `MAX_RETRIEVED` 12, `STRUCTURAL_EDGE_DECAY` 0.85, `TRAVERSAL_STRUCTURAL_EDGES` `SPECIALIZES,GENERALIZES,CONTRASTS,CO_LOCATED` | [7.3](07_question_answering.md#73-transversal-traversal) |
 | `QueryConfig` — evidence | `EVIDENCE_MAX_PATTERNS` 10 | [7.4](07_question_answering.md#74-the-evidence-object) |
 | `PhenomenonThresholds` (`insight_contracts/insight.py`; one instance shared by the three sections) | `MIN_EMM_SCORE` 0.08, `WEIGHT_EMM_REF` 0.08, `MIN_COMPONENT_Z` 0.5 | [3.2](03_insights.md#32-selection-rules), [3.3](03_insights.md#33-insight-weight), [4.2](04_representation.md#42-the-canonical-form) |
-| `Settings` (`insight_graph_service/core/settings.py`) — paths, upload | `WORKSPACE_DIR` (`workspace`), `MAX_UPLOAD_MB` 200 | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [8.1](08_interface.md#81-http-api) |
+| `Settings` (`insight_graph_service/core/settings.py`) — paths, upload, map | `WORKSPACE_DIR` (`workspace`), `MAX_UPLOAD_MB` 200, `GEO_MAX_POINTS` 5000 | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [8.1](08_interface.md#81-http-api) |
 | `Settings` — admission | `MIN_INSIGHT_WEIGHT` 0.2, `MAX_INSIGHTS_PER_BATCH` 200 | [3.2](03_insights.md#32-selection-rules) |
 | `Settings` — Neo4j | `NEO4J_ENABLED` false, `NEO4J_URI` `bolt://localhost:7687`, `NEO4J_USER` `neo4j`, `NEO4J_PASSWORD` "", `NEO4J_DATABASE` `sigv1`, `NEO4J_LOAD_BATCH_SIZE` 5000 | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 | `Settings` — web | `WEB_HOST` 127.0.0.1, `WEB_PORT` 8765 | [8.6](08_interface.md#86-configuration-failure-modes-and-tests) |

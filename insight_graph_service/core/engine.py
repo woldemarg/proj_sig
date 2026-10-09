@@ -43,6 +43,7 @@ from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatc
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import load_dataset
 from subgroup_miner.selection import select_insights
+from subgroup_miner.spatial import annotate_extents, cell_boundary, sac_summary
 
 log = logging.getLogger(__name__)
 
@@ -219,7 +220,9 @@ class Engine:
         return snapshot, CommittedState(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
     @_healthy
-    def upload(self, name: str, stream: BinaryIO, *, bins: str | None = None, categories: str | None = None) -> dict[str, Any]:
+    def upload(
+        self, name: str, stream: BinaryIO, *, bins: str | None = None, categories: str | None = None, geo: str | None = None
+    ) -> dict[str, Any]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
         path = self.ws.save_upload(name, stream)
         if not path.exists():  # the workspace was reset while the file streamed in
@@ -227,7 +230,7 @@ class Engine:
         if path.stat().st_size > self.settings.max_upload_mb * 1024 * 1024:
             path.unlink()
             raise PipelineError("file_too_large", f"{name} exceeds {self.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
-        return self.submit(path, filename=name, bins=bins, categories=categories)
+        return self.submit(path, filename=name, bins=bins, categories=categories, geo=geo)
 
     @_healthy
     def submit(
@@ -237,11 +240,13 @@ class Engine:
         filename: str | None = None,
         bins: str | None = None,
         categories: str | None = None,
+        geo: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
         ``bins`` / ``categories`` = None means "use BIN_COLUMNS / CATEGORICAL_COLUMNS"
         (applied leniently); an explicit string (even "") overrides them strictly.
+        ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         """
         path = Path(path)
         created = utc_now()
@@ -252,6 +257,7 @@ class Engine:
             "source_path": str(path),
             "bins": bins,
             "categories": categories,
+            **({"geo": geo} if geo else {}),
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
             "created_at": created,
@@ -284,6 +290,7 @@ class Engine:
                         filename=record["filename"],
                         bins=record.get("bins"),
                         categories=record.get("categories"),
+                        geo=record.get("geo"),
                     )
                     ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
@@ -292,13 +299,15 @@ class Engine:
                         return self._skip(record, duplicate)
 
                 with self._stage(record, "PROFILING", timings, "discover_s"):
-                    result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s))
+                    result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s), spatial=loaded.spatial)
                     record["profile"] = {
                         **result.profile.to_dict(),
                         "derived_columns": loaded.derived_columns,
                         "bins": loaded.bins,
                         "categorical_overrides": loaded.categories,
                     }
+                    if loaded.spatial:
+                        record["profile"]["geo"] = self._geo_profile(loaded)
                     self.ws.save_profile(ds, record["profile"])
 
                 with self._stage(record, "VALIDATING_INSIGHTS", timings, "select_s"):
@@ -306,6 +315,10 @@ class Engine:
                     insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=batch_id, filename=record["filename"])
                     selection = select_insights(insights, self.settings.miner)
                     kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
+                    if loaded.spatial:
+                        record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
+                        annotate_extents(kept, covers, loaded.spatial, self.settings.miner.geo_colocation_min)
+                        self.ws.save_profile(ds, record["profile"])
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])
                     if not kept:
@@ -331,6 +344,8 @@ class Engine:
                         for rec in patterns:
                             rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
                         self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
+                        if loaded.spatial:
+                            self._save_geo(ds, loaded)
                         self._enter(record, "PERSISTING")
                         self._refuse_journaled(kept)
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
@@ -351,6 +366,92 @@ class Engine:
                 record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
             self.ws.save_batch(record)
             return record
+
+    @staticmethod
+    def _geo_profile(loaded: Any) -> dict[str, Any]:
+        ctx = loaded.spatial
+        return {
+            "option": loaded.geo,
+            "resolution": ctx.resolution,
+            "location": ctx.location,
+            "cells": len(ctx.cells),
+            "points": int((ctx.point_cell >= 0).sum()),
+            "sparse_cells": ctx.sparse_cells,
+            "min_cell_points": ctx.min_cell_points,
+            "base": "H3 cells holding at least one point",
+            "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
+        }
+
+    def _save_geo(self, ds: str, loaded: Any) -> None:
+        ctx = loaded.spatial
+        arrays = {"cells": ctx.cells.astype(str), "point_cell": ctx.point_cell, "lonlat": ctx.lonlat, "nbr_ptr": ctx.nbr_ptr, "nbr_idx": ctx.nbr_idx}
+        columns = {c: loaded.frame[c].to_numpy(dtype=float if loaded.frame[c].dtype.kind in "fiu" else str) for c in loaded.frame.columns}
+        self.ws.save_geo(ds, arrays, columns, {"resolution": ctx.resolution, "location": ctx.location})
+
+    def geo_datasets(self) -> list[dict[str, Any]]:
+        """READY datasets analysed as H3 cells, with what the map needs to offer them."""
+        out = []
+        for b in self.ws.list_batches():
+            geo = (b.get("profile") or {}).get("geo")
+            if b.get("status") == "READY" and geo:
+                out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
+        return out
+
+    def geo_cells(self, dataset_id: str) -> dict[str, Any]:
+        """The dataset's cells as a GeoJSON FeatureCollection; properties are the cell-table columns."""
+        geo = self._geo(dataset_id)
+        cols = geo["columns"]
+        features = []
+        for i, cell in enumerate(geo["cells"]):
+            props: dict[str, Any] = {"h3": str(cell), "row": i}
+            for name, values in cols.items():
+                v = values[i]
+                props[name] = (None if not np.isfinite(v) else round(float(v), 4)) if values.dtype.kind == "f" else str(v)
+            features.append(
+                {"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props}
+            )
+        lonlat = geo["lonlat"][geo["point_cell"] >= 0]
+        bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
+        covers = self.ws.load_covers(dataset_id)
+        patterns = [
+            {
+                "id": r["id"],
+                "rows": covers[r["id"]].tolist(),
+                "scope": [f"{c['attribute']} = {c['value']}" for c in r["conditions"]],
+                "target": r["target"],
+                "effect_size": r["effect_size"],
+                "phenomenon_type": r["phenomenon_type"],
+                "support": r["support"],
+                "weight": r["weight"],
+                "spatial": r["provenance"].get("spatial", {}),
+            }
+            for r in self.ws.patterns()
+            if r["dataset_id"] == dataset_id and r["id"] in covers
+        ]
+        return {"type": "FeatureCollection", "features": features, "bbox": bbox, "meta": geo["meta"], "patterns": patterns}
+
+    def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
+        """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""
+        geo = self._geo(dataset_id)
+        rows = self.ws.load_covers(dataset_id).get(pattern_id)
+        if rows is None:
+            raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
+        inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
+        step = max(1, int(np.ceil(len(inside) / max_points)))
+        points = geo["lonlat"][inside[::step]]
+        return {
+            "pattern_id": pattern_id,
+            "cells": [str(c) for c in geo["cells"][rows]],
+            "rows": rows.tolist(),
+            "n_points": int(len(inside)),
+            "points": np.round(points.astype(float), 5).tolist(),
+        }
+
+    def _geo(self, dataset_id: str) -> dict[str, Any]:
+        geo = self.ws.load_geo(dataset_id) if dataset_id.startswith("ds-") and dataset_id[3:].isalnum() else None
+        if geo is None:
+            raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+        return geo
 
     @contextmanager
     def _stage(self, record: dict[str, Any], stage: str, timings: dict[str, float], key: str) -> Iterator[None]:

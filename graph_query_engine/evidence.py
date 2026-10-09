@@ -110,6 +110,12 @@ class Evidence:
                 f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
                 f" | confounders: {', '.join(s['drivers']) or 'none detected'}"
             )
+            spatial = it.provenance.get("spatial")
+            if spatial:
+                lines.append(
+                    f"     place: {spatial['cells']:,} H3 cells (resolution {spatial['resolution']}), compactness {spatial.get('compactness', 0):.2f}"
+                    f" | significance corrected for spatial autocorrelation (effective n {format_value(spatial['n_eff'])})"
+                )
             lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
         if self.notes:
             lines.append("")

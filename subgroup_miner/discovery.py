@@ -26,6 +26,7 @@ from scipy.stats import norm, zscore
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, Insight, Rejection, Shift, pattern_id
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.spatial import SpatialContext, effective_n_factor
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
 NULL_LEVELS = frozenset({"nan", "<NA>", "None"})  # never a condition (same literals as EDA step 3)
@@ -85,7 +86,8 @@ class DiscoveryResult:
     data: pd.DataFrame  # EDA data_safe (row positions == source file rows)
     n_tests: int  # multiple-testing family size (distinct cohorts x metrics)
     pass1_subgroups: int  # pass-1 selectors before merging identical extents
-    rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate
+    rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate / tautological
+    spatial: SpatialContext | None = None  # rows are H3 cells (docs/02_discovery.md §2.9)
 
 
 def emm_pair_scale(n_metrics: int) -> float:
@@ -192,7 +194,9 @@ def _validation_frame(cands: list[Candidate]) -> pd.DataFrame:
     )
 
 
-def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str], None] | None = None) -> DiscoveryResult:
+def run_discovery(
+    df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str], None] | None = None, spatial: SpatialContext | None = None
+) -> DiscoveryResult:
     """EDA pass 1 -> distinct closed cohorts -> ranking -> near-duplicate pruning -> pass 2.
 
     Deduplication runs *before* the validation budget is spent, so the bootstrap only
@@ -207,6 +211,9 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
         raise DiscoveryError("invalid_schema", "No categorical dimensions to slice by (consider BIN_COLUMNS).")
 
     dims = eda.step2_evaluate_macro_groupings(profile, min_categories=config.min_search_dimensions)
+    if spatial:  # the neighbourhood conditions are the geo mode's question: always searched (§2.9)
+        forced = [c for c in categoricals if c in spatial.conditions]
+        dims = forced + [d for d in dims if d not in forced]
     space = eda.step3_generate_search_space(profile, dims, compute_budget=config.compute_budget)
     global_medians = {n: float(np.median(data[n].dropna())) for n in numerics}
     global_mads = {n: float(eda.calculate_mad(data[n].dropna())) for n in numerics}
@@ -272,18 +279,27 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
         validated.append(cand)
 
     return DiscoveryResult(
-        prof, candidates, validated, data, n_tests=len(candidates) * len(numerics), pass1_subgroups=len(pass1), rejections=rejections
+        prof,
+        candidates,
+        validated,
+        data,
+        n_tests=len(candidates) * len(numerics),
+        pass1_subgroups=len(pass1),
+        rejections=rejections,
+        spatial=spatial,
     )
 
 
-def _median_test(values: np.ndarray, global_median: float, global_mad: float) -> float:
-    """Two-sided asymptotic test of H0: subgroup median == global median."""
+def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+    """Two-sided asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the
+    sample to its effective size under spatial autocorrelation (docs/02_discovery.md §2.9)."""
     values = values[~np.isnan(values)]
     n = len(values)
     if n < 2:
         return 1.0
+    root_n = math.sqrt(max(n * n_eff_factor, 1.0))
     scale = eda.calculate_mad(values) or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
-    se = _MEDIAN_SE_FACTOR * scale / math.sqrt(n) if scale else float(np.std(values, ddof=1)) / math.sqrt(n)
+    se = _MEDIAN_SE_FACTOR * scale / root_n if scale else float(np.std(values, ddof=1)) / root_n
     if not se or not np.isfinite(se):
         return 1.0
     z = (float(np.median(values)) - global_median) / se
@@ -316,15 +332,25 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
     if not validated:
         return []
     prof = result.profile
+    spatial = result.spatial
     insights: list[Insight] = []
     for cand in validated:
         rows = result.data.iloc[cand.row_indices]
+        top_shifts, own = cand.top_shifts, set()
+        if spatial:  # a neighbourhood condition never explains the metric it is computed from
+            own = {m for c in cand.conditions for m in spatial.derived_from.get(c.attribute, [])}
+            top_shifts = [(m, v) for m, v in top_shifts if m not in own]
+            if not top_shifts:
+                result.rejections.append(Rejection(cand.expression, "tautological", f"only shifts of {sorted(own)}"))
+                continue
         shifts: list[Shift] = []
-        for metric, magnitude in cand.top_shifts:
+        for metric, magnitude in top_shifts:
             local_median = float(np.median(rows[metric].dropna()))
             sign = np.sign(local_median - prof.global_medians[metric]) or 1.0
             shifts.append(Shift(metric, float(sign * magnitude), local_median, prof.global_medians[metric], prof.global_mads[metric]))
         covariance = _covariance_pair(rows, result.data, prof.numerics)
+        if own & set(covariance.get("pair", [])):
+            covariance = {}
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
@@ -333,8 +359,20 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
                 shifts.append(Shift(metric, float(sign * eda.robust_z_score(local_median, gm, gd)), local_median, gm, gd, "covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
         primary = shifts[0]
-        p_value = _median_test(rows[primary.metric].to_numpy(dtype=float), primary.global_median, primary.global_mad)
+        values = rows[primary.metric].to_numpy(dtype=float)
+        n_eff_factor = effective_n_factor(spatial.moran.get(primary.metric, 0.0)) if spatial else 1.0
+        p_value = _median_test(values, primary.global_median, primary.global_mad, n_eff_factor)
         pid = pattern_id(dataset_id, cand.conditions)
+        provenance_extra = {}
+        if spatial:
+            p_iid = _median_test(values, primary.global_median, primary.global_mad)
+            provenance_extra["spatial"] = {
+                "resolution": spatial.resolution,
+                "cells": cand.row_count,
+                "moran_i": round(spatial.moran.get(primary.metric, 0.0), 4),
+                "n_eff": round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
+                "p_adjusted_iid": min(1.0, p_iid * result.n_tests),
+            }
         insights.append(
             Insight(
                 id=pid,
@@ -374,6 +412,7 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
                     ],
                     "expression": cand.expression,
                     "multiple_testing_family": result.n_tests,
+                    **provenance_extra,
                 },
             )
         )

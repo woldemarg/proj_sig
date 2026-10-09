@@ -126,10 +126,20 @@ SIG owns its six node labels in that database, so use one workspace per database
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
    - The *Prompt* tab shows the exact evidence the model saw.
 
+6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@7` (or `curl -F geo=auto@7`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; an answer paints the cited insights' cells, *▶ TOUR* flies through them, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+
+   Demo questions on the month of point events (`data/epoints_2026-08-01_2026-08-31.parquet`, `geo=auto@7`), simple to complex:
+   1. *Що відрізняє зони hot spot від решти?* — the LISA condition: bomber drones dominate the hot spots (+6 sd).
+   2. *Де частка Бомбер вища, ніж зазвичай?* — a metric question: the cells where that share is high.
+   3. *Де цілі далі від лінії фронту?* — isolated, quiet cells (low neighbourhood activity) lie farther from the front.
+   4. *Чим відрізняються зони, де домінує КСБС ЗСУ (А5007)?* — a scope question; the answer reaches other themes through the anchors.
+   5. *Що ще відбувається там, де ammunition type mode Уламковий?* — the same place through `CO_LOCATED` and the shared themes.
+
 **Without the UI**, use the HTTP API through the console's port:
 ```powershell
 curl -X POST http://127.0.0.1:8765/api/demo                                        # the synthetic dataset -> a batch record
 curl -F file=@data\housing.csv -F bins=median_income:4,housing_median_age:4 http://127.0.0.1:8765/api/upload
+curl -F file=@data\epoints_2026-08-01_2026-08-31.parquet -F geo=auto@7 http://127.0.0.1:8765/api/upload   # points -> H3 cells
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only

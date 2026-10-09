@@ -28,7 +28,7 @@ KERNEL = {"insight_contracts"}
 # package -> (repository packages it may import besides itself, third-party top-level modules it may import)
 RULES = {
     "insight_contracts": (set(), set()),
-    "subgroup_miner": (KERNEL, {"numpy", "pandas", "scipy", "pysubgroup"}),
+    "subgroup_miner": (KERNEL, {"numpy", "pandas", "scipy", "pysubgroup", "h3"}),  # h3: the geo option's cell table (spatial.py)
     "attractor_topology": (KERNEL, {"numpy", "sklearn", "sentence_transformers", "torch"}),
     "graph_query_engine": (KERNEL, {"numpy", "sklearn"}),
     "insight_graph_service": (set(), set()),  # the package itself: its two parts below

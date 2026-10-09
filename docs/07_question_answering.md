@@ -84,7 +84,7 @@ P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO|CO_OCCURS){0,L}  <--ACTIVATES-
 h = STRUCTURAL_HOPS (1)     L = MAX_LATENT_HOPS (1)     total length ≤ TRAVERSAL_MAX_DEPTH (5)
 ```
 
-Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS in both directions); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
+Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS and CO_LOCATED in both directions; CO_LOCATED exists only between patterns of a geo dataset, [6.1](06_graph_and_storage.md#61-the-structural-plane)); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
 
 | Step | Condition | Factor |
 |---|---|---|
@@ -92,7 +92,7 @@ Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES
 | RELATED_TO, anchor → anchor | every link the ontology kept (mutual kNN above `RELATED_TO_MIN_WEIGHT`, 0.30) | weight |
 | CO_OCCURS, anchor → anchor | every compiled co-occurrence link (anchors sharing members, [5.7](05_latent_anchors.md#57-links-between-anchors)) | weight (≤ 1) |
 | ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
-| lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS |
+| lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS or CO_LOCATED either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS and CO_LOCATED |
 
 The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` flag says which memberships those are. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
 

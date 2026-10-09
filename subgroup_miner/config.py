@@ -16,6 +16,14 @@ class MinerConfig:
     bin_columns: str = ""  # "col:q,col2:q" — derive quantile-band categorical dimensions from numerics
     categorical_columns: str = ""  # "Store,Holiday_Flag" — integer/float-coded columns to treat as categorical dimensions
 
+    # spatial ingestion, only for an upload with a geo option (docs/02_discovery.md §2.9)
+    geo_resolution: int = 7  # H3 resolution when the geo option names none
+    min_cell_points: int = 5  # below it a cell keeps its counters but not its medians and shares (NaN)
+    geo_share_max_levels: int = 8  # categoricals with at most this many levels also become per-level share metrics
+    geo_mode_max_levels: int = 40  # categoricals with more levels are not aggregated
+    geo_lisa_permutations: int = 99
+    geo_colocation_min: float = 0.3  # CO_LOCATED edge: overlap of the one-ring-dilated extents
+
     # discovery (docs/02_discovery.md) — EDA defaults preserved
     compute_budget: int = 5000  # step3 compute_budget
     validation_budget: int = 50  # workflow: top-50 candidates to step4b

@@ -33,7 +33,7 @@ const SUGGESTIONS = [
 const MARKS = {
   anchor: 'node[kind="Attractor"]', up: 'node[kind="Pattern"][ptype != "covariance"][direction > 0]',
   down: 'node[kind="Pattern"][ptype != "covariance"][direction < 0]', cov: 'node[kind="Pattern"][ptype = "covariance"]',
-  lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]',
+  lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]', colocated: 'edge[type="CO_LOCATED"]',
   latent: 'edge[type="RELATED_TO"], edge[type="CO_OCCURS"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
 };
@@ -142,7 +142,7 @@ async function refreshBatches() {
   sel.innerHTML = `<option value="">All datasets</option>` + ready.map(([id, f]) => `<option value="${esc(id)}">${esc(f)}</option>`).join("");
   sel.value = ready.some(([id]) => id === cur) ? cur : "";
   const readyKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",");
-  if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); }
+  if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); GeoMap.refresh(); }
   clearTimeout(S.poll);
   if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
 }
@@ -152,7 +152,7 @@ function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.classN
 async function upload() {
   const f = $("file").files[0]; if (!f) return;
   const fd = new FormData();
-  fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value);
+  fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   setUploadMsg(`Uploading ${f.name}…`);
   $("upload-btn").disabled = true;
   try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("Queued — progress is shown below."); $("file").value = ""; $("file-name").textContent = ""; refreshBatches(); }
@@ -179,6 +179,7 @@ function graphStyle() {
     { selector: 'edge[type="GENERALIZES"]', style: { display: "none" } },
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
+    { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
     { selector: 'edge[type="ACTIVATES"]', style: { "line-color": anchor, width: "mapData(weight, 0, 1, 0.4, 2)", opacity: 0.22 } },
     { selector: 'edge[type="ACTIVATES"][?weak]', style: { "line-style": "dashed" } },
     { selector: 'edge[type="RELATED_TO"]', style: { "curve-style": "unbundled-bezier", "control-point-distances": "data(cpd)", "control-point-weights": 0.5, "line-color": anchor, width: "mapData(weight, 0, 1, 1, 6)", opacity: 0.75, label: "data(weight)", "font-size": 8.5, color: anchor, "text-background-color": surface, "text-background-opacity": 0.9, "text-background-padding": 2 } },
@@ -286,6 +287,7 @@ const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, d
   ["lattice", "SPECIALIZES", "Hierarchy", "muted", 2, null],
   ["contrast", "CONTRASTS", "Contrasts", "bad", 2, "dash"],
   ["sibling", "SIBLING", "Siblings", "muted", 1.5, "dot"],
+  ["colocated", "CO_LOCATED", "Same place", "path", 1.5, "dash"],
 ];
 const ANSWER_MARKS = [  // highlight field, legend key, name, palette colour, size, ring width
   ["evidence", "ev", "Evidence", "ink", 8, 2], ["transversal_only", "cross", "Other segment", "bad", 10, 3],
@@ -419,12 +421,15 @@ function setView(view) {
   $("cy").hidden = view !== "graph";
   $("sphere").hidden = view !== "sphere";
   $("table-view").hidden = view !== "table";
+  $("map-view").hidden = view !== "map";
+  document.querySelector(".canvas-body").classList.toggle("map-mode", view === "map");
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
-  $("fit-btn").hidden = view === "table";
+  $("fit-btn").hidden = view === "table" || view === "map";
   const columns = document.querySelector('.toggle[data-key="schema"]');  // column nodes have no vectors: graph only
   columns.disabled = view === "sphere"; columns.title = view === "sphere" ? "Columns are not drawn in 3D (they have no vectors)" : "Dimension and metric columns (graph only)";
-  $("empty-hint").hidden = view === "table" || S.nodes.length > 0;
+  $("empty-hint").hidden = view === "table" || view === "map" || S.nodes.length > 0;
   if (view === "sphere") renderSphere();
+  if (view === "map") GeoMap.show();
   if (view === "graph" && S.cy) { S.cy.resize(); S.cy.fit(S.cy.elements(":visible"), 40); }
 }
 
@@ -587,7 +592,7 @@ async function inspect(id) {
   if (groups.length) {
     const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
       "SPECIALIZES": "Narrower version of", "GENERALIZES": "Broader version of", "SPECIALIZES (in)": "Narrower insights", "GENERALIZES (in)": "Broader insights",
-      "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
+      "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
       `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
       items.map((it) => `<div class="nb" data-id="${esc(it.id)}"><span>${esc(it.label)}</span><span class="muted">${num(Number(it.weight))}</span></div>`).join("") + `</details>`).join("");
@@ -624,7 +629,7 @@ function renderChain(item) {
   if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">matched your question</span></div>`;
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
-    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", CO_OCCURS: "co-occurring theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast" }[st.edge_type] || st.edge_type;
+    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", CO_OCCURS: "co-occurring theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast", CO_LOCATED: "same place" }[st.edge_type] || st.edge_type;
     html += `<span class="e">→ ${esc(label)} ${num(st.weight)} →</span><span class="n ${st.target.startsWith("A-") ? "A" : ""}">${esc(st.target)}</span>`;
   }
   return `<div class="chain">${html}</div>`;
@@ -702,7 +707,7 @@ function renderThread() {
   if (!S.chat.length) {
     t.innerHTML = `<div class="welcome"><div class="art"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 4z"/></svg></div>` +
       `<h3>Ask about your data</h3><p>Answers are built only from validated insights in the graph, with every claim linked to its source.</p>` +
-      `<div class="suggest">${chipButtons(SUGGESTIONS)}</div></div>`;
+      `<div class="suggest">${chipButtons(GeoMap.suggestions().length ? GeoMap.suggestions() : SUGGESTIONS)}</div></div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
@@ -712,8 +717,15 @@ function renderThread() {
     const turn = S.chat[Number(box.dataset.turn)];
     if (!turn || !turn.qa) return;
     const items = turn.qa.view.evidence.items || [];
-    box.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", () => { if (S.view === "table") setView("graph"); focusNodes([a.dataset.pid]); inspect(a.dataset.pid); }));
-    box.querySelectorAll(".ev").forEach((el) => el.addEventListener("click", () => highlightPath(turn, items[Number(el.dataset.i)], el)));
+    box.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", () => {
+      if (S.view === "map" && GeoMap.has(a.dataset.pid)) { GeoMap.focusPattern(a.dataset.pid); return; }
+      if (S.view === "table") setView("graph"); focusNodes([a.dataset.pid]); inspect(a.dataset.pid);
+    }));
+    box.querySelectorAll(".ev").forEach((el) => el.addEventListener("click", () => {
+      const item = items[Number(el.dataset.i)];
+      if (S.view === "map" && GeoMap.has(item.pattern_id)) { GeoMap.focusPattern(item.pattern_id); return; }
+      highlightPath(turn, item, el);
+    }));
     box.querySelectorAll(".bot-tabs button").forEach((tab) => tab.addEventListener("click", () => {
       const open = !tab.classList.contains("active");  // a click on the open panel closes it
       box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); });
@@ -741,6 +753,7 @@ async function ask(question) {
     }
     renderThread();
     highlight(S.hl);
+    try { GeoMap.onAnswer(qa); } catch (err) { console.error("map highlight failed", err); }  // the map never breaks an answer
     if (S.view === "graph") focusNodes([...(qa.view.highlight.traversed || [])]);
     renderSphere();
   } catch (e) { Object.assign(turn, { pending: false, error: e.message }); renderThread(); }
@@ -815,7 +828,7 @@ function init() {
     k.addEventListener("mouseleave", () => spotlight(null));
   });
   $("legend-btn").addEventListener("click", () => setLegend($("legend").hidden));
-  $("clear-btn").addEventListener("click", () => { S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); });
+  $("clear-btn").addEventListener("click", () => { S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear(); });
   $("drawer-close").addEventListener("click", closeDrawer);
   $("table-search").addEventListener("input", renderTable);
   document.querySelectorAll("#ins-table th").forEach((th) => th.addEventListener("click", () => {
@@ -825,7 +838,7 @@ function init() {
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat = []; S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); });
+  $("new-chat").addEventListener("click", () => { S.chat = []; S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); GeoMap.clear(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
   initResize();
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
