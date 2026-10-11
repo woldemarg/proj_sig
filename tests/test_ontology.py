@@ -17,6 +17,9 @@ def unit(v):
 
 
 DIM = 1152  # the production insight vector (3 x 384)
+# The toy clusters below are drawn for this assignment band and merge threshold (the defaults before the precision tuning
+# of docs/05_latent_anchors.md §5.10); the tests exercise the mechanics, not the production band.
+BAND = {"min_assign_threshold": 0.75, "max_assign_threshold": 0.80, "soft_merge_low": 0.85}
 
 
 def clusters(rng, centers, per, noise=0.05):
@@ -45,7 +48,7 @@ def ingest(ont, x, w=None, seq=0, prefix="p"):
 
 def test_cold_start_creates_attractors_with_full_activation_coverage(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = TopologyConfig()
+    cfg = TopologyConfig(**BAND)
     ont = LatentOntology(cfg, tmp_path)
     x, labels = clusters(rng, centers, 6)
     up, ids = ingest(ont, x)
@@ -131,7 +134,7 @@ def test_damping_slows_an_over_represented_attractor(tmp_path, toy):
     rng, dim, centers = toy
     probe = clusters(np.random.RandomState(5), [unit(centers[0] + 0.6 * unit(rng.normal(size=dim)))], 4, noise=0.02)[0]
     moves, sources = {}, {}
-    for name, cfg in (("free", TopologyConfig()), ("damped", TopologyConfig(density_multiple=1.0))):
+    for name, cfg in (("free", TopologyConfig(**BAND)), ("damped", TopologyConfig(density_multiple=1.0, **BAND))):
         ont, hub = _skewed_ontology(tmp_path / name, np.random.RandomState(1), centers, cfg)
         before = ont.centroid(hub).copy()
         up, _ = ingest(ont, probe, seq=1)
@@ -144,7 +147,7 @@ def test_damping_slows_an_over_represented_attractor(tmp_path, toy):
 
 def test_trust_region_caps_a_batch_move(tmp_path, toy):
     rng, dim, centers = toy
-    cfg = TopologyConfig(max_centroid_step=0.002)
+    cfg = TopologyConfig(max_centroid_step=0.002, **BAND)
     ont = LatentOntology(cfg, tmp_path)
     ingest(ont, clusters(rng, centers, 4)[0])
     before = ont.store.embeddings.copy()

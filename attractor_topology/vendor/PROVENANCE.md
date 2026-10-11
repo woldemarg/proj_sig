@@ -10,6 +10,10 @@ The `lac` modules are **copied into this repository** so the topology runs witho
 
 lac's `chunk_journal.py` is vendored as well, but it belongs to the graph service's storage, which keeps its own provenance note.
 
+The original is the public lac repository, [`proj_ontology`](https://github.com/woldemarg/proj_ontology). Its own cleanup of
+2026-10-11 adopted three of the changes above (one `omp_extract` for both extractions, `bootstrap` folded into
+`append_concepts`, the input dimension instead of a hard-coded 384); the hashes in the table are of the files at copy time.
+
 `settings.py` and `paths.py` are not vendored. The ontology knobs are `TopologyConfig`, and state directories are required arguments. Inside the lac modules, lac's vocabulary stays: a *chunk* is a pattern row and a *concept* is an attractor (glossary: `docs/11_reference.md` §11.1).
 
 ## Not vendored

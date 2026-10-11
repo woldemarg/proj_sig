@@ -8,7 +8,7 @@
 
 ## 10.1 Test map
 
-116 collected tests in 20 files (115 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
+117 collected tests in 20 files (116 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
@@ -27,7 +27,7 @@
 | LLM client | `test_llm_client.py` (4) | the real HTTP client against an OpenAI-compatible stub: a plain OpenAI payload without a model name or a key, health naming the served model, an upstream error keeping its status and reason; a refused connection fails fast and is remembered; citation validation incl. grouped citations |
 | LLM model broker | `test_llm_model_broker.py` (3) | the broker forwards to the configured model with the pinned provider order and its bearer key, replacing the requested model and passing the other fields as sent; an upstream 429 keeps its status and `Retry-After`, a 5xx → 502, empty messages, `stream: true` or a malformed body → an OpenAI-shaped 400, missing settings → 503 with a live `/health`; the whole chain narrator client → broker → upstream over local HTTP, the key only in the broker |
 | model provisioning | `test_model_store.py` (2) | a verified seed is copied and a present copy kept; a corrupt file of the right size fails the SHA-256 check but passes the service's presence-and-size check, and is repaired from the seed; the bundled checkpoint matches the pinned manifest (`model`) |
-| end to end | `test_e2e.py` (8) | upload → … → grounded answer with provenance and cross-scope analogues (hashing double and real model); the benchmark ordering (`test_hypothesis_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; `Engine.search` and `search.search` give the same structured context, and the narration adds the answer and its metrics; LLM failure keeps knowledge; empty graph |
+| end to end | `test_e2e.py` (9) | upload → … → grounded answer with provenance and cross-scope analogues (hashing double and real model); the benchmark ordering (`test_hypothesis_apparatus`); the chain-eval layers and their invariants (`test_chain_eval_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; `Engine.search` and `search.search` give the same structured context, and the narration adds the answer and its metrics; LLM failure keeps knowledge; empty graph |
 | 3D sphere | `test_sphere.py` (3) | every insight and the themes it activates placed inside the unit ball, classes `up` / `down` / `cov`, hover text, edges only between placed nodes (ACTIVATES, RELATED_TO and SPECIALIZES among them); an answer's highlighted edges between placed nodes resolve among the sphere's edges; the projection is deterministic, `GET /api/sphere` serves it, an empty workspace gives the message |
 | self-containment | `test_self_contained.py` (4) | every loaded module and `sys.path` entry lies in the repository or the Python environment (interpreter, standard library, site-packages — also of a base environment the venv is layered on), the vendored engines load from the repository; no source string of the seven packages holds a machine path, and a relative path that climbs a folder appears only in a docstring and resolves inside the repository; every path setting of every section resolves inside the repository; the model loads from `models/` |
 | package boundaries | `test_architecture.py` (2) | every import of the seven packages is in the allow-list of [12.2](12_architecture.md#122-dependency-direction): the repository packages and the third-party modules each package may import (relative imports resolved); only the Neo4j mirror imports the driver |
@@ -104,6 +104,45 @@ Reading:
 
 This is an apparatus, not proof: one synthetic dataset, two mechanisms with analogues. `test_hypothesis_apparatus` guards the ordering as a regression.
 
+**The attractor benchmark** (`python scripts/attractor_benchmark.py`, [10.4](#104-measurement-scripts)). The demo cannot tell
+the anchor layer's groupings apart: with four anchors over 28 insights the latent layer is complete, so any grouping of
+the same vectors gives the walk its full advantage. The benchmark that can is planted at scale. `generate(seed)` draws a
+dataset of 8,000 rows over four dimensions with three cross-scope mechanisms out of eight (a driver shifted up or down in
+three scopes that share no condition: discount → margin, delivery → returns, wait → satisfaction, price → churn) and one
+distractor anomaly; a workspace ingests five such datasets as successive batches, and a case's analogues may come from
+any of them. The same walk is run over the engine's attractors, over a static k-means of the same insight vectors with
+as many clusters as the engine formed (the same `RELATED_TO` and co-membership rules), and over random memberships of
+the same sizes (the null); the vector, text and weight-only rankers are the non-graph baselines. Comparisons are paired,
+with a cluster bootstrap over the source datasets and Holm over the four.
+
+Pre-registered, test seeds read once (the record is in the lac repository, [`docs/latent-attractors/experiments.md`](https://github.com/woldemarg/proj_ontology/blob/main/docs/latent-attractors/experiments.md), D1–D2):
+
+| Attractor settings | cases | walk / attractors | walk / static k-means | random null | vector | weight only |
+|---|---|---|---|---|---|---|
+| the previous defaults (assignment 0.75–0.80, merge 0.85) | 473 | 0.295 / 0.560 | **0.362 / 0.660** | — | 0.166 / 0.237 | 0.074 / 0.214 |
+| **the current defaults** (assignment 0.88–0.92, merge 0.95, cap 80) | 455 | **0.376 / 0.633** | 0.387 / 0.661 | 0.064 / 0.159 | 0.155 / 0.225 | 0.076 / 0.192 |
+
+Values are recall@5 / MRR. Under the previous defaults the lifecycle's groups were larger and mixed mechanisms (pair
+precision as low as 0.73 against 0.96–1.00 for k-means), and the walk over k-means won by −0.067 [−0.108, −0.026]. The
+precision band fixes that: the walk over the tuned attractors is level with the walk over k-means at the same count
+(−0.011 [−0.034, +0.012]), +0.066 [+0.025, +0.114] over the previous defaults on the same cases, +0.22 over vector
+neighbours; random groups collapse it to 0.064, so the grouping carries the value. The lifecycle chooses its group count
+itself, incrementally; k-means was handed it. These are planted data under one embedder: the result speaks to the
+generator's mechanisms, not to every insight corpus. Translated to the lac repository's text graphs, the same band
+connected fewer evidence pairs (its construction record, C5), so it is this system's default and not that project's.
+
+**Evidence chains (query-free).** `python scripts/chain_eval.py` measures the graph before any question: for each planted
+mechanism with two or more patterns, the share of its pattern pairs connected within h semantic hops, per layer. A path
+leaves a pattern through its anchors (ACTIVATES, 0 hops), moves between anchors along RELATED_TO / CO_OCCURS (1 hop each),
+arrives at a pattern and may continue only along a lattice edge (1 hop); a pattern never bridges two anchors for free.
+The null is the share of non-set pattern pairs within h, the ball the share of the patterns within h of a random one.
+The same measures, with the same hop rule, run in the lac project's graph-construction record on text corpora and on this
+demo exported there, so a construction change is read on both kinds of corpus. On the demo (3 sets of 5, 8 and 2 patterns,
+16 scope-disjoint pairs, 4 anchors): the structural layer connects 59 % of the set pairs within two hops and 19 % of the
+disjoint ones; the latent layer connects every set pair and every disjoint pair, but also 85 % of the non-set pairs (lift
+1.18, two-hop ball 93 %): with four anchors the layer is complete, and the benchmark's ordering comes from the walk's
+ranking, not from selective connectivity. `test_chain_eval_apparatus` guards the layer invariants.
+
 ## 10.4 Measurement scripts
 
 The measurement scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j off and save their results to `.scratch/results/<name>_<label>.json`. The benchmark, grounding and live-answer numbers of [7.7](07_question_answering.md#77-measured-behaviour) and [10.3](#103-hypothesis-benchmark) come from them. `scripts/scratch.py` holds the shared helpers (`scratch_dir`, `write_demo_csv`, `build_engine`, `ingest_ready`, `demo_engine`, `save_result`) and loads `.env` like the services do.
@@ -111,6 +150,10 @@ The measurement scripts build throwaway workspaces under `.scratch/` (never `wor
 | Script | Measures |
 |---|---|
 | `experiment.py [--k K] [--label NAME]` | the hypothesis benchmark of [10.3](#103-hypothesis-benchmark) |
+| `attractor_benchmark.py [--seeds 201-230] [--per-workspace 5] [--k K] [--label NAME] [--override NAME=VALUE ...]` | the attractor benchmark of [10.3](#103-hypothesis-benchmark): the walk over the engine's attractors against the same walk over static k-means and over random memberships, and the non-graph rankers, on planted datasets; paired comparisons with a cluster bootstrap over datasets and Holm; `--override` sets attractor settings by name for an A/B |
+| `calibration.py` | the calibration sequence of [5.10](05_latent_anchors.md#510-calibration-per-embedder) under the current attractor settings: the demo, a same-domain batch, `housing.csv`; per batch the orphan rate, the anchors minted and the warnings |
+| `export_chain_demo.py <out.json>` | the demo graph (patterns with their committed vectors and scope literals, the planted sets, the snapshot's edges) as one JSON for an external chain evaluation (the lac repository's `eval_multihop` reads it as `sig_demo`) |
+| `chain_eval.py [--label NAME]` | the query-free evidence-chain connectivity of [10.3](#103-hypothesis-benchmark): per layer, the share of each planted set's pattern pairs within h semantic hops, the null, the lift and the ball |
 | `multilingual_benchmark.py [--label NAME]` | the 60-question grounding benchmark of [7.7](07_question_answering.md#77-measured-behaviour): seed recall, consistency, evidence overlap, direction accuracy, FPGR and latency per bucket |
 | `eval_answers.py [--label NAME]` | five demo questions narrated through the configured LLM (`narration.answer` over `Engine.evidence`): grounding, citations, unknown keys, latency, token usage, prompt size — **live**: it calls the narrator's `LLM_BASE_URL`, by default the broker, which must be running (`python -m llm_model_broker` with `GEMMA_*` in `.env`) |
 

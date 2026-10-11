@@ -47,7 +47,7 @@ question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO |
 | Reused | Source | How |
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | the eda project: `scripts/main_upd.py` | vendored as [`subgroup_miner/vendor/eda/main_upd.py`](subgroup_miner/vendor/eda/main_upd.py); its differences in [`PROVENANCE.md`](subgroup_miner/vendor/PROVENANCE.md) |
-| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, metrics) | the lac project: `v2_orchestrator/` | vendored as [`attractor_topology/vendor/lac/`](attractor_topology/vendor/lac); its differences in [`PROVENANCE.md`](attractor_topology/vendor/PROVENANCE.md) |
+| Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, metrics) | the lac project ([`proj_ontology`](https://github.com/woldemarg/proj_ontology)): `v2_orchestrator/` | vendored as [`attractor_topology/vendor/lac/`](attractor_topology/vendor/lac); its differences in [`PROVENANCE.md`](attractor_topology/vendor/PROVENANCE.md) |
 | Embedding model | Qwen3-Embedding-0.6B at a pinned revision (Matryoshka-truncated to 384-d, bf16) | provisioned and verified file by file (`python -m insight_graph_service.core.model_store`) |
 
 ---
@@ -198,6 +198,8 @@ The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIV
 
 Labels come from the planted ground truth (scope containment), not from the measured shifts. See [10.3](docs/10_verification.md#103-hypothesis-benchmark) for the reading and the caveats.
 
+**Attractor benchmark** (`python scripts/attractor_benchmark.py`): the same walk over the engine's attractors against the same walk over a static k-means of the same insight vectors, on planted datasets at scale (455 cases from 30 datasets, pre-registered and read once). The walk over the attractors reaches recall@5 0.376 / MRR 0.633 against 0.155 / 0.225 for vector neighbours and 0.064 for random groups; it is level with the static clustering at the same group count (−0.011 [−0.034, +0.012]) and +0.066 above the previous default band, which is why the band is set for precision ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder), [10.3](docs/10_verification.md#103-hypothesis-benchmark)).
+
 **Realistic dataset** (`data/housing.csv`, 20 640 rows, one native categorical plus two derived bands):
 
 | Stage | Count |
@@ -207,7 +209,7 @@ Labels come from the planted ground truth (scope containment), not from the meas
 | insights | 40 |
 | new attractors | 11 (e.g. `longitude ↓ · latitude ↑`, 8 patterns) |
 
-- **Ingested after the demo,** this batch exercised lac's streaming path. All 40 insights were orphans for the unrelated retail attractors at the calibrated `MIN_ASSIGN_THRESHOLD` of 0.75, and the orphan buffer triggered OMP extraction.
+- **Ingested after the demo,** this batch exercised lac's streaming path. All 40 insights were orphans for the unrelated retail attractors under the assignment band (0.88–0.92, set for precision above the 0.75 floor that separates datasets), and the orphan buffer triggered OMP extraction.
 - **Cross-dataset links are bridges.** One RELATED_TO edge joins a retail anchor and a housing anchor (0.57: both "a value metric falls"). The knowledge base integrates datasets that describe related phenomena, so such a link is a legitimate transversal path; evidence reached over it is labelled with its dataset ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)). On six retail and housing questions no such path entered the evidence.
 - **Co-occurrence links.** The two batches carry 10 CO_OCCURS links between anchors that share member insights, next to 15 RELATED_TO ([5.7](docs/05_latent_anchors.md#57-links-between-anchors)).
 

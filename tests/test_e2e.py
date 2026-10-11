@@ -83,6 +83,39 @@ def test_hypothesis_apparatus(model_engine):
     assert s["transversal"]["recall"] > s["text_nn"]["recall"]
 
 
+def test_attractor_benchmark_apparatus(tmp_path):
+    from attractor_benchmark import analyse, build_cases, generate, holm, rank_cases
+
+    frame, truth = generate(1)
+    assert len(truth) == 3 and all(len(scopes) == 3 for scopes in truth.values())  # three mechanisms, three disjoint scopes each
+    assert all(not (set(a.items()) & set(b.items())) for scopes in truth.values() for a in scopes for b in scopes if a is not b)
+    csv = tmp_path / "planted.csv"
+    frame.to_csv(csv, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    record = engine.ingest_file(csv)
+    assert record["status"] == "READY", record.get("error")
+    cases = build_cases(engine, {record["batch_id"]: truth}, {record["batch_id"]: 1})
+    assert cases and all(c.analogues and c.dataset == 1 for c in cases)
+    rows = rank_cases(engine, cases, k=3, seed=1)
+    rankers = ("transversal", "static", "random", "vector_nn", "text_nn", "weight_only")
+    assert all(0.0 <= row[m][key] <= 1.0 for row in rows for m in rankers for key in ("recall", "precision", "mrr", "reached"))
+    assert all(row[m]["reached"] == 1.0 for row in rows for m in ("vector_nn", "text_nn", "weight_only"))  # they rank every pattern
+    result = analyse(rows, 3)
+    assert result["cases"] == len(rows) and set(result["comparisons"]) == set(rankers[1:])
+    assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
+
+
+def test_chain_eval_apparatus(hashed_engine):
+    from chain_eval import run_chain_eval
+
+    res = run_chain_eval(hashed_engine)
+    layers = res["layers"]
+    assert set(layers) == {"structural", "latent", "union"} and res["sets"] >= 2 and res["disjoint_pairs"] > 0
+    assert layers["structural"]["disjoint@1"] == 0.0  # a lattice edge needs a shared condition; analogues share none
+    assert layers["union"]["pairs@2"] >= max(layers["structural"]["pairs@2"], layers["latent"]["pairs@2"])
+    assert all(0.0 <= m[f"ball@{h}"] <= 1.0 for m in layers.values() for h in (0, 2, 4))
+
+
 def test_llm_failure_keeps_knowledge(hashed_engine):
     qa = ask(hashed_engine, QUESTION, FakeLLM(ok=False))
     assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
