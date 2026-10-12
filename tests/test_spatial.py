@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import h3
 import numpy as np
 import pandas as pd
@@ -10,6 +12,7 @@ from conftest import make_config, make_engine
 
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition
+from insight_graph_service.core.engine import PipelineError
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
 from subgroup_miner.ingestion import IngestionError, load_dataset
@@ -108,11 +111,34 @@ def test_subgroup_moran_sees_a_block_not_scattered_cells():
 
 
 def test_closure_strips_the_shifts_a_closed_condition_restates():
-    data = pd.DataFrame({"sector": ["n"] * 4 + ["s"] * 4, "lisa_points": ["hot spot"] * 4 + ["no cluster"] * 4})
-    cand = Candidate("sector=='n'", (Condition("sector", "n"),), np.arange(4), 4, 0.5, [("points", 3.0), ("load_median", 1.0)], 4.0, 0.0)
-    (merged,), _ = merge_identical_extents([cand], data, ["sector", "lisa_points"], {"lisa_points": ["points"]})
+    rng = np.random.default_rng(1)
+    data = pd.DataFrame(
+        {"sector": ["n"] * 4 + ["s"] * 4, "lisa_points": ["hot spot"] * 4 + ["no cluster"] * 4, "points": rng.random(8), "load_median": rng.random(8)}
+    )
+    ranks = data[["points", "load_median"]].rank().to_numpy()
+    profile = {
+        "data_safe": data,
+        "categoricals": ["sector", "lisa_points"],
+        "numerics": ["points", "load_median"],
+        "ranks": ranks,
+        "global_corr": eda.rank_correlation(ranks),
+    }
+    cand = Candidate(
+        "sector=='n'", (Condition("sector", "n"),), np.arange(4), 4, 0.5, [("points", 3.0), ("load_median", 1.0)], 4.0, 0.5, emm_reliability=1.0
+    )
+    (merged,), _ = merge_identical_extents([cand], profile, {"lisa_points": ["points"]})
     assert merged.conditions == (Condition("lisa_points", "hot spot"), Condition("sector", "n"))  # the closure adds the implied condition
     assert merged.restated == {"points"} and merged.top_shifts == [("load_median", 1.0)] and merged.sd_aggregate_score == 1.0
+    assert merged.emm_stabilized_score == 0.0  # one metric left: no pair may carry a correlation change
+
+
+def test_block_bootstrap_skips_draws_without_values():
+    data = pd.DataFrame({"load": np.r_[np.full(5, 30.0), np.full(8, np.nan)], "sector": ["n"] * 13})  # one block with values, one without
+    cand = Candidate("sector=='n'", (Condition("sector", "n"),), np.arange(13), 13, 0.5, [("load", 2.0)], 2.0, 0.0)
+    np.random.seed(0)
+    blocks = np.r_[np.zeros(5, dtype=int), np.ones(8, dtype=int)]
+    out = eda.step4b_deep_validation(data, _validation_frame([cand]), ["load"], ["sector"], {"load": 10.0}, {"load": 5.0}, blocks)
+    assert out["final_sd_score"][0] == pytest.approx(2.0)  # every draw with a value finds the same median: stable, never NaN
 
 
 def test_validation_never_reports_a_restated_metric_as_a_hidden_shift():
@@ -160,11 +186,14 @@ def test_geo_batch_end_to_end(tmp_path):
             assert p["target"] not in ("points", "when_active_days")
     hot = [p for p in patterns if {"attribute": "lisa_points", "value": "hot spot"} in p["conditions"] and p["effect_size"] > 0]
     assert any(p["target"] in ("share_shift_night", "load_median", "when_late_share") for p in hot)  # the planted effects
-    cells = engine.geo_cells(record["dataset_id"])
+    cells = json.loads(engine.geo_cells_file(record["dataset_id"]).read_text(encoding="utf-8"))  # written with the batch
     assert len(cells["features"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
     one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
     assert len(one["cells"]) == patterns[0]["support"] and 0 < len(one["points"]) <= one["n_points"]
     assert engine.geo_datasets()[0]["dataset_id"] == record["dataset_id"]
+    engine.ws.save_batch({**record, "status": "FAILED"})  # a batch that failed after its files were written serves no map
+    with pytest.raises(PipelineError):
+        engine.geo_cells_file(record["dataset_id"])
 
 
 def test_geo_evidence_speaks_plain_language(tmp_path):

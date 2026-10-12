@@ -273,6 +273,20 @@ def step3_generate_search_space(profile, top_categories, compute_budget=5000):
 # ==========================================
 # STEP 4: PASS 1 - Robust Screening
 # ==========================================
+def correlation_change(local_ranks, global_corr, allowed):
+    """RMS change of the rank correlation over the pairs of the ``allowed`` metrics: the Frobenius norm of the
+    correlation difference over sqrt(m(m - 1)), m the allowed metrics, so the score is the per-pair change in
+    [0, 2] whatever the number of metrics. A correlation undefined inside the subgroup counts as no change; a
+    metric not allowed is in no pair."""
+    keep = np.asarray(allowed, dtype=bool)
+    m = int(keep.sum())
+    if m < 2:
+        return 0.0
+    delta = (global_corr - rank_correlation(local_ranks))[keep][:, keep]
+    delta[np.isnan(delta)] = 0.0
+    return float(np.linalg.norm(delta) / np.sqrt(m * (m - 1)))
+
+
 def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
     """``forbidden``: dimension -> metrics a subgroup on that dimension must not score (a neighbourhood condition
     restating the counter it was computed from); excluded here, before the rank, so the validation budget is
@@ -314,16 +328,16 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
 
         min_rows_for_emm = len(numerics) * 3
         if sg_size < min_rows_for_emm or len(numerics) < 2:
-            emm_stabilized_score = 0.0
+            emm_reliability = 0.0
         else:
-            local_corr = rank_correlation(ranks[row_indices])
-            corr_delta = global_corr - local_corr
-            corr_delta[np.isnan(corr_delta)] = 0.0  # undefined locally: no evidence of change
-            raw_divergence = np.linalg.norm(corr_delta)
-            reliability_penalty = np.sqrt(
+            emm_reliability = np.sqrt(
                 max(0, sg_size - min_sg_size) / (total_rows - min_sg_size)
             )
-            emm_stabilized_score = raw_divergence * reliability_penalty
+        emm_stabilized_score = (
+            emm_reliability * correlation_change(ranks[row_indices], global_corr, [c not in own for c in numerics])
+            if emm_reliability
+            else 0.0
+        )
 
         insights.append(
             {
@@ -335,6 +349,7 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
                 "top_shifts": top_k_shifts,
                 "sd_aggregate_score": sd_aggregate_score,
                 "emm_stabilized_score": emm_stabilized_score,
+                "emm_reliability": emm_reliability,
             }
         )
 
@@ -384,14 +399,20 @@ def step4b_deep_validation(
             sample = sg_data.iloc[np.concatenate([groups[k] for k in np.random.randint(0, len(groups), len(groups))])]
             b_score = 0
             for num_col, _ in row["top_shifts"]:
-                s_median = np.median(sample[num_col].dropna())
+                values = sample[num_col].dropna()
+                if values.empty:  # a draw of blocks without a value of this metric scores nothing
+                    b_score = None
+                    break
                 b_score += robust_z_score(
-                    s_median, global_medians[num_col], global_mads[num_col]
+                    np.median(values), global_medians[num_col], global_mads[num_col]
                 )
-            bootstrap_scores.append(b_score)
+            if b_score is not None:
+                bootstrap_scores.append(b_score)
 
-        stability_penalty = np.std(bootstrap_scores) / (
-            np.mean(bootstrap_scores) + 1e-6
+        stability_penalty = (
+            np.std(bootstrap_scores) / (np.mean(bootstrap_scores) + 1e-6)
+            if bootstrap_scores
+            else 0.9  # no draw with values: as unstable as the cap allows
         )
         final_sd_score = row["sd_aggregate_score"] * (
             1 - min(stability_penalty, 0.9)

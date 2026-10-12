@@ -77,6 +77,7 @@ class Candidate:
     drivers: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)  # selectors merged into this cohort
     restated: frozenset[str] = frozenset()  # the metrics a closed condition is computed from: never its shifts (§2.9)
+    emm_reliability: float = 0.0  # pass 1's size factor of the correlation change; the re-score at closure keeps it
 
 
 @dataclass
@@ -91,11 +92,6 @@ class DiscoveryResult:
     spatial: SpatialContext | None = None  # rows are H3 cells (docs/02_discovery.md §2.9)
     ranks: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # the metrics' global ranks (EDA profile)
     global_corr: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # their rank correlation over all rows
-
-
-def emm_pair_scale(n_metrics: int) -> float:
-    """sqrt(m(m-1)): number of off-diagonal entries of an m x m correlation matrix."""
-    return math.sqrt(n_metrics * (n_metrics - 1)) if n_metrics > 1 else 1.0
 
 
 def _z_positive(values: pd.Series) -> pd.Series:
@@ -124,12 +120,15 @@ def closed_intent(data: pd.DataFrame, rows: np.ndarray, categoricals: list[str])
 
 
 def merge_identical_extents(
-    cands: list[Candidate], data: pd.DataFrame, categoricals: list[str], derived_from: dict[str, list[str]] | None = None
+    cands: list[Candidate], profile: dict[str, Any], derived_from: dict[str, list[str]] | None = None
 ) -> tuple[list[Candidate], list[Rejection]]:
     """One cohort per extent, described by its closed intent; the other selectors become aliases (R5). The metrics a
     closed condition is computed from (``derived_from``: a geo dataset's neighbourhood conditions, §2.9) are the
-    cohort's ``restated`` set and their shifts leave ``top_shifts`` here: pass 1 scored none for the selector's own
-    conditions (``eda.step4_evaluate_micro_slices(forbidden=)``), the closure can add conditions."""
+    cohort's ``restated`` set: their shifts leave ``top_shifts`` here and the correlation change is re-scored over
+    the other metrics — pass 1 did both for the selector's own conditions (``eda.step4_evaluate_micro_slices(forbidden=)``),
+    the closure can add conditions. ``profile``: the EDA profile (``data_safe``, ``categoricals``, ``numerics``, ``ranks``,
+    ``global_corr``)."""
+    data, categoricals = profile["data_safe"], list(profile["categoricals"])
     groups: dict[bytes, list[Candidate]] = {}
     for cand in cands:
         groups.setdefault(np.sort(cand.row_indices).tobytes(), []).append(cand)
@@ -147,6 +146,10 @@ def merge_identical_extents(
         if head.restated:
             head.top_shifts = [s for s in head.top_shifts if s[0] not in head.restated]
             head.sd_aggregate_score = sum(v for _, v in head.top_shifts)  # as pass 1 sums the shifts it keeps
+            allowed = [m not in head.restated for m in profile["numerics"]]
+            head.emm_stabilized_score = head.emm_reliability * eda.correlation_change(
+                profile["ranks"][head.row_indices], profile["global_corr"], allowed
+            )
         head.aliases = [m.expression for m in rest]
         rejections += [Rejection(m.expression, "cover_equivalent", f"same rows as {head.expression}") for m in rest]
         merged.append(head)
@@ -252,10 +255,6 @@ def run_discovery(
     raw = eda.step4_evaluate_micro_slices(profile, space, spatial.derived_from if spatial else None)
     if raw.empty:
         raise DiscoveryError("no_candidates", "No subgroup passed the pass-1 size screen.")
-    # The EDA's EMM score is a Frobenius norm over all m(m-1) off-diagonal entries, so its
-    # scale grows with the number of metrics; dividing by sqrt(m(m-1)) turns it into the
-    # RMS correlation change per metric pair (in [0, 2]), which the thresholds refer to.
-    raw["emm_stabilized_score"] = raw["emm_stabilized_score"] / emm_pair_scale(len(numerics))
 
     by_expr = {str(sel): sel for sel in space}
     pass1 = [
@@ -268,10 +267,11 @@ def run_discovery(
             top_shifts=[(str(m), float(v)) for m, v in row["top_shifts"]],
             sd_aggregate_score=float(row["sd_aggregate_score"]),
             emm_stabilized_score=float(row["emm_stabilized_score"]),
+            emm_reliability=float(row["emm_reliability"]),
         )
         for _, row in raw.iterrows()
     ]
-    merged, rejections = merge_identical_extents(pass1, data, categoricals, spatial.derived_from if spatial else None)
+    merged, rejections = merge_identical_extents(pass1, profile, spatial.derived_from if spatial else None)
     candidates = []
     for c in merged:  # a cohort without a shift stands on its covariance pair alone; without one it can become no insight
         if c.top_shifts or _covariance_pair(c.row_indices, profile["ranks"], profile["global_corr"], numerics, c.restated):

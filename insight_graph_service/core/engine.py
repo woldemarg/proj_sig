@@ -50,11 +50,6 @@ log = logging.getLogger(__name__)
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
 
 
-def _is_dataset_id(value: str) -> bool:
-    """A dataset id as ingestion mints them (``ds-<hex>``): the only request strings composed into a workspace path."""
-    return value.startswith("ds-") and value[3:].isalnum()
-
-
 class PipelineError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -351,9 +346,8 @@ class Engine:
                         self._refuse_journaled(kept)
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
-                        if loaded.spatial:
-                            self._save_geo(ds, loaded)
-                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds))  # the map's file, from the journaled patterns
+                        if loaded.spatial:  # the map's file, from the journaled patterns
+                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, self._save_geo(ds, loaded)))
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
@@ -387,11 +381,20 @@ class Engine:
             "glossary": ctx.glossary,
         }
 
-    def _save_geo(self, ds: str, loaded: Any) -> None:
+    def _save_geo(self, ds: str, loaded: Any) -> dict[str, Any]:
+        """Store the geo dataset's context and cell table; returns them in the shape ``Workspace.load_geo`` gives back."""
         ctx = loaded.spatial
-        arrays = {"cells": ctx.cells.astype(str), "point_cell": ctx.point_cell, "lonlat": ctx.lonlat, "nbr_ptr": ctx.nbr_ptr, "nbr_idx": ctx.nbr_idx}
-        columns = {c: loaded.frame[c].to_numpy(dtype=float if loaded.frame[c].dtype.kind in "fiu" else str) for c in loaded.frame.columns}
-        self.ws.save_geo(ds, arrays, columns, {"resolution": ctx.resolution, "location": ctx.location})
+        geo = {
+            "cells": ctx.cells.astype(str),
+            "point_cell": ctx.point_cell,
+            "lonlat": ctx.lonlat,
+            "nbr_ptr": ctx.nbr_ptr,
+            "nbr_idx": ctx.nbr_idx,
+            "columns": {c: loaded.frame[c].to_numpy(dtype=float if loaded.frame[c].dtype.kind in "fiu" else str) for c in loaded.frame.columns},
+            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(loaded.frame.columns)},
+        }
+        self.ws.save_geo(ds, geo)
+        return geo
 
     def geo_datasets(self) -> list[dict[str, Any]]:
         """READY datasets analysed as H3 cells, with what the map needs to offer them."""
@@ -402,17 +405,20 @@ class Engine:
                 out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
         return out
 
+    def _geo_ready(self, dataset_id: str) -> bool:
+        """Only a dataset with a READY geo batch is served: its files survive a failed batch, its listing does not."""
+        return any(d["dataset_id"] == dataset_id for d in self.geo_datasets())
+
     def geo_cells_file(self, dataset_id: str) -> Path:
         """``geo_cells`` as written with the dataset's batch (the cells, their rings and the patterns' extents never
         change afterwards): the map reads the file on every open."""
-        path = self.ws.geo_cells_path(dataset_id) if _is_dataset_id(dataset_id) else None
-        if not (path and path.is_file()):
+        if not (self._geo_ready(dataset_id) and self.ws.geo_cells_path(dataset_id).is_file()):
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
-        return path
+        return self.ws.geo_cells_path(dataset_id)
 
-    def geo_cells(self, dataset_id: str) -> dict[str, Any]:
-        """The dataset's cells as a GeoJSON FeatureCollection; properties are the cell-table columns."""
-        geo = self._geo(dataset_id)
+    def geo_cells(self, dataset_id: str, geo: dict[str, Any]) -> dict[str, Any]:
+        """The dataset's cells (``geo``: its stored context, in ``Workspace.load_geo``'s shape) as a GeoJSON FeatureCollection
+        with the journaled patterns' extents; properties are the cell-table columns."""
         cols = geo["columns"]
         features = []
         for i, cell in enumerate(geo["cells"]):
@@ -461,7 +467,7 @@ class Engine:
         }
 
     def _geo(self, dataset_id: str) -> dict[str, Any]:
-        geo = self.ws.load_geo(dataset_id) if _is_dataset_id(dataset_id) else None
+        geo = self.ws.load_geo(dataset_id) if self._geo_ready(dataset_id) else None
         if geo is None:
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
         return geo

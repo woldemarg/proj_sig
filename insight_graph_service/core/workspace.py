@@ -227,11 +227,12 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, arrays: dict[str, np.ndarray], columns: dict[str, np.ndarray], meta: dict[str, Any]) -> None:
-        """A geo dataset's spatial context (``arrays``), its cell table (``columns``, by name) and ``meta``."""
-        names = list(columns)
-        payload = {**arrays, **{f"col{i}": np.asarray(columns[n]) for i, n in enumerate(names)}}
-        payload["meta"] = np.array(json.dumps({**meta, "columns": names}, ensure_ascii=False))
+    def save_geo(self, dataset_id: str, geo: dict[str, Any]) -> None:
+        """A geo dataset's spatial context, cell table and meta, in the shape ``load_geo`` returns."""
+        names = list(geo["columns"])
+        payload = {k: v for k, v in geo.items() if k not in ("columns", "meta")}
+        payload.update({f"col{i}": np.asarray(geo["columns"][n]) for i, n in enumerate(names)})
+        payload["meta"] = np.array(json.dumps({**geo["meta"], "columns": names}, ensure_ascii=False))
         np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **payload)
 
     def geo_cells_path(self, dataset_id: str) -> Path:

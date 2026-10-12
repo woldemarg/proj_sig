@@ -71,7 +71,7 @@ class Insight:
     effect_size: float  # signed robust z of the target
     sd_score: float  # EDA final_sd_score (bootstrap penalised)
     sd_raw_score: float  # EDA sd_aggregate_score (pass 1)
-    emm_score: float  # EDA emm_stabilized_score / sqrt(m(m-1)): RMS correlation change per pair
+    emm_score: float  # EDA emm_stabilized_score: RMS correlation change per pair of the metrics the scope may explain
     volume_utility: float
     # tests of the median shift; None for covariance insights (the correlation change has neither)
     stability: float | None  # final_sd / sd_raw = 1 - min(bootstrap CV, 0.9)
