@@ -191,14 +191,14 @@ The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIV
 
 | method | recall@3 | MRR | recall@5 |
 |---|---|---|---|
-| transversal (this system) | **0.521** | **0.581** | **0.729** |
-| structural-only BFS | 0.000 | 0.079 | 0.000 |
-| naive text-NN (canonical documents) | 0.111 | 0.321 | 0.299 |
+| transversal (this system) | **0.500** | **0.581** | **0.701** |
+| structural-only BFS | 0.000 | 0.078 | 0.000 |
+| naive text-NN (canonical documents) | 0.167 | 0.243 | 0.361 |
 | insight-vector kNN (no attractor graph) | 0.028 | 0.229 | 0.507 |
 
 Labels come from the planted ground truth (scope containment), not from the measured shifts. See [10.3](docs/10_verification.md#103-hypothesis-benchmark) for the reading and the caveats.
 
-**Attractor benchmark** (`python scripts/attractor_benchmark.py`): the same walk over the engine's attractors against the same walk over a static k-means of the same insight vectors, on planted datasets at scale (455 cases from 30 datasets, pre-registered and read once). The walk over the attractors reaches recall@5 0.376 / MRR 0.633 against 0.155 / 0.225 for vector neighbours and 0.064 for random groups; it is level with the static clustering at the same group count (−0.011 [−0.034, +0.012]) and +0.066 above the previous default band, which is why the band is set for precision ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder), [10.3](docs/10_verification.md#103-hypothesis-benchmark)).
+**Attractor benchmark** (`python scripts/attractor_benchmark.py`): the same walk over the engine's attractors against the same walk over a static k-means of the same insight vectors, on planted datasets at scale (456 cases from 30 datasets; pre-registered and read once on 2026-10-11, re-measured after the kernel changes of 2026-10-12). The walk over the attractors reaches recall@5 0.360 / MRR 0.693 against 0.147 / 0.207 for vector neighbours and 0.08 for random groups; it is level with the static clustering at the same group count (−0.009 [−0.032, +0.013]) and +0.037 [+0.005, +0.077] above the previous band, which is why the band is set for precision ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder), [10.3](docs/10_verification.md#103-hypothesis-benchmark)).
 
 **Realistic dataset** (`data/housing.csv`, 20 640 rows, one native categorical plus two derived bands):
 
@@ -206,12 +206,12 @@ Labels come from the planted ground truth (scope containment), not from the meas
 |---|---|
 | candidates | 102 |
 | validated | 50 |
-| insights | 40 |
-| new attractors | 11 (e.g. `longitude ↓ · latitude ↑`, 8 patterns) |
+| insights | 41 |
+| new attractors | 6 (e.g. `longitude ↓ · latitude ↑`, 19 patterns) |
 
-- **Ingested after the demo,** this batch exercised lac's streaming path. All 40 insights were orphans for the unrelated retail attractors under the assignment band (0.88–0.92, set for precision above the 0.75 floor that separates datasets), and the orphan buffer triggered OMP extraction.
-- **Cross-dataset links are bridges.** One RELATED_TO edge joins a retail anchor and a housing anchor (0.57: both "a value metric falls"). The knowledge base integrates datasets that describe related phenomena, so such a link is a legitimate transversal path; evidence reached over it is labelled with its dataset ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)). On six retail and housing questions no such path entered the evidence.
-- **Co-occurrence links.** The two batches carry 10 CO_OCCURS links between anchors that share member insights, next to 15 RELATED_TO ([5.7](docs/05_latent_anchors.md#57-links-between-anchors)).
+- **Ingested after the demo,** this batch exercised lac's streaming path. All 41 insights were orphans for the unrelated retail attractors under the assignment band (0.88–0.92, set for precision above the 0.75 floor that separates datasets), and the orphan buffer triggered OMP extraction.
+- **Cross-dataset links are bridges.** Four RELATED_TO edges join a retail anchor and a housing anchor (`margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.61: both "a value metric falls"). The knowledge base integrates datasets that describe related phenomena, so such a link is a legitimate transversal path; evidence reached over it is labelled with its dataset ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)). On six retail and housing questions no such path entered the evidence.
+- **Co-occurrence links.** The batches carry 13 CO_OCCURS links between anchors that share member insights, next to 15 RELATED_TO ([5.7](docs/05_latent_anchors.md#57-links-between-anchors)).
 
 ---
 
@@ -219,7 +219,7 @@ Labels come from the planted ground truth (scope containment), not from the meas
 The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-approximations-and-limitations). The ones that matter first:
 * Gemma 4 runs remotely on OpenRouter: the evidence prompt (subgroup statistics, not raw rows) leaves the machine; use Ollama or LM Studio for fully local inference.
 * The EDA searches only 2- and 3-conjunctions of equality selectors (no single selectors, no numeric intervals); numeric dimensions need explicit bands.
-* Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics — conservative, not a permutation test. A correlation-change insight has no median test: it is validated by its correlation change alone.
+* Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics — conservative, not a permutation test, and post-selection, so it gates and is recorded but does not enter the weight. A correlation-change insight has no median test: it is validated by its (rank) correlation change alone.
 * The embedder is Qwen3-Embedding-0.6B and the cosine thresholds are calibrated for it ([5.10](docs/05_latent_anchors.md#510-calibration-per-embedder)); another embedder needs them measured again.
 * **Workspaces from another representation are not migrated (proof-of-concept scope).** A workspace written by another canonical or representation version starts degraded (409 `workspace_degraded`, [6.5](docs/06_graph_and_storage.md#65-versions-degraded-start-and-reset)); one with another representation fingerprint ([4.6](docs/04_representation.md#46-representation-identity-and-versions)) fails batches at EMBEDDING and refuses questions (409 `representation_mismatch`). `POST /api/reset` starts either over.
 * One graph service replica and one worker per workspace (a writer lock): the file workspace is the store ([12.6](docs/12_architecture.md#126-storage-files-no-sql-database-no-blob-store)).

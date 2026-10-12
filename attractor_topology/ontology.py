@@ -80,11 +80,24 @@ def _member_weight(activation: dict[str, Any]) -> float:
     return float(np.clip(w, 1e-3, 1.0))
 
 
+def _recount(activations: Activations, index: dict[int, int], unit: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray | None]:
+    """Mass per attractor (``index``: attractor id -> row), the summed member weights of ``activations``; with ``unit``
+    (unit vectors by ``row_id``) also the weight-averaged pull per attractor. An activation naming an attractor the
+    state lacks is a journal / state inconsistency and raises."""
+    mass = np.zeros(len(index))
+    pull = np.zeros((len(index), unit.shape[1])) if unit is not None and len(unit) else None
+    for a in activations:
+        i, w = index[int(a["attractor_id"])], _member_weight(a)
+        mass[i] += w
+        if pull is not None:
+            pull[i] += w * unit[int(a["row_id"])]
+    return mass, pull
+
+
 def _mass(local: Activations, x_in: np.ndarray, n_attractors: int) -> np.ndarray:
     """The initial mass of freshly extracted attractors: the summed norms (w) of the rows each one activates."""
-    return np.bincount(
-        [int(a["concept_id"]) for a in local], weights=[float(np.linalg.norm(x_in[int(a["chunk_id"])])) for a in local], minlength=n_attractors
-    )
+    members = [{"attractor_id": a["concept_id"], "insight_weight": float(np.linalg.norm(x_in[int(a["chunk_id"])]))} for a in local]
+    return _recount(members, {i: i for i in range(n_attractors)})[0]
 
 
 def _tag(edges: Activations, source: str) -> Activations:
@@ -156,31 +169,28 @@ class LatentOntology:
     def save(self) -> None:
         self.store.save(self.state_dir)
 
-    def forget(self, kept_activations: Activations, kept_vectors: np.ndarray) -> list[int]:
-        """Dataset deletion: every surviving anchor is rebuilt from its surviving members (``row_id`` already
-        renumbered into ``kept_vectors``): its mass is their summed weight and its centroid their weight-averaged
-        direction, so inertia and position agree again; orphan anchors are dropped; the row counter restarts at
-        the rows kept. A linked anchor left without members keeps its centroid with mass 0. Returns the dropped
-        anchor ids."""
+    def recount_mass(self, activations: Activations) -> None:
+        """Every anchor's mass as the summed weights of its memberships in the journal (``activations``: the whole
+        journal's). The batch keeps the same sum incrementally; the caller recounts before every batch, so the store's
+        inertia is the journal-derived quantity and a state saved under another unit (lac's head counts) needs no mode."""
+        self.store.chunk_counts = _recount(activations, {a: i for i, a in enumerate(self.attractor_ids)})[0]
+
+    def forget(self, kept_activations: Activations, kept_vectors: np.ndarray, lost: set[int]) -> list[int]:
+        """Dataset deletion. Every surviving anchor's mass is recounted from its surviving members (``row_id``
+        already renumbered into ``kept_vectors``); an anchor that ``lost`` a member is also moved to its surviving
+        members' weight-averaged direction, so its inertia and position agree again, while an anchor that lost
+        nobody keeps the position its history gave it. Orphan anchors are dropped; the row counter restarts at the
+        rows kept. A linked anchor left without members keeps its centroid with mass 0. Returns the dropped anchor ids."""
         st = self.store
         n_rows = len(kept_vectors)
         members = Counter(int(a["attractor_id"]) for a in kept_activations)
         # no pattern left: nothing for a topology to be relative to, the knowledge base starts cold again
         dropped = orphan_anchors(members, self.topology(), self.attractor_ids) if n_rows else list(self.attractor_ids)
         st.keep_concepts([a for a in self.attractor_ids if a not in dropped])
-        index = {a: i for i, a in enumerate(self.attractor_ids)}
-        mass = np.zeros(len(index))
-        pull = np.zeros((len(index), kept_vectors.shape[1]) if n_rows else (len(index), 0))
-        unit = l2_normalize(kept_vectors) if n_rows else kept_vectors
-        for a in kept_activations:
-            i = index.get(int(a["attractor_id"]))
-            if i is None:
-                continue
-            w = _member_weight(a)
-            mass[i] += w
-            pull[i] += w * unit[a["row_id"]]
+        mass, pull = _recount(kept_activations, {a: i for i, a in enumerate(self.attractor_ids)}, l2_normalize(kept_vectors) if n_rows else None)
         for i in np.flatnonzero(mass > 0):
-            st.embeddings[i] = l2_normalize(pull[i][None])[0].astype(np.float32)
+            if self.attractor_ids[i] in lost:
+                st.embeddings[i] = l2_normalize(pull[i][None])[0].astype(np.float32)
         st.chunk_counts = mass
         st.next_chunk_id = n_rows
         st.clear_orphan_buffer()  # always empty between batches; the ids would be stale anyway
@@ -227,13 +237,13 @@ class LatentOntology:
 
     def _cold_start(self, x_in: np.ndarray, x_unit: np.ndarray, row_ids: list[int], batch_seq: int) -> tuple[Activations, _Extraction]:
         """First batch: extract the initial attractor set from the batch itself."""
-        cents, _, local = eng.extract_attractors(x_in, x_unit, self.config)
+        cents, local = eng.extract_attractors(x_in, x_unit, self.config)
         gids = self.store.append_concepts(cents, chunk_counts=_mass(local, x_in, len(cents)), batch_id=batch_seq)
         acts = _tag(eng.remap_activation_edges(local, chunk_id_map=row_ids, concept_id_map=gids), "cold_start")
         return acts, _Extraction(extracted=len(cents), kept=len(cents))
 
     def _damping(self) -> np.ndarray:
-        """Per-attractor EMA multiplier d_j = min(1, tau / share_j), share_j = its memberships over all memberships: an
+        """Per-attractor EMA multiplier d_j = min(1, tau / share_j), share_j = its mass over all mass: an
         over-represented attractor keeps its members but moves less (docs/05_latent_anchors.md §5.6); all ones before any share exists."""
         st = self.store
         total = st.chunk_counts.sum()
@@ -270,7 +280,7 @@ class LatentOntology:
             st.push_orphans(np.stack(orphan_embs), orphan_ids)
         if st.should_extract_orphans(cfg, len(orphan_ids)):
             buf, buf_ids = st.get_orphan_buffer()
-            new_c, _, local = eng.extract_attractors(buf, l2_normalize(buf), cfg)
+            new_c, local = eng.extract_attractors(buf, l2_normalize(buf), cfg)
             kept, absorptions = eng.soft_merge_orphans(new_c, st, cfg)
             ext.extracted, ext.soft_merged, ext.kept = len(new_c), len(absorptions), len(kept)
             acts += _tag(eng.route_absorbed_activations(local, absorptions, buf_ids, buf, st, cfg, batch_seq, damping), "absorbed")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import pytest
 
@@ -166,8 +168,8 @@ def test_sign_repair_flips_anti_aligned_atoms(toy):
     rows = clusters(rng, centers[:1], 3, noise=0.01)[0]
     cents = -centers[0][None, :]  # OMP returned the atom with the "wrong" sign
     acts = [{"chunk_id": i, "concept_id": 0, "weight": 0.9} for i in range(3)]
-    fixed, counts, fixed_acts = repair_extraction(cents, acts, rows, TopologyConfig())
-    assert float(fixed[0] @ centers[0]) > 0.99 and counts.tolist() == [3] and len(fixed_acts) == 3
+    fixed, fixed_acts = repair_extraction(cents, acts, rows, TopologyConfig())
+    assert float(fixed[0] @ centers[0]) > 0.99 and len(fixed_acts) == 3
 
 
 def test_orphan_rule_keeps_linked_or_populated_anchors():
@@ -178,27 +180,47 @@ def test_orphan_rule_keeps_linked_or_populated_anchors():
     assert orphan_anchors({}, [], [0, 1]) == [0, 1]
 
 
-def test_forget_rebuilds_survivors_and_renumbers(tmp_path, toy):
+def test_forget_moves_only_touched_anchors_and_renumbers(tmp_path, toy):
     rng, dim, centers = toy
     ont = LatentOntology(TopologyConfig(), tmp_path)
     x = clusters(rng, centers, 4)[0]
     w = np.linspace(0.3, 1.0, len(x))
     up, _ = ingest(ont, x, w)
-    before, first = ont.attractor_ids, ont.attractor_ids[0]
+    before = ont.attractor_ids
+    first, second = [a for a, _ in Counter(a["attractor_id"] for a in up.activations).most_common(2)]  # first has at least two members
+    centroids = {a: ont.centroid(a).copy() for a in before}
     linked = {a for e in ont.topology() for a in (e["source"], e["target"])}
-    members = [a for a in up.activations if a["attractor_id"] == first]
+    of_first = [a for a in up.activations if a["attractor_id"] == first]
+    members = of_first[: len(of_first) // 2] + [a for a in up.activations if a["attractor_id"] == second]  # first loses half, second nobody
     keep = [{**a, "row_id": i} for i, a in enumerate(members)]
     kept_vectors = x[[a["row_id"] for a in members]]
-    dropped = ont.forget(keep, kept_vectors)
-    assert dropped == [a for a in before if a != first and a not in linked]
-    i = ont.attractor_ids.index(first)
-    assert ont.store.next_chunk_id == len(keep) and ont.store.chunk_counts[i] == pytest.approx(sum(a["insight_weight"] for a in keep))  # mass in w
-    rebuilt = sum(a["insight_weight"] * v / np.linalg.norm(v) for a, v in zip(keep, kept_vectors))
-    assert float(ont.store.embeddings[i] @ (rebuilt / np.linalg.norm(rebuilt))) > 0.999  # the survivors' weighted direction
-    assert all(ont.store.chunk_counts[ont.attractor_ids.index(a)] == 0 for a in ont.attractor_ids if a != first)  # linked survivors
+    lost = {a["attractor_id"] for a in up.activations if a not in members}
+    dropped = ont.forget(keep, kept_vectors, lost)
+    assert dropped == [a for a in before if a not in (first, second) and a not in linked]
+    i, j = ont.attractor_ids.index(first), ont.attractor_ids.index(second)
+    assert ont.store.next_chunk_id == len(keep)
+    assert ont.store.chunk_counts[i] == pytest.approx(sum(a["insight_weight"] for a in keep if a["attractor_id"] == first))  # mass in w
+    rebuilt = sum(a["insight_weight"] * v / np.linalg.norm(v) for a, v in zip(keep, kept_vectors) if a["attractor_id"] == first)
+    assert float(ont.store.embeddings[i] @ (rebuilt / np.linalg.norm(rebuilt))) > 0.999  # moved to its survivors' direction
+    assert np.allclose(ont.store.embeddings[j], centroids[second])  # lost nobody: not moved
+    assert all(ont.store.chunk_counts[ont.attractor_ids.index(a)] == 0 for a in ont.attractor_ids if a not in (first, second))  # linked survivors
     assert len(ont.store.embeddings) == len(ont.attractor_ids) == len(ont.store.created_at)
     # an old journal without the field: strength / alignment gives the weight back
     assert _member_weight({"strength": 0.45, "alignment": 0.9}) == pytest.approx(0.5)
+
+
+def test_recount_from_the_journal_matches_the_incremental_mass(tmp_path, toy):
+    rng, dim, centers = toy
+    ont = LatentOntology(TopologyConfig(), tmp_path)
+    x = clusters(rng, centers, 4)[0]
+    up, _ = ingest(ont, x, np.linspace(0.2, 1.0, len(x)))
+    incremental = ont.store.chunk_counts.copy()
+    ont.recount_mass(up.activations)  # what the engine does before every batch
+    assert np.allclose(ont.store.chunk_counts, incremental, atol=1e-6) and ont.store.chunk_counts.sum() == pytest.approx(
+        sum(a["insight_weight"] for a in up.activations)
+    )
+    with pytest.raises(KeyError):  # an activation of an anchor the state lacks is an inconsistency, not a silent under-count
+        ont.recount_mass([{**up.activations[0], "attractor_id": 999}])
 
 
 def test_state_roundtrip(tmp_path, toy):

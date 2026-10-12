@@ -134,8 +134,9 @@ def step1_profile_data(data):
         variances = data_safe[numerics].var()
         valid_nums = variances[variances > 0].index.tolist()
 
-        # the association measure of the whole engine is the rank correlation (see rank_correlation)
-        init_corr = data_safe[valid_nums].rank().corr().abs()
+        # the association measure of the whole engine is the rank correlation (see rank_correlation): ranked once
+        ranked = data_safe[valid_nums].rank()
+        init_corr = ranked.corr().abs()
         upper_tri = init_corr.where(
             np.triu(np.ones(init_corr.shape), k=1).astype(bool)
         )
@@ -144,7 +145,7 @@ def step1_profile_data(data):
         ]
         valid_nums = [n for n in valid_nums if n not in nums_to_drop]
         values = data_safe[valid_nums].to_numpy(dtype=float)
-        ranks = data_safe[valid_nums].rank().to_numpy(dtype=float)  # once; a subgroup's correlation is read on this scale
+        ranks = ranked[valid_nums].to_numpy(dtype=float)  # a subgroup's correlation is read on this scale
         global_corr = np.nan_to_num(rank_correlation(ranks))
     else:
         valid_nums = []

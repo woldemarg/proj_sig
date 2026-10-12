@@ -68,7 +68,7 @@ Every chapter follows the same object through its stage. The demo dataset (`reta
 | pattern id | `P-bc4657a04746` |
 | scope | `category = phones ∧ region = US` (438 rows, 8.8 %) |
 | phenomenon | discount +2.21 sd (median 19.19 vs 10.74), margin −1.10 sd (median 14.75 vs 19.45) |
-| weight | 0.843 |
+| weight | 0.805 |
 | anchor | `A-1 "discount ↑ · margin ↓"` (alignment 0.98), shared with 8 other insights over 9 distinct scopes |
 | question | *"Why is margin lower for phones in the US?"* → seed `P-bc4657a04746`, then six scope-disjoint tablet insights through `A-1` |
 

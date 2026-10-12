@@ -141,7 +141,7 @@ Guarantees (tests: `test_lattice.py`; `test_persistence.py`: write → reload �
 ```text
 transaction (6.4): checkpoint (state, journal, snapshot) + marker pending.json → datasets/<id>/,
 journal/blocks/<batch>.npz, the batch records (READY, FAILED and SKIPPED alike) and the upload moved into the
-checkpoint → ontology.forget: memberships recounted, orphan anchors dropped (5.11) → the journal rewritten without
+checkpoint → ontology.forget: masses recounted, anchors that lost a member moved, orphan anchors dropped (5.11) → the journal rewritten without
 the dataset's rows (row ids renumbered in journal order; next_chunk_id = rows) → state saved → snapshot rebuilt and
 saved → committed graph and frame loaded → marker removed (the commit point) → checkpoint discarded (this deletes
 the moved files)

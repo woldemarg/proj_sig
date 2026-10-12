@@ -11,7 +11,7 @@ from conftest import toy_insight
 
 from insight_contracts import Insight, Shift
 from insight_graph_service.core.batch import admit_insights
-from subgroup_miner.config import MinerConfig
+from subgroup_miner.config import WEIGHT_FACTORS, MinerConfig
 from subgroup_miner.selection import insight_weight, select_insights, weight_factors, with_weight
 
 
@@ -34,6 +34,11 @@ def make_insight(expr="a=1", conds=(("a", "1"),), z=2.0, stability=0.9, p=1e-10,
     )
 
 
+def test_config_refuses_another_count_of_exponents():
+    with pytest.raises(ValueError):
+        MinerConfig(weight_exponents=(0.35, 0.25, 0.20, 0.10, 0.10))  # the five-entry setting from before the confidence factor went
+
+
 def test_weight_bounded_and_monotone():
     cfg = MinerConfig()
     base = make_insight()
@@ -44,10 +49,10 @@ def test_weight_bounded_and_monotone():
     assert with_weight(replace(base, p_adjusted=1e-2), cfg).weight == w  # the p-value gates (R2), it does not weigh
     assert with_weight(replace(base, emm_score=0.5), cfg).weight > w  # EMM bonus
     f = weight_factors(base, cfg)
-    assert set(f) == {"effect", "stability", "support", "emm"} and all(0 <= v <= 1 for v in f.values())
+    assert set(f) == set(WEIGHT_FACTORS) and all(0 <= v <= 1 for v in f.values())
     # formula: weighted geometric mean with floor
     total = sum(cfg.weight_exponents)  # the exponents are relative: renormalised over the measured factors
-    expected = cfg.weight_floor + (1 - cfg.weight_floor) * np.prod([f[k] ** (a / total) for k, a in zip(f, cfg.weight_exponents)])
+    expected = cfg.weight_floor + (1 - cfg.weight_floor) * np.prod([f[k] ** (a / total) for k, a in zip(WEIGHT_FACTORS, cfg.weight_exponents)])
     assert insight_weight(f, cfg) == pytest.approx(expected)
 
 

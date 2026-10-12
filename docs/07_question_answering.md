@@ -73,7 +73,7 @@ score     = 0.35 · target + 0.25 · scope + 0.15 · direction + 0.15 · semanti
 
 and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in score order with `score ≥ max(SEED_MIN_SCORE (0.25), SEED_RELATIVE_MIN (0.75) · best)`, at most `SEED_TOP_K` (3), skipping direct SPECIALIZES / GENERALIZES neighbours of seeds already chosen (the walk reaches those anyway); fallback: the best semantic match. A seed's reported score is floored at `1e-3`.
 
-> **Running example.** One seed, `P-bc4657a04746`, score 0.742 = 0.35 · 0.7 (margin is a secondary shift; its target is discount) + 0.25 · 1.0 + 0.15 · 1.0 + 0.15 · 0.087 + 0.10 · 0.843. The semantic term is small for an instructive reason: the question's phenomenon is "margin down" alone, and Qwen3 embeds "discount" and "margin" with a cosine of 0.71, so against the pattern's "discount up, margin down" the phenomenon cosine is −0.29 (`0.135 · 1 + 0.201 · 0.707 + 0.664 · (−0.285) = 0.087`). The lexical terms carry the seed.
+> **Running example.** One seed, `P-bc4657a04746`, score 0.738 = 0.35 · 0.7 (margin is a secondary shift; its target is discount) + 0.25 · 1.0 + 0.15 · 1.0 + 0.15 · 0.087 + 0.10 · 0.805. The semantic term is small for an instructive reason: the question's phenomenon is "margin down" alone, and Qwen3 embeds "discount" and "margin" with a cosine of 0.71, so against the pattern's "discount up, margin down" the phenomenon cosine is −0.29 (`0.135 · 1 + 0.201 · 0.707 + 0.664 · (−0.285) = 0.087`). The lexical terms carry the seed.
 
 ## 7.3 Transversal traversal
 

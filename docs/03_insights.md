@@ -29,7 +29,7 @@
 | `phenomenon_type` | `"shift"` or `"covariance"` |
 | `covariance` | `{"pair": [a, b], "local_corr", "global_corr", "delta"}` or `{}` |
 | `aliases` | selectors merged into this cohort before validation |
-| `weight`, `weight_factors` | `insight_weight`, and the five factors with `null` for unmeasured ones |
+| `weight`, `weight_factors` | `insight_weight`, and the four factors with `null` for unmeasured ones |
 | `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, multiple_testing_family}` from the miner, plus `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), which the graph service sets on the journal record |
 
 The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`) (`batch.pattern_records`). What the record does **not** hold: the covered rows themselves (only their positions, in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians — the rows stay in the uploaded file (`uploads/`; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). The vectors are stored beside it: the insight vector in `embeddings.mmap`, its three blocks and the document embedding in `journal/blocks/<batch>.npz`.
@@ -40,10 +40,10 @@ The journal adds `row_id` (the vector's row), `canonical` (the canonical form of
 > target      discount                               support     438 (8.76 %)
 > shifts      discount +2.208 (19.19 vs 10.74), margin −1.096 (14.75 vs 19.45),
 >             delivery_days −0.253, return_rate −0.227 (source covariance_pair)
-> sd_score    3.465    sd_raw_score 3.557    stability 0.974    emm_score 0.0223    volume_utility 0.270
+> sd_score    3.470    sd_raw_score 3.557    stability 0.976    emm_score 0.0175    volume_utility 0.270
 > p_adjusted  < 1e-300 (reported as 0)       multiple_testing_family 336 (= 84 cohorts × 4 metrics)
-> covariance  delivery_days ~ return_rate: 0.88 overall → 0.73 in the subgroup
-> weight      0.843
+> covariance  delivery_days ~ return_rate: 0.82 overall → 0.70 in the subgroup (rank correlations)
+> weight      0.805
 > ```
 
 ## 3.2 Selection rules
@@ -85,25 +85,24 @@ A covariance insight cites only its correlation change. Its median shifts stay i
 
 ## 3.3 Insight weight
 
-The weight combines five normalised factors, each in `[0, 1]` and monotone in its evidence:
+The weight combines four normalised factors, each in `[0, 1]` and monotone in its evidence. The median test is not one of them: its p-value is computed on cohorts the screen selected by that very shift, so it is not a calibrated probability; it gates (R2) and stays in the record, but does not steer centroids or ranks.
 
 | Factor | Shift insight | Covariance insight |
 |---|---|---|
 | effect | `1 − exp(−|effect_size| / WEIGHT_EFFECT_REF)` (1.5) | `1 − exp(−emm_score / WEIGHT_EMM_REF)` (0.08) |
 | stability | `clip(stability, 0, 1)` | not measured — `None` |
-| confidence | `clip(−log10(max(p_adjusted, 1e-300)) / WEIGHT_CONFIDENCE_REF, 0, 1)` (6) | not measured — `None` |
 | support | `clip(volume_utility / 0.3849, 0, 1)` — 0.3849 is the maximum of `√p(1 − p)` | same |
 | emm | `0.5 + 0.5 · (1 − exp(−emm_score / WEIGHT_EMM_REF))` — a bonus that never zeroes the weight | same |
 
-They are combined as a weighted geometric mean over the **measured** factors, with exponents `a = WEIGHT_EXPONENTS = (0.35, 0.25, 0.20, 0.10, 0.10)` for (effect, stability, confidence, support, emm):
+They are combined as a weighted geometric mean over the **measured** factors, with exponents `a = WEIGHT_EXPONENTS = (0.35, 0.25, 0.10, 0.10)` for (effect, stability, support, emm); the service refuses any other count of exponents:
 
 ```text
 w = WEIGHT_FLOOR + (1 − WEIGHT_FLOOR) · exp( Σ_{k measured} (a_k / Σ_{measured} a) · ln max(f_k, 1e-3) )        WEIGHT_FLOOR = 0.05
 ```
 
-A geometric mean makes the factors complementary: a strong effect cannot buy back an unstable one. Unmeasured factors are dropped and the exponents renormalised, because in a product any substituted constant is a fixed tax rather than a neutral value (a 0.5 for the two factors a covariance insight lacks would cost every such insight `0.5^0.45 = 0.73`).
+A geometric mean makes the factors complementary: a strong effect cannot buy back an unstable one. Unmeasured factors are dropped and the exponents renormalised, because in a product any substituted constant is a fixed tax rather than a neutral value (a 0.5 for the factor a covariance insight lacks would cost every such insight `0.5^0.36 = 0.78`).
 
-> **Running example.** Factors for `P-bc4657a04746`: effect 0.7705, stability 0.9744, confidence 1.0, support 0.7016, emm 0.6214, so `w = 0.05 + 0.95 · exp(−0.1808) = 0.843`.
+> **Running example.** Factors for `P-bc4657a04746`: effect 0.7705, stability 0.9756, support 0.7016, emm 0.5984, so `w = 0.05 + 0.95 · exp(−0.2303) = 0.805`.
 
 ## 3.4 Where the weight acts
 
@@ -120,17 +119,17 @@ A geometric mean makes the factors complementary: a strong effect cannot buy bac
 |---|---|---|
 | `MIN_SUPPORT_ROWS` | 30 | |
 | `MIN_EFFECT_Z`, `MAX_P_ADJUSTED`, `MIN_STABILITY` | 0.5, 0.05, 0.5 | the shift test |
-| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.086. A `PhenomenonThresholds` field, shared by the miner, the topology and the query engine; part of the fingerprint ([4.6](04_representation.md#46-representation-identity-and-versions)): it decides whether a correlation component enters the vector |
+| `MIN_EMM_SCORE` | 0.08 | per-pair RMS scale after shrinkage: ≈ 0.2–0.4 raw change per pair for subgroups with 5–15 % of the rows; the planted EU∧phones correlation break scores 0.083. A `PhenomenonThresholds` field, shared by the miner, the topology and the query engine; part of the fingerprint ([4.6](04_representation.md#46-representation-identity-and-versions)): it decides whether a correlation component enters the vector |
 | `MIN_INSIGHT_WEIGHT`, `MAX_INSIGHTS_PER_BATCH` | 0.2, 200 | the graph service's admission (`Settings`) |
-| `WEIGHT_EFFECT_REF`, `WEIGHT_CONFIDENCE_REF`, `WEIGHT_EMM_REF` | 1.5, 6, 0.08 | saturation scales; `WEIGHT_EMM_REF` (a `PhenomenonThresholds` field) also scales the correlation component's coefficient, so it is part of the fingerprint |
-| `WEIGHT_EXPONENTS`, `WEIGHT_FLOOR` | (0.35, 0.25, 0.20, 0.10, 0.10), 0.05 | |
+| `WEIGHT_EFFECT_REF`, `WEIGHT_EMM_REF` | 1.5, 0.08 | saturation scales; `WEIGHT_EMM_REF` (a `PhenomenonThresholds` field) also scales the correlation component's coefficient, so it is part of the fingerprint |
+| `WEIGHT_EXPONENTS`, `WEIGHT_FLOOR` | (0.35, 0.25, 0.10, 0.10), 0.05 | four exponents (effect, stability, support, emm); any other count is refused at start |
 
 ## 3.6 Guarantees
 
-* `WEIGHT_FLOOR ≤ weight ≤ 1`; the weight is monotone non-decreasing in `|z|`, stability, `−log p` and the EMM score; unmeasured factors are `None` and never enter the mean.
+* `WEIGHT_FLOOR ≤ weight ≤ 1`; the weight is monotone non-decreasing in `|z|`, stability, support and the EMM score, and independent of the p-value; unmeasured factors are `None` and never enter the mean.
 * No two kept insights share a `row_hash` or an `id`.
 * Every validated candidate is kept or has exactly one rejection; cohorts beyond `VALIDATION_BUDGET` never reach selection.
 
 ## 3.7 Measured behaviour
 
-On the demo, 50 validated candidates give 28 insights; the 22 rejections are all `weak_effect`. Two of the 28 are covariance insights: the planted discount–margin correlation break in EU∧phones (EMM 0.086) and a mixture effect in tablets∧online, where discount and delivery days co-move because the APAC rows carry both planted shifts (EMM 0.14).
+On the demo, 50 validated candidates give 28 insights; the 22 rejections are all `weak_effect`. Two of the 28 are covariance insights: the planted discount–margin correlation break in EU∧phones (EMM 0.083) and a mixture effect in tablets∧online, where discount and delivery days co-move because the APAC rows carry both planted shifts (EMM 0.113).

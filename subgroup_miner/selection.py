@@ -17,11 +17,10 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from insight_contracts import Insight, Rejection
-from subgroup_miner.config import MinerConfig
+from subgroup_miner.config import WEIGHT_FACTORS, MinerConfig
 
 # volume_preference_score(p) = sqrt(p) * (1 - p) peaks at p = 1/3
 VOLUME_UTILITY_MAX = math.sqrt(1.0 / 3.0) * (2.0 / 3.0)
-WEIGHT_FACTORS = ("effect", "stability", "support", "emm")
 
 
 def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
@@ -50,7 +49,7 @@ def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
 def insight_weight(factors: dict[str, float | None], config: MinerConfig) -> float:
     """w = floor + (1 - floor) * prod_k f_k ** (a_k / sum a), over the measured factors (not None)."""
     exponents = {k: a for k, a in zip(WEIGHT_FACTORS, config.weight_exponents) if factors.get(k) is not None}
-    total = sum(exponents.values()) or 1.0
+    total = sum(exponents.values())  # effect, support and emm are always measured, so never 0
     log_mean = sum((a / total) * math.log(max(factors[k], 1e-3)) for k, a in exponents.items())
     return float(config.weight_floor + (1.0 - config.weight_floor) * math.exp(log_mean))
 

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.settings import Settings
-from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, WorkspaceBusy
+from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
 log = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def create_app(engine: Engine) -> FastAPI:
         log.exception("request failed", exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}", "code": "internal_error"}, status_code=500)
 
-    for error in (PipelineError, RepresentationMismatch, RollbackPending):
+    for error in (PipelineError, RepresentationMismatch, RollbackPending, UploadTooLarge):
         app.add_exception_handler(error, refused)
     app.add_exception_handler(Exception, failed)
 
@@ -98,7 +98,10 @@ def create_app(engine: Engine) -> FastAPI:
         return record
 
     @app.post("/api/upload")
-    def upload(file: UploadFile = File(...), bins: str = Form(""), categories: str = Form("")) -> JSONResponse:
+    def upload(request: Request, file: UploadFile = File(...), bins: str = Form(""), categories: str = Form("")) -> JSONResponse:
+        cap = engine.settings.max_upload_mb * 1024 * 1024
+        if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
+            raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS)
         return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None)
 

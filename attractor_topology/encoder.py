@@ -14,7 +14,6 @@ opposite phenomenon directions even though their sentences embed alike.
 
 from __future__ import annotations
 
-import itertools
 import os
 import threading
 from pathlib import Path
@@ -122,13 +121,14 @@ class SentenceTransformerEmbedder:
             missing = sorted({t for t in texts if (prompt, t) not in self._memo})
             if missing:
                 vecs = model.encode(missing, prompt=prompt or None, batch_size=ENCODE_BATCH_SIZE, convert_to_numpy=True, show_progress_bar=False)
-                for key in list(itertools.islice(self._memo, max(0, len(self._memo) + len(missing) - MEMO_MAX))):
-                    del self._memo[key]  # the oldest entries make room (free question text would otherwise live here for the process lifetime)
                 for text, vec in zip(missing, l2_normalize(np.asarray(vecs, dtype=np.float32))):
                     self._memo[(prompt, text)] = vec
-            if not texts:
-                return np.empty((0, self.dim), dtype=np.float32)
-            return np.stack([self._memo[(prompt, t)] for t in texts]).astype(np.float32)
+            out = np.stack([self._memo[(prompt, t)] for t in texts]).astype(np.float32) if texts else np.empty((0, self.dim), dtype=np.float32)
+            while (
+                len(self._memo) > MEMO_MAX
+            ):  # after the lookup: the oldest entries go (question text would otherwise live here for the process lifetime)
+                del self._memo[next(iter(self._memo))]
+            return out
 
     def embed(self, texts: list[str]) -> np.ndarray:
         return self._encode(texts, "")

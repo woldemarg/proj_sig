@@ -14,10 +14,10 @@
 |---|---|---|
 | discovery → insight | `test_discovery_contract.py` (10) | profile contract (identifier dropped, float targets kept, EDA dimensions, candidates within the search space); fields and provenance; signed directions of the planted effects; determinism; planted phenomena survive selection; `closed_intent` adds implied conditions; identical extents merge before validation; near duplicates pruned in rank order; extent/intent antitone; `no_numeric_targets` and `invalid_schema` |
 | the miner alone | `test_subgroup_miner_standalone.py` (1) | a table → validated, weighted insights → `describe` (numbered ASCII lines for a prompt) |
-| selection, weight and admission | `test_selection.py` (6) | weight bounds and monotonicity, the formula with all five factors measured; reason codes of the validity rules; admission (`batch.admit_insights`): the R4 weight floor (`low_weight`) and the R7 budget (`budget`), heaviest first; covariance retargeting with unmeasured factors and the shift's p-values and stability `None` |
+| selection, weight and admission | `test_selection.py` (6) | weight bounds and monotonicity (a p-value change leaves the weight unchanged), the formula with all four factors measured, a five-entry `WEIGHT_EXPONENTS` refused; reason codes of the validity rules; admission (`batch.admit_insights`): the R4 weight floor (`low_weight`) and the R7 budget (`budget`), heaviest first; covariance retargeting with unmeasured factors and the shift's p-values and stability `None` |
 | canonical → embedding | `test_canonical_embedding.py` (9) | embedding inputs vs document (sections, ASCII); labels without numbers; number rules; covariance component; shape, dtype, unit norms, stability, direction separation and cross-scope similarity for the hashing double **and the real model**; fingerprint sensitivity (block weights, width, truncation, query instruction, the three thresholds, compute dtype, revision); a `.env` value read by `load_env_file` overrides its default, an empty non-string value keeps it; query instruction only on free question text |
 | the topology alone | `test_attractor_topology_standalone.py` (1) | insights → 1152-d vectors (hashing double) → anchors with unit centroids, every insight activated, the anchors persisting in their folder |
-| insight → ontology | `test_ontology.py` (11) | cold start coverage, at least three anchors, each planted cluster within one anchor; the orphan rule (cases: no members and no link → dropped, no members but linked → kept, members → kept); `forget` recounts, renumbers and drops; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
+| insight → ontology | `test_ontology.py` (12) | cold start coverage, at least three anchors, each planted cluster within one anchor; the orphan rule (cases: no members and no link → dropped, no members but linked → kept, members → kept); `forget` recounts mass in `w`, moves only the anchors that lost a member, renumbers and drops; the journal recount equals the incremental mass and refuses an unknown anchor; assignment, orphans and new anchors; soft merge; weight scales the EMA pull; `τ_density`; damping without membership change; trust region; sign repair; state round-trip |
 | structural lattice | `test_lattice.py` (5) | covering relation only, GENERALIZES inverse, SIBLING rule, CONTRASTS rule and relation type, no embedding dependency |
 | persistence | `test_persistence.py` (22) | write → reload → rebuild identical; a failed READY write rolls back the snapshot too; an interrupted deletion (error or crash) is undone; dataset deletion (artefacts gone, the dataset's literals leaving the literal cache, the orphan rule anchor by anchor, journal/frame/ontology consistent, snapshot = rebuild, re-ingest possible, last dataset empties the ontology); a record rewritten under a concurrent reader (no sharing violation on either side); a reset during a batch refused at once (`busy`) while readers keep the committed state and the batch still commits; idempotent re-ingest; graph consistency (incl. every membership below the alignment floor is weak and every CO_OCCURS endpoint has a non-weak member); the co-occurrence weights on a hand example (normalised weights, weak memberships excluded, the cap at 1); the Cypher walks both latent edge types; rollback; a failed rollback keeps its marker, refuses later writes (`rollback_pending`) and is finished by the next writer start; representation mismatch; a batch killed after its journal append rolled back at the next start; a second writer process refused while the first keeps its queue; journals of another canonical version start degraded (empty state, writes and questions refused with `workspace_degraded`, the Neo4j mirror untouched) and a reset recovers; a failed recovery starts degraded too; READY survives a post-commit save failure; ingestion failure codes; options strict when explicit, lenient as defaults; the Neo4j mirror equals the snapshot |
 | literal grounding | `test_multilingual_retrieval.py` (12) | the dense gates on a dictionary embedder (translations accepted, `us` rejected by case, a hub literal demoted, an equidistant span rejected by Lowe); character matches for same-script inflections and typos only, the length guard; longest span claims its tokens and one embedding pass; a value under two columns resolves to the named column or a wildcard that scores without conflict, typed or translated alike; words inside a matched literal cast no direction, and a weakening word is a word, not a substring; Ukrainian comparatives and directed drivers; B1 = B2 seeds (hashing double); the catalog vectors persisted and reloaded without re-embedding, the catalog cached until the next commit; B3 translated twin parses and seeds like English, distractors ground to nothing (`model`); B4 inflected Ukrainian value (`model`); identical seeds with the Neo4j mirror on (fake driver) and off |
@@ -92,15 +92,15 @@ Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwe
 
 | Method | recall@3 | precision@3 | MRR | recall@5 |
 |---|---|---|---|---|
-| transversal | **0.521** | **0.556** | **0.581** | **0.729** |
-| structural | 0.000 | 0.000 | 0.079 | 0.000 |
-| text_nn | 0.111 | 0.111 | 0.321 | 0.299 |
+| transversal | **0.500** | **0.528** | **0.581** | **0.701** |
+| structural | 0.000 | 0.000 | 0.078 | 0.000 |
+| text_nn | 0.167 | 0.167 | 0.243 | 0.361 |
 | vector_nn | 0.028 | 0.028 | 0.229 | 0.507 |
 
 Reading:
 - **Structural traversal** never reaches scope-disjoint analogues within its first ranks: they sit 2–4 lattice hops away, mixed with everything else.
 - **Text-NN and raw vector kNN** rank the seed's own refinements first.
-- **The anchor layer** puts the analogues at the top (MRR 0.58 vs ≤ 0.32) and reaches most of them by `k = 5` (0.73 vs 0.51).
+- **The anchor layer** puts the analogues at the top (MRR 0.58 vs ≤ 0.24) and reaches most of them by `k = 5` (0.70 vs 0.51).
 
 This is an apparatus, not proof: one synthetic dataset, two mechanisms with analogues. `test_hypothesis_apparatus` guards the ordering as a regression.
 
@@ -119,14 +119,16 @@ Pre-registered, test seeds read once (the record is in the lac repository, [`doc
 
 | Attractor settings | cases | walk / attractors | walk / static k-means | random null | vector | weight only |
 |---|---|---|---|---|---|---|
-| the previous defaults (assignment 0.75–0.80, merge 0.85) | 473 | 0.295 / 0.560 | **0.362 / 0.660** | — | 0.166 / 0.237 | 0.074 / 0.214 |
-| **the current defaults** (assignment 0.88–0.92, merge 0.95, cap 80) | 455 | **0.376 / 0.633** | 0.387 / 0.661 | 0.064 / 0.159 | 0.155 / 0.225 | 0.076 / 0.192 |
+| the previous band (assignment 0.75–0.80, merge 0.85, cap 40) | 456 | 0.323 / 0.642 | **0.354 / 0.671** | 0.080 / 0.246 | 0.147 / 0.207 | 0.081 / 0.282 |
+| **the current defaults** (assignment 0.88–0.92, merge 0.95, cap 80) | 456 | **0.360 / 0.693** | 0.368 / 0.681 | 0.081 / 0.226 | 0.147 / 0.207 | 0.081 / 0.282 |
 
-Values are recall@5 / MRR. Under the previous defaults the lifecycle's groups were larger and mixed mechanisms (pair
-precision as low as 0.73 against 0.96–1.00 for k-means), and the walk over k-means won by −0.067 [−0.108, −0.026]. The
-precision band fixes that: the walk over the tuned attractors is level with the walk over k-means at the same count
-(−0.011 [−0.034, +0.012]), +0.066 [+0.025, +0.114] over the previous defaults on the same cases, +0.22 over vector
-neighbours; random groups collapse it to 0.064, so the grouping carries the value. The lifecycle chooses its group count
+Values are recall@5 / MRR, re-measured on 2026-10-12 after the kernel changes (mass in `w`, no confidence factor, rank
+correlations; the pre-registered read of 2026-10-11 under the earlier kernel gave the same picture: −0.011 against
+k-means, +0.066 over the previous band on 455 cases). Under the previous band the lifecycle's groups were larger and
+mixed mechanisms, and the walk over k-means won by −0.031 [−0.059, −0.005]. The precision band fixes that: the walk
+over the tuned attractors is level with the walk over k-means at the same count (−0.009 [−0.032, +0.013]), +0.037
+[+0.005, +0.077] over the previous band on the same cases, +0.21 over vector neighbours; random groups collapse it to
+0.08, so the grouping carries the value. The lifecycle chooses its group count
 itself, incrementally; k-means was handed it. These are planted data under one embedder: the result speaks to the
 generator's mechanisms, not to every insight corpus. Translated to the lac repository's text graphs, the same band
 connected fewer evidence pairs (its construction record, C5), so it is this system's default and not that project's.
@@ -186,12 +188,12 @@ Options:
 
 **Statistics**
 * The EDA searches only 2- and 3-conjunctions of equality selectors — no single selectors, no numeric intervals; numeric dimensions need explicit bands.
-* Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics: conservative (overlapping cohorts count as independent tests), not a permutation test. Pre-validation near-duplicate pruning ranks by the pass-1 `temp_index`, not by the final weight.
+* Significance is an asymptotic median test with Bonferroni over distinct cohorts × metrics: conservative (overlapping cohorts count as independent tests), not a permutation test, and computed on cohorts the screen selected by the same shift — so it gates and is recorded, but the weight does not use it. Pre-validation near-duplicate pruning ranks by the pass-1 `temp_index`, not by the final weight, and keeps at most `VALIDATION_BUDGET` cohorts (the rest are scanned only as their aliases).
 * `SD` sums the three largest shifts; `temp_index` adds clipped z-scores of incommensurable quantities (the EDA's design, monotone in each); the EMM shrinkage `sqrt((n − n_min)/(N − n_min))` is a reliability heuristic, not a standard error.
 * Weight exponents, block weights, `EMM_COMPONENT_WEIGHT` and the seed-score weights are design choices validated on the synthetic data and the benchmark, not fitted.
 
 **Representation and ontology**
-* The phenomenon is linear in label embeddings: with correlated labels (Qwen3: discount · margin = 0.71), a one-metric question and a two-metric insight partly cancel ([7.2](07_question_answering.md#72-seeds)), and two one-off phenomena can share an anchor.
+* The phenomenon is linear in label embeddings: with correlated labels (Qwen3: discount · margin = 0.71), a one-metric question and a two-metric insight partly cancel ([7.2](07_question_answering.md#72-seeds)), and two one-off phenomena can share an anchor. A question naming two or more metrics gives each the same `±2` component, while an insight's phenomenon block carries its real robust-z ratios (the running example: discount +2.21, margin −1.10), so the semantic term of such a question measures "both move that way", not the insight's proportions; a question cannot know the ratio, and the lexical terms (target, direction) carry those seeds when a column name matches.
 * OMP dictionary learning on tens of rows is far from its intended regime; the signed repair is what makes it usable. The adaptive assignment threshold becomes adaptive only with 10 or more anchors.
 * Mutual kNN can leave an anchor without links ([5.7](05_latent_anchors.md#57-links-between-anchors)); links between anchors of different datasets are bridges by design, so a question can draw evidence from another dataset, labelled with its dataset ([5.10](05_latent_anchors.md#510-calibration-per-embedder)). `engine_weight` is not comparable across activation sources.
 

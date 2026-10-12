@@ -356,7 +356,7 @@ def repair_extraction(
     local_acts: list[dict[str, Any]],
     unit_rows: np.ndarray,
     config: Config,
-) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Turn OMP atoms into signed attractors before they are stored.
 
     OMP reports |coefficient|, so an anti-aligned row can "activate" an atom, and
@@ -371,7 +371,7 @@ def repair_extraction(
     4. drops unused atoms and remaps concept ids to ``0 .. n-1``.
     """
     if len(centroids) == 0:
-        return centroids, np.empty(0, dtype=np.int64), local_acts
+        return centroids, local_acts
     cents = _l2_normalize_rows(centroids.astype(np.float64))
     cos = unit_rows.astype(np.float64) @ cents.T  # (rows, atoms)
     for j in range(len(cents)):
@@ -421,13 +421,12 @@ def repair_extraction(
     used = sorted({concept for _, concept in unique})
     remap = {old: new for new, old in enumerate(used)}
     acts = [{**a, "concept_id": remap[a["concept_id"]]} for a in unique.values()]
-    counts = np.bincount([a["concept_id"] for a in acts], minlength=len(used)).astype(np.int64)
-    return cents[used].astype(np.float32), counts, acts
+    return cents[used].astype(np.float32), acts
 
 
-def extract_attractors(rows: np.ndarray, unit_rows: np.ndarray, config: Config) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+def extract_attractors(rows: np.ndarray, unit_rows: np.ndarray, config: Config) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Mint attractors (cold start and orphan buffer): OMP on ``dictionary_input_scale * rows``,
-    then the signed repair; returns (centroids, chunk_counts, local activations)."""
+    then the signed repair; returns (centroids, local activations); the mass of a new attractor is the caller's (the summed weights of its rows)."""
     scaled = np.asarray(rows, dtype=np.float32) * float(config.dictionary_input_scale)
     centroids, acts = _omp_extract(scaled, config)
     return repair_extraction(centroids, acts, unit_rows, config)

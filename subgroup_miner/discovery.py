@@ -141,12 +141,12 @@ def merge_identical_extents(cands: list[Candidate], data: pd.DataFrame, categori
     return merged, rejections
 
 
-def _primary_key(cand: Candidate, data: pd.DataFrame, global_medians: dict[str, float]) -> tuple[str, int] | None:
-    """(primary metric, shift sign) of a pass-1 cohort; None without shifts."""
+def _primary_key(cand: Candidate, values: np.ndarray, column: dict[str, int], global_medians: dict[str, float]) -> tuple[str, int] | None:
+    """(primary metric, shift sign) of a pass-1 cohort; None without shifts. ``values``: the metric columns as one array."""
     if not cand.top_shifts:
         return None
     metric = cand.top_shifts[0][0]
-    local = float(np.median(data[metric].iloc[cand.row_indices].dropna()))
+    local = float(np.nanmedian(values[cand.row_indices, column[metric]]))
     return metric, 1 if local >= global_medians[metric] else -1
 
 
@@ -156,15 +156,16 @@ def _jaccard(rows: np.ndarray, other: np.ndarray) -> float:
 
 
 def prune_near_duplicates(
-    ranked: list[Candidate], data: pd.DataFrame, global_medians: dict[str, float], threshold: float, limit: int | None = None
+    ranked: list[Candidate], values: np.ndarray, numerics: list[str], global_medians: dict[str, float], threshold: float, limit: int | None = None
 ) -> tuple[list[Candidate], list[Rejection]]:
     """Greedy in rank order (R6): a cohort with the primary metric and sign of a higher-ranked kept
     cohort and Jaccard(rows) >= ``threshold`` is absorbed as an alias of it. At most ``limit`` cohorts are
     kept (the validation budget: nothing below it is validated); the rest are scanned only as aliases of those."""
     kept: list[tuple[Candidate, tuple[str, int] | None, np.ndarray]] = []
     rejections: list[Rejection] = []
+    column = {name: j for j, name in enumerate(numerics)}
     for cand in ranked:
-        key = _primary_key(cand, data, global_medians)
+        key = _primary_key(cand, values, column, global_medians)
         rows = np.sort(cand.row_indices)
         host = next(
             (other for other, other_key, other_rows in kept if key is not None and key == other_key and _jaccard(rows, other_rows) >= threshold), None
@@ -259,7 +260,7 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
     for cand, index in zip(candidates, _z_positive(scores["sd"]) + _z_positive(scores["emm"]) + _z_positive(scores["vol"])):
         cand.temp_index = float(index)
     ranked = sorted(candidates, key=lambda c: -c.temp_index)  # stable: pass-1 order breaks ties
-    eligible, near = prune_near_duplicates(ranked, data, global_medians, config.redundancy_jaccard, config.validation_budget)
+    eligible, near = prune_near_duplicates(ranked, profile["values"], numerics, global_medians, config.redundancy_jaccard, config.validation_budget)
     rejections += near
 
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG

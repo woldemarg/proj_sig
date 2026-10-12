@@ -24,6 +24,6 @@ def test_insights_become_vectors_and_attractors(tmp_path):
     update = ontology.ingest(encoded["vector"], np.array([i.weight for i in insights]), [i.id for i in insights], batch_seq=0, batch_id="b1")
     attractors = ontology.attractors()
     assert attractors and {a["pattern_id"] for a in update.activations} == {i.id for i in insights}
-    assert all(abs(float(np.linalg.norm(a.centroid)) - 1.0) < 1e-4 and a.mass >= 1 for a in attractors)
+    assert all(abs(float(np.linalg.norm(a.centroid)) - 1.0) < 1e-4 and a.mass > 0 for a in attractors)  # mass in w: 0.6 per member
     ontology.save()
     assert [a.id for a in LatentOntology(config, tmp_path).attractors()] == [a.id for a in attractors]  # the anchors persist
