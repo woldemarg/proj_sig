@@ -26,7 +26,7 @@
 ## Other copied assets
 | Asset | Original | Location |
 |---|---|---|
-| `housing.csv` (a realistic demo dataset) | eda project: `data/housing.csv` | `data/housing.csv` (local, git-ignored) |
+| `housing.csv` (a realistic demo dataset) | eda project: `data/housing.csv` | `data/housing.csv` (local, git-ignored); a copy without `total_bedrooms` (the one column with nulls) is shipped as the map demo, `data/demo/california_housing.csv` — the California housing data of Pace & Barry (1997, StatLib), public domain |
 
 ## Taking upstream changes
 Do not re-copy the file over its local changes. Re-apply an upstream change by hand, keeping edits 1–11 (upstream changes to step 5 or the runner do not apply), then run `python -m pytest`. `subgroup_miner/discovery.py` stays the boundary where vendored results become `Insight` records.

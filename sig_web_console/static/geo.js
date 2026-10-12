@@ -8,6 +8,7 @@ const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amb
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
   datasetOf: (pid) => (G.patterns[pid] ? G.ds : null),
+  current: () => G.ds,  // the geo dataset the map holds (its questions are suggestions())
 
   async refresh() {
     try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }

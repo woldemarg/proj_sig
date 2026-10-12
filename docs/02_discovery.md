@@ -12,12 +12,12 @@
 
 | Input | Form | Source |
 |---|---|---|
-| file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
+| file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo` / `POST /api/demo/geo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
 | `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* = the form field `bins` of `POST /api/upload` |
 | `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* = the form field `categories` |
 | `geo` | `auto`, `<column>` or `<lat>,<lon>`, optionally `@<resolution>`; `None` = a plain table | UI *Spatial analysis (H3 cells)* = the form field `geo`; rows become H3 cells first ([2.9](#29-spatial-datasets-the-geo-option)) |
 
-An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Try demo*) sends an explicit `""` for both options; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
+An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Demo: table*) sends an explicit `""` for both options, `POST /api/demo/geo` (*Demo: map*) its band and geo option; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
 
 Before a batch exists, `Engine.upload` refuses a file above `MAX_UPLOAD_MB` (200): it deletes the upload and raises `file_too_large`, which the API answers with HTTP 413. Steps, in order:
 
@@ -225,4 +225,6 @@ These conditions are always among the searched dimensions: they are prepended to
 
 After admission the graph service adds `compactness` (the share of the extent's neighbour links that stay inside the extent; 1 = one solid block, a scattered extent is not penalised) and `colocated` (up to three other insights of the dataset whose ring-1-dilated extents overlap by `|A ∩ B| / min(|A|, |B|) ≥ GEO_COLOCATION_MIN` (0.3); the `CO_LOCATED` edges of [6.1](06_graph_and_storage.md#61-the-structural-plane)), and stores the cell table, the point → cell map and the neighbour graph as `datasets/<ds>/geo.npz`; the profile also carries `geo.glossary`, the plain-language meaning of every derived column the answers use ([7.4](07_question_answering.md#74-the-evidence-object)) ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)).
 
+> **Measured** on the map demo (California housing, 20,640 block groups, `geo=auto@5`, `bins=median_income_median:4`): 884 cells (540 below `MIN_CELL_POINTS`), global Moran's I of the metrics 0.33–0.72; 46 validated candidates, 11 insights admitted (two of them correlation changes); of the 37 with a shift test 21 are significant without and 9 with the `n_eff` correction.
+>
 > **Measured** on a month of point events (322,843 points, `geo=auto@7`): 13,403 cells (8,023 below `MIN_CELL_POINTS`), 2,260 `hot spot` cells; global Moran's I of the metrics 0.18–0.90; of 50 validated candidates 39 are significant without and 26 with the `n_eff` correction (26 insights admitted); ingestion and discovery ≈ 12 s on a laptop CPU.

@@ -32,7 +32,7 @@
 | 3D sphere | `test_sphere.py` (3) | every insight and the themes it activates placed inside the unit ball, classes `up` / `down` / `cov`, hover text, edges only between placed nodes (ACTIVATES, RELATED_TO and SPECIALIZES among them); an answer's highlighted edges between placed nodes resolve among the sphere's edges; the projection is deterministic, `GET /api/sphere` serves it, an empty workspace gives the message |
 | self-containment | `test_self_contained.py` (4) | every loaded module and `sys.path` entry lies in the repository or the Python environment (interpreter, standard library, site-packages — also of a base environment the venv is layered on), the vendored engines load from the repository; no source string of the seven packages holds a machine path, and a relative path that climbs a folder appears only in a docstring and resolves inside the repository; every path setting of every section resolves inside the repository; the model loads from `models/` |
 | package boundaries | `test_architecture.py` (2) | every import of the seven packages is in the allow-list of [12.2](12_architecture.md#122-dependency-direction): the repository packages and the third-party modules each package may import (relative imports resolved); only the Neo4j mirror imports the driver |
-| UI | `test_ui_smoke.py` (2) | on the `scripts/dev.py` composite: static files, API upload → READY → graph → node → a grounded Ukrainian chat answer (the narrator asks the graph service over local HTTP) with its highlight → delete → empty → a failed upload deleted by batch id → reset; headless Chromium: dataset card, insights table, Ukrainian chat answer with highlight and evidence cards (panels closed by default, open on click), the legend column (defaults, counts, hover spotlight) switching sphere traces and graph edges, an isolated evidence path kept through a layer switch, sphere click → drawer, a dragged column border, citation → drawer, theme toggle, delete from the card, no page errors |
+| UI | `test_ui_smoke.py` (2) | on the `scripts/dev.py` composite: static files, API upload → READY → graph → node → a grounded Ukrainian chat answer (the narrator asks the graph service over local HTTP) with its highlight; the map demo (`POST /api/demo/geo`: 884 cells at resolution 5, its insights, `/api/geo`, deletion) → delete → empty → a failed upload deleted by batch id → reset; headless Chromium: dataset card, insights table, Ukrainian chat answer with highlight and evidence cards (panels closed by default, open on click), the welcome card's questions (both demos' together, one dataset's under the dataset filter, none after the deletions), the legend column (defaults, counts, hover spotlight) switching sphere traces and graph edges, an isolated evidence path kept through a layer switch, sphere click → drawer, a dragged column border, citation → drawer, theme toggle, delete from the card, no page errors |
 
 **Isolation.**
 - **No credentials.** Settings read only the process environment, and the tests never load the repository's `.env`, so developer credentials never reach a test.
@@ -55,7 +55,7 @@
 - The browser test looks for Chromium only under the Playwright folder of `%LOCALAPPDATA%` (Windows and Linux builds) and skips elsewhere.
 - The containers are verified by `scripts/compose_check.py`, outside pytest ([10.5](#105-quality-gate-and-container-check)).
 
-## 10.2 The synthetic demo dataset
+## 10.2 The demo datasets
 
 `insight_graph_service/core/demo.py::generate_retail_dataset` builds the demo table: 5,000 orders, seed 7. `POST /api/demo` ingests it as `retail_synthetic.csv`; the tests and the measurement scripts write it to their own folders. Dimensions `region, category, channel`, plus noise columns `payment, weekday, store_size` that step 2 of the EDA correctly ignores; `order_id` is an identifier. Mechanisms: `margin = 26 − 0.6 · discount + ε`, `return_rate = 0.02 + 0.01 · delivery_days + ε`.
 
@@ -69,6 +69,8 @@
 | correlation break | EU ∧ phones: margin decoupled from discount | EMM / covariance insight |
 
 `GROUND_TRUTH` in the same module lists these scopes for the tests and the benchmark.
+
+**The map demo** (`POST /api/demo/geo`) is a real table shipped with the service: the California housing data (Pace & Barry, 1997; 20,640 block groups with coordinates, nine columns, `data/demo/california_housing.csv`), ingested as `geo=auto@5` with `bins=median_income_median:4`. Resolution 5 was chosen on the point counts: 884 occupied cells, 344 with five or more block groups (resolution 4 gives 230 cells, too few rows for the search; 6 gives 2,530 cells, three quarters of them sparse). The band turns the cells' typical income into a dimension next to ocean proximity and the neighbourhood conditions; without it the search has three dimensions and finds six insights, with it eleven, among them house values high where income and density are high and low inland. `test_ui_smoke.py` runs the demo through the API and pins the resolution, the cell count and the band dimension.
 
 ## 10.3 Hypothesis benchmark
 

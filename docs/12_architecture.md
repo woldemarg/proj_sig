@@ -64,7 +64,7 @@ The libraries are folders, not pip packages. Another project copies a folder, or
 
 | Service | Routes |
 |---|---|
-| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `GET /api/graph`, `GET /api/nodes/{id}`, `GET /api/sphere` (projected points and edges, JSON), `DELETE /api/datasets/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question) |
+| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `POST /api/demo/geo`, `GET /api/graph`, `GET /api/nodes/{id}`, `GET /api/sphere` (projected points and edges, JSON), `DELETE /api/datasets/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question) |
 | narrator (`python -m evidence_narrator_service`) | `POST /api/chat/query` (`{question, use_llm}` → the answer), `GET /api/chat/health` (always 200: the LLM and the graph service) |
 | broker (`python -m llm_model_broker`) | `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` |
 

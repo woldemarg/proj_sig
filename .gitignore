@@ -19,4 +19,6 @@ models/**
 !models/.gitkeep
 data/**
 !data/.gitkeep
+!data/demo/
+!data/demo/california_housing.csv
 .DS_Store

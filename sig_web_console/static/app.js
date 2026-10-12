@@ -21,13 +21,22 @@ const ERROR_HELP = {
   duplicate_patterns: ["Already ingested", "These insights are already in the graph.", ""],
   interrupted: ["Interrupted", "Processing stopped before finishing; nothing partial was kept.", "Upload the file again."],
 };
-// chat content is Ukrainian; data literals (column names, values) stay exactly as the data holds them
-const SUGGESTIONS = [
-  "Чому margin нижчий для phones у US?",
-  "Що пов'язано з вищим return_rate?",
-  "Розкажи про margin для laptops у EU",
-  "Де руйнується кореляція між discount і margin?",
-];
+// chat content is Ukrainian; data literals (column names, values) stay exactly as the data holds them.
+// The welcome card's questions per demo dataset (by filename); any other geo dataset gets GeoMap.suggestions().
+const SUGGESTIONS = {
+  "retail_synthetic.csv": [
+    "Чому margin нижчий для phones у US?",
+    "Що пов'язано з вищим return_rate?",
+    "Розкажи про margin для laptops у EU",
+    "Де руйнується кореляція між discount і margin?",
+  ],
+  "california_housing.csv": [
+    "Чому median house value нижчий у зонах INLAND?",
+    "Де median_house_value вищий?",
+    "Що особливого в зонах NEAR OCEAN?",
+    "Де найбільше households?",
+  ],
+};
 // The legend (index.html data-key) -> the graph elements of each entry; a sphere trace carries its entry's key as
 // `meta` (sphereTraces), and the toggles (.toggle[data-key]) show or hide their entry in both views.
 const MARKS = {
@@ -132,20 +141,23 @@ async function refreshBatches() {
     if (!kept || (b.status === "READY" && kept.status !== "READY")) byDataset.set(key, b);
   }
   const cards = [...byDataset.values()];
-  $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try the demo.</div>`;
+  $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;
   $("batches").querySelectorAll(".ds.clickable").forEach((el) => el.addEventListener("click", () => {
-    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; loadGraph(); refreshBatches();
+    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; setFilter();
   }));
   $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
   const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b.filename])).entries()];
   const sel = $("dataset-filter"), cur = sel.value;
   sel.innerHTML = `<option value="">All datasets</option>` + ready.map(([id, f]) => `<option value="${esc(id)}">${esc(f)}</option>`).join("");
   sel.value = ready.some(([id]) => id === cur) ? cur : "";
+  if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets that are there
   const readyKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",");
   if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); GeoMap.refresh(); }
   clearTimeout(S.poll);
   if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
 }
+
+function setFilter() { loadGraph(); refreshBatches(); GeoMap.refresh(); }  // every view, the map and the welcome card follow the filter
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
@@ -694,6 +706,19 @@ function followUps(turn) {
 
 const chipButtons = (questions) => questions.map((q) => `<button type="button" class="chip-q">${esc(q)}</button>`).join("");
 
+function suggestions() {
+  /* the welcome card's questions: only for data that is there — a demo dataset's own set, another geo dataset's
+     questions from its insights; the dataset filter (whose options are the READY datasets) narrows them to one
+     dataset; no dataset, no questions */
+  const filter = $("dataset-filter").value;
+  const out = [];
+  for (const o of [...$("dataset-filter").options].filter((o) => o.value && (!filter || o.value === filter))) {
+    if (SUGGESTIONS[o.text]) out.push(...SUGGESTIONS[o.text]);
+    else if (o.value === GeoMap.current()) out.push(...GeoMap.suggestions());
+  }
+  return out;
+}
+
 function botTurn(turn, isLast) {
   if (turn.pending) {
     return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Searching the graph${$("use-llm").checked ? " and writing an answer" : ""}…</span></div></div>`;
@@ -706,9 +731,12 @@ function botTurn(turn, isLast) {
 function renderThread() {
   const t = $("thread");
   if (!S.chat.length) {
+    const chips = suggestions(), key = chips.join("\n");
+    if (t.dataset.chips === key && t.querySelector(".welcome")) return;  // rendered on every poll tick: only a change rebuilds the chips
+    t.dataset.chips = key;
     t.innerHTML = `<div class="welcome"><div class="art"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 4z"/></svg></div>` +
       `<h3>Ask about your data</h3><p>Answers are built only from validated insights in the graph, with every claim linked to its source.</p>` +
-      `<div class="suggest">${chipButtons(GeoMap.suggestions().length ? GeoMap.suggestions() : SUGGESTIONS)}</div></div>`;
+      (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
@@ -805,10 +833,12 @@ function init() {
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
-  $("demo-btn").addEventListener("click", async () => {
-    setUploadMsg("Preparing the demo dataset…");
-    try { await api("/api/demo", { method: "POST" }); setUploadMsg("Demo queued — progress is shown below."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
-  });
+  for (const [id, path] of [["demo-btn", "/api/demo"], ["demo-geo-btn", "/api/demo/geo"]]) {
+    $(id).addEventListener("click", async () => {
+      setUploadMsg("Preparing the demo dataset…");
+      try { await api(path, { method: "POST" }); setUploadMsg("Demo queued — progress is shown below."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
+    });
+  }
   $("reset-btn").addEventListener("click", async () => {
     if (!confirm("Reset the workspace?\n\nEvery dataset, insight and theme is deleted; upload the data again afterwards.")) return;
     try { await api("/api/reset", { method: "POST" }); setUploadMsg("The workspace was reset."); } catch (err) { setUploadMsg(err.message, true); }
@@ -818,7 +848,7 @@ function init() {
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); highlight(S.hl); }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
-  $("dataset-filter").addEventListener("change", () => { loadGraph(); refreshBatches(); });
+  $("dataset-filter").addEventListener("change", setFilter);
   $("fit-btn").addEventListener("click", () => {
     const gd = S.view === "sphere" && sphereDiv();
     if (gd) Plotly.relayout(gd, { "scene.camera.eye": { x: 1.1, y: 1.1, z: 1.1 }, "scene.camera.center": { x: 0, y: 0, z: 0 } });

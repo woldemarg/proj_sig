@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
-from insight_graph_service.core.settings import Settings
+from insight_graph_service.core.settings import PROJECT_ROOT, Settings
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
@@ -109,6 +109,13 @@ def create_app(engine: Engine) -> FastAPI:
     def demo() -> JSONResponse:
         table = io.BytesIO(generate_retail_dataset().to_csv(index=False).encode("utf-8"))
         return accept("retail_synthetic.csv", table, "", "")  # the demo is self-describing: explicitly no bands / overrides
+
+    @app.post("/api/demo/geo")
+    def demo_geo() -> JSONResponse:
+        # the shipped California housing table (located block groups) as H3 cells at resolution 5, with the cells' typical
+        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies this one file of data/
+        with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as table:
+            return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")
     def graph(dataset: str | None = None) -> dict[str, Any]:
