@@ -8,7 +8,7 @@
 
 ## 11.1 Glossary
 
-One concept, one name per layer. Code and these docs use the first column, the UI the second, the vendored lac modules the third.
+One concept, one name per layer. Code and these docs use the first column, the UI the second, the vendored lac modules the third. The lac repository ([`proj_ontology`](https://github.com/woldemarg/proj_ontology)), where the engine comes from, calls the same object a *concept* (its `:Concept` node) and describes it as a *latent attractor*; lac's v4 *entity anchors* (`:Anchor` nodes, named entities) are a different thing and have no counterpart here.
 
 | Code / docs | UI | lac (vendored) | Meaning |
 |---|---|---|---|
@@ -76,8 +76,8 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | `MinerConfig` — weight | `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_CONFIDENCE_REF` 6, `WEIGHT_EXPONENTS` (0.35, 0.25, 0.20, 0.10, 0.10), `WEIGHT_FLOOR` 0.05 | [3.3](03_insights.md#33-insight-weight) |
 | `MinerConfig` — structural lattice | `CONTRAST_MIN_OVERLAP` 0.5, `CONTRAST_MIN_SHIFT` 0.5 | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | `TopologyConfig` (`attractor_topology/config.py`) — representation | `MODEL_DIR` (`models`), `EMBEDDING_DEVICE` auto, `BLOCK_WEIGHTS` (0.45, 0.55, 1.0), `EMM_COMPONENT_WEIGHT` 0.5 | [4.3](04_representation.md#43-the-tripartite-vector), [4.4](04_representation.md#44-the-embedding-model) |
-| `TopologyConfig` — extraction | `CONCEPTS_PER_CHUNK` 1, `DICTIONARY_K_MIN` 4, `DICTIONARY_K_STEP` 2, `MAX_CONCEPT_COUNT` 40, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `DICTIONARY_INPUT_SCALE` 10, `RANDOM_SEED` 42, `SOFT_MERGE_LOW` 0.85, `MIN_ACTIVATION_ALIGNMENT` 0.20 | [5.3](05_latent_anchors.md#53-extraction-omp-k-sweep-with-signed-repair) |
-| `TopologyConfig` — assignment | `MIN_ASSIGN_THRESHOLD` 0.75, `MAX_ASSIGN_THRESHOLD` 0.80, `ADAPTIVE_PERCENTILE` 85, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.80, `CENTROID_ALPHA` 0.05, `ORPHAN_BUFFER_MIN_FACTOR` 3 | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans), [5.10](05_latent_anchors.md#510-calibration-per-embedder) |
+| `TopologyConfig` — extraction | `CONCEPTS_PER_CHUNK` 1, `DICTIONARY_K_MIN` 4, `DICTIONARY_K_STEP` 2, `MAX_CONCEPT_COUNT` 80, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `DICTIONARY_INPUT_SCALE` 10, `RANDOM_SEED` 42, `SOFT_MERGE_LOW` 0.95, `MIN_ACTIVATION_ALIGNMENT` 0.20 | [5.3](05_latent_anchors.md#53-extraction-omp-k-sweep-with-signed-repair) |
+| `TopologyConfig` — assignment | `MIN_ASSIGN_THRESHOLD` 0.88, `MAX_ASSIGN_THRESHOLD` 0.92, `ADAPTIVE_PERCENTILE` 85, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.80, `CENTROID_ALPHA` 0.05, `ORPHAN_BUFFER_MIN_FACTOR` 3 | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans), [5.10](05_latent_anchors.md#510-calibration-per-embedder) |
 | `TopologyConfig` — guards | `DENSITY_FLOOR` 0.25, `DENSITY_MULTIPLE` 3.0, `MAX_CENTROID_STEP` 0.10, `WARN_ORPHAN_RATE` 0.50, `WARN_MIN_EXTRACTION_YIELD` 0.10, `WARN_AVG_DEGREE` (1.0, 8.0) | [5.6](05_latent_anchors.md#56-stability-guards) |
 | `TopologyConfig` — anchor links | `RELATED_TO_PEER_COUNT` 3, `RELATED_TO_MIN_WEIGHT` 0.30 | [5.7](05_latent_anchors.md#57-links-between-anchors) |
 | `QueryConfig` (`graph_query_engine/config.py`) — literal grounding | `GROUNDING_MIN_COSINE` 0.30 (centred cosine; embedder-specific); fixed in `graph_query_engine/question.py`: `CHAR_MIN` 0.30, `CHAR_MAX_LEN_DIFF` 3, `MARGIN_MIN` 0.15, `MARGIN_K` 5, `LOWE_MAX` 0.85, `MAX_SPAN` 3, `ACRONYM_MAX_LEN` 4 | [7.1.1](07_question_answering.md#711-literal-grounding) |

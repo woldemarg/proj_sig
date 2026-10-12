@@ -48,7 +48,7 @@ Orphans are pushed into lac's orphan buffer, whose flush rule is "at least `DICT
 
 **1. Input scale.** The OMP input is `X = DICTIONARY_INPUT_SCALE · x_in` (10). lac fits the dictionary with sklearn's `MiniBatchDictionaryLearning`, whose sparse coding during dictionary updates penalises codes with `alpha = 1`; for inputs of norm ≤ 1 that penalty zeroes almost every code and the atoms stay at their initialisation. Scaling by `s` is equivalent to `alpha / s`; OMP directions and the relative error are scale-invariant. The EMA never sees the scale (but see `engine_weight` in [5.9](#59-activation-records-and-batch-metrics)).
 
-**2. K-sweep.** `K = max(2, min(DICTIONARY_K_MIN, n)), +DICTIONARY_K_STEP, …, ≤ min(MAX_CONCEPT_COUNT, n)` (4, 6, … up to 40), codes by OMP with `CONCEPTS_PER_CHUNK = 1` non-zero per row:
+**2. K-sweep.** `K = max(2, min(DICTIONARY_K_MIN, n)), +DICTIONARY_K_STEP, …, ≤ min(MAX_CONCEPT_COUNT, n)` (4, 6, … up to 80), codes by OMP with `CONCEPTS_PER_CHUNK = 1` non-zero per row:
 
 ```text
 err(K)  = ‖X − A_K D_K‖_F² / ‖X‖_F²          dead(K) = #{atoms with no |a_ij| > 1e-5} / K
@@ -68,7 +68,7 @@ A `K` with `dead(K) > MAX_DEAD_CONCEPT_RATIO` (0.25) is skipped while no `K` has
 
 ## 5.4 Assignment, EMA and orphans
 
-**Adaptive threshold** (`compute_adaptive_threshold`): with fewer than 10 anchors `τ = MIN_ASSIGN_THRESHOLD` (0.75, calibrated for Qwen3 — [5.10](#510-calibration-per-embedder)); otherwise `τ = clip(percentile_85(off-diagonal cos(c_j, c_k)), MIN_ASSIGN_THRESHOLD, MAX_ASSIGN_THRESHOLD = 0.80)` — anchor-to-anchor similarity is a loose upper bound for insight-to-anchor similarity.
+**Adaptive threshold** (`compute_adaptive_threshold`): with fewer than 10 anchors `τ = MIN_ASSIGN_THRESHOLD` (0.88, set for precision on Qwen3 — [5.10](#510-calibration-per-embedder)); otherwise `τ = clip(percentile_85(off-diagonal cos(c_j, c_k)), MIN_ASSIGN_THRESHOLD, MAX_ASSIGN_THRESHOLD = 0.92)` — anchor-to-anchor similarity is a loose upper bound for insight-to-anchor similarity.
 
 **Assignment** (`assign_and_update`): `sim_ij = cos(x_i, c_j)`, one similarity matrix per batch against the centroids as the batch found them (the EMA updates of earlier rows in the batch do not change later rows' assignment). If `max_j sim_ij ≥ τ`, the row activates every anchor among its `TOP_K_ASSIGN` (2) best with `sim_ij ≥ τ` and `sim_ij ≥ MIXTURE_RATIO (0.8) · max_j sim_ij` — an insight can belong to two anchors when it mixes two phenomena — and each activation updates that centroid. Otherwise the row is an orphan.
 
@@ -80,7 +80,7 @@ A `K` with `dead(K) > MAX_DEAD_CONCEPT_RATIO` (0.25) is skipped while no `K` has
 
 A young anchor moves quickly, a mature one slowly; `d_j` is the damping of [5.6](#56-stability-guards).
 
-**Orphans.** When two or more rows are orphans, extraction runs on them. New atoms whose best cosine to an existing anchor exceeds `SOFT_MERGE_LOW` (0.85) are absorbed by that anchor (`soft_merge_orphans`): their activations are re-pointed and the host is EMA-updated with the buffered vectors (`route_absorbed_activations`); the remaining atoms become new anchors. A single orphan is wired to its nearest anchor (`assign_orphans_nearest`, EMA included).
+**Orphans.** When two or more rows are orphans, extraction runs on them. New atoms whose best cosine to an existing anchor exceeds `SOFT_MERGE_LOW` (0.95) are absorbed by that anchor (`soft_merge_orphans`): their activations are re-pointed and the host is EMA-updated with the buffered vectors (`route_absorbed_activations`); the remaining atoms become new anchors. A single orphan is wired to its nearest anchor (`assign_orphans_nearest`, EMA included).
 
 ## 5.5 How the evidence weight acts
 
@@ -169,16 +169,18 @@ The snapshot recomputes `alignment` against the **current** centroids, so edge w
 
 ## 5.10 Calibration per embedder
 
-Cosine thresholds belong to the embedder, not to the method. Qwen3 places unrelated texts closer together than MiniLM (label cosine 0.71 vs 0.43; mean retail ↔ housing anchor cosine 0.21 vs 0.10). The embedder comparison of [4.5](04_representation.md#45-embedder-comparison) gives the two quantities that bound `MIN_ASSIGN_THRESHOLD`, on the demo followed by a same-domain batch (demo seed 8) and by `housing.csv`:
+Cosine thresholds belong to the embedder, not to the method. Qwen3 places unrelated texts closer together than MiniLM (label cosine 0.71 vs 0.43; mean retail ↔ housing anchor cosine 0.21 vs 0.10). The embedder comparison of [4.5](04_representation.md#45-embedder-comparison) gives the two quantities that bound the assignment floor, on the demo followed by a same-domain batch (demo seed 8) and by `housing.csv`:
 
 | | MiniLM-L12 | Qwen3 → 384 |
 |---|---|---|
-| smallest assignment alignment of the same-domain batch (must be assigned) | 0.842 | 0.788 |
+| smallest assignment alignment of the same-domain batch | 0.842 | 0.788 |
 | largest alignment of the unrelated batch to a retail anchor at 0.55 (must stay orphan) | none: all orphans | 0.71 (53 % orphans) |
-| `MIN_ASSIGN_THRESHOLD` | **0.55** | **0.75** |
-| orphan rate of the unrelated batch at that threshold | 1.0 | 1.0 |
+| a floor that separates the two datasets | **0.55** | **0.75** |
+| orphan rate of the unrelated batch at that floor | 1.0 | 1.0 |
 
-**Rule:** the floor lies between the two measured values — above the largest alignment of an unrelated batch to an existing anchor, below the smallest alignment of a same-domain batch — so an unrelated dataset arrives as orphans while a related one is assigned. A different embedding model (a code change in `attractor_topology/encoder.py`, [4.7](04_representation.md#47-configuration)) needs both values measured again and the floor reset, together with `GROUNDING_MIN_COSINE` ([7.1.1](07_question_answering.md#711-literal-grounding)). With 10 or more anchors the adaptive threshold is `clip(p85, MIN, MAX)`, so the floor still applies.
+**The band is set for precision, above the separating floor.** The floor that separates datasets (0.75 for Qwen3) is a lower bound: an unrelated dataset must arrive as orphans. The current band, `MIN_ASSIGN_THRESHOLD` 0.88 to `MAX_ASSIGN_THRESHOLD` 0.92 with `SOFT_MERGE_LOW` 0.95, sits well above it, so that an insight joins an anchor only when it aligns tightly. A related insight below the band is not lost: alone, it is wired to its nearest anchor ([5.4](#54-assignment-ema-and-orphans)); with peers, it mints a new anchor, which merges back only when near-identical to an existing one. The effect is more and purer anchors. The band was chosen on the planted benchmark of [10.3](10_verification.md#103-hypothesis-benchmark): under the previous band (0.75–0.80, merge 0.85) the anchors mixed mechanisms and the walk over them lost to a static clustering of the same vectors by 0.067 recall@5; under the current band the two are level and the walk gains 0.066 over the previous band on the same cases.
+
+Measured on the calibration sequence under the current band (Qwen3; `python scripts/calibration.py`): the demo forms its four anchors as before; the same-domain batch arrives with one orphan in 26 (4 %), wired to its nearest anchor, no new anchor; `housing.csv` (with its bands, [2](02_discovery.md)) arrives entirely as orphans and OMP mints 11 anchors of its own, among them near-duplicate pairs (`longitude ↓ · latitude ↑` twice) that the 0.95 merge keeps apart. A different embedding model (a code change in `attractor_topology/encoder.py`, [4.7](04_representation.md#47-configuration)) needs the floor measured again and the band reset above it, together with `GROUNDING_MIN_COSINE` ([7.1.1](07_question_answering.md#711-literal-grounding)). With 10 or more anchors the adaptive threshold is `clip(p85, MIN, MAX)`, so the band still applies.
 
 `RELATED_TO_MIN_WEIGHT` is 0.30 for both models of the comparison. The floor does not separate datasets, and is not meant to: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured: one cross-dataset link with three datasets (`corr(discount~margin) weakens · margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.57 — both "a value metric falls"), three with four datasets. On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. Such links are bridges, not noise: the knowledge base integrates datasets that describe related phenomena, so an anchor of another dataset is a legitimate transversal step, and evidence reached over it carries its dataset (`provenance.dataset_id`, [7.4](07_question_answering.md#74-the-evidence-object)). Co-occurrence links never cross datasets on their own: an insight belongs to one dataset, so its co-memberships join anchors its dataset populates.
 
@@ -200,11 +202,11 @@ lac names, SIG-sized defaults (lac was tuned for thousands of text chunks, SIG s
 |---|---|---|---|
 | `CONCEPTS_PER_CHUNK` | 2 | **1** | one dominant phenomenon per insight at extraction; a second membership comes from the assignment rule (co-memberships, 5.7) — two or three atoms blur the anchors (measured, 5.7) |
 | `DICTIONARY_K_MIN` / `_STEP` | 20 / 20 | **4 / 2** | tens of insights |
-| `MAX_CONCEPT_COUNT` | 200 | **40** | |
+| `MAX_CONCEPT_COUNT` | 200 | **80** | room for the purer, more numerous anchors a precision band mints (5.10) |
 | `RELATED_TO_PEER_COUNT` | 7 | **3** | small anchor sets would become near-complete graphs |
 | `RELATED_TO_MIN_WEIGHT` | 0.15 | **0.30** | composite vectors have a higher baseline similarity |
-| `MIN` / `MAX_ASSIGN_THRESHOLD` | 0.30 / 0.45 | **0.75 / 0.80** | same reason; the floor is calibrated for the embedder (5.10) |
-| `SOFT_MERGE_LOW` | 0.55 | **0.85** | phenomenon clusters are tight (0.93–0.99) |
+| `MIN` / `MAX_ASSIGN_THRESHOLD` | 0.30 / 0.45 | **0.88 / 0.92** | same reason; the band is set for precision on the embedder (5.10) |
+| `SOFT_MERGE_LOW` | 0.55 | **0.95** | phenomenon clusters are tight (0.93–0.99); only near-identical atoms merge |
 | `MIXTURE_RATIO` | 0.90 | **0.80** | also the co-membership rule of the snapshot; 0.8 adds the most co-occurrence links without moving the benchmark (5.7) |
 | `CENTROID_ALPHA` 0.05, `TOP_K_ASSIGN` 2, `ADAPTIVE_PERCENTILE` 85, `ORPHAN_BUFFER_MIN_FACTOR` 3, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `RANDOM_SEED` 42 | lac | lac | unchanged |
 | centering | running mean | **none** | lac's frame moved between batches, so stored and query vectors would drift apart; SIG keeps one frame |
@@ -218,4 +220,4 @@ Checked after every batch by `check_invariants()` (a violation raises `OntologyE
 
 Tests (`tests/test_ontology.py`): cold start with full coverage, at least three anchors, and the members of each planted cluster sharing one anchor; the orphan rule (a memberless unlinked anchor goes, a linked or populated one stays) and `forget` recounting and renumbering; assignment; orphans → OMP → new anchor; single-orphan nearest fallback; soft merge into an existing anchor; the weight scales the EMA pull; the `τ_density` formula; damping slows an over-represented anchor without changing membership; the trust region caps a move and keeps unit norm; sign repair; state round-trip.
 
-Measured (demo → same-domain batch → `housing.csv`; Qwen3 at 0.75): no hub warning, `damped_attractors = 0`, `clamped_attractors = 0` — healthy operation is not altered. The same-domain batch is fully assigned; `housing.csv` arrives entirely as orphans (the advisory orphan-rate warning fires, as it should for a new domain) and OMP mints 11 anchors of its own. Qwen3's labels are less separable than MiniLM's in the embedder comparison ([4.5](04_representation.md#45-embedder-comparison)), so the demo's two one-off phenomena share `A-3` (MiniLM gives each a singleton: 7 anchors instead of 4), while the three recurring mechanisms keep their own anchors.
+Measured (demo → same-domain batch → `housing.csv`; Qwen3 under the 0.88–0.92 band): no warning on any of the three batches, `damped_attractors = 0`, `clamped_attractors = 0` — healthy operation is not altered. The same-domain batch is assigned but for one orphan wired to its nearest anchor; `housing.csv` arrives entirely as orphans and OMP mints 11 anchors of its own. Qwen3's labels are less separable than MiniLM's in the embedder comparison ([4.5](04_representation.md#45-embedder-comparison)), so the demo's two one-off phenomena share `A-3` (MiniLM gives each a singleton: 7 anchors instead of 4), while the three recurring mechanisms keep their own anchors.

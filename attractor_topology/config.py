@@ -23,7 +23,7 @@ class TopologyConfig:
     concepts_per_chunk: int = 1  # one dominant phenomenon per insight at extraction
     related_to_peer_count: int = 3
     related_to_min_weight: float = 0.30
-    max_concept_count: int = 40
+    max_concept_count: int = 80
     dictionary_k_min: int = 4
     dictionary_k_step: int = 2
     reconstruction_error_tolerance: float = 0.015
@@ -35,10 +35,11 @@ class TopologyConfig:
     top_k_assign: int = 2
     mixture_ratio: float = 0.80  # also the co-membership rule of the snapshot (docs/05_latent_anchors.md §5.7)
     adaptive_percentile: float = 85.0
-    # cosine thresholds are embedder-specific (docs/05_latent_anchors.md §5.10), calibrated for Qwen3
-    min_assign_threshold: float = 0.75
-    max_assign_threshold: float = 0.80
-    soft_merge_low: float = 0.85
+    # cosine thresholds are embedder-specific (docs/05_latent_anchors.md §5.10), calibrated for Qwen3; the band is set for
+    # precision: only tight matches join an anchor, the rest mint their own (docs/05_latent_anchors.md §5.10, §10.3)
+    min_assign_threshold: float = 0.88
+    max_assign_threshold: float = 0.92
+    soft_merge_low: float = 0.95
     orphan_buffer_min_factor: int = 3
     min_activation_alignment: float = 0.20  # ACTIVATES edges below this are dropped/rerouted
     # stability guards (docs/05_latent_anchors.md §5.6): adaptive hub threshold, per-attractor damping, trust region
