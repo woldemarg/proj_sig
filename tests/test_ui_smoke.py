@@ -134,9 +134,10 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.click(".answer-box a.cite >> nth=0")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert "insight" in page.inner_text("#drawer-kind").lower()
-        # one legend for every view; by default only Hierarchy and Theme links are on, with live counts
+        # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
-        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent"]
+        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
+        assert page.evaluate("S.cy.edges('[type=\"ACTIVATES\"]').filter('.hidden').length") == 0  # memberships drawn from the start
         assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
         page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
         assert page.evaluate("S.cy.elements('.lg-dim').length") > 0
@@ -148,18 +149,18 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.wait_for_function(f"(() => {{ const gd = {sphere}; return !!(gd && gd.data && gd.on); }})()", timeout=60000)
         page.screenshot(path=str(tmp_path / "sphere.png"))  # for a look by eye: the drawing is the console's now
         visible = f"(name) => {sphere}.data.filter(t => t.name === name).map(t => t.visible !== false)"
-        assert page.evaluate(f"({visible})('Memberships')") == [False] and page.evaluate(f"({visible})('Hierarchy')") == [True]
+        assert page.evaluate(f"({visible})('Memberships')") == [True] and page.evaluate(f"({visible})('Hierarchy')") == [True]
         assert page.evaluate("document.querySelector('.toggle[data-key=\"schema\"]').disabled")  # columns have no 3D meaning
         page.click("#legend .toggle[data-key='activates']")
         page.click("#legend .toggle[data-key='lattice']")
-        assert page.evaluate(f"({visible})('Memberships')") == [True] and page.evaluate(f"({visible})('Hierarchy')") == [False]
+        assert page.evaluate(f"({visible})('Memberships')") == [False] and page.evaluate(f"({visible})('Hierarchy')") == [False]
         page.evaluate("document.querySelector('#drawer-close').click()")
         pid = page.evaluate("S.nodes[0].id")
         page.evaluate(f"{sphere}.emit('plotly_click', {{ points: [{{ customdata: '{pid}' }}] }})")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         page.click("#view-switch button[data-view='graph']")
         hidden, rest = (page.evaluate(f"S.cy.edges('[type=\"ACTIVATES\"]').not('.hl-edge'){f}.length") for f in (".filter('.hidden')", ""))
-        assert hidden == 0 and rest > 0  # on in the graph too
+        assert hidden == rest > 0  # off in the graph too
         # an isolated evidence path stays isolated through a layer switch (it is the current highlight)
         page.click(tab)
         page.click(".bot-pane[data-pane='0'] .ev >> nth=0")
