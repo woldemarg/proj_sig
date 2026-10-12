@@ -419,8 +419,8 @@ class Engine:
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
         """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06_graph_and_storage.md §6.8).
 
-        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
-        centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
+        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (rebuilt from
+        their surviving members: mass and centroid); the others go. Journal rows are renumbered, the snapshot is
         rebuilt and the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the
         state, the journal, the snapshot and the moved-aside files; an error rolls back at once, and a crash
         leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
@@ -439,8 +439,9 @@ class Engine:
             acts = [{**a, "row_id": row_of[a["row_id"]]} for a in self.ws.activations() if a["row_id"] in row_of]
             with self.ws.transaction({"dataset_id": dataset_id}, journal=True) as cp:  # commit point: the marker goes
                 self.ws.remove_dataset(dataset_id, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
-                dropped = ontology.forget(acts, len(kept))
-                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
+                kept_vectors = vectors[[r["row_id"] for r in kept]]
+                dropped = ontology.forget(acts, kept_vectors)
+                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], kept_vectors, acts)
                 ontology.save()
                 snapshot, state = self._derive(ontology)
             return {

@@ -14,6 +14,7 @@ opposite phenomenon directions even though their sentences embed alike.
 
 from __future__ import annotations
 
+import itertools
 import os
 import threading
 from pathlib import Path
@@ -39,6 +40,7 @@ TRUNCATE_DIM = 384  # Matryoshka: the first 384 dims, re-normalised -> 3 x 384 =
 QUERY_TASK = "Given a quantitative analysis question, retrieve relevant statistical subgroup patterns"
 QUERY_PROMPT = "Instruct: {task}\nQuery: "  # Qwen3-Embedding convention; documents stay un-prefixed
 # rows per forward pass: bounds the transient VRAM peak on long documents (Qwen3: 1.7 GB at 16 vs 3.4 GB at 64)
+MEMO_MAX = 4096  # memoised texts (about 20 MB of vectors): every batch's insight texts fit, questions cycle through
 ENCODE_BATCH_SIZE = 16
 
 
@@ -120,6 +122,8 @@ class SentenceTransformerEmbedder:
             missing = sorted({t for t in texts if (prompt, t) not in self._memo})
             if missing:
                 vecs = model.encode(missing, prompt=prompt or None, batch_size=ENCODE_BATCH_SIZE, convert_to_numpy=True, show_progress_bar=False)
+                for key in list(itertools.islice(self._memo, max(0, len(self._memo) + len(missing) - MEMO_MAX))):
+                    del self._memo[key]  # the oldest entries make room (free question text would otherwise live here for the process lifetime)
                 for text, vec in zip(missing, l2_normalize(np.asarray(vecs, dtype=np.float32))):
                     self._memo[(prompt, text)] = vec
             if not texts:

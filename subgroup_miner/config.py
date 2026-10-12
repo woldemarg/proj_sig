@@ -29,8 +29,7 @@ class MinerConfig:
     min_stability: float = 0.5
     max_p_adjusted: float = 0.05
     weight_effect_ref: float = 1.5
-    weight_confidence_ref: float = 6.0  # -log10(p_adj) that saturates confidence
-    weight_exponents: tuple = (0.35, 0.25, 0.20, 0.10, 0.10)  # effect, stability, confidence, support, emm
+    weight_exponents: tuple = (0.35, 0.25, 0.10, 0.10)  # effect, stability, support, emm
     weight_floor: float = 0.05
 
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)

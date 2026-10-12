@@ -21,7 +21,9 @@ class ConceptStore:
     def __init__(self) -> None:
         self.concept_ids: list[int] = []
         self.embeddings: np.ndarray = np.empty((0, 0), dtype=np.float32)
-        self.chunk_counts: np.ndarray = np.empty(0, dtype=np.int64)
+        # each attractor's mass: the summed norms ||w x_hat|| = w of its memberships, the inertia the EMA decays by
+        # (lac counted heads; SIG's pull scales with w, so a weak member must buy less inertia than a strong one)
+        self.chunk_counts: np.ndarray = np.empty(0, dtype=np.float64)
         self.last_updated_batch: np.ndarray = np.empty(0, dtype=np.int64)
         self.created_at: list[str] = []
 
@@ -37,7 +39,7 @@ class ConceptStore:
         return len(self.concept_ids) == 0
 
     def update_concept_centroid(self, concept_idx: int, chunk_vec: np.ndarray, alpha: float, batch_id: int, damping: float = 1.0) -> None:
-        # Concept inertia: mature attractors resist drift (alpha decays with sqrt(chunk_count));
+        # Concept inertia: mature attractors resist drift (alpha decays with sqrt(mass));
         # ``damping`` (<= 1) further slows over-represented attractors (SIG hub guard)
         decayed_alpha = max(0.01, alpha / np.sqrt(self.chunk_counts[concept_idx] + 1)) * damping
 
@@ -48,7 +50,7 @@ class ConceptStore:
         if norm > 1e-12:
             self.embeddings[concept_idx] = (blended / norm).astype(np.float32)
 
-        self.chunk_counts[concept_idx] += 1
+        self.chunk_counts[concept_idx] += float(np.linalg.norm(chunk))  # the pull's own scale (w)
         self.last_updated_batch[concept_idx] = batch_id
         self.dirty_concept_indices.add(concept_idx)
 
@@ -56,10 +58,10 @@ class ConceptStore:
         self,
         centroids: np.ndarray,
         *,
-        chunk_counts: list[int] | np.ndarray,
+        chunk_counts: list[float] | np.ndarray,
         batch_id: int,
     ) -> list[int]:
-        """Add new attractors; returns their ids."""
+        """Add new attractors with their initial mass; returns their ids."""
         if len(centroids) == 0:
             return []
 
@@ -76,7 +78,7 @@ class ConceptStore:
         self.next_concept_id += n_new
         self.concept_ids.extend(new_ids)
 
-        self.chunk_counts = np.concatenate([self.chunk_counts, np.asarray(chunk_counts, dtype=np.int64)])
+        self.chunk_counts = np.concatenate([self.chunk_counts, np.asarray(chunk_counts, dtype=np.float64)])
         self.last_updated_batch = np.concatenate([self.last_updated_batch, np.full(n_new, batch_id, dtype=np.int64)])
         self.created_at.extend([_utc_now_iso()] * n_new)
 
@@ -167,7 +169,7 @@ class ConceptStore:
         if concepts_path.exists():
             with np.load(concepts_path) as data:
                 store.embeddings = data["embeddings"].astype(np.float32)
-                store.chunk_counts = data["chunk_counts"].astype(np.int64)
+                store.chunk_counts = data["chunk_counts"].astype(np.float64)
                 store.last_updated_batch = data["last_updated_batch"].astype(np.int64)
 
         orphan_path = state_dir / "orphan_buffer.npz"

@@ -234,7 +234,7 @@ def _attractor_nodes(
             " · ".join(component_label(k, v) for k, v in sig[:2]) or f"Attractor {aid}",
             {
                 "attractor_id": aid,
-                "mass": att.mass,
+                "mass": round(float(att.mass), 3),
                 "evidence_mass": float(sum(s for _, _, s in mem)),
                 "n_patterns": len(mem),
                 "distinct_scopes": len({frozenset((c["attribute"], c["value"]) for c in r["conditions"]) for r, _, _ in mem}),

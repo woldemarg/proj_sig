@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from attractor_topology.config import TopologyConfig
-from attractor_topology.ontology import LatentOntology, orphan_anchors
+from attractor_topology.ontology import LatentOntology, _member_weight, orphan_anchors
 from attractor_topology.vendor.lac.observability import density_threshold
 from attractor_topology.vendor.lac.ontology_engine import repair_extraction
 
@@ -178,18 +178,27 @@ def test_orphan_rule_keeps_linked_or_populated_anchors():
     assert orphan_anchors({}, [], [0, 1]) == [0, 1]
 
 
-def test_forget_recounts_and_renumbers(tmp_path, toy):
+def test_forget_rebuilds_survivors_and_renumbers(tmp_path, toy):
     rng, dim, centers = toy
     ont = LatentOntology(TopologyConfig(), tmp_path)
-    up, _ = ingest(ont, clusters(rng, centers, 4)[0])
+    x = clusters(rng, centers, 4)[0]
+    w = np.linspace(0.3, 1.0, len(x))
+    up, _ = ingest(ont, x, w)
     before, first = ont.attractor_ids, ont.attractor_ids[0]
     linked = {a for e in ont.topology() for a in (e["source"], e["target"])}
-    keep = [{**a, "row_id": i} for i, a in enumerate(a for a in up.activations if a["attractor_id"] == first)]
-    dropped = ont.forget(keep, len(keep))
+    members = [a for a in up.activations if a["attractor_id"] == first]
+    keep = [{**a, "row_id": i} for i, a in enumerate(members)]
+    kept_vectors = x[[a["row_id"] for a in members]]
+    dropped = ont.forget(keep, kept_vectors)
     assert dropped == [a for a in before if a != first and a not in linked]
-    assert ont.store.next_chunk_id == len(keep) and ont.store.chunk_counts[ont.attractor_ids.index(first)] == len(keep)
+    i = ont.attractor_ids.index(first)
+    assert ont.store.next_chunk_id == len(keep) and ont.store.chunk_counts[i] == pytest.approx(sum(a["insight_weight"] for a in keep))  # mass in w
+    rebuilt = sum(a["insight_weight"] * v / np.linalg.norm(v) for a, v in zip(keep, kept_vectors))
+    assert float(ont.store.embeddings[i] @ (rebuilt / np.linalg.norm(rebuilt))) > 0.999  # the survivors' weighted direction
     assert all(ont.store.chunk_counts[ont.attractor_ids.index(a)] == 0 for a in ont.attractor_ids if a != first)  # linked survivors
     assert len(ont.store.embeddings) == len(ont.attractor_ids) == len(ont.store.created_at)
+    # an old journal without the field: strength / alignment gives the weight back
+    assert _member_weight({"strength": 0.45, "alignment": 0.9}) == pytest.approx(0.5)
 
 
 def test_state_roundtrip(tmp_path, toy):

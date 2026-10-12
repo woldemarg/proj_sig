@@ -86,6 +86,8 @@ class DiscoveryResult:
     n_tests: int  # multiple-testing family size (distinct cohorts x metrics)
     pass1_subgroups: int  # pass-1 selectors before merging identical extents
     rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate
+    ranks: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # the metrics' global ranks (EDA profile)
+    global_corr: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # their rank correlation over all rows
 
 
 def emm_pair_scale(n_metrics: int) -> float:
@@ -148,28 +150,28 @@ def _primary_key(cand: Candidate, data: pd.DataFrame, global_medians: dict[str, 
     return metric, 1 if local >= global_medians[metric] else -1
 
 
+def _jaccard(rows: np.ndarray, other: np.ndarray) -> float:
+    inter = np.intersect1d(rows, other, assume_unique=True).size
+    return inter / (rows.size + other.size - inter)
+
+
 def prune_near_duplicates(
-    ranked: list[Candidate], data: pd.DataFrame, global_medians: dict[str, float], threshold: float
+    ranked: list[Candidate], data: pd.DataFrame, global_medians: dict[str, float], threshold: float, limit: int | None = None
 ) -> tuple[list[Candidate], list[Rejection]]:
     """Greedy in rank order (R6): a cohort with the primary metric and sign of a higher-ranked kept
-    cohort and Jaccard(rows) >= ``threshold`` is absorbed as an alias of it."""
+    cohort and Jaccard(rows) >= ``threshold`` is absorbed as an alias of it. At most ``limit`` cohorts are
+    kept (the validation budget: nothing below it is validated); the rest are scanned only as aliases of those."""
     kept: list[tuple[Candidate, tuple[str, int] | None, np.ndarray]] = []
     rejections: list[Rejection] = []
     for cand in ranked:
         key = _primary_key(cand, data, global_medians)
-        mask = np.zeros(len(data), dtype=bool)
-        mask[cand.row_indices] = True
-        size = int(mask.sum())
-        host = None
-        for other, other_key, other_mask in kept:
-            if key is None or key != other_key:
-                continue
-            inter = int(np.count_nonzero(mask & other_mask))
-            if inter / (size + int(other_mask.sum()) - inter) >= threshold:
-                host = other
-                break
+        rows = np.sort(cand.row_indices)
+        host = next(
+            (other for other, other_key, other_rows in kept if key is not None and key == other_key and _jaccard(rows, other_rows) >= threshold), None
+        )
         if host is None:
-            kept.append((cand, key, mask))
+            if limit is None or len(kept) < limit:
+                kept.append((cand, key, rows))
             continue
         host.aliases += [cand.expression, *cand.aliases]
         rejections.append(Rejection(cand.expression, "near_duplicate", f"Jaccard>={threshold} with {host.expression}"))
@@ -257,11 +259,11 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
     for cand, index in zip(candidates, _z_positive(scores["sd"]) + _z_positive(scores["emm"]) + _z_positive(scores["vol"])):
         cand.temp_index = float(index)
     ranked = sorted(candidates, key=lambda c: -c.temp_index)  # stable: pass-1 order breaks ties
-    eligible, near = prune_near_duplicates(ranked, data, global_medians, config.redundancy_jaccard)
+    eligible, near = prune_near_duplicates(ranked, data, global_medians, config.redundancy_jaccard, config.validation_budget)
     rejections += near
 
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG
-    top = _validation_frame(eligible[: config.validation_budget])
+    top = _validation_frame(eligible)
     validated_df = eda.step4b_deep_validation(data, top, numerics, categoricals, global_medians, global_mads)
     by_candidate = {c.expression: c for c in candidates}
     validated: list[Candidate] = []
@@ -272,7 +274,15 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
         validated.append(cand)
 
     return DiscoveryResult(
-        prof, candidates, validated, data, n_tests=len(candidates) * len(numerics), pass1_subgroups=len(pass1), rejections=rejections
+        prof,
+        candidates,
+        validated,
+        data,
+        n_tests=len(candidates) * len(numerics),
+        pass1_subgroups=len(pass1),
+        rejections=rejections,
+        ranks=profile["ranks"],
+        global_corr=profile["global_corr"],
     )
 
 
@@ -290,14 +300,14 @@ def _median_test(values: np.ndarray, global_median: float, global_mad: float) ->
     return float(2.0 * norm.sf(abs(z)))
 
 
-def _covariance_pair(rows: pd.DataFrame, data: pd.DataFrame, numerics: list[str]) -> dict[str, Any]:
-    """Metric pair whose correlation diverges most from the global one (explains the EMM score)."""
-    if len(numerics) < 2 or len(rows) < 3 * len(numerics):
+def _covariance_pair(row_indices: np.ndarray, ranks: np.ndarray, glob: np.ndarray, numerics: list[str]) -> dict[str, Any]:
+    """Metric pair whose rank correlation inside the cohort diverges most from the global one ``glob`` (explains the
+    EMM score; the same measure, ``eda.rank_correlation``, on the same global ranks)."""
+    if len(numerics) < 2 or len(row_indices) < 3 * len(numerics):
         return {}
     # a metric constant inside the subgroup has an undefined (NaN) correlation: excluded,
     # never read as "correlation dropped to 0"
-    local = rows[numerics].corr().to_numpy()
-    glob = data[numerics].corr().to_numpy()
+    local = eda.rank_correlation(ranks[row_indices])
     delta = np.where(np.triu(np.ones_like(local, dtype=bool), k=1), local - glob, np.nan)
     if not np.isfinite(delta).any() or np.nanmax(np.abs(delta)) <= 1e-12:
         return {}
@@ -324,7 +334,7 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
             local_median = float(np.median(rows[metric].dropna()))
             sign = np.sign(local_median - prof.global_medians[metric]) or 1.0
             shifts.append(Shift(metric, float(sign * magnitude), local_median, prof.global_medians[metric], prof.global_mads[metric]))
-        covariance = _covariance_pair(rows, result.data, prof.numerics)
+        covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics)
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
