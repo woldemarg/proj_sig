@@ -70,6 +70,16 @@ def subgroup_from_indices(data, row_indices):
     return data.iloc[row_indices]
 
 
+def rank_correlation(ranks):
+    """Correlation matrix of the metrics' global ranks over the given rows: Spearman's association on the rank
+    scale the whole table set once, so one tail value cannot dominate a subgroup's correlation the way it does
+    Pearson's. NaN where a metric is constant (or undefined) on the rows."""
+    if np.isnan(ranks).any():
+        return pd.DataFrame(ranks).corr().to_numpy()
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.corrcoef(ranks, rowvar=False)
+
+
 # ==========================================
 # STEP 1: Ingestion & Semantic Profiling
 # ==========================================
@@ -124,7 +134,9 @@ def step1_profile_data(data):
         variances = data_safe[numerics].var()
         valid_nums = variances[variances > 0].index.tolist()
 
-        init_corr = data_safe[valid_nums].corr().abs()
+        # the association measure of the whole engine is the rank correlation (see rank_correlation): ranked once
+        ranked = data_safe[valid_nums].rank()
+        init_corr = ranked.corr().abs()
         upper_tri = init_corr.where(
             np.triu(np.ones(init_corr.shape), k=1).astype(bool)
         )
@@ -132,14 +144,20 @@ def step1_profile_data(data):
             col for col in upper_tri.columns if any(upper_tri[col] > 0.95)
         ]
         valid_nums = [n for n in valid_nums if n not in nums_to_drop]
-        global_corr = data_safe[valid_nums].corr().fillna(0).values
+        values = data_safe[valid_nums].to_numpy(dtype=float)
+        ranks = ranked[valid_nums].to_numpy(dtype=float)  # a subgroup's correlation is read on this scale
+        global_corr = np.nan_to_num(rank_correlation(ranks))
     else:
-        valid_nums, global_corr = [], np.array([])
+        valid_nums = []
+        values = ranks = np.empty((len(data_safe), 0))
+        global_corr = np.array([])
 
     return {
         "data_safe": data_safe,
         "numerics": valid_nums,
         "categoricals": categoricals,
+        "values": values,  # the metric columns as one array (pass 1 reads subgroups from it, not from frame copies)
+        "ranks": ranks,
         "global_corr": global_corr,
         "total_rows": len(data_safe),
     }
@@ -258,6 +276,7 @@ def step3_generate_search_space(profile, top_categories, compute_budget=5000):
 def step4_evaluate_micro_slices(profile, search_vectors):
     data = profile["data_safe"]
     numerics = profile["numerics"]
+    values, ranks = profile["values"], profile["ranks"]
     global_corr = profile["global_corr"]
     total_rows = profile["total_rows"]
 
@@ -275,12 +294,10 @@ def step4_evaluate_micro_slices(profile, search_vectors):
         if sg_size < min_sg_size or sg_size == total_rows:
             continue
 
-        sg_data = subgroup_from_indices(data, row_indices)
         volume_utility = volume_preference_score(sg_size / total_rows)
 
         shift_profile = {}
-        for num_col in numerics:
-            s_median = np.median(sg_data[num_col].dropna())
+        for num_col, s_median in zip(numerics, np.nanmedian(values[row_indices], axis=0)):
             if not np.isnan(s_median):
                 shift_profile[num_col] = robust_z_score(
                     s_median, global_medians[num_col], global_mads[num_col]
@@ -295,7 +312,7 @@ def step4_evaluate_micro_slices(profile, search_vectors):
         if sg_size < min_rows_for_emm or len(numerics) < 2:
             emm_stabilized_score = 0.0
         else:
-            local_corr = sg_data[numerics].corr().values
+            local_corr = rank_correlation(ranks[row_indices])
             corr_delta = global_corr - local_corr
             corr_delta[np.isnan(corr_delta)] = 0.0  # undefined locally: no evidence of change
             raw_divergence = np.linalg.norm(corr_delta)

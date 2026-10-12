@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from insight_contracts import PhenomenonThresholds
 
+WEIGHT_FACTORS = ("effect", "stability", "support", "emm")  # the insight weight's factors, in exponent order (docs/03_insights.md §3.3)
+
 
 @dataclass(frozen=True)
 class MinerConfig:
@@ -37,10 +39,13 @@ class MinerConfig:
     min_stability: float = 0.5
     max_p_adjusted: float = 0.05
     weight_effect_ref: float = 1.5
-    weight_confidence_ref: float = 6.0  # -log10(p_adj) that saturates confidence
-    weight_exponents: tuple = (0.35, 0.25, 0.20, 0.10, 0.10)  # effect, stability, confidence, support, emm
+    weight_exponents: tuple[float, ...] = (0.35, 0.25, 0.10, 0.10)  # one per WEIGHT_FACTORS entry
     weight_floor: float = 0.05
 
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5
     contrast_min_shift: float = 0.5
+
+    def __post_init__(self) -> None:
+        if len(self.weight_exponents) != len(WEIGHT_FACTORS):  # a five-entry setting from before the confidence factor went would shift every weight
+            raise ValueError(f"WEIGHT_EXPONENTS needs one entry per factor {WEIGHT_FACTORS}, got {self.weight_exponents}")

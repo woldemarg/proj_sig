@@ -138,7 +138,7 @@ def test_near_duplicates_are_pruned_in_rank_order():
     a, b = cand("a", range(100), "margin"), cand("b", range(95), "margin")  # Jaccard 0.95, same metric and sign
     c = cand("c", range(97), "discount")  # overlaps as much, but another primary metric
     d = cand("d", range(100, 200), "margin")  # disjoint rows
-    kept, rejections = prune_near_duplicates([a, b, c, d], data, medians, 0.88)
+    kept, rejections = prune_near_duplicates([a, b, c, d], data.to_numpy(dtype=float), list(data.columns), medians, 0.88)
     assert [k.expression for k in kept] == ["a", "c", "d"] and a.aliases == ["b"]
     assert [(r.expression, r.reason) for r in rejections] == [("b", "near_duplicate")]
 

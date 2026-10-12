@@ -224,12 +224,9 @@ class Engine:
         self, name: str, stream: BinaryIO, *, bins: str | None = None, categories: str | None = None, geo: str | None = None
     ) -> dict[str, Any]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
-        path = self.ws.save_upload(name, stream)
+        path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        if path.stat().st_size > self.settings.max_upload_mb * 1024 * 1024:
-            path.unlink()
-            raise PipelineError("file_too_large", f"{name} exceeds {self.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         return self.submit(path, filename=name, bins=bins, categories=categories, geo=geo)
 
     @_healthy
@@ -333,6 +330,7 @@ class Engine:
                     with self._stage(record, "UPDATING_ONTOLOGY", timings, "ontology_s"):
                         seq = record["batch_seq"] = self.ws.next_batch_seq()
                         ontology = self.ontology()
+                        ontology.recount_mass(self.ws.activations())  # the store's inertia is the journal's summed member weights
                         update = ontology.ingest(
                             enc["vector"], np.array([i.weight for i in kept]), [i.id for i in kept], batch_seq=seq, batch_id=batch_id
                         )
@@ -521,8 +519,8 @@ class Engine:
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
         """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06_graph_and_storage.md §6.8).
 
-        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their
-        centroids are not un-averaged); the others go. Journal rows are renumbered, the snapshot is
+        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their mass recounted;
+        those that lost a member moved to their surviving members' direction); the others go. Journal rows are renumbered, the snapshot is
         rebuilt and the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the
         state, the journal, the snapshot and the moved-aside files; an error rolls back at once, and a crash
         leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
@@ -538,11 +536,14 @@ class Engine:
             records, vectors = self.ws.patterns(), self.ws.vectors()
             kept = [r for r in records if r["dataset_id"] != dataset_id]
             row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
-            acts = [{**a, "row_id": row_of[a["row_id"]]} for a in self.ws.activations() if a["row_id"] in row_of]
+            all_acts = self.ws.activations()
+            acts = [{**a, "row_id": row_of[a["row_id"]]} for a in all_acts if a["row_id"] in row_of]
+            lost = {int(a["attractor_id"]) for a in all_acts if a["row_id"] not in row_of}  # the anchors the deletion touches
             with self.ws.transaction({"dataset_id": dataset_id}, journal=True) as cp:  # commit point: the marker goes
                 self.ws.remove_dataset(dataset_id, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
-                dropped = ontology.forget(acts, len(kept))
-                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], vectors[[r["row_id"] for r in kept]], acts)
+                kept_vectors = vectors[[r["row_id"] for r in kept]]
+                dropped = ontology.forget(acts, kept_vectors, lost)
+                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], kept_vectors, acts)
                 ontology.save()
                 snapshot, state = self._derive(ontology)
             return {

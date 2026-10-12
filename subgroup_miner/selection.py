@@ -3,8 +3,10 @@
 The statistical rules (R1–R3) decide what a finding is; every rejected candidate records the rule that
 fired so pruning is observable. How many findings a graph admits (R4 weight floor, R7 batch budget) is
 the caller's admission, not the miner's. The weight is a weighted geometric mean of
-five normalised evidence factors; it is consumed by the ontology (docs/05_latent_anchors.md §5.5) and
-the traversal ranking (docs/07_question_answering.md §7.3).
+four normalised evidence factors; it is consumed by the ontology (docs/05_latent_anchors.md §5.5) and
+the traversal ranking (docs/07_question_answering.md §7.3). The median test is a gate (R2), not a factor: its
+p-value is computed on cohorts the screen selected by that very shift, so it is not a calibrated probability
+and does not steer centroids or ranks.
 """
 
 from __future__ import annotations
@@ -15,33 +17,29 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from insight_contracts import Insight, Rejection
-from subgroup_miner.config import MinerConfig
+from subgroup_miner.config import WEIGHT_FACTORS, MinerConfig
 
 # volume_preference_score(p) = sqrt(p) * (1 - p) peaks at p = 1/3
 VOLUME_UTILITY_MAX = math.sqrt(1.0 / 3.0) * (2.0 / 3.0)
-WEIGHT_FACTORS = ("effect", "stability", "confidence", "support", "emm")
 
 
 def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
     """Map raw statistics to [0, 1] evidence factors (monotone, dataset-independent).
 
-    For ``covariance`` insights the effect is the EMM divergence, and the median-test
-    confidence / bootstrap stability (which measure the *shift*) are not measured by
-    the EDA: they are reported as ``None`` and left out of the geometric mean (their
-    exponents are renormalised over the measured factors), which is the only neutral
-    treatment in a product.
+    For ``covariance`` insights the effect is the EMM divergence, and the bootstrap
+    stability (which measures the *shift*) is not measured by the EDA: it is reported
+    as ``None`` and left out of the geometric mean (the exponents are renormalised over
+    the measured factors), which is the only neutral treatment in a product.
     """
     emm_effect = 1.0 - math.exp(-max(insight.emm_score, 0.0) / config.thresholds.weight_emm_ref)
     if insight.phenomenon_type == "covariance":
-        effect, stability, confidence = emm_effect, None, None
+        effect, stability = emm_effect, None
     else:
         effect = 1.0 - math.exp(-abs(insight.effect_size) / config.weight_effect_ref)
         stability = float(np.clip(insight.stability, 0.0, 1.0))
-        confidence = float(np.clip(-math.log10(max(insight.p_adjusted, 1e-300)) / config.weight_confidence_ref, 0.0, 1.0))
     return {
         "effect": float(effect),
         "stability": None if stability is None else float(stability),
-        "confidence": None if confidence is None else float(confidence),
         "support": float(np.clip(insight.volume_utility / VOLUME_UTILITY_MAX, 0.0, 1.0)),
         # EMM is a bonus: no correlation change must not zero the weight -> [0.5, 1]
         "emm": 0.5 + 0.5 * emm_effect,
@@ -51,7 +49,7 @@ def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
 def insight_weight(factors: dict[str, float | None], config: MinerConfig) -> float:
     """w = floor + (1 - floor) * prod_k f_k ** (a_k / sum a), over the measured factors (not None)."""
     exponents = {k: a for k, a in zip(WEIGHT_FACTORS, config.weight_exponents) if factors.get(k) is not None}
-    total = sum(exponents.values()) or 1.0
+    total = sum(exponents.values())  # effect, support and emm are always measured, so never 0
     log_mean = sum((a / total) * math.log(max(factors[k], 1e-3)) for k, a in exponents.items())
     return float(config.weight_floor + (1.0 - config.weight_floor) * math.exp(log_mean))
 

@@ -136,6 +136,10 @@ class RollbackPending(RuntimeError):
     code = "rollback_pending"
 
 
+class UploadTooLarge(RuntimeError):
+    code = "file_too_large"
+
+
 class Workspace:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -185,12 +189,21 @@ class Workspace:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def save_upload(self, name: str, stream: BinaryIO) -> Path:
-        """Store an uploaded file under ``uploads/``; returns its path."""
+    def save_upload(self, name: str, stream: BinaryIO, max_bytes: int) -> Path:
+        """Store an uploaded file under ``uploads/``; ``UploadTooLarge`` once the stream passes ``max_bytes`` (the copy
+        stops one byte past the cap and the partial file is removed). This bounds the copy under ``uploads/``; the
+        request body itself is bounded by the HTTP layer, which refuses a ``Content-Length`` above the cap before
+        reading it (a body sent without one is spooled by the framework first)."""
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         dest = self.uploads_dir / f"{uuid.uuid4().hex[:8]}_{Path(name).name}"
+        copied = 0
         with dest.open("wb") as f:
-            shutil.copyfileobj(stream, f)
+            while chunk := stream.read(min(1 << 20, max_bytes + 1 - copied)):
+                copied += len(chunk)
+                f.write(chunk)
+        if copied > max_bytes:
+            dest.unlink(missing_ok=True)
+            raise UploadTooLarge(f"{name} exceeds {max_bytes >> 20} MB (MAX_UPLOAD_MB)")
         return dest
 
     def save_profile(self, dataset_id: str, profile: dict[str, Any]) -> None:

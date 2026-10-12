@@ -39,6 +39,7 @@ TRUNCATE_DIM = 384  # Matryoshka: the first 384 dims, re-normalised -> 3 x 384 =
 QUERY_TASK = "Given a quantitative analysis question, retrieve relevant statistical subgroup patterns"
 QUERY_PROMPT = "Instruct: {task}\nQuery: "  # Qwen3-Embedding convention; documents stay un-prefixed
 # rows per forward pass: bounds the transient VRAM peak on long documents (Qwen3: 1.7 GB at 16 vs 3.4 GB at 64)
+MEMO_MAX = 4096  # memoised texts (about 20 MB of vectors): every batch's insight texts fit, questions cycle through
 ENCODE_BATCH_SIZE = 16
 
 
@@ -122,9 +123,12 @@ class SentenceTransformerEmbedder:
                 vecs = model.encode(missing, prompt=prompt or None, batch_size=ENCODE_BATCH_SIZE, convert_to_numpy=True, show_progress_bar=False)
                 for text, vec in zip(missing, l2_normalize(np.asarray(vecs, dtype=np.float32))):
                     self._memo[(prompt, text)] = vec
-            if not texts:
-                return np.empty((0, self.dim), dtype=np.float32)
-            return np.stack([self._memo[(prompt, t)] for t in texts]).astype(np.float32)
+            out = np.stack([self._memo[(prompt, t)] for t in texts]).astype(np.float32) if texts else np.empty((0, self.dim), dtype=np.float32)
+            while (
+                len(self._memo) > MEMO_MAX
+            ):  # after the lookup: the oldest entries go (question text would otherwise live here for the process lifetime)
+                del self._memo[next(iter(self._memo))]
+            return out
 
     def embed(self, texts: list[str]) -> np.ndarray:
         return self._encode(texts, "")

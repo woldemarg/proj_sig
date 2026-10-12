@@ -64,7 +64,7 @@ A `K` with `dead(K) > MAX_DEAD_CONCEPT_RATIO` (0.25) is skipped while no `K` has
 | sign | flip atom `j` when `Σ_{users i} cos(x̂_i, d_j) < 0` | an anchor must point towards its members |
 | intra-extraction soft merge | visiting atoms by usage, atom `j` is absorbed by the first already kept atom with `cos(d_j, d_k) > SOFT_MERGE_LOW` (0.85); a host becomes `normalize(Σ max(usage, 1) · d)` | OMP splits one phenomenon into near-duplicate atoms ([`PROVENANCE.md`](../attractor_topology/vendor/PROVENANCE.md)) |
 | alignment floor | activations with `cos(x̂_i, d_j) < MIN_ACTIVATION_ALIGNMENT` (0.20) are dropped; a row left without an atom is rerouted to its best atom (`rerouted = True`, weight `max(cos, 0)`), and flagged `weak = True` when even that is below the floor. If that atom is then absorbed into an existing anchor, the routed record (`absorbed`) no longer carries the flags; the snapshot's alignment test still marks it weak ([5.9](#59-activation-records-and-batch-metrics)) | the coverage invariant wins, and consumers can tell a weak membership |
-| cleanup | unused atoms are removed, ids remapped to `0..K′−1`, `chunk_counts` = activations per atom | |
+| cleanup | unused atoms are removed, ids remapped to `0..K′−1`; each atom's initial mass is the summed weights `w` of the rows it activates | |
 
 ## 5.4 Assignment, EMA and orphans
 
@@ -75,10 +75,10 @@ A `K` with `dead(K) > MAX_DEAD_CONCEPT_RATIO` (0.25) is skipped while no `K` has
 **EMA with concept inertia** (`ConceptStore.update_concept_centroid`), per activation:
 
 ```text
-α′ = max(0.01, CENTROID_ALPHA (0.05) / sqrt(count_j + 1)) · d_j        c_j ← normalize( (1 − α′) · c_j + α′ · x_i )        count_j += 1
+α′ = max(0.01, CENTROID_ALPHA (0.05) / sqrt(mass_j + 1)) · d_j        c_j ← normalize( (1 − α′) · c_j + α′ · x_i )        mass_j += w_i
 ```
 
-A young anchor moves quickly, a mature one slowly; `d_j` is the damping of [5.6](#56-stability-guards).
+A young anchor moves quickly, a mature one slowly; `d_j` is the damping of [5.6](#56-stability-guards). The mass is in the pull's own units: `x_i = w_i · x̂_i` moves the centroid in proportion to `w_i`, and buys inertia in the same proportion — a run of weak members cannot freeze an anchor they barely moved (lac counts heads; its chunks all weigh 1). Before every batch the engine recounts every anchor's mass from the journal's memberships (`LatentOntology.recount_mass`), so the store's inertia is always the journal-derived sum, whatever unit an older state was saved in.
 
 **Orphans.** When two or more rows are orphans, extraction runs on them. New atoms whose best cosine to an existing anchor exceeds `SOFT_MERGE_LOW` (0.95) are absorbed by that anchor (`soft_merge_orphans`): their activations are re-pointed and the host is EMA-updated with the buffered vectors (`route_absorbed_activations`); the remaining atoms become new anchors. A single orphan is wired to its nearest anchor (`assign_orphans_nearest`, EMA included).
 
@@ -89,7 +89,8 @@ An insight enters as `x = w · x̂` with `‖x̂‖ = 1`:
 * **Assignment is invariant to `w`.** Assignment to existing anchors, soft merge and kNN are cosine-based, so the weight never changes which existing anchor an insight joins; it does shape extraction (below), and so which new anchors exist.
 * **The pull scales with `w`.** In the EMA, `α′ · x_i = α′ · w · x̂_i`: a strong insight moves its anchor more (test: `w = 1` moves a centroid more than 3× as far as `w = 0.1`).
 * **Extraction listens to strong evidence.** OMP minimises a reconstruction loss in which a row scaled by `w` counts ∝ `w²`, so weak insights rarely mint anchors of their own.
-* **Edges record both.** `alignment = cos(x̂, c)` is the geometric fit; `strength = alignment · w` is the evidence ([5.9](#59-activation-records-and-batch-metrics)).
+* **Mass is in `w`.** An anchor's mass — its inertia in the EMA and its share in the hub guard — is the sum of its members' `w`, so a weak member buys as little inertia as it exerts pull.
+* **Edges record both.** `alignment = cos(x̂, c)` is the geometric fit; `strength = alignment · w` is the evidence, `insight_weight = w` the member's weight ([5.9](#59-activation-records-and-batch-metrics)).
 
 ## 5.6 Stability guards
 
@@ -97,7 +98,7 @@ None of the guards freezes learning or diverts rows to the orphan buffer: both w
 
 ```text
 τ_density = max(DENSITY_FLOOR 0.25, DENSITY_MULTIPLE 3.0 / N_anchors)          hub threshold: 3 × the uniform share
-share_j   = count_j / Σ_k count_k   (memberships, before the batch)        d_j = min(1, τ_density / share_j)        EMA damping
+share_j   = mass_j / Σ_k mass_k   (before the batch)                     d_j = min(1, τ_density / share_j)        EMA damping
 Δ_j = c_j(after) − c_j(before);  if ‖Δ_j‖ > MAX_CENTROID_STEP (0.10):   c_j ← normalize(c_j(before) + (MAX_CENTROID_STEP / ‖Δ_j‖) · Δ_j)
 ```
 
@@ -136,11 +137,11 @@ Two or three atoms per insight make anchors mixtures of phenomena: the grown gra
 
 ## 5.8 How an anchor is described
 
-lac stores **no text** for an anchor: only its centroid, `chunk_count`, `last_updated_batch` and `created_at` (`state/concepts.npz`, `state/state.json`). Everything readable is derived from the members at snapshot time (`snapshot._attractor_nodes` and `snapshot.attractor_signature` in `insight_graph_service/core/snapshot.py`, over `LatentOntology.attractors()`) and recomputed after every batch, so the description follows the membership. Over the members `(record_i, alignment_i, strength_i)` — weak memberships included, with their small strength:
+lac stores **no text** for an anchor: only its centroid, its mass (lac's `chunk_counts` array, here the summed member weights), `last_updated_batch` and `created_at` (`state/concepts.npz`, `state/state.json`). Everything readable is derived from the members at snapshot time (`snapshot._attractor_nodes` and `snapshot.attractor_signature` in `insight_graph_service/core/snapshot.py`, over `LatentOntology.attractors()`) and recomputed after every batch, so the description follows the membership. Over the members `(record_i, alignment_i, strength_i)` — weak memberships included, with their small strength:
 
 ```text
 signature(label) = Σ_i strength_i · coef_i(label) / max_l |coef_i(l)|  /  Σ_i strength_i        (each member's components scaled to [−1, 1] first)
-evidence_mass    = Σ_i strength_i          dispersion = 1 − mean_i alignment_i          mass = lac chunk_count
+evidence_mass    = Σ_i strength_i          dispersion = 1 − mean_i alignment_i          mass = Σ_i w_i (the store's inertia)
 ```
 
 | Text | Derivation | Example |
@@ -148,7 +149,7 @@ evidence_mass    = Σ_i strength_i          dispersion = 1 − mean_i alignment_
 | `label` | the two strongest signature entries, each rendered as `<label> ↑` / `<label> ↓` or `corr(<a>~<b>) strengthens` / `weakens` (`insight_contracts.text.component_label`), joined by ` · `; `Attractor <k>` without members | `discount ↑ · margin ↓` |
 | `signature` | the six strongest entries as `[{"component", "value"}]` | `[{"component": "discount", "value": 1.0}, {"component": "margin", "value": -0.49}, …]` |
 | `dimensions`, `targets`, `datasets` | sorted sets over the members' conditions, targets and datasets | `["category", "channel", "region"]`, `["discount"]` |
-| `n_patterns`, `distinct_scopes`, `mass`, `evidence_mass`, `dispersion` | counts and sums above | `9, 9, 9, 6.96, 0.024` |
+| `n_patterns`, `distinct_scopes`, `mass`, `evidence_mass`, `dispersion` | counts and sums above | `9, 9, 6.73, 6.52, 0.030` |
 | `last_updated_batch`, `created_at` | lac batch sequence mapped back to the batch id; creation time | |
 | `centroid` | `{dim, norm, representation_version, fingerprint}` — the vector contract, not the vector | |
 | `description` (prompt only) | `graph_query_engine.graph.describe_components(signature)` over `insight_contracts.text.describe_component`: the two strongest entries as ASCII prose (`<label> up` / `down`, `correlation between a and b strengthens` / `weakens`) joined by ` and `; falls back to the label | `discount up and margin down` |
@@ -180,19 +181,19 @@ Cosine thresholds belong to the embedder, not to the method. Qwen3 places unrela
 
 **The band is set for precision, above the separating floor.** The floor that separates datasets (0.75 for Qwen3) is a lower bound: an unrelated dataset must arrive as orphans. The current band, `MIN_ASSIGN_THRESHOLD` 0.88 to `MAX_ASSIGN_THRESHOLD` 0.92 with `SOFT_MERGE_LOW` 0.95, sits well above it, so that an insight joins an anchor only when it aligns tightly. A related insight below the band is not lost: alone, it is wired to its nearest anchor ([5.4](#54-assignment-ema-and-orphans)); with peers, it mints a new anchor, which merges back only when near-identical to an existing one. The effect is more and purer anchors. The band was chosen on the planted benchmark of [10.3](10_verification.md#103-hypothesis-benchmark): under the previous band (0.75–0.80, merge 0.85) the anchors mixed mechanisms and the walk over them lost to a static clustering of the same vectors by 0.067 recall@5; under the current band the two are level and the walk gains 0.066 over the previous band on the same cases.
 
-Measured on the calibration sequence under the current band (Qwen3; `python scripts/calibration.py`): the demo forms its four anchors as before; the same-domain batch arrives with one orphan in 26 (4 %), wired to its nearest anchor, no new anchor; `housing.csv` (with its bands, [2](02_discovery.md)) arrives entirely as orphans and OMP mints 11 anchors of its own, among them near-duplicate pairs (`longitude ↓ · latitude ↑` twice) that the 0.95 merge keeps apart. A different embedding model (a code change in `attractor_topology/encoder.py`, [4.7](04_representation.md#47-configuration)) needs the floor measured again and the band reset above it, together with `GROUNDING_MIN_COSINE` ([7.1.1](07_question_answering.md#711-literal-grounding)). With 10 or more anchors the adaptive threshold is `clip(p85, MIN, MAX)`, so the band still applies.
+Measured on the calibration sequence under the current band (Qwen3; `python scripts/calibration.py`, after the kernel changes of 2026-10-12): the demo forms its four anchors as before; the same-domain batch arrives with three orphans in 26 (12 %), which OMP mints into three anchors of their own — two hold two patterns each, one (`discount ↑ · delivery days ↑`) is broad enough to gather compiled co-memberships from both retail datasets; `housing.csv` (41 insights, with its bands, [2](02_discovery.md)) arrives entirely as orphans and OMP mints 6 anchors of its own, among them near-duplicate pairs (`longitude ↓ · latitude ↑` / `latitude ↑ · longitude ↓`) that the 0.95 merge keeps apart. Before those changes the same-domain batch had one orphan, wired to its nearest anchor, and housing minted 11 anchors: the weights fell by about 0.04 when the confidence factor went, and the OMP loss, ∝ `w²`, mints fewer atoms for the same tolerance. A different embedding model (a code change in `attractor_topology/encoder.py`, [4.7](04_representation.md#47-configuration)) needs the floor measured again and the band reset above it, together with `GROUNDING_MIN_COSINE` ([7.1.1](07_question_answering.md#711-literal-grounding)). With 10 or more anchors the adaptive threshold is `clip(p85, MIN, MAX)`, so the band still applies.
 
-`RELATED_TO_MIN_WEIGHT` is 0.30 for both models of the comparison. The floor does not separate datasets, and is not meant to: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured: one cross-dataset link with three datasets (`corr(discount~margin) weakens · margin ↓` ↔ `median house value ↓ · total rooms ↓`, 0.57 — both "a value metric falls"), three with four datasets. On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. Such links are bridges, not noise: the knowledge base integrates datasets that describe related phenomena, so an anchor of another dataset is a legitimate transversal step, and evidence reached over it carries its dataset (`provenance.dataset_id`, [7.4](07_question_answering.md#74-the-evidence-object)). Co-occurrence links never cross datasets on their own: an insight belongs to one dataset, so its co-memberships join anchors its dataset populates.
+`RELATED_TO_MIN_WEIGHT` is 0.30 for both models of the comparison. The floor does not separate datasets, and is not meant to: under Qwen3 the largest retail ↔ housing cosine (0.66) exceeds the weakest within-domain link (0.58). Measured (2026-10-12): four cross-dataset links with three datasets, among them `margin ↓` ↔ `median house value ↓ · total rooms ↓` (0.61) and `corr(discount~margin) weakens · margin ↓` ↔ the same housing anchor (0.60) — in each "a value metric falls". On six retail and housing questions no evidence item came from the other dataset, but in the four-dataset workspace one of four retail questions pulled one item of another dataset into its evidence through such a link. Such links are bridges, not noise: the knowledge base integrates datasets that describe related phenomena, so an anchor of another dataset is a legitimate transversal step, and evidence reached over it carries its dataset (`provenance.dataset_id`, [7.4](07_question_answering.md#74-the-evidence-object)). Co-occurrence links never cross datasets on their own: an insight belongs to one dataset, so its co-memberships join anchors its dataset populates.
 
 ## 5.11 Removing patterns: the orphan rule
 
-Deleting a dataset ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) removes its patterns and their memberships; `LatentOntology.forget(kept_activations, n_rows)` then recounts every anchor's `chunk_count` from the surviving activations and decides which anchors go (`orphan_anchors`):
+Deleting a dataset ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) removes its patterns and their memberships; `LatentOntology.forget(kept_activations, kept_vectors, lost)` then recounts every anchor's mass from the surviving activations, moves every anchor that lost a member to its surviving members' weight-averaged direction (so its inertia and its position agree again; an anchor that lost nobody is not touched), and decides which anchors go (`orphan_anchors`):
 
 ```text
 anchor dropped  ⇔  no remaining member  ∧  no RELATED_TO link (in the topology as it stood before the deletion)
 ```
 
-A CO_OCCURS link needs a member on both sides, so it never keeps a memberless anchor; the rule reads RELATED_TO only. An anchor that keeps a member stays. An anchor left without members but still linked to another anchor stays too: its centroid keeps its place in the mutual-kNN topology and can receive future insights that align with it, so a later upload of a related dataset joins it instead of minting a new one. Its label becomes `Attractor k` until it has members again. Centroids are never un-averaged — a survivor keeps the position its history gave it — and the row counter follows the rewritten journal. When the last pattern of the workspace goes, every anchor goes with it: an empty knowledge base starts cold again. Accordingly the mass invariant of [5.13](#513-guarantees-and-measured-behaviour) applies to anchors *created* in a batch; an older one may legitimately be empty.
+A CO_OCCURS link needs a member on both sides, so it never keeps a memberless anchor; the rule reads RELATED_TO only. An anchor that keeps a member stays. An anchor left without members but still linked to another anchor stays too: its centroid keeps its place in the mutual-kNN topology and can receive future insights that align with it, so a later upload of a related dataset joins it instead of minting a new one. Its label becomes `Attractor k` until it has members again, keeping its centroid at mass 0. The row counter follows the rewritten journal. When the last pattern of the workspace goes, every anchor goes with it: an empty knowledge base starts cold again. Accordingly the mass invariant of [5.13](#513-guarantees-and-measured-behaviour) applies to anchors *created* in a batch; an older one may legitimately be empty.
 
 ## 5.12 Configuration
 
@@ -218,6 +219,6 @@ lac names, SIG-sized defaults (lac was tuned for thousands of text chunks, SIG s
 
 Checked after every batch by `check_invariants()` (a violation raises `OntologyError` → the batch fails with `ontology_failure` and the checkpoint is restored): every ingested insight has at least one activation; no anchor created in the batch has mass 0 (an older anchor may be empty after a deletion, [5.11](#511-removing-patterns-the-orphan-rule)); centroids are unit-norm. Checked by tests: `next_chunk_id == journal rows == vector rows`, because an insight's `row_id` is its journal row.
 
-Tests (`tests/test_ontology.py`): cold start with full coverage, at least three anchors, and the members of each planted cluster sharing one anchor; the orphan rule (a memberless unlinked anchor goes, a linked or populated one stays) and `forget` recounting and renumbering; assignment; orphans → OMP → new anchor; single-orphan nearest fallback; soft merge into an existing anchor; the weight scales the EMA pull; the `τ_density` formula; damping slows an over-represented anchor without changing membership; the trust region caps a move and keeps unit norm; sign repair; state round-trip.
+Tests (`tests/test_ontology.py`): cold start with full coverage, at least three anchors, and the members of each planted cluster sharing one anchor; the orphan rule (a memberless unlinked anchor goes, a linked or populated one stays) and `forget` recounting mass in `w`, moving only the anchors that lost a member and renumbering; the journal recount that precedes every batch equals the incremental mass; assignment; orphans → OMP → new anchor; single-orphan nearest fallback; soft merge into an existing anchor; the weight scales the EMA pull; the `τ_density` formula; damping slows an over-represented anchor without changing membership; the trust region caps a move and keeps unit norm; sign repair; state round-trip.
 
 Measured (demo → same-domain batch → `housing.csv`; Qwen3 under the 0.88–0.92 band): no warning on any of the three batches, `damped_attractors = 0`, `clamped_attractors = 0` — healthy operation is not altered. The same-domain batch is assigned but for one orphan wired to its nearest anchor; `housing.csv` arrives entirely as orphans and OMP mints 11 anchors of its own. Qwen3's labels are less separable than MiniLM's in the embedder comparison ([4.5](04_representation.md#45-embedder-comparison)), so the demo's two one-off phenomena share `A-3` (MiniLM gives each a singleton: 7 anchors instead of 4), while the three recurring mechanisms keep their own anchors.
