@@ -81,8 +81,9 @@ def test_upload_process_render_query(client, demo_csv):
     geo_ds = geo_batch["dataset_id"]
     assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
     assert len(client.get(f"/api/geo/{geo_ds}/cells").json()["features"]) == 884
+    assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
     assert client.delete(f"/api/datasets/{geo_ds}").json()["patterns_removed"] == geo_batch["metrics"]["validated_insights"]
-    assert client.get("/api/geo").json() == []
+    assert client.get("/api/geo").json() == [] and client.get(f"/api/geo/{geo_ds}/cells").status_code == 404  # the file went with the dataset
     # delete through the API: the dataset, its graph and its record go; the mirror of the UI is the backend
     ds = batches[0]["dataset_id"]
     assert client.delete(f"/api/datasets/{ds}").json()["patterns_removed"] == batches[0]["metrics"]["validated_insights"]

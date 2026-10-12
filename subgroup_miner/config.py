@@ -23,7 +23,6 @@ class MinerConfig:
     min_cell_points: int = 5  # below it a cell keeps its counters but not its medians and shares (NaN)
     geo_share_max_levels: int = 8  # categoricals with at most this many levels also become per-level share metrics
     geo_mode_max_levels: int = 40  # categoricals with more levels are not aggregated
-    geo_lisa_permutations: int = 99
     geo_colocation_min: float = 0.3  # CO_LOCATED edge: overlap of the one-ring-dilated extents
 
     # discovery (docs/02_discovery.md) — EDA defaults preserved

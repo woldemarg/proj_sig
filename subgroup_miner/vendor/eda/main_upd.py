@@ -273,7 +273,10 @@ def step3_generate_search_space(profile, top_categories, compute_budget=5000):
 # ==========================================
 # STEP 4: PASS 1 - Robust Screening
 # ==========================================
-def step4_evaluate_micro_slices(profile, search_vectors):
+def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
+    """``forbidden``: dimension -> metrics a subgroup on that dimension must not score (a neighbourhood condition
+    restating the counter it was computed from); excluded here, before the rank, so the validation budget is
+    spent on shifts that are allowed to exist."""
     data = profile["data_safe"]
     numerics = profile["numerics"]
     values, ranks = profile["values"], profile["ranks"]
@@ -297,8 +300,9 @@ def step4_evaluate_micro_slices(profile, search_vectors):
         volume_utility = volume_preference_score(sg_size / total_rows)
 
         shift_profile = {}
+        own = set().union(*(forbidden.get(a, ()) for a in extract_dimension_attrs(selector))) if forbidden else set()
         for num_col, s_median in zip(numerics, np.nanmedian(values[row_indices], axis=0)):
-            if not np.isnan(s_median):
+            if not np.isnan(s_median) and num_col not in own:
                 shift_profile[num_col] = robust_z_score(
                     s_median, global_medians[num_col], global_mads[num_col]
                 )
@@ -357,8 +361,12 @@ def _skew_p_value(local_counts, global_counts):
 
 
 def step4b_deep_validation(
-    data, top_candidates, numerics, categoricals, global_medians, global_mads
+    data, top_candidates, numerics, categoricals, global_medians, global_mads, blocks
 ):
+    """``blocks``: one block id per row of ``data``, the bootstrap's resampling unit — each row its own block for a
+    plain table (the same draws as a row resample), the cell's parent cell for spatial data, so neighbouring cells
+    stay together as the rows of an independent sample would. ``top_candidates["restated"]``: per subgroup, the
+    metrics its conditions are computed from — never reported as a hidden shift."""
     validated_insights = []
     global_cat_dists = {
         cat: data[cat].value_counts(normalize=True) for cat in categoricals
@@ -371,8 +379,9 @@ def step4b_deep_validation(
         sg_data = subgroup_from_indices(data, row["row_indices"])
 
         bootstrap_scores = []
+        groups = list(pd.Series(np.arange(len(sg_data))).groupby(blocks[row["row_indices"]]).indices.values())
         for _ in range(BOOTSTRAP_RESAMPLES):
-            sample = sg_data.sample(frac=1.0, replace=True)
+            sample = sg_data.iloc[np.concatenate([groups[k] for k in np.random.randint(0, len(groups), len(groups))])]
             b_score = 0
             for num_col, _ in row["top_shifts"]:
                 s_median = np.median(sample[num_col].dropna())
@@ -413,7 +422,7 @@ def step4b_deep_validation(
 
         top_shift_cols = [col for col, _ in row["top_shifts"]]
         for num in numerics:
-            if num not in top_shift_cols:
+            if num not in top_shift_cols and num not in row["restated"]:
                 s_med = np.median(sg_data[num].dropna())
                 shift = robust_z_score(
                     s_med, global_medians[num], global_mads[num]

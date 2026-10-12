@@ -39,7 +39,7 @@ from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot
-from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
+from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import load_dataset
 from subgroup_miner.selection import select_insights
@@ -48,6 +48,11 @@ from subgroup_miner.spatial import annotate_extents, cell_boundary, sac_summary
 log = logging.getLogger(__name__)
 
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
+
+
+def _is_dataset_id(value: str) -> bool:
+    """A dataset id as ingestion mints them (``ds-<hex>``): the only request strings composed into a workspace path."""
+    return value.startswith("ds-") and value[3:].isalnum()
 
 
 class PipelineError(RuntimeError):
@@ -342,12 +347,13 @@ class Engine:
                         for rec in patterns:
                             rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
                         self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
-                        if loaded.spatial:
-                            self._save_geo(ds, loaded)
                         self._enter(record, "PERSISTING")
                         self._refuse_journaled(kept)
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
+                        if loaded.spatial:
+                            self._save_geo(ds, loaded)
+                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds))  # the map's file, from the journaled patterns
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
@@ -395,6 +401,14 @@ class Engine:
             if b.get("status") == "READY" and geo:
                 out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
         return out
+
+    def geo_cells_file(self, dataset_id: str) -> Path:
+        """``geo_cells`` as written with the dataset's batch (the cells, their rings and the patterns' extents never
+        change afterwards): the map reads the file on every open."""
+        path = self.ws.geo_cells_path(dataset_id) if _is_dataset_id(dataset_id) else None
+        if not (path and path.is_file()):
+            raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+        return path
 
     def geo_cells(self, dataset_id: str) -> dict[str, Any]:
         """The dataset's cells as a GeoJSON FeatureCollection; properties are the cell-table columns."""
@@ -447,7 +461,7 @@ class Engine:
         }
 
     def _geo(self, dataset_id: str) -> dict[str, Any]:
-        geo = self.ws.load_geo(dataset_id) if dataset_id.startswith("ds-") and dataset_id[3:].isalnum() else None
+        geo = self.ws.load_geo(dataset_id) if _is_dataset_id(dataset_id) else None
         if geo is None:
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
         return geo

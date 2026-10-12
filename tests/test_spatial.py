@@ -8,10 +8,12 @@ import pandas as pd
 import pytest
 from conftest import make_config, make_engine
 
+import subgroup_miner.vendor.eda.main_upd as eda
+from insight_contracts import Condition
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.discovery import _median_test
+from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
 from subgroup_miner.ingestion import IngestionError, load_dataset
-from subgroup_miner.spatial import build_cells, effective_n_factor, parse_geo, parse_points
+from subgroup_miner.spatial import build_cells, effective_n_factor, parse_geo, parse_points, subgroup_moran
 
 HOT = (48.5, 35.25)  # the planted cluster: many points, mostly at night, late in the period
 
@@ -38,7 +40,7 @@ def geo_frame(seed: int = 3) -> pd.DataFrame:
 
 
 def cells_of(frame: pd.DataFrame, **kw):
-    opts = dict(min_cell_points=5, share_max_levels=8, mode_max_levels=40, lisa_permutations=99, seed=42) | kw
+    opts = dict(min_cell_points=5, share_max_levels=8, mode_max_levels=40) | kw
     return build_cells(frame, "auto", 7, **opts)
 
 
@@ -89,6 +91,45 @@ def test_effective_n_widens_the_median_test():
     values = rng.normal(0.3, 1.0, 200)
     assert effective_n_factor(-0.4) == 1.0 and effective_n_factor(0.5) == pytest.approx(1 / 3)
     assert _median_test(values, 0.0, 0.67, effective_n_factor(0.5)) > _median_test(values, 0.0, 0.67)
+
+
+def test_subgroup_moran_sees_a_block_not_scattered_cells():
+    table, ctx, _ = cells_of(geo_frame())
+    pos = {c: i for i, c in enumerate(ctx.cells)}
+    centre = ctx.cells[int(table["points"].idxmax())]
+    block = np.array([pos[c] for c in h3.grid_disk(centre, 2) if c in pos])  # a solid patch of busy cells
+    assert subgroup_moran(table["points"].to_numpy(float)[block], block, ctx) > 0.0
+    scattered = []
+    for i in range(len(ctx.cells)):  # no two of them neighbours
+        if not np.isin(ctx.neighbours(i), scattered).any():
+            scattered.append(i)
+    scattered = np.array(scattered)
+    assert subgroup_moran(table["points"].to_numpy(float)[scattered], scattered, ctx) == 0.0
+
+
+def test_closure_strips_the_shifts_a_closed_condition_restates():
+    data = pd.DataFrame({"sector": ["n"] * 4 + ["s"] * 4, "lisa_points": ["hot spot"] * 4 + ["no cluster"] * 4})
+    cand = Candidate("sector=='n'", (Condition("sector", "n"),), np.arange(4), 4, 0.5, [("points", 3.0), ("load_median", 1.0)], 4.0, 0.0)
+    (merged,), _ = merge_identical_extents([cand], data, ["sector", "lisa_points"], {"lisa_points": ["points"]})
+    assert merged.conditions == (Condition("lisa_points", "hot spot"), Condition("sector", "n"))  # the closure adds the implied condition
+    assert merged.restated == {"points"} and merged.top_shifts == [("load_median", 1.0)] and merged.sd_aggregate_score == 1.0
+
+
+def test_validation_never_reports_a_restated_metric_as_a_hidden_shift():
+    rng = np.random.default_rng(0)
+    data = pd.DataFrame(
+        {"points": np.r_[rng.normal(50, 1, 20), rng.normal(10, 1, 80)], "load": rng.normal(0, 1, 100), "sector": ["n"] * 20 + ["s"] * 80}
+    )
+    medians = {m: float(data[m].median()) for m in ("points", "load")}
+    mads = {m: float(eda.calculate_mad(data[m])) for m in ("points", "load")}
+
+    def drivers(restated: frozenset[str]) -> list[str]:
+        cand = Candidate("sector=='n'", (Condition("sector", "n"),), np.arange(20), 20, 0.5, [("load", 0.1)], 0.1, 0.0, restated=restated)
+        out = eda.step4b_deep_validation(data, _validation_frame([cand]), ["points", "load"], ["sector"], medians, mads, np.arange(100))
+        return list(out["root_cause_drivers"][0])
+
+    assert any(d.startswith("[points] hidden shift") for d in drivers(frozenset()))  # a plain cohort: the counter is a hidden shift
+    assert not any("points" in d for d in drivers(frozenset({"points"})))  # a cohort whose condition is computed from it: never
 
 
 def test_geo_option_is_strict_and_changes_the_dataset_id(tmp_path):

@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 import h3
 import numpy as np
 import pandas as pd
+from scipy import sparse
+from scipy.stats import false_discovery_control, norm
 
 from insight_contracts import Insight
 
@@ -57,12 +59,13 @@ class SpatialContext:
     lonlat: np.ndarray  # float32 (source rows, 2)
     nbr_ptr: np.ndarray  # CSR over cell rows: ring-1 neighbours present in the table
     nbr_idx: np.ndarray
+    blocks: np.ndarray  # per cell row, its parent cell (one resolution coarser) as an int: the bootstrap's resampling unit
     min_cell_points: int
     sparse_cells: int = 0
     lag_columns: list[str] = field(default_factory=list)  # numeric neighbourhood columns, banded by ingestion
     conditions: list[str] = field(default_factory=list)  # the neighbourhood dimensions, always searched
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
-    moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1)
+    moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
 
     def neighbours(self, row: int) -> np.ndarray:
@@ -181,23 +184,42 @@ def moran_i(values: np.ndarray, ptr: np.ndarray, idx: np.ndarray) -> float:
     return float((z[use] * lag[use]).sum() / use.sum() / denom)
 
 
-def local_moran(values: np.ndarray, ptr: np.ndarray, idx: np.ndarray, permutations: int, seed: int, alpha: float = 0.05) -> np.ndarray:
-    """LISA class per cell over the occupied cells (row-standardised ring-1 weights); conditional permutation
-    test, folded p <= ``alpha``, else ``NO_CLUSTER``."""
-    z = (values - values.mean()) / (values.std() or 1.0)
-    n = len(z)
-    lag = spatial_lag(z, ptr, idx, None)
-    local = z * np.nan_to_num(lag)
+def local_moran(values: np.ndarray, ptr: np.ndarray, idx: np.ndarray, q: float = 0.05) -> np.ndarray:
+    """LISA class per cell over the occupied cells (row-standardised ring-1 weights). Each cell's local I is scored
+    against its conditional-randomisation null — the cell fixed, its k neighbours' values drawn without replacement
+    from the other n − 1 cells (Anselin 1995) — with that null's exact mean and variance (Sokal, Oden & Thomson 1998)
+    and a normal approximation, so the p-values have no floor whatever the map's size; they are cut at false-discovery
+    rate ``q`` over the cells that have neighbours (one test per cell is a family), the survivors labelled by their
+    quadrant, every other cell ``NO_CLUSTER``."""
+    n = len(values)
+    z = (values - values.mean()) / (values.std() or 1.0)  # population scaling: sum(z^2) = n
     k = np.diff(ptr)
-    rng = np.random.default_rng(seed)
-    others = rng.integers(0, max(n - 1, 1), size=(n, permutations, int(k.max(initial=1))))
-    others += others >= np.arange(n)[:, None, None]  # never draw the cell itself
-    mask = np.arange(others.shape[2]) < k[:, None, None]
-    perm_lag = (z[np.minimum(others, n - 1)] * mask).sum(axis=2) / np.maximum(k, 1)[:, None]
-    extreme = (np.abs(z[:, None] * perm_lag) >= np.abs(local)[:, None]).sum(axis=1)
-    p = (extreme + 1) / (permutations + 1)
-    labels = np.array([LISA_LABELS[(bool(a > 0), bool(b > 0))] for a, b in zip(z, np.nan_to_num(lag))], dtype=object)
-    return np.where((p <= alpha) & (k > 0), labels, NO_CLUSTER)
+    lag = np.nan_to_num(spatial_lag(z, ptr, idx, None))
+    tested = np.flatnonzero(k > 0)
+    # under the null the lag is the mean of k draws without replacement from the other n - 1 standardised values
+    mean = -z / max(n - 1, 1)
+    var = ((n - z**2) / max(n - 1, 1) - mean**2) / np.maximum(k, 1) * (n - 1 - k) / max(n - 2, 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        score = np.sign(z) * (lag - mean) / np.sqrt(var)  # (I - E[I]) / sd[I] for I = z * lag: |z| cancels
+    p = 2.0 * norm.sf(np.abs(np.nan_to_num(score[tested])))
+    labels = np.array([LISA_LABELS[(bool(a > 0), bool(b > 0))] for a, b in zip(z, lag)], dtype=object)
+    keep = np.zeros(n, dtype=bool)
+    if len(tested):
+        keep[tested[false_discovery_control(p) <= q]] = True  # Benjamini-Hochberg over the tested cells
+    return np.where(keep, labels, NO_CLUSTER)
+
+
+def induced_links(rows: np.ndarray, ctx: SpatialContext) -> sparse.csr_array:
+    """The ring-1 links among ``rows`` as a CSR over the subgroup's own rows: what stays inside the subgroup."""
+    n = len(ctx.cells)
+    return sparse.csr_array((np.ones(len(ctx.nbr_idx)), ctx.nbr_idx, ctx.nbr_ptr), shape=(n, n))[rows][:, rows]
+
+
+def subgroup_moran(values: np.ndarray, rows: np.ndarray, ctx: SpatialContext) -> float:
+    """Moran's I of ``values`` (one per row of ``rows``) over the subgroup's own cells and the ring-1 links that stay
+    inside it: the dependence the median test must discount. Scattered cells have no inside links and give 0."""
+    w = induced_links(rows, ctx)
+    return moran_i(np.asarray(values, dtype=float), w.indptr, w.indices)
 
 
 def build_cells(
@@ -208,8 +230,6 @@ def build_cells(
     min_cell_points: int,
     share_max_levels: int,
     mode_max_levels: int,
-    lisa_permutations: int,
-    seed: int,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Source rows -> (cell table, spatial context, warnings)."""
     lat, lon, location = locate_points(frame, locator)
@@ -283,6 +303,7 @@ def build_cells(
 
     ptr, idx, ring = _neighbour_graph(cells)
     ring_arr = np.asarray(ring)
+    blocks = pd.factorize(np.array([h3.cell_to_parent(c, resolution - 1) if resolution else c for c in cells], dtype=object))[0]
     metrics = [c for c, v in out.items() if v.dtype.kind == "f"]
     lag_columns, derived = [], {}
     for metric in counters:  # ponytail: counters only; intensive-metric lags when a dataset needs them
@@ -302,7 +323,7 @@ def build_cells(
     for col, others in nested.items():
         if others:
             derived[f"{col}_mode"] = [m for o in others for m in out if m.startswith(f"share_{o}_")]
-    out[LISA_COLUMN] = local_moran(np.log1p(counts), ptr, idx, lisa_permutations, seed)
+    out[LISA_COLUMN] = local_moran(np.log1p(counts), ptr, idx)
     derived[LISA_COLUMN] = counters
     glossary[LISA_COLUMN] = "whether the cell and its neighbours form a cluster of many or few events"
     glossary.update({f"{LISA_COLUMN}={k}": v for k, v in LISA_WORDS.items()})
@@ -315,6 +336,7 @@ def build_cells(
         lonlat=np.column_stack([lon, lat]).astype(np.float32),
         nbr_ptr=ptr,
         nbr_idx=idx,
+        blocks=blocks,
         min_cell_points=min_cell_points,
         sparse_cells=int((~dense).sum()),
         lag_columns=lag_columns,
@@ -378,10 +400,8 @@ def _nesting(a: pd.Series, b: pd.Series) -> float:
 
 def compactness(rows: np.ndarray, ctx: SpatialContext) -> float:
     """Share of the extent's neighbour links that stay inside the extent (1 = one solid block, 0 = isolated cells)."""
-    inside = np.zeros(len(ctx.cells), dtype=bool)
-    inside[rows] = True
-    links = np.concatenate([ctx.neighbours(r) for r in rows]) if len(rows) else np.empty(0, dtype=np.int64)
-    return float(inside[links].mean()) if len(links) else 0.0
+    total = int(np.diff(ctx.nbr_ptr)[rows].sum())
+    return induced_links(rows, ctx).nnz / total if total else 0.0
 
 
 def colocated(extents: dict[str, np.ndarray], ctx: SpatialContext, min_overlap: float) -> list[tuple[str, str, float]]:
@@ -413,8 +433,9 @@ def cell_boundary(cell: str) -> list[list[float]]:
 
 
 def effective_n_factor(rho: float) -> float:
-    """n_eff / n for a metric with spatial autocorrelation ``rho`` (Clifford, Richardson & Hémon 1989, one-parameter
-    approximation n_eff = n (1 - rho) / (1 + rho)); no correction for rho <= 0."""
+    """n_eff / n for a sample with spatial autocorrelation ``rho`` (Clifford, Richardson & Hémon 1989, one-parameter
+    approximation n_eff = n (1 - rho) / (1 + rho)); no correction for rho <= 0. ``rho`` is the subgroup's own
+    (``subgroup_moran``), so a solid block is discounted and scattered cells are not."""
     rho = min(max(rho, 0.0), 0.99)
     return (1.0 - rho) / (1.0 + rho)
 

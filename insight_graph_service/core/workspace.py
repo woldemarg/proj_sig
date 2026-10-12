@@ -7,6 +7,7 @@ Layout under ``WORKSPACE_DIR``::
     datasets/<dataset_id>/covers.npz       pattern_id -> covered row positions
     datasets/<dataset_id>/rejections.json  pruned candidates with reason codes
     datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, cell table, point -> cell, neighbour graph
+    datasets/<dataset_id>/cells.geojson    a geo dataset: the map's GeoJSON (cells, patterns' extents), written with the batch
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
     journal/embeddings.mmap (+ _meta.json) float32 unit insight vectors, row = row_id
@@ -232,6 +233,10 @@ class Workspace:
         payload = {**arrays, **{f"col{i}": np.asarray(columns[n]) for i, n in enumerate(names)}}
         payload["meta"] = np.array(json.dumps({**meta, "columns": names}, ensure_ascii=False))
         np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **payload)
+
+    def geo_cells_path(self, dataset_id: str) -> Path:
+        """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
+        return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str) -> dict[str, Any] | None:
         """``{"meta", "columns": {name: array}, <array>: ...}`` of a geo dataset; None for any other dataset."""

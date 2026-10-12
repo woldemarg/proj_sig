@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from insight_graph_service.core.demo import generate_retail_dataset
@@ -140,8 +140,8 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_datasets()
 
     @app.get("/api/geo/{dataset_id}/cells")
-    def geo_cells(dataset_id: str) -> dict[str, Any]:
-        return engine.geo_cells(dataset_id)
+    def geo_cells(dataset_id: str) -> FileResponse:
+        return FileResponse(engine.geo_cells_file(dataset_id), media_type="application/geo+json")
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
