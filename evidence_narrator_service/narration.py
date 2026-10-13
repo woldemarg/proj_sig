@@ -31,6 +31,12 @@ Rules:
 7. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
    original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
    Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
+   The one exception is rule 8.
+8. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
+   already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
+   values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
+   9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
+   transversal, latent or anchor; say "зони" for map cells and "схожа картина в інших зонах" for recurrences.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

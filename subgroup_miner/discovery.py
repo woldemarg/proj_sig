@@ -26,6 +26,7 @@ from scipy.stats import norm, zscore
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, Insight, Rejection, Shift, pattern_id
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
 NULL_LEVELS = frozenset({"nan", "<NA>", "None"})  # never a condition (same literals as EDA step 3)
@@ -75,6 +76,8 @@ class Candidate:
     final_sd_score: float = 0.0
     drivers: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)  # selectors merged into this cohort
+    restated: frozenset[str] = frozenset()  # the metrics a closed condition is computed from: never its shifts (§2.9)
+    emm_reliability: float = 0.0  # pass 1's size factor of the correlation change; the re-score at closure keeps it
 
 
 @dataclass
@@ -85,14 +88,10 @@ class DiscoveryResult:
     data: pd.DataFrame  # EDA data_safe (row positions == source file rows)
     n_tests: int  # multiple-testing family size (distinct cohorts x metrics)
     pass1_subgroups: int  # pass-1 selectors before merging identical extents
-    rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate
+    rejections: list[Rejection] = field(default_factory=list)  # cover_equivalent / near_duplicate / tautological
+    spatial: SpatialContext | None = None  # rows are H3 cells (docs/02_discovery.md §2.9)
     ranks: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # the metrics' global ranks (EDA profile)
     global_corr: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))  # their rank correlation over all rows
-
-
-def emm_pair_scale(n_metrics: int) -> float:
-    """sqrt(m(m-1)): number of off-diagonal entries of an m x m correlation matrix."""
-    return math.sqrt(n_metrics * (n_metrics - 1)) if n_metrics > 1 else 1.0
 
 
 def _z_positive(values: pd.Series) -> pd.Series:
@@ -120,8 +119,16 @@ def closed_intent(data: pd.DataFrame, rows: np.ndarray, categoricals: list[str])
     return tuple(sorted(closed))
 
 
-def merge_identical_extents(cands: list[Candidate], data: pd.DataFrame, categoricals: list[str]) -> tuple[list[Candidate], list[Rejection]]:
-    """One cohort per extent, described by its closed intent; the other selectors become aliases (R5)."""
+def merge_identical_extents(
+    cands: list[Candidate], profile: dict[str, Any], derived_from: dict[str, list[str]] | None = None
+) -> tuple[list[Candidate], list[Rejection]]:
+    """One cohort per extent, described by its closed intent; the other selectors become aliases (R5). The metrics a
+    closed condition is computed from (``derived_from``: a geo dataset's neighbourhood conditions, §2.9) are the
+    cohort's ``restated`` set: their shifts leave ``top_shifts`` here and the correlation change is re-scored over
+    the other metrics — pass 1 did both for the selector's own conditions (``eda.step4_evaluate_micro_slices(forbidden=)``),
+    the closure can add conditions. ``profile``: the EDA profile (``data_safe``, ``categoricals``, ``numerics``, ``ranks``,
+    ``global_corr``)."""
+    data, categoricals = profile["data_safe"], list(profile["categoricals"])
     groups: dict[bytes, list[Candidate]] = {}
     for cand in cands:
         groups.setdefault(np.sort(cand.row_indices).tobytes(), []).append(cand)
@@ -135,6 +142,14 @@ def merge_identical_extents(cands: list[Candidate], data: pd.DataFrame, categori
         if not enumerated <= set(closed):  # a selector value that does not match the data string
             raise DiscoveryError("internal_error", f"closure of {head.expression} misses {sorted(enumerated - set(closed))}")
         head.conditions = closed
+        head.restated = frozenset(m for c in closed for m in (derived_from or {}).get(c.attribute, ()))
+        if head.restated:
+            head.top_shifts = [s for s in head.top_shifts if s[0] not in head.restated]
+            head.sd_aggregate_score = sum(v for _, v in head.top_shifts)  # as pass 1 sums the shifts it keeps
+            allowed = [m not in head.restated for m in profile["numerics"]]
+            head.emm_stabilized_score = head.emm_reliability * eda.correlation_change(
+                profile["ranks"][head.row_indices], profile["global_corr"], allowed
+            )
         head.aliases = [m.expression for m in rest]
         rejections += [Rejection(m.expression, "cover_equivalent", f"same rows as {head.expression}") for m in rest]
         merged.append(head)
@@ -189,13 +204,16 @@ def _validation_frame(cands: list[Candidate]) -> pd.DataFrame:
             "row_count": [c.row_count for c in cands],
             "volume_utility": [c.volume_utility for c in cands],
             "top_shifts": [c.top_shifts for c in cands],
+            "restated": [c.restated for c in cands],
             "sd_aggregate_score": [c.sd_aggregate_score for c in cands],
             "emm_stabilized_score": [c.emm_stabilized_score for c in cands],
         }
     )
 
 
-def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str], None] | None = None) -> DiscoveryResult:
+def run_discovery(
+    df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str], None] | None = None, spatial: SpatialContext | None = None
+) -> DiscoveryResult:
     """EDA pass 1 -> distinct closed cohorts -> ranking -> near-duplicate pruning -> pass 2.
 
     Deduplication runs *before* the validation budget is spent, so the bootstrap only
@@ -210,6 +228,9 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
         raise DiscoveryError("invalid_schema", "No categorical dimensions to slice by (consider BIN_COLUMNS).")
 
     dims = eda.step2_evaluate_macro_groupings(profile, min_categories=config.min_search_dimensions)
+    if spatial:  # the neighbourhood conditions are the geo mode's question: always searched (§2.9)
+        forced = [c for c in categoricals if c in spatial.conditions]
+        dims = forced + [d for d in dims if d not in forced]
     space = eda.step3_generate_search_space(profile, dims, compute_budget=config.compute_budget)
     global_medians = {n: float(np.median(data[n].dropna())) for n in numerics}
     global_mads = {n: float(eda.calculate_mad(data[n].dropna())) for n in numerics}
@@ -231,13 +252,9 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
 
     if on_stage:
         on_stage("DISCOVERING")
-    raw = eda.step4_evaluate_micro_slices(profile, space)
+    raw = eda.step4_evaluate_micro_slices(profile, space, spatial.derived_from if spatial else None)
     if raw.empty:
         raise DiscoveryError("no_candidates", "No subgroup passed the pass-1 size screen.")
-    # The EDA's EMM score is a Frobenius norm over all m(m-1) off-diagonal entries, so its
-    # scale grows with the number of metrics; dividing by sqrt(m(m-1)) turns it into the
-    # RMS correlation change per metric pair (in [0, 2]), which the thresholds refer to.
-    raw["emm_stabilized_score"] = raw["emm_stabilized_score"] / emm_pair_scale(len(numerics))
 
     by_expr = {str(sel): sel for sel in space}
     pass1 = [
@@ -250,10 +267,19 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
             top_shifts=[(str(m), float(v)) for m, v in row["top_shifts"]],
             sd_aggregate_score=float(row["sd_aggregate_score"]),
             emm_stabilized_score=float(row["emm_stabilized_score"]),
+            emm_reliability=float(row["emm_reliability"]),
         )
         for _, row in raw.iterrows()
     ]
-    candidates, rejections = merge_identical_extents(pass1, data, categoricals)
+    merged, rejections = merge_identical_extents(pass1, profile, spatial.derived_from if spatial else None)
+    candidates = []
+    for c in merged:  # a cohort without a shift stands on its covariance pair alone; without one it can become no insight
+        if c.top_shifts or _covariance_pair(c.row_indices, profile["ranks"], profile["global_corr"], numerics, c.restated):
+            candidates.append(c)
+        elif c.restated:
+            rejections.append(Rejection(c.expression, "tautological", f"only shifts of {sorted(c.restated)}, no correlation change"))
+        else:
+            rejections.append(Rejection(c.expression, "no_shift", "no metric has a median inside the cohort, no correlation change"))
 
     # EDA workflow ranking (upstream runner's temp_index), over the distinct cohorts
     scores = pd.DataFrame([(c.sd_aggregate_score, c.emm_stabilized_score, c.volume_utility) for c in candidates], columns=["sd", "emm", "vol"])
@@ -265,7 +291,9 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
 
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG
     top = _validation_frame(eligible)
-    validated_df = eda.step4b_deep_validation(data, top, numerics, categoricals, global_medians, global_mads)
+    validated_df = eda.step4b_deep_validation(
+        data, top, numerics, categoricals, global_medians, global_mads, spatial.blocks if spatial else np.arange(len(data))
+    )
     by_candidate = {c.expression: c for c in candidates}
     validated: list[Candidate] = []
     for _, row in validated_df.iterrows():
@@ -282,34 +310,41 @@ def run_discovery(df: pd.DataFrame, config: MinerConfig, on_stage: Callable[[str
         n_tests=len(candidates) * len(numerics),
         pass1_subgroups=len(pass1),
         rejections=rejections,
+        spatial=spatial,
         ranks=profile["ranks"],
         global_corr=profile["global_corr"],
     )
 
 
-def _median_test(values: np.ndarray, global_median: float, global_mad: float) -> float:
-    """Two-sided asymptotic test of H0: subgroup median == global median."""
+def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+    """Two-sided asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the
+    sample to its effective size under spatial autocorrelation (docs/02_discovery.md §2.9)."""
     values = values[~np.isnan(values)]
     n = len(values)
     if n < 2:
         return 1.0
+    root_n = math.sqrt(max(n * n_eff_factor, 1.0))
     scale = eda.calculate_mad(values) or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
-    se = _MEDIAN_SE_FACTOR * scale / math.sqrt(n) if scale else float(np.std(values, ddof=1)) / math.sqrt(n)
+    se = _MEDIAN_SE_FACTOR * scale / root_n if scale else float(np.std(values, ddof=1)) / root_n
     if not se or not np.isfinite(se):
         return 1.0
     z = (float(np.median(values)) - global_median) / se
     return float(2.0 * norm.sf(abs(z)))
 
 
-def _covariance_pair(row_indices: np.ndarray, ranks: np.ndarray, glob: np.ndarray, numerics: list[str]) -> dict[str, Any]:
+def _covariance_pair(
+    row_indices: np.ndarray, ranks: np.ndarray, glob: np.ndarray, numerics: list[str], restated: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     """Metric pair whose rank correlation inside the cohort diverges most from the global one ``glob`` (explains the
-    EMM score; the same measure, ``eda.rank_correlation``, on the same global ranks)."""
+    EMM score; the same measure, ``eda.rank_correlation``, on the same global ranks). A ``restated`` metric is in no
+    pair: a neighbourhood condition never explains the metric it is computed from."""
     if len(numerics) < 2 or len(row_indices) < 3 * len(numerics):
         return {}
     # a metric constant inside the subgroup has an undefined (NaN) correlation: excluded,
     # never read as "correlation dropped to 0"
     local = eda.rank_correlation(ranks[row_indices])
-    delta = np.where(np.triu(np.ones_like(local, dtype=bool), k=1), local - glob, np.nan)
+    allowed = np.array([m not in restated for m in numerics])
+    delta = np.where(np.triu(np.ones_like(local, dtype=bool), k=1) & allowed[:, None] & allowed, local - glob, np.nan)
     if not np.isfinite(delta).any() or np.nanmax(np.abs(delta)) <= 1e-12:
         return {}
     i, j = np.unravel_index(int(np.nanargmax(np.abs(delta))), delta.shape)
@@ -327,15 +362,16 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
     if not validated:
         return []
     prof = result.profile
+    spatial = result.spatial
     insights: list[Insight] = []
     for cand in validated:
         rows = result.data.iloc[cand.row_indices]
-        shifts: list[Shift] = []
+        covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics, cand.restated)
+        shifts: list[Shift] = []  # never empty: a cohort without a shift entered the rank on its covariance pair
         for metric, magnitude in cand.top_shifts:
             local_median = float(np.median(rows[metric].dropna()))
             sign = np.sign(local_median - prof.global_medians[metric]) or 1.0
             shifts.append(Shift(metric, float(sign * magnitude), local_median, prof.global_medians[metric], prof.global_mads[metric]))
-        covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics)
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
@@ -344,8 +380,21 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
                 shifts.append(Shift(metric, float(sign * eda.robust_z_score(local_median, gm, gd)), local_median, gm, gd, "covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
         primary = shifts[0]
-        p_value = _median_test(rows[primary.metric].to_numpy(dtype=float), primary.global_median, primary.global_mad)
+        values = rows[primary.metric].to_numpy(dtype=float)
+        rho = subgroup_moran(values, cand.row_indices, spatial) if spatial else 0.0  # the subgroup's own dependence, not the map's
+        n_eff_factor = effective_n_factor(rho)
+        p_value = _median_test(values, primary.global_median, primary.global_mad, n_eff_factor)
         pid = pattern_id(dataset_id, cand.conditions)
+        provenance_extra = {}
+        if spatial:
+            p_iid = _median_test(values, primary.global_median, primary.global_mad)
+            provenance_extra["spatial"] = {
+                "resolution": spatial.resolution,
+                "cells": cand.row_count,
+                "moran_i": round(rho, 4),
+                "n_eff": round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
+                "p_adjusted_iid": min(1.0, p_iid * result.n_tests),
+            }
         insights.append(
             Insight(
                 id=pid,
@@ -385,6 +434,7 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
                     ],
                     "expression": cand.expression,
                     "multiple_testing_family": result.n_tests,
+                    **provenance_extra,
                 },
             )
         )

@@ -8,15 +8,16 @@
 
 ## 2.1 Ingestion
 
-`load_dataset(path, config, filename=, bins=, categories=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings)`.
+`load_dataset(path, config, filename=, bins=, categories=, geo=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings, geo, spatial)`.
 
 | Input | Form | Source |
 |---|---|---|
-| file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
+| file | `.csv`, `.tsv`, `.txt`, `.parquet` | `POST /api/upload` (the console's upload; saved under `WORKSPACE_DIR/uploads/`), `POST /api/demo` / `POST /api/demo/geo`, or a path given to `Engine.ingest_file` (the measurement scripts, the tests) |
 | `bins` | `"col:q,col2:q"` (`col` alone means 4 quantiles); `""` = none; `None` = workspace default `BIN_COLUMNS` | UI *Split numbers into bands* = the form field `bins` of `POST /api/upload` |
 | `categories` | `"col,col2"`; `""` = none; `None` = workspace default `CATEGORICAL_COLUMNS` | UI *Treat as categories* = the form field `categories` |
+| `geo` | `auto`, `<column>` or `<lat>,<lon>`, optionally `@<resolution>`; `None` = a plain table | UI *Spatial analysis (H3 cells)* = the form field `geo`; rows become H3 cells first ([2.9](#29-spatial-datasets-the-geo-option)) |
 
-An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Try demo*) sends an explicit `""` for both options; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
+An empty or missing upload field means "workspace default" (`None`); `POST /api/demo` (the UI's *Demo: table*) sends an explicit `""` for both options, `POST /api/demo/geo` (*Demo: map*) its band and geo option; `Engine.submit` takes the options (`None` unless one is passed; `bins=""` is an explicit "none"), and `Engine.ingest_file(path)` submits with the workspace defaults.
 
 Before a batch exists, `Engine.upload` refuses a file above `MAX_UPLOAD_MB` (200): it deletes the upload and raises `file_too_large`, which the API answers with HTTP 413. Steps, in order:
 
@@ -87,11 +88,11 @@ MAD(y) = med(|y − med(y)|);   if MAD = 0:   MAD := (0.6745 / 0.7979) · mean(|
 ```text
 SD(S)      = sum of the three largest |z_k(S)|                                   (top_shifts)
 Δ          = C − C_S, with Δ_ij := 0 where C_S,ij is undefined (metric constant in S); only when n ≥ 3m and m ≥ 2
-EMM_eda(S) = ‖Δ‖_F · sqrt( max(0, n − n_min) / (N − n_min) )                   (reliability shrinkage)
+EMM_eda(S) = ‖Δ‖_F / sqrt(m(m − 1)) · sqrt( max(0, n − n_min) / (N − n_min) )   (RMS per pair · reliability shrinkage)
 vol(S)     = √p · (1 − p)                                                        (maximal at p = 1/3: 0.3849)
 ```
 
-`SD` rewards median shifts, `EMM` rewards a changed correlation structure (exceptional model mining), `vol` rewards moderate, actionable subgroups over near-majorities. The shrinkage pulls correlations estimated from few rows towards "no change"; an undefined local correlation is no evidence of change, not a change to 0.
+`SD` rewards median shifts, `EMM` rewards a changed correlation structure (exceptional model mining), `vol` rewards moderate, actionable subgroups over near-majorities. The shrinkage pulls correlations estimated from few rows towards "no change"; an undefined local correlation is no evidence of change, not a change to 0. `m` counts the metrics the scope may explain: on a geo dataset a metric a condition is computed from is in no pair ([2.9](#29-spatial-datasets-the-geo-option)).
 
 ### Step 4b — pass-2 validation (`step4b_deep_validation`)
 **Bootstrap stability.** For `B = 20` resamples of `S` (n of n, with replacement; the adapter seeds the global RNG with `EDA_RANDOM_SEED`):
@@ -138,7 +139,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 |---|---|---|
 | conditions | the closed intent, sorted `(attribute, str(value))` | a typed scope for the lattice; identical cohorts get identical pattern ids |
 | signed shift | `z_k(S) = sign(med_S(y_k) − med(y_k)) · |z_k(S)|` (a zero difference counts as +) | the EDA keeps magnitudes only; direction drives CONTRASTS, the phenomenon vector and the answer |
-| EMM per pair | `emm_score = EMM_eda / sqrt(m(m − 1))`, applied as the pass-1 rows become candidates (so `temp_index`, step 4b and the insight all see the per-pair value) | the Frobenius norm grows with the number of off-diagonal entries; per pair it is an RMS correlation change in `[0, 2]`, so `MIN_EMM_SCORE` means the same on every dataset |
+| EMM per pair | `emm_score = EMM_eda`: the RMS correlation change per pair of the metrics the scope may explain (`correlation_change` in the vendored step 4; re-scored at closure when the closed intent restates more metrics), so `temp_index`, step 4b and the insight all see the per-pair value | the Frobenius norm grows with the number of off-diagonal entries; per pair it is an RMS correlation change in `[0, 2]`, so `MIN_EMM_SCORE` means the same on every dataset |
 | covariance pair | `argmax_{i<j} |C_S,ij − C_ij|` over pairs defined in `S` (needs `n ≥ 3m`; `{}` if none) → `{pair, local_corr, global_corr, delta}` | says *which* relation drives the EMM score |
 | pair shifts | `z_k(S)` for pair metrics missing from the top three (`Shift.source = "covariance_pair"`) | lets a correlation-change insight be targeted on one of its metrics |
 | significance | two-sided asymptotic median test on the primary metric, `se = 1.2533 · 1.4826 · MAD(y_S) / √n` with the subgroup MAD computed like the EDA's (zero-MAD fallback included); if that is 0, the global MAD; if that is 0 too, `se = sd(y_S) / √n`. `z = (med_S − med) / se`, `p = 2 · Φ̄(|z|)` (`p = 1` for `n < 2` or a zero or non-finite `se`); `p_adjusted = min(1, p · n_tests)` | the EDA has no p-values; selection and weight need one. Bonferroni over overlapping cohorts is conservative, never anti-conservative |
@@ -148,7 +149,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 
 ## 2.5 Contracts
 
-* `run_discovery(df, config, on_stage=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges.
+* `run_discovery(df, config, on_stage=None, spatial=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections, spatial)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges (and `tautological` ones of a geo dataset, added by `build_insights`); `spatial` (a `SpatialContext`) switches on [2.9](#29-spatial-datasets-the-geo-option).
 * `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
 * `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id, and points each journal record's `provenance.rows_ref` at them (`Workspace.covers_ref`).
@@ -164,6 +165,8 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `MIN_SEARCH_DIMENSIONS` | 3 | dimension back-fill floor in step 2 |
 | `REDUNDANCY_JACCARD` | 0.88 | near-duplicate threshold |
 | `EDA_RANDOM_SEED` | 42 | bootstrap seed |
+| `GEO_RESOLUTION`, `MIN_CELL_POINTS` | 7, 5 | H3 resolution when the geo option names none; points below which a cell's intensive metrics are NaN ([2.9](#29-spatial-datasets-the-geo-option)) |
+| `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_COLOCATION_MIN` | 8, 40, 0.3 | categorical roles, the `CO_LOCATED` overlap |
 
 ## 2.7 Failure modes and guarantees
 
@@ -189,3 +192,41 @@ Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame i
 | `housing.csv` with two bands | 102 → 102 | 0 | 50 | 40 |
 
 On the demo and on `housing.csv`, no profiled categorical is constant on another's subgroups (the demo dimensions are drawn independently; housing has one native categorical and two bands), so there is no implied condition and closure finds nothing to merge. The toy frames of [2.7](#27-failure-modes-and-guarantees) exercise both merges: closure with an implied column, and near-duplicate pruning.
+
+## 2.9 Spatial datasets (the geo option)
+
+An upload with the `geo` option (form field `geo` of `POST /api/upload`, `Engine.submit(geo=)`, `load_dataset(geo=)`) holds **points**, one per row. Ingestion turns them into a table with **one row per occupied H3 cell** (`subgroup_miner/spatial.py`, `build_cells`) before bands and categories apply; discovery then mines cells exactly as it mines any table. Without the option nothing below runs and a dataset is processed — and identified — as before.
+
+**The option.** `auto`, `<column>` (GeoJSON `Point` or WKT `POINT (x y)` text) or `<lat>,<lon>` (numeric), each optionally followed by `@<resolution>` (0–15; default `GEO_RESOLUTION` 7). `auto` takes the first text column whose first 200 non-null values parse as points for at least 95 %, otherwise the numeric pair whose names contain a `lat`/`latitude` and a `lon`/`lng`/`long`/`longitude` token. A spec that cannot be applied is `invalid_options`; rows without a valid point are ignored with a warning. The applied option enters the dataset id (`… ‖ "geo=<locator>@<resolution>"`).
+
+**Column roles follow the dtypes only** (no column name is interpreted):
+
+| Source column | Cell column(s) | Kind |
+|---|---|---|
+| (every point) | `points` — the number of points in the cell | counter, every cell |
+| datetime (or text that parses as dates, ≥ 8 characters) | `<col>_active_days` (distinct days); `<col>_late_share` (share of points after the midpoint of the whole period) | counter; intensive |
+| numeric | `<col>_median` | intensive |
+| categorical, 2–`GEO_MODE_MAX_LEVELS` (40) levels, *place-like* (mean top-level share over dense cells ≥ 0.9) or with more than `GEO_SHARE_MAX_LEVELS` (8) levels | `<col>_mode` — the cell's most frequent level | dimension |
+| categorical, mixed within cells, ≤ `GEO_SHARE_MAX_LEVELS` levels | `share_<col>_<level>` per level (a binary column: its rarer level) present strictly between 0 and 1 in at least 10 % of dense cells | intensive |
+| more levels, or a single one (identifiers, free text) | — (listed in a warning) | dropped |
+
+A mode column nested in a share column (one column's level fixes the other's for ≥ 98 % of the rows, either direction) is dropped: its mode would restate those shares. **Intensive** columns are NaN in cells with fewer than `MIN_CELL_POINTS` (5) points — medians and shares of one to four points are noise — while counters are kept for every cell, so quiet cells stay part of the comparison. **The baseline of every shift is the set of cells holding at least one point** (the profile's `geo.base`).
+
+**Neighbourhood conditions** are computed on all cells before any NaN rule and become text dimensions (the miner is unchanged):
+
+| Column | Definition |
+|---|---|
+| `neighbours_<counter>_band` | the mean of the counter over the cell's ring-1 neighbours (`h3.grid_ring`, the cell itself excluded; a neighbour without points counts as 0), cut into quartile bands `q1…q4` by `apply_bins` |
+| `lisa_points` | local Moran's I of `log1p(points)` with row-standardised ring-1 weights over the occupied cells; each cell's I is scored against its conditional-randomisation null — the cell fixed, its neighbours' values drawn from the other cells (Anselin 1995) — with that null's exact mean and variance (Sokal, Oden & Thomson 1998) under a normal approximation, so there are no permutations and the p-values have no floor on a large map (a permutation null of P draws cannot go below 1/(P+1), which a false-discovery cut over thousands of cells never passes); the p-values of the cells that have neighbours are cut at false-discovery rate 0.05 (Benjamini–Hochberg: one test per cell is a family, and uncorrected per-cell p-values would label hundreds of cells of a large map under the null); a survivor is `hot spot` (high, high neighbours), `cold spot`, `high outlier` or `low outlier`; every other cell `no cluster` |
+
+These conditions are always among the searched dimensions: they are prepended to step 2's choice (so a geo dataset searches up to six dimensions plus its neighbourhood conditions; `COMPUTE_BUDGET` still bounds the conjunctions). A condition never explains what it is computed from (`SpatialContext.derived_from`): a neighbourhood condition never explains a counter, and a mode condition never explains the shares of a column it is nested with (≥ 90 % of the rows). How the rule is applied: *Tautologies never reach the rank*, below.
+
+**Two neighbourhoods, on purpose.** The band counts an absent ring neighbour as 0 and averages over the whole ring (`spatial_lag` with `ring`): a cell next to empty space has quiet surroundings, and that is what the band measures. Moran's I and LISA average over the occupied neighbours only (`ring` = None): autocorrelation is a property of the values that exist. The two read different questions and are not unified.
+
+**Tautologies never reach the rank.** A neighbourhood condition restates the counters it was built from (`SpatialContext.derived_from`: the bands and `lisa_points` → every counter; a mode nested in a share column → those shares), so pass 1 scores no such (dimension, metric) pair, neither as a shift nor inside the correlation change (`step4_evaluate_micro_slices(forbidden=)`): a hot-spot cohort is ranked by what else is special about it, not by the `points` it is busy by construction, and the validation budget is spent on shifts that are allowed to exist. The closure of [2.3](#23-deduplication-before-validation) can add such a condition to a cohort found through another one, so the rule is applied once more at closure: the metrics the closed conditions are computed from are the cohort's `restated` set, their shifts leave `top_shifts` there (the shift score is re-summed and the correlation change re-scored over the other metrics), the validation never reports them as hidden shifts, and the covariance pair is searched among the other metrics. A cohort left with no shift stands on its covariance pair alone: with one it can become a covariance insight, without one it is rejected as `tautological` before the rank and spends no validation slot. (A plain-table cohort in which no metric has a median — every value missing — is rejected at the same point as `no_shift`.)
+
+**Spatial autocorrelation.** Neighbouring cells are not independent, so the median test of [2.4](#24-what-the-adapter-adds) runs on an effective sample size: `n_eff = n · (1 − ρ) / (1 + ρ)` — the one-parameter approximation of Clifford, Richardson & Hémon (1989) — with `ρ = max(0, I_S)`, `I_S` the Moran's I of the primary metric over the **subgroup's own cells and the ring-1 links that stay inside it** (`subgroup_moran`): a solid block of similar cells is discounted, thirty scattered cells have no inside links and are not; the global I of each metric stays on the profile as a description of the map. `se = 1.2533 · 1.4826 · MAD / √n_eff`. The same dependence reaches `stability`: for spatial data the step-4b bootstrap resamples **blocks** — a cell's parent cell one resolution coarser (`SpatialContext.blocks`), drawn with replacement, each drawn block contributing all its cells — instead of cells, so neighbouring cells stay together as they would in an independent sample; a small extent spans few parents, and over k parents the bootstrap has at most k^k distinct resamples, so its `stability` is coarse. A draw whose blocks hold no value of a shifted metric (sparse cells carry no intensive metric) scores nothing and is skipped; a cohort with no scoring draw gets the full instability penalty. Each insight records `provenance.spatial = {resolution, cells, moran_i (the subgroup's), n_eff, p_adjusted_iid}` (the Bonferroni-adjusted p without the correction), and the profile's `geo.sac = {validated, significant_iid, significant_corrected, admitted}` counts the validated candidates with `p_adjusted ≤ MAX_P_ADJUSTED` without and with the correction.
+
+After admission the graph service adds `compactness` (the share of the extent's neighbour links that stay inside the extent; 1 = one solid block, a scattered extent is not penalised — a description; the test's discount is `moran_i` above) and `colocated` (up to three other insights of the dataset whose ring-1-dilated extents overlap by `|A ∩ B| / min(|A|, |B|) ≥ GEO_COLOCATION_MIN` (0.3); the `CO_LOCATED` edges of [6.1](06_graph_and_storage.md#61-the-structural-plane)), and stores the cell table, the point → cell map and the neighbour graph as `datasets/<ds>/geo.npz`; the profile also carries `geo.glossary`, the plain-language meaning of every derived column the answers use ([7.4](07_question_answering.md#74-the-evidence-object)) ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)).
+
+> **Measured** on the map demo (California housing, 20,640 block groups, `geo=auto@5`, `bins=median_income_median:4`): 884 cells (540 below `MIN_CELL_POINTS`), global Moran's I of the metrics 0.33–0.72; 53 distinct cohorts, 12 of them dropped before the rank as tautological, 39 validated, 18 insights admitted (one a correlation change, three on a `hot spot` scope); of the 39 validated 26 are significant without and 17 with the subgroup-level `n_eff` correction; the subgroups' own Moran's I runs from below 0 (scattered cells: no discount) to 0.71 (a solid inland block of 616 cells, `n_eff` 33).

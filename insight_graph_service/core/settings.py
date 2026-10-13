@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]  # the repository root; relat
 class Settings:
     workspace_dir: Path = Path("workspace")
     max_upload_mb: int = 200
+    geo_max_points: int = 5000  # points per pattern sent to the map (GET /api/geo/{dataset}/patterns/{pattern})
 
     # admission into the graph (docs/03_insights.md §3.2, rules R4 and R7)
     min_insight_weight: float = 0.2

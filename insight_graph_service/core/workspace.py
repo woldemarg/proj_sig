@@ -6,6 +6,8 @@ Layout under ``WORKSPACE_DIR``::
     datasets/<dataset_id>/profile.json     schema / profile summary
     datasets/<dataset_id>/covers.npz       pattern_id -> covered row positions
     datasets/<dataset_id>/rejections.json  pruned candidates with reason codes
+    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, cell table, point -> cell, neighbour graph
+    datasets/<dataset_id>/cells.geojson    a geo dataset: the map's GeoJSON (cells, patterns' extents), written with the batch
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
     journal/embeddings.mmap (+ _meta.json) float32 unit insight vectors, row = row_id
@@ -217,6 +219,37 @@ class Workspace:
 
     def save_covers(self, dataset_id: str, covers: dict[str, np.ndarray]) -> None:
         np.savez_compressed(self.dataset_dir(dataset_id) / "covers.npz", **{k: np.asarray(v, dtype=np.int64) for k, v in covers.items()})
+
+    def load_covers(self, dataset_id: str) -> dict[str, np.ndarray]:
+        path = self.datasets_dir / dataset_id / "covers.npz"
+        if not path.is_file():
+            return {}
+        with np.load(path) as data:
+            return {k: data[k] for k in data.files}
+
+    def save_geo(self, dataset_id: str, geo: dict[str, Any]) -> None:
+        """A geo dataset's spatial context, cell table and meta, in the shape ``load_geo`` returns."""
+        names = list(geo["columns"])
+        payload = {k: v for k, v in geo.items() if k not in ("columns", "meta")}
+        payload.update({f"col{i}": np.asarray(geo["columns"][n]) for i, n in enumerate(names)})
+        payload["meta"] = np.array(json.dumps({**geo["meta"], "columns": names}, ensure_ascii=False))
+        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **payload)
+
+    def geo_cells_path(self, dataset_id: str) -> Path:
+        """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
+        return self.datasets_dir / dataset_id / "cells.geojson"
+
+    def load_geo(self, dataset_id: str) -> dict[str, Any] | None:
+        """``{"meta", "columns": {name: array}, <array>: ...}`` of a geo dataset; None for any other dataset."""
+        path = self.datasets_dir / dataset_id / "geo.npz"
+        if not path.is_file():
+            return None
+        with np.load(path, allow_pickle=False) as data:
+            meta = json.loads(str(data["meta"]))
+            out = {k: data[k] for k in data.files if k != "meta" and not k.startswith("col")}
+            out["columns"] = {n: data[f"col{i}"] for i, n in enumerate(meta["columns"])}
+        out["meta"] = meta
+        return out
 
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.

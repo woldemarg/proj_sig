@@ -111,7 +111,7 @@ Without an LLM everything still works: answers fall back to a cited, evidence-on
 SIG owns its six node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
 
 ### Using the console
-1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click **Try demo**.
+1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Demo: table** (the synthetic retail orders) or **Demo: map** (California housing block groups, analysed as H3 cells).
    - Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
    - A dataset card's *Delete* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. **Watch the batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
@@ -126,10 +126,16 @@ SIG owns its six node labels in that database, so use one workspace per database
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
    - The *Prompt* tab shows the exact evidence the model saw.
 
+6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@7` (or `curl -F geo=auto@7`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; an answer paints the cited insights' cells, *▶ TOUR* flies through them, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+
+   **Demo: map** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
+
 **Without the UI**, use the HTTP API through the console's port:
 ```powershell
 curl -X POST http://127.0.0.1:8765/api/demo                                        # the synthetic dataset -> a batch record
+curl -X POST http://127.0.0.1:8765/api/demo/geo                                    # the shipped housing table as H3 cells (resolution 5)
 curl -F file=@data\housing.csv -F bins=median_income:4,housing_median_age:4 http://127.0.0.1:8765/api/upload
+curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_income_median:4 http://127.0.0.1:8765/api/upload   # points -> H3 cells
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only

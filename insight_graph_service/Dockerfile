@@ -19,6 +19,7 @@ COPY subgroup_miner ./subgroup_miner
 COPY attractor_topology ./attractor_topology
 COPY graph_query_engine ./graph_query_engine
 COPY insight_graph_service ./insight_graph_service
+COPY data/demo/california_housing.csv data/demo/
 USER sig
 ENV PYTHONPATH=/app WORKSPACE_DIR=/data/workspace MODEL_DIR=/app/models EMBEDDING_DEVICE=cpu WEB_HOST=0.0.0.0 WEB_PORT=8000 HOME=/tmp TMPDIR=/data/tmp
 EXPOSE 8000

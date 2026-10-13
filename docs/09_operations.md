@@ -65,6 +65,7 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | Operation | Request | Answer |
 |---|---|---|
 | ingest the demo | `POST /api/demo` | 202 + the `UPLOADED` record |
+| ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record |
 | status | `GET /api/batches`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
 | ask | `POST /api/chat/query` `{question, use_llm}` | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |

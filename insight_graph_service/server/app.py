@@ -17,12 +17,12 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
-from insight_graph_service.core.settings import Settings
+from insight_graph_service.core.settings import PROJECT_ROOT, Settings
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
@@ -64,8 +64,8 @@ def create_app(engine: Engine) -> FastAPI:
     def run(job, *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
-    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None) -> JSONResponse:
-        record = engine.upload(name, stream, bins=bins, categories=categories)
+    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None) -> JSONResponse:
+        record = engine.upload(name, stream, bins=bins, categories=categories, geo=geo)
         run(engine.process, record["batch_id"])
         return JSONResponse(record, status_code=202)
 
@@ -98,17 +98,24 @@ def create_app(engine: Engine) -> FastAPI:
         return record
 
     @app.post("/api/upload")
-    def upload(request: Request, file: UploadFile = File(...), bins: str = Form(""), categories: str = Form("")) -> JSONResponse:
+    def upload(request: Request, file: UploadFile = File(...), bins: str = Form(""), categories: str = Form(""), geo: str = Form("")) -> JSONResponse:
         cap = engine.settings.max_upload_mb * 1024 * 1024
         if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
-        # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS)
-        return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None)
+        # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
+        return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None, geo.strip() or None)
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
         table = io.BytesIO(generate_retail_dataset().to_csv(index=False).encode("utf-8"))
         return accept("retail_synthetic.csv", table, "", "")  # the demo is self-describing: explicitly no bands / overrides
+
+    @app.post("/api/demo/geo")
+    def demo_geo() -> JSONResponse:
+        # the shipped California housing table (located block groups) as H3 cells at resolution 5, with the cells' typical
+        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies this one file of data/
+        with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as table:
+            return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")
     def graph(dataset: str | None = None) -> dict[str, Any]:
@@ -127,6 +134,18 @@ def create_app(engine: Engine) -> FastAPI:
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
         return sphere_points(engine.committed(), settings.topology.random_seed, dataset or None)
+
+    @app.get("/api/geo")
+    def geo_datasets() -> list[dict[str, Any]]:
+        return engine.geo_datasets()
+
+    @app.get("/api/geo/{dataset_id}/cells")
+    def geo_cells(dataset_id: str) -> FileResponse:
+        return FileResponse(engine.geo_cells_file(dataset_id), media_type="application/geo+json")
+
+    @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
+    def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:

@@ -23,6 +23,7 @@ EDGE_ENDPOINTS = {
     "GENERALIZES": ("Pattern", "Pattern"),
     "SIBLING": ("Pattern", "Pattern"),
     "CONTRASTS": ("Pattern", "Pattern"),
+    "CO_LOCATED": ("Pattern", "Pattern"),
     "HAS_SCOPE": ("Pattern", "Dimension"),
     "TARGETS": ("Pattern", "Metric"),
     "ACTIVATES": ("Pattern", "Attractor"),

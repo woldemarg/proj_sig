@@ -1,4 +1,4 @@
-"""Deterministic structural plane: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS (docs/06_graph_and_storage.md §6.1).
+"""Deterministic structural plane: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS / CO_LOCATED (docs/06_graph_and_storage.md §6.1).
 
 Derived only from scope conditions and signed shifts — never from embeddings.
 Relations are computed within one dataset (scopes of different schemas are
@@ -106,4 +106,18 @@ def structural_edges(insights: list[Insight], config: MinerConfig) -> list[Graph
                     {"metric": metric, "z_source": za, "z_target": zb, "scope_overlap": overlap, "relation": relation},
                 )
             )
+    return edges
+
+
+def colocation_edges(insights: list[Insight], structural: list[GraphEdge]) -> list[GraphEdge]:
+    """CO_LOCATED between geo patterns whose cell extents overlap (``provenance.spatial.colocated``, recorded at
+    ingest) and that no other structural edge already links."""
+    linked = {frozenset((e.source, e.target)) for e in structural}
+    present = {i.id for i in insights}
+    edges = []
+    for ins in insights:
+        for partner in ins.provenance.get("spatial", {}).get("colocated", []):
+            other = partner["pattern_id"]
+            if ins.id < other and other in present and frozenset((ins.id, other)) not in linked:
+                edges.append(GraphEdge(ins.id, other, EdgeType.CO_LOCATED, float(partner["overlap"]), {"overlap": partner["overlap"]}))
     return edges

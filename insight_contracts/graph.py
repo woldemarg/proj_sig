@@ -12,7 +12,8 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
 
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
-``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights).
+``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
+``CO_LOCATED`` (geo datasets) carries ``overlap`` of the two one-ring-dilated cell extents.
 """
 
 from __future__ import annotations
@@ -34,18 +35,20 @@ class EdgeType(str, Enum):
     ACTIVATES = "ACTIVATES"
     RELATED_TO = "RELATED_TO"
     CO_OCCURS = "CO_OCCURS"
+    CO_LOCATED = "CO_LOCATED"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
 
 
-STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.GENERALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS}
+STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.GENERALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}
 LATENT_EDGES = {EdgeType.RELATED_TO, EdgeType.CO_OCCURS}  # anchor <-> anchor: centroid neighbours, shared members
-UNDIRECTED_EDGES = {EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.RELATED_TO, EdgeType.CO_OCCURS}
+UNDIRECTED_EDGES = {EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED, EdgeType.RELATED_TO, EdgeType.CO_OCCURS}
 EDGE_PLANE = {
     EdgeType.SPECIALIZES: "structural",
     EdgeType.GENERALIZES: "structural",
     EdgeType.SIBLING: "structural",
     EdgeType.CONTRASTS: "structural",
+    EdgeType.CO_LOCATED: "structural",
     EdgeType.RELATED_TO: "latent",
     EdgeType.CO_OCCURS: "latent",
     EdgeType.ACTIVATES: "bridge",

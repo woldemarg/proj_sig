@@ -13,6 +13,7 @@ from dev import compose
 
 from evidence_narrator_service.app import create_app as create_narrator
 from evidence_narrator_service.settings import NarratorSettings
+from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 
 
@@ -72,6 +73,17 @@ def test_upload_process_render_query(client, demo_csv):
     parsed = qa["view"]["evidence"]["parsed"]
     assert parsed["targets"] == ["margin"] and parsed["direction"] == -1  # literals parsed inside Ukrainian
     assert set(qa["view"]["highlight"]["edges"]) <= {e["data"]["id"] for e in g["edges"]}  # highlight ids resolve in the UI graph
+    # the map demo: the shipped housing table as H3 cells, with its own resolution and band
+    assert client.post("/api/demo/geo").status_code == 202
+    geo_batch = next(b for b in _wait_ready(client) if b["filename"] == "california_housing.csv")
+    assert geo_batch["status"] == "READY" and geo_batch["profile"]["geo"]["resolution"] == 5 and geo_batch["profile"]["geo"]["cells"] == 884
+    assert geo_batch["metrics"]["validated_insights"] > 0 and "median_income_median_band" in geo_batch["profile"]["selected_dimensions"]
+    geo_ds = geo_batch["dataset_id"]
+    assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
+    assert len(client.get(f"/api/geo/{geo_ds}/cells").json()["features"]) == 884
+    assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
+    assert client.delete(f"/api/datasets/{geo_ds}").json()["patterns_removed"] == geo_batch["metrics"]["validated_insights"]
+    assert client.get("/api/geo").json() == [] and client.get(f"/api/geo/{geo_ds}/cells").status_code == 404  # the file went with the dataset
     # delete through the API: the dataset, its graph and its record go; the mirror of the UI is the backend
     ds = batches[0]["dataset_id"]
     assert client.delete(f"/api/datasets/{ds}").json()["patterns_removed"] == batches[0]["metrics"]["validated_insights"]
@@ -100,6 +112,10 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
     cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
+    housing = engine.process(
+        engine.submit(PROJECT_ROOT / "data" / "demo" / "california_housing.csv", bins="median_income_median:4", geo="auto@5")["batch_id"]
+    )
+    assert housing["status"] == "READY"  # the map demo, as POST /api/demo/geo queues it
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
@@ -110,6 +126,15 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=20000)
         page.wait_for_selector(".ds .chip.ok", timeout=10000)  # dataset card shows "Ready"
         assert page.inner_text("#health").strip()  # health pills rendered
+        chips = "[...document.querySelectorAll('.chip-q')].map((c) => c.textContent)"
+        assert len(page.evaluate(chips)) == 8 and {"Чому margin нижчий для phones у US?", "Де median_house_value вищий?"} <= set(
+            page.evaluate(chips)
+        )  # both demos' questions
+        page.select_option("#dataset-filter", housing["dataset_id"])  # the filter narrows the welcome card to one dataset
+        page.wait_for_function(f"({chips}).length === 4", timeout=10000)
+        assert page.evaluate(chips)[0] == "Чому median house value нижчий у зонах INLAND?"
+        page.select_option("#dataset-filter", "")
+        page.wait_for_function(f"({chips}).length === 8", timeout=10000)
         # insights table view lists every pattern node
         page.click("#view-switch button[data-view='table']")
         page.wait_for_selector("#ins-table tbody tr[data-id]")
@@ -178,11 +203,16 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
         page.screenshot(path=str(tmp_path / "ui.png"))
-        # deleting the dataset from its card empties the views, through the backend
-        page.once("dialog", lambda d: d.accept())
+        # deleting the datasets from their cards empties the views, through the backend
         assert page.is_visible(".ds .ds-del")  # always visible, not only on hover
-        page.click(".ds .ds-del")
+        for left in (1, 0):
+            page.once("dialog", lambda d: d.accept())
+            page.click(".ds .ds-del >> nth=0")
+            page.wait_for_function(f"document.querySelectorAll('.ds').length === {left}", timeout=20000)
         page.wait_for_selector(".empty-rail", timeout=20000)
         assert page.evaluate("S.cy.nodes().length") == 0 and not engine.graph().of_kind("Pattern")
+        page.click("#new-chat")  # a fresh chat with no data: the welcome card offers no questions
+        page.wait_for_selector(".welcome", timeout=10000)
+        assert page.evaluate("document.querySelectorAll('.chip-q').length") == 0
         browser.close()
         assert not errors, errors

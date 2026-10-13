@@ -33,7 +33,7 @@ from insight_contracts import (
 from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.workspace import utc_now
-from subgroup_miner.lattice import structural_edges
+from subgroup_miner.lattice import colocation_edges, structural_edges
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -69,7 +69,13 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
             dataset_node_id(ds),
             "Dataset",
             b.get("filename", ds),
-            {"dataset_id": ds, "filename": b.get("filename"), "rows": profile.get("rows"), "columns": profile.get("columns")},
+            {
+                "dataset_id": ds,
+                "filename": b.get("filename"),
+                "rows": profile.get("rows"),
+                "columns": profile.get("columns"),
+                **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+            },
         )
         nodes[batch_node_id(bid)] = GraphNode(
             batch_node_id(bid),
@@ -276,7 +282,8 @@ def build_snapshot(
     nodes = {ins.id: GraphNode(ins.id, "Pattern", headline(ins), dict(by_pid[ins.id])) for ins in insights}
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
-    edges += structural_edges(insights, settings.miner)
+    structural = structural_edges(insights, settings.miner)
+    edges += structural + colocation_edges(insights, structural)
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
