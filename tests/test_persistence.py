@@ -425,6 +425,7 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     for field, value in (("emm_score", 9.9), ("support_fraction", 0.9), ("drivers", ["x"]), ("phenomenon_type", "covariance"), ("effect_size", -1.0)):
         assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # every number the prompt shows is covered
     assert record_digest({**rows[0], "row_id": 999, "provenance": {}}) == rows[0]["record_digest"]  # what a deletion rewrites is not
+    assert record_digest({**rows[0], "retired_field": 1}) != rows[0]["record_digest"]  # the record's own keys, not the class's
     for r in rows:
         if r["id"] == forged:
             r["p_adjusted"] = 0.5
