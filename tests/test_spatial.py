@@ -296,3 +296,43 @@ def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(
     engine.ws.save_graph({**old, "version": 4})
     graph = make_engine(cfg).graph()
     assert graph.of_kind("Region") and {e["props"]["relation"] for e in graph.edges if e["type"] == "CO_LOCATED"} >= {"overlaps"}
+
+
+def test_one_upload_makes_one_dataset_per_level(tmp_path):
+    """``geo=<loc>@<r1>,<r2>`` and ``table`` make ordinary datasets, each with the id of its own upload, under one
+    ``upload_id``; a level is deleted alone or the whole upload at once."""
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        done = [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4", table=True)]
+    assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
+    assert len({r["upload_id"] for r in done}) == len({r["source_path"] for r in done}) == 1  # one file, one upload id
+    separate = [
+        load_dataset(path, engine.settings.miner, geo=g, bins=b).dataset_id for g, b in (("auto@8", "points:4"), ("auto", "points:4"), (None, ""))
+    ]
+    assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
+    assert any("points" in w for w in done[2]["warnings"])
+    graph, table = engine.graph(), done[2]["dataset_id"]
+    assert graph.nodes[f"DS:{table}"]["props"]["level"] == "table"
+    assert not any(graph.insight(e["source"]).dataset_id == table for e in graph.edges if e["type"] in ("IN_REGION", "CO_LOCATED"))
+    upload_id = done[0]["upload_id"]
+    with TestClient(create_app(engine)) as client:
+        listed = client.get("/api/batches", params={"upload_id": upload_id}).json()
+        assert sorted(b["batch_id"] for b in listed) == sorted(r["batch_id"] for r in done)
+        client.delete(f"/api/datasets/{done[1]['dataset_id']}")
+        assert engine.ws.ready_batch_for(done[0]["dataset_id"]) and Path(done[0]["source_path"]).is_file()  # the other levels stay
+        assert client.delete(f"/api/uploads/{upload_id}").json()["datasets"] == sorted([done[0]["dataset_id"], table])
+        assert not engine.ws.list_batches() and not Path(done[0]["source_path"]).exists()
+        assert client.delete(f"/api/uploads/{upload_id}").status_code == 404
+        for geo, table_level in (("auto@8,6", False), ("auto@7,7", False), ("", True)):  # 6 is no region level; twice; no geo
+            with path.open("rb") as f:
+                refused = client.post("/api/upload", files={"file": ("p.csv", f, "text/csv")}, data={"geo": geo, "table": table_level})
+            assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+    assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
