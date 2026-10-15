@@ -19,7 +19,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
-from insight_contracts import dataset_node_id, metric_node_id
+from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -126,11 +126,12 @@ class Evidence:
                 f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
                 f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
             )
-            spatial = it.provenance.get("spatial")
+            spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
             if spatial:
+                compactness = it.provenance["spatial"].get("compactness", 0)  # derived, outside the contract
                 lines.append(
-                    f"     place: {spatial['cells']:,} H3 cells (resolution {spatial['resolution']}), compactness {spatial.get('compactness', 0):.2f}"
-                    f" | significance corrected for spatial autocorrelation (effective n {format_value(spatial['n_eff'])})"
+                    f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}), compactness {compactness:.2f}"
+                    f" | significance corrected for spatial autocorrelation (effective n {format_value(spatial.n_eff)})"
                 )
             lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
         if self.notes:

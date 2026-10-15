@@ -11,7 +11,7 @@ import pytest
 from conftest import make_config, make_engine
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition
+from insight_contracts import Condition, SpatialProvenance
 from insight_graph_service.core.engine import PipelineError
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
@@ -207,3 +207,12 @@ def test_geo_evidence_speaks_plain_language(tmp_path):
     assert "PLAIN LANGUAGE" in prompt
     scopes = [line for line in prompt.splitlines() if line.startswith("[P")]
     assert scopes and not any("neighbours_points_band" in line or "lisa_points" in line for line in scopes)
+
+
+def test_spatial_provenance_is_the_five_ingest_fields():
+    stored = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01, "compactness": 0.5, "colocated": []}
+    spatial = SpatialProvenance.from_dict(stored)
+    assert spatial.to_dict() == {k: stored[k] for k in ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")}  # derived keys stay out
+    assert SpatialProvenance.from_dict(spatial.to_dict()) == spatial
+    assert SpatialProvenance.from_dict({"resolution": 7, "cells": 40}).moran_i is None  # an older record reads
+    assert SpatialProvenance.from_dict(None) is None and SpatialProvenance.from_dict({}) is None

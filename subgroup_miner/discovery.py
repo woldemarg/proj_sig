@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.stats import norm, zscore
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, Insight, Rejection, Shift, pattern_id
+from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
@@ -388,13 +388,13 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         provenance_extra = {}
         if spatial:
             p_iid = _median_test(values, primary.global_median, primary.global_mad)
-            provenance_extra["spatial"] = {
-                "resolution": spatial.resolution,
-                "cells": cand.row_count,
-                "moran_i": round(rho, 4),
-                "n_eff": round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
-                "p_adjusted_iid": min(1.0, p_iid * result.n_tests),
-            }
+            provenance_extra["spatial"] = SpatialProvenance(
+                resolution=spatial.resolution,
+                cells=cand.row_count,
+                moran_i=round(rho, 4),
+                n_eff=round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
+                p_adjusted_iid=min(1.0, p_iid * result.n_tests),
+            ).to_dict()
         insights.append(
             Insight(
                 id=pid,

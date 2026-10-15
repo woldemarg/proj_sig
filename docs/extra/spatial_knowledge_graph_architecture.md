@@ -461,8 +461,8 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 | цілісність запису | #5 | реалізовано (`record_digest`, `integrity` на вузлі Pattern, виключення з evidence) |
 | джерело і надійність | #6 | реалізовано (опції upload, `PATCH /api/datasets/{id}`, props Dataset, рядок `DATASETS:`) |
 | заголовок без «verified» | #26 | реалізовано (`graph_query_engine/evidence.py`, `SYSTEM_PROMPT`; фраза «trust is given per item» — з рядками `trust:` у #8) |
-| `SpatialProvenance` з п'яти полів | #25 | план |
-| прибирання перед ядром | #33 | план |
+| `SpatialProvenance` з п'яти полів | #25 | реалізовано (`insight_contracts`; пише discovery, читає evidence, задає поля дайджесту) |
+| прибирання перед ядром | #33 | реалізовано (реєстр у пам'яті, каталог при коміті, пороги-константи, `geo.npz` з п'яти масивів) |
 | регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | план |
 | `upload_id`, рівні як датасети, `table` | #28 | план |
 | вибір роздільностей з даних | #29 | план |
