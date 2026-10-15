@@ -31,11 +31,11 @@ from insight_contracts.text import (
 )
 
 EVIDENCE_MAX_PATTERNS = 10
-LINK_NOTE = {"CO_OCCURS": ", shared members"}
+LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occurrence link from a centroid neighbour
 LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
     "same_region": " [reached by location only: same area, zones do not overlap]",
-    "adjacent": " [reached by location only: zones touch, do not overlap]",
-}  # how the prompt tells a co-occurrence link from a centroid neighbour
+    "adjacent": " [reached by location only: zones touch or barely overlap]",
+}
 
 
 @dataclass
@@ -192,7 +192,7 @@ class Evidence:
                     for x in s["shifts"][: len(it.shift_text) or 1][:2]
                 )
             tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
-            tag = tag or (" (знайдено лише за місцем: той самий район, інше явище)" if it.located else "")
+            tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
@@ -228,7 +228,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         (forged if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch" else chosen).append(r)
     for idx, r in enumerate(chosen, start=1):
         node = graph.nodes[r.node_id]
-        ins = graph.insight(r.node_id)
+        ins, located = graph.insight(r.node_id), _located(r, graph)
         material = config.thresholds.has_material_covariance(ins)
         acts = [
             {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
@@ -268,8 +268,8 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                 validation=describe_validation(ins, config.thresholds)
                 + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
                 attractors=acts,
-                transversal_only=r.transversal_only,
-                located=_located(r, graph),
+                transversal_only=r.transversal_only and not located,  # the last step is the place, not the phenomenon
+                located=located,
                 provenance={
                     **ins.provenance,
                     "pattern_id": r.node_id,
