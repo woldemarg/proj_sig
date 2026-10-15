@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 5  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 6  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
