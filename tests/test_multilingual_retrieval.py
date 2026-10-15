@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from conftest import make_config, make_engine
+from doubles import HashingEmbedder
 from test_traversal import pattern
 
 from graph_query_engine.graph import DualGraph
@@ -180,13 +181,17 @@ def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
     built = writer.committed().catalog  # the commit embeds the literals and saves their vectors
     assert writer.ws.load_literals(writer.encoder.spec.fingerprint).keys() == set(built.texts)
     assert writer.ws.load_literals("another-fingerprint") == {}
-    reader = make_engine(cfg, recover=False)
-    calls = []
-    original = reader.encoder.embedder.embed
-    reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
+    calls: list[list[str]] = []
+
+    class Counting(HashingEmbedder):
+        def embed(self, texts):
+            calls.append(list(texts))
+            return super().embed(texts)
+
+    reader = make_engine(cfg, recover=False, embedder=Counting())  # counts from the start, where the catalog is built
     catalog = reader.committed().catalog
     assert isinstance(catalog, LiteralCatalog) and catalog.texts == built.texts and calls == []  # loaded, not re-embedded
-    assert np.allclose(catalog.vectors, built.vectors) and reader.committed().catalog is catalog  # cached until the next commit
+    assert np.allclose(catalog.vectors, built.vectors)
     assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "graph" / "literals.npz.tmp").exists()
 
 

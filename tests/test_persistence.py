@@ -137,6 +137,23 @@ def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     csv2.write_text(demo_csv.read_text().replace("\n", "\n", 1) + "\n")  # different bytes -> new dataset id
     rec = other.ingest_file(csv2)
     assert rec["status"] == "FAILED" and rec["error"]["code"] == "representation_mismatch"
+    literals = other.ws.literals_path.read_bytes()
+    assert make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0))).committed().catalog is None  # no cache built or saved
+    assert other.ws.literals_path.read_bytes() == literals
+
+
+def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv, tmp_path):
+    """The literal catalog is built when the state is loaded; if the model fails there, the engine still starts, not degraded."""
+    from doubles import HashingEmbedder
+
+    class Broken(HashingEmbedder):
+        def embed(self, texts):
+            raise RuntimeError("CUDA out of memory")
+
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    engine.ws.literals_path.unlink()  # the start must embed the literals
+    broken = make_engine(make_config(tmp_path / "ws"), embedder=Broken())
+    assert broken.problem is None and broken.graph().insights and broken.committed().catalog is None
 
 
 class Crash(BaseException):  # the process dies: no except-handler runs

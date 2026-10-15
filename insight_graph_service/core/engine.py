@@ -161,20 +161,27 @@ class Engine:
         """The read state of a commit, complete before readers see it: every pattern's canonical-document vector (stored
         at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the literal
         catalog (docs/07_question_answering.md §7.1.1; known literals from the workspace's literal cache). A writer
-        saves both, so no later commit or restart pays for them again."""
-        missing = [pid for pid in graph.insights if pid not in frame.documents]
-        if missing:
-            filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
-            frame.documents.update(filled)
-            if self._writer:
-                self.ws.save_document_vectors(frame.documents, set(filled))
+        saves both, so no later commit or restart pays for them again. Neither is built for a workspace of another
+        representation (its questions are refused) nor when the model fails: then ``search`` builds the catalog on the
+        first question, and a pattern without a document vector stays out of the naive baseline."""
         if not graph.insights:
             return CommittedState(graph, frame)
-        fingerprint = self.encoder.spec.fingerprint
-        known = self.ws.load_literals(fingerprint)
-        catalog = build_catalog(graph, self.encoder.embedder, known)
-        if self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
-            self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors)
+        try:
+            self.ws.check_representation(self.encoder.spec)  # never embed or save with a model the workspace does not use
+            missing = [pid for pid in graph.insights if pid not in frame.documents]
+            if missing:
+                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
+                frame.documents.update(filled)
+                if self._writer:
+                    self.ws.save_document_vectors(frame.documents, set(filled))
+            fingerprint = self.encoder.spec.fingerprint
+            known = self.ws.load_literals(fingerprint)
+            catalog = build_catalog(graph, self.encoder.embedder, known)
+            if self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
+                self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors)
+        except Exception as exc:  # the graph is committed; a missing cache costs the first question, never the workspace
+            log.warning("committed state without its literal catalog: %s: %s", type(exc).__name__, exc)
+            return CommittedState(graph, frame)
         return CommittedState(graph, frame, catalog)
 
     def ontology(self) -> LatentOntology:
@@ -379,7 +386,17 @@ class Engine:
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
                         if loaded.spatial:  # the map's file, from the journaled patterns
-                            self._save_geo(ds, loaded)
+                            ctx = loaded.spatial
+                            self.ws.save_geo(
+                                ds,
+                                {
+                                    "cells": ctx.cells.astype(str),
+                                    "point_cell": ctx.point_cell,
+                                    "lonlat": ctx.lonlat,
+                                    "nbr_ptr": ctx.nbr_ptr,
+                                    "nbr_idx": ctx.nbr_idx,
+                                },
+                            )
                             atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, loaded))
                         ontology.save()
                         self.ws.record_representation(spec)
@@ -413,13 +430,6 @@ class Engine:
             "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
             "glossary": ctx.glossary,
         }
-
-    def _save_geo(self, ds: str, loaded: Any) -> None:
-        """Store the geo dataset's spatial context: its cells, point -> cell, the points and the ring-1 neighbour CSR."""
-        ctx = loaded.spatial
-        self.ws.save_geo(
-            ds, {"cells": ctx.cells.astype(str), "point_cell": ctx.point_cell, "lonlat": ctx.lonlat, "nbr_ptr": ctx.nbr_ptr, "nbr_idx": ctx.nbr_idx}
-        )
 
     def geo_datasets(self) -> list[dict[str, Any]]:
         """READY datasets analysed as H3 cells, with what the map needs to offer them."""
@@ -566,8 +576,8 @@ class Engine:
         return record
 
     def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
-        """After a commit (batch or deletion): readers switch to the new state in one assignment (the literal catalog
-        follows on the next question) and the optional Neo4j mirror is synced; returns the mirror status."""
+        """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and
+        the optional Neo4j mirror is synced; returns the mirror status."""
         self._state = state
         return self.sync_neo4j(snapshot)
 

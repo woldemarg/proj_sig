@@ -6,7 +6,7 @@ Layout under ``WORKSPACE_DIR``::
     datasets/<dataset_id>/profile.json     schema / profile summary
     datasets/<dataset_id>/covers.npz       pattern_id -> covered row positions
     datasets/<dataset_id>/rejections.json  pruned candidates with reason codes
-    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, cell table, point -> cell, neighbour graph
+    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, point -> cell, points, neighbour graph
     datasets/<dataset_id>/cells.geojson    a geo dataset: the map's GeoJSON (cells, patterns' extents), written with the batch
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
@@ -157,12 +157,13 @@ class Workspace:
         for d in (self.registry_dir, self.datasets_dir, self.journal_dir / "blocks", self.state_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.journal = ChunkJournal(self.journal_dir, records_name="patterns.jsonl")
+        self._batches: dict[str, dict[str, Any]] = {}
         self._load_cache()
 
     def _load_cache(self) -> None:
         """The batch registry and the vector contract, read once and written through: the console polls them, and a
-        reader never opens a file the writer is replacing."""
-        self._batches = {b["batch_id"]: b for b in map(read_json, self.registry_dir.glob("*.json")) if b}
+        reader never opens a file the writer is replacing. Merged, not replaced: a record saved meanwhile stays."""
+        self._batches.update({b["batch_id"]: b for b in map(read_json, self.registry_dir.glob("*.json")) if b})
         self._representation = read_json(self.state_dir / "representation.json")
 
     def batch_path(self, batch_id: str) -> Path:
@@ -171,7 +172,7 @@ class Workspace:
     def save_batch(self, record: dict[str, Any]) -> None:
         record["updated_at"] = utc_now()
         atomic_write_json(self.batch_path(record["batch_id"]), record)
-        self._batches[record["batch_id"]] = copy.deepcopy(record)
+        self._batches[record["batch_id"]] = json.loads(json.dumps(record, default=str))  # what the file holds
 
     def load_batch(self, batch_id: str) -> dict[str, Any] | None:
         """A copy: a caller edits it and saves it, or drops it."""

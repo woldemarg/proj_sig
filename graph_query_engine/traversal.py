@@ -109,7 +109,6 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
 
 
 def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> TraversalResult:
-    lattice = LATTICE_EDGES
     counter = itertools.count()
     heap: list[tuple] = []
     for s in seeds:
@@ -141,7 +140,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
 
         if phase in ("P0", "P1"):
             if s_cnt < STRUCTURAL_HOPS:
-                for e, other in graph.incident(node, lattice):
+                for e, other in graph.incident(node, LATTICE_EDGES):
                     if e["type"] in ("SPECIALIZES", "GENERALIZES") and e["source"] != node:
                         continue  # both directions are materialised; follow out-edges only
                     if phase == "P1" and other in seed_ids:
