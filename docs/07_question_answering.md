@@ -101,7 +101,8 @@ The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` 
 | node rank | path score · `insight_weight` (seeds keep their seed score) |
 | `route` | `seed`, `structural` (reached in phase P0), `transversal` (reached in phase P1, i.e. through an anchor) |
 | `scope_overlap` | maximum Jaccard similarity of conditions with any seed |
-| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup; not set when the last step is a `same_region` or `adjacent` CO_LOCATED link, which sets `located` instead |
+| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup; not set when `located` is |
+| `located` | `same_region` or `adjacent` (`LOCATED_RELATIONS`) when the last step is a CO_LOCATED link of that relation and `scope_overlap = 0`: the same area, not a related finding; else empty |
 | `structural_distance` | BFS hops over all structural edges, including SIBLING, up to 5 (`None` = unreachable within 5) |
 | result | seeds first, then by rank, up to `|seeds| + MAX_RETRIEVED` (12) patterns, with their `PathStep(source, target, edge_type, weight, hop, edge_id, reverse)` lists; `used_edges` and `traversed_nodes` are the union of the selected paths |
 
@@ -128,7 +129,7 @@ Evidence(
         validation="bootstrap stability 0.95; adjusted p < 0.001",   # or "correlation change (...); no median test"
         path=[{source, target, edge_type, weight, hop, edge_id, reverse}, ...],   # the PathSteps as dicts
         path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
-        attractors=[{attractor, alignment, label}], transversal_only=True,
+        attractors=[{attractor, alignment, label}], transversal_only=True, located="",   # located: as on Retrieved
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight, type}], signature}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],

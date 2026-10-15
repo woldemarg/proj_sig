@@ -128,6 +128,8 @@ def test_an_item_reached_only_by_location_is_marked():
 
 def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+    from graph_query_engine.evidence import LOCATION_TAG
+    from graph_query_engine.traversal import LOCATED_RELATIONS
 
     snap = snapshot()
     snap["nodes"].append(pattern("P3", ["region=APAC", "category=laptops"]))
@@ -141,4 +143,5 @@ def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     assert item.located == "same_region" and not item.transversal_only  # only the place links it to P2's phenomenon
     location, latent = (next(n for n in found.evidence.notes if mark in n) for mark in ("by location", "latent anchors"))
     assert item.key in location and item.key not in latent
+    assert set(LOCATION_TAG) == LOCATED_RELATIONS  # every location-only relation has its tag
     assert "P3" not in found.payload().view["traversal"]["baselines"]["transversal_only"]  # the console reads the same mark
