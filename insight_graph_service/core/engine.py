@@ -43,7 +43,7 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, load_dataset, parse_indicators
+from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, SpatialError, cell_boundary, compactness, derive_spatial, parse_geo_levels, sac_summary
 
@@ -271,18 +271,30 @@ class Engine:
         table: bool = False,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
-        dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); processing is a separate call."""
+        dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
+        levels from the points (``select_levels``). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
-        levels = resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
+        locator, _, res = (geo or "").partition("@")
+        auto = res.strip().lower() == "auto"
+        levels = [] if auto else resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
+        selection = None
+        if auto:
+            try:
+                selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
+            except IngestionError as exc:
+                path.unlink(missing_ok=True)  # refused: the file is not kept
+                raise PipelineError(exc.code, str(exc)) from exc
+            chosen = ",".join(map(str, selection["chosen"]))
+            levels = resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
-        return [self.submit(path, geo=g, upload=(upload_id, level), **options) for g, level in levels]
+        return [self.submit(path, geo=g, upload=(upload_id, level), geo_levels=selection, **options) for g, level in levels]
 
     @_healthy
     def submit(
@@ -298,6 +310,7 @@ class Engine:
         indicators: str | None = None,
         upload: tuple[str, str] | None = None,
         strict: bool = True,
+        geo_levels: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -306,7 +319,8 @@ class Engine:
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
         (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is (``upload_id``, level) for a batch
-        of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning).
+        of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
+        ``geo_levels`` is the ``@auto`` selection (``profile.geo.levels``).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         path = Path(path)
@@ -321,6 +335,7 @@ class Engine:
             **({"geo": geo} if geo else {}),
             **({"upload_id": upload[0], "level": upload[1]} if upload else {}),
             **({} if strict else {"strict": False}),
+            **({"geo_levels": geo_levels} if geo_levels else {}),
             **trust,
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
@@ -372,7 +387,7 @@ class Engine:
                         "categorical_overrides": loaded.categories,
                     }
                     if loaded.spatial:
-                        record["profile"]["geo"] = self._geo_profile(loaded)
+                        record["profile"]["geo"] = self._geo_profile(loaded) | ({"levels": record["geo_levels"]} if "geo_levels" in record else {})
                     if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
                         record["warnings"].append(
                             f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"
