@@ -379,7 +379,8 @@ class Engine:
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
                         if loaded.spatial:  # the map's file, from the journaled patterns
-                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, self._save_geo(ds, loaded)))
+                            self._save_geo(ds, loaded)
+                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, loaded))
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
@@ -413,20 +414,12 @@ class Engine:
             "glossary": ctx.glossary,
         }
 
-    def _save_geo(self, ds: str, loaded: Any) -> dict[str, Any]:
-        """Store the geo dataset's context and cell table; returns them in the shape ``Workspace.load_geo`` gives back."""
+    def _save_geo(self, ds: str, loaded: Any) -> None:
+        """Store the geo dataset's spatial context: its cells, point -> cell, the points and the ring-1 neighbour CSR."""
         ctx = loaded.spatial
-        geo = {
-            "cells": ctx.cells.astype(str),
-            "point_cell": ctx.point_cell,
-            "lonlat": ctx.lonlat,
-            "nbr_ptr": ctx.nbr_ptr,
-            "nbr_idx": ctx.nbr_idx,
-            "columns": {c: loaded.frame[c].to_numpy(dtype=float if loaded.frame[c].dtype.kind in "fiu" else str) for c in loaded.frame.columns},
-            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(loaded.frame.columns)},
-        }
-        self.ws.save_geo(ds, geo)
-        return geo
+        self.ws.save_geo(
+            ds, {"cells": ctx.cells.astype(str), "point_cell": ctx.point_cell, "lonlat": ctx.lonlat, "nbr_ptr": ctx.nbr_ptr, "nbr_idx": ctx.nbr_idx}
+        )
 
     def geo_datasets(self) -> list[dict[str, Any]]:
         """READY datasets analysed as H3 cells, with what the map needs to offer them."""
@@ -448,12 +441,13 @@ class Engine:
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
         return self.ws.geo_cells_path(dataset_id)
 
-    def geo_cells(self, dataset_id: str, geo: dict[str, Any]) -> dict[str, Any]:
-        """The dataset's cells (``geo``: its stored context, in ``Workspace.load_geo``'s shape) as a GeoJSON FeatureCollection
-        with the journaled patterns' extents; properties are the cell-table columns."""
-        cols = geo["columns"]
+    def geo_cells(self, dataset_id: str, loaded: Any) -> dict[str, Any]:
+        """The dataset's cells as a GeoJSON FeatureCollection with the journaled patterns' extents; properties are the
+        columns of the analysed cell table (``loaded.frame``), read once, when the batch writes the file."""
+        ctx, frame = loaded.spatial, loaded.frame
+        cols = {c: frame[c].to_numpy(dtype=float if frame[c].dtype.kind in "fiu" else str) for c in frame.columns}
         features = []
-        for i, cell in enumerate(geo["cells"]):
+        for i, cell in enumerate(ctx.cells):
             props: dict[str, Any] = {"h3": str(cell), "row": i}
             for name, values in cols.items():
                 v = values[i]
@@ -461,7 +455,7 @@ class Engine:
             features.append(
                 {"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props}
             )
-        lonlat = geo["lonlat"][geo["point_cell"] >= 0]
+        lonlat = ctx.lonlat[ctx.point_cell >= 0]
         bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
         covers = self.ws.load_covers(dataset_id)
         patterns = [
@@ -479,7 +473,13 @@ class Engine:
             for r in self.ws.patterns()
             if r["dataset_id"] == dataset_id and r["id"] in covers
         ]
-        return {"type": "FeatureCollection", "features": features, "bbox": bbox, "meta": geo["meta"], "patterns": patterns}
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "bbox": bbox,
+            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
+            "patterns": patterns,
+        }
 
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
         """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""

@@ -236,29 +236,21 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, geo: dict[str, Any]) -> None:
-        """A geo dataset's spatial context, cell table and meta, in the shape ``load_geo`` returns."""
-        names = list(geo["columns"])
-        payload = {k: v for k, v in geo.items() if k not in ("columns", "meta")}
-        payload.update({f"col{i}": np.asarray(geo["columns"][n]) for i, n in enumerate(names)})
-        payload["meta"] = np.array(json.dumps({**geo["meta"], "columns": names}, ensure_ascii=False))
-        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **payload)
+    def save_geo(self, dataset_id: str, geo: dict[str, np.ndarray]) -> None:
+        """A geo dataset's spatial context (``cells``, ``point_cell``, ``lonlat``, ``nbr_ptr``, ``nbr_idx``)."""
+        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **geo)
 
     def geo_cells_path(self, dataset_id: str) -> Path:
         """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
         return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str) -> dict[str, Any] | None:
-        """``{"meta", "columns": {name: array}, <array>: ...}`` of a geo dataset; None for any other dataset."""
+        """The spatial context ``save_geo`` stored for a geo dataset; None for any other dataset."""
         path = self.datasets_dir / dataset_id / "geo.npz"
         if not path.is_file():
             return None
         with np.load(path, allow_pickle=False) as data:
-            meta = json.loads(str(data["meta"]))
-            out = {k: data[k] for k in data.files if k != "meta" and not k.startswith("col")}
-            out["columns"] = {n: data[f"col{i}"] for i, n in enumerate(meta["columns"])}
-        out["meta"] = meta
-        return out
+            return {k: data[k] for k in data.files}
 
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.
