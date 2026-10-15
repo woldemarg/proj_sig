@@ -42,7 +42,7 @@
           <div class="hint">Quantile bands become a dimension; the source column stops being a metric.</div>
           <label class="small" for="geo">Spatial analysis (H3 cells)</label>
           <input class="field" id="geo" placeholder="e.g. auto@7 · geometry · lat,lon">
-          <div class="hint">Rows are points: analyse H3 cells instead — <span class="mono">auto</span> finds a GeoJSON/WKT point or lat/lon columns; <span class="mono">@7</span> is the resolution.</div>
+          <div class="hint">Rows are points: analyse H3 cells instead — <span class="mono">auto</span> finds a GeoJSON/WKT point or lat/lon columns; <span class="mono">@7</span> is the resolution, <span class="mono">@7,5</span> one dataset per level, <span class="mono">@auto</span> levels read from the points.</div>
           <label class="small" for="indicators">What the metrics measure</label>
           <input class="field" id="indicators" placeholder="e.g. price:retail_price:UAH, qty:units_sold">
           <div class="hint"><span class="mono">metric:indicator[:unit]</span> — what a metric measures, for comparing datasets. With spatial analysis the metrics are the cells' (<span class="mono">price_median</span>). Not part of the analysis.</div>

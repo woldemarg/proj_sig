@@ -14,10 +14,11 @@ import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
+from insight_graph_service.core.settings import PROJECT_ROOT
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
-from subgroup_miner.ingestion import IngestionError, load_dataset
-from subgroup_miner.spatial import build_cells, effective_n_factor, parse_geo, parse_points, subgroup_moran
+from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset
+from subgroup_miner.spatial import SpatialError, build_cells, effective_n_factor, parse_geo, parse_points, select_levels, subgroup_moran
 
 HOT = (48.5, 35.25)  # the planted cluster: many points, mostly at night, late in the period
 
@@ -345,10 +346,6 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
 def test_auto_picks_the_levels_from_the_points(tmp_path):
     """``@auto``: the finest resolution with enough cells, enough of them dense, then the coarser region levels; the
     same file the same levels; a denser file a finer level; an upload with ``@auto`` is the upload of its levels."""
-    from insight_graph_service.core.settings import PROJECT_ROOT
-    from subgroup_miner.ingestion import auto_levels
-    from subgroup_miner.spatial import select_levels
-
     cfg, levels = MinerConfig(), (7, 5, 3, 1)
     california = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
     picked = auto_levels(california, "auto", cfg, levels)
@@ -358,14 +355,17 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
         n: select_levels(rng.uniform(48, 49, n), rng.uniform(35, 36, n), levels, min_rows=50, min_cell_points=5)["chosen"][0] for n in (2_000, 50_000)
     }
     assert finest[50_000] > finest[2_000]  # the denser file gets the finer level
+    with pytest.raises(SpatialError, match="dense share"):  # many cells, none dense: the refusal names that
+        select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
 
     path = tmp_path / "points.csv"
     geo_frame().to_csv(path, index=False)
     engine = make_engine(make_config(tmp_path / "ws"))
     with path.open("rb") as f:
-        (record,) = engine.upload("points.csv", f, geo="auto@auto")
+        record, table = engine.upload("points.csv", f, geo="auto@auto", table=True)
     done = engine.process(record["batch_id"])
-    assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7]
+    assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7] and "geo_levels" not in done
+    assert table["level"] == "table" and "geo_levels" not in table  # the selection is the geo levels' alone
     assert done["dataset_id"] == load_dataset(path, engine.settings.miner, geo="auto@7").dataset_id
     pd.DataFrame({"lat": [48.5] * 60, "lon": [35.3] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:

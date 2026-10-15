@@ -278,15 +278,18 @@ class Engine:
         auto = res.strip().lower() == "auto"
         levels = [] if auto else resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
-        if not path.exists():  # the workspace was reset while the file streamed in
-            raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        selection = None
+        selection, refused = None, None
         if auto:
             try:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
             except IngestionError as exc:
-                path.unlink(missing_ok=True)  # refused: the file is not kept
-                raise PipelineError(exc.code, str(exc)) from exc
+                refused = PipelineError(exc.code, str(exc))
+        if not path.exists():  # the workspace was reset while the file streamed in or was read
+            raise PipelineError("busy", "the workspace was reset during the upload; upload again")
+        if refused:
+            path.unlink()  # refused: the file is not kept
+            raise refused
+        if selection:
             chosen = ",".join(map(str, selection["chosen"]))
             levels = resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
         with path.open("rb") as stored:
@@ -294,7 +297,7 @@ class Engine:
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
-        return [self.submit(path, geo=g, upload=(upload_id, level), geo_levels=selection, **options) for g, level in levels]
+        return [self.submit(path, geo=g, upload=(upload_id, level), geo_levels=selection if g else None, **options) for g, level in levels]
 
     @_healthy
     def submit(
@@ -320,7 +323,7 @@ class Engine:
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
         (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is (``upload_id``, level) for a batch
         of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
-        ``geo_levels`` is the ``@auto`` selection (``profile.geo.levels``).
+        ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``.
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         path = Path(path)
@@ -387,7 +390,9 @@ class Engine:
                         "categorical_overrides": loaded.categories,
                     }
                     if loaded.spatial:
-                        record["profile"]["geo"] = self._geo_profile(loaded) | ({"levels": record["geo_levels"]} if "geo_levels" in record else {})
+                        record["profile"]["geo"] = self._geo_profile(loaded) | (
+                            {"levels": record.pop("geo_levels")} if "geo_levels" in record else {}
+                        )
                     if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
                         record["warnings"].append(
                             f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"
