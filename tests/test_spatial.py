@@ -12,6 +12,7 @@ from conftest import make_config, make_engine
 
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, SpatialProvenance
+from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
@@ -216,3 +217,4 @@ def test_spatial_provenance_is_the_five_ingest_fields():
     assert SpatialProvenance.from_dict(spatial.to_dict()) == spatial
     assert SpatialProvenance.from_dict({"resolution": 7, "cells": 40}).moran_i is None  # an older record reads
     assert SpatialProvenance.from_dict(None) is None and SpatialProvenance.from_dict({}) is None
+    assert tuple(SpatialProvenance.__dataclass_fields__) == SPATIAL_DIGEST_FIELDS  # widening either is a decision about stored digests

@@ -130,7 +130,9 @@ class SpatialProvenance:
         return asdict(self)
 
 
-SPATIAL_DIGEST_FIELDS = tuple(SpatialProvenance.__dataclass_fields__)  # the ingest part of provenance.spatial
+# the provenance.spatial fields stored digests cover: fixed, not derived from SpatialProvenance, since a field added
+# there that stored records already hold (compactness) would turn every one of them into a mismatch
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
 UNDIGESTED = frozenset({"provenance", "row_id", "canonical", "embedding", "record_digest"})  # rewritten or derived after the write
 
 

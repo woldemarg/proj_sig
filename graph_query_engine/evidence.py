@@ -127,11 +127,12 @@ class Evidence:
                 f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
             )
             spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
-            if spatial:
+            if spatial and spatial.cells is not None:
                 compactness = it.provenance["spatial"].get("compactness", 0)  # derived, outside the contract
+                n_eff = f" (effective n {format_value(spatial.n_eff)})" if spatial.n_eff is not None else ""
                 lines.append(
                     f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}), compactness {compactness:.2f}"
-                    f" | significance corrected for spatial autocorrelation (effective n {format_value(spatial.n_eff)})"
+                    f" | significance corrected for spatial autocorrelation{n_eff}"
                 )
             lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
         if self.notes:
