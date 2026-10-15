@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 import h3
 import numpy as np
@@ -47,6 +48,9 @@ GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
 COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset and of the others (the strongest relations)
 GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: share of the region's occupied cells the pattern covers
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
+GEO_AUTO_RESOLUTIONS = range(10, 2, -1)  # the resolutions ``@auto`` weighs, finest first
+GEO_DENSE_SHARE_MIN = 0.3  # ``@auto``: the finest level needs this share of cells with at least min_cell_points points
+GEO_LEVELS_MAX = 3  # ``@auto``: levels chosen, the finest included
 
 
 class SpatialError(ValueError):
@@ -98,6 +102,42 @@ def parse_geo_levels(spec: str, default_resolution: int) -> list[tuple[str, int]
     if len({r for _, r in levels}) < len(levels):
         raise SpatialError(f"Bad geo spec '{spec}' (a resolution is listed twice)")
     return sorted(levels, key=lambda level: -level[1])
+
+
+def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ...], *, min_rows: int, min_cell_points: int) -> dict[str, Any]:
+    """The resolutions ``@auto`` picks for these points (docs/02_discovery.md §2.9): the finest of
+    ``GEO_AUTO_RESOLUTIONS`` with at least ``min_rows`` cells of which ``GEO_DENSE_SHARE_MIN`` hold ``min_cell_points``
+    points, then the coarser ``region_levels`` that still have ``min_rows`` cells, at most ``GEO_LEVELS_MAX`` in all.
+    Returns ``{chosen, candidates: {res: {cells, dense_share, median_points}}, reasons: {res: why}}``, keyed by the
+    resolution as text (as JSON stores it)."""
+    ok = np.isfinite(lat) & np.isfinite(lon)
+    if not ok.any():
+        raise SpatialError("No valid point for @auto")
+    cells = pd.Series([h3.latlng_to_cell(a, b, GEO_AUTO_RESOLUTIONS[0]) for a, b in zip(lat[ok], lon[ok])]).value_counts()
+    candidates = {}
+    for res in GEO_AUTO_RESOLUTIONS:  # each level from the one finer: a parent's parent is the coarser parent
+        cells = cells.groupby([h3.cell_to_parent(c, res) for c in cells.index]).sum()
+        candidates[str(res)] = {
+            "cells": len(cells),
+            "dense_share": round(float((cells >= min_cell_points).mean()), 4),
+            "median_points": float(cells.median()),
+        }
+    reasons, chosen = {}, []
+    for res, c in candidates.items():
+        if c["cells"] < min_rows:
+            reasons[res] = f"{c['cells']} cells < MIN_ROWS {min_rows}"
+        elif not chosen and c["dense_share"] < GEO_DENSE_SHARE_MIN:
+            reasons[res] = f"dense share {c['dense_share']} < {GEO_DENSE_SHARE_MIN}"
+        elif chosen and int(res) not in region_levels:
+            reasons[res] = "not a GEO_REGION_LEVELS level"
+        elif len(chosen) == GEO_LEVELS_MAX:
+            reasons[res] = f"GEO_LEVELS_MAX {GEO_LEVELS_MAX} reached"
+        else:
+            reasons[res] = "finest level" if not chosen else "region level"
+            chosen.append(int(res))
+    if not chosen:
+        raise SpatialError("no resolution fits @auto: " + "; ".join(f"{res}: {why}" for res, why in reasons.items()))
+    return {"chosen": chosen, "candidates": candidates, "reasons": reasons}
 
 
 def parse_points(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:

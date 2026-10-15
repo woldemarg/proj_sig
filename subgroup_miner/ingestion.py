@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, parse_geo
+from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, locate_points, parse_geo, select_levels
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -195,6 +196,15 @@ def load_dataset(
         geo=_geo_text(geo_spec),
         spatial=spatial,
     )
+
+
+def auto_levels(path: Path, locator: str, config: MinerConfig, region_levels: tuple[int, ...]) -> dict[str, Any]:
+    """``select_levels`` for the points of a stored file (the ``@auto`` resolution of an upload)."""
+    try:
+        lat, lon, _ = locate_points(read_table(Path(path)), locator)
+        return select_levels(lat, lon, region_levels, min_rows=config.min_rows, min_cell_points=config.min_cell_points)
+    except SpatialError as exc:
+        raise IngestionError("invalid_options", str(exc)) from exc
 
 
 def _geo_text(spec: tuple[str, int] | None) -> str | None:
