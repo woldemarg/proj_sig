@@ -52,6 +52,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | Identifier | Format | Example | Defined in |
 |---|---|---|---|
 | dataset id | `ds-` + 12 hex of `sha256(file bytes ‖ bands ‖ categories)` | `ds-6e53eb7fb0f9` | [2.1](02_discovery.md#21-ingestion) |
+| upload id | `up-` + 12 hex of `sha256(file bytes)`, options left out: one per uploaded file, shared by its levels | `up-3f1c0a9b2d4e` | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
 | batch id | `B` + UTC `YYYYMMDDTHHMMSS` + `-` + 6 hex | `B20261001T112454-ff7fe6` | [9.1](09_operations.md#91-the-batch-lifecycle) |
 | writer lock | `<workspace>.writer.lock` beside the workspace folder, holding the writer's pid | `workspace.writer.lock` | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | pattern id | `P-` + 12 hex of `sha1(dataset id, condition expressions of the conditions sorted by (attribute, value))` | `P-bc4657a04746` | [3.1](03_insights.md#31-the-insight-record) |
