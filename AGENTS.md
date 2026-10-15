@@ -1,6 +1,8 @@
-# AGENTS.md — Working rules for coding agents in `sig/`
+# AGENTS.md — Working rules for coding agents in SIG
 
-This file defines the default behaviour of AI coding agents (and is good advice for people) working in this repository. Priorities: correctness, statistical honesty, maintainability, fast feedback. Scope: **this folder (`sig/`) only** — see §Boundaries.
+This file defines the default behaviour of AI coding agents (and is good advice for people) working in this repository. Priorities: correctness, statistical honesty, maintainability, fast feedback. Scope: **this repository only** — see §Boundaries.
+
+`python` in the commands below means the repository's virtual environment: `.venv\Scripts\python.exe` on Windows, `.venv/bin/python` on macOS and Linux. Never the `python` on PATH, never the base environment the venv is layered on. Forward-slash paths work in both shells.
 
 ---
 
@@ -8,9 +10,8 @@ This file defines the default behaviour of AI coding agents (and is good advice 
 
 Every task that changes a line of Python ends with the gate passing:
 
-```powershell
-.venv\Scripts\python.exe scripts\check.py          # Windows
-.venv/bin/python scripts/check.py                  # macOS / Linux
+```text
+python scripts/check.py
 ```
 
 The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (≈ 2 min; model-backed and browser tests included when the local model and Chromium are present on the host).
@@ -30,9 +31,9 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | Path | Role |
 |---|---|
 | `insight_contracts/` | the shared kernel, **standard library only**: `insight` (the `Insight` and its parts, `PhenomenonThresholds`), `graph` (edge types, node ids, the snapshot contract), `text` (how an insight reads), `payload` (`EvidencePayload`, the graph service → narrator contract) |
-| `subgroup_miner/` | table → validated, weighted insights: `ingestion`, `discovery` (the EDA adapter), `selection` (validity rules, weight), `lattice`, `describe`; **vendored** `vendor/eda/main_upd.py` (divergences in `vendor/PROVENANCE.md`) |
-| `attractor_topology/` | insights → vectors → latent attractors: `canonical`, `encoder` (Qwen3 only), `ontology` (the lac adapter), `models`; **vendored** `vendor/lac/` (`vendor/PROVENANCE.md`) |
-| `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `evidence`, `search`, `ports` |
+| `subgroup_miner/` | table → validated, weighted insights: `ingestion`, `spatial` (the geo option: points → H3 cells, LISA, extents; the only module that imports `h3`), `discovery` (the EDA adapter), `selection` (validity rules, weight), `lattice`, `describe`, `config`; **vendored** `vendor/eda/main_upd.py` (divergences in `vendor/PROVENANCE.md`) |
+| `attractor_topology/` | insights → vectors → latent attractors: `canonical`, `encoder` (Qwen3 only), `ontology` (the lac adapter), `models`, `config`; **vendored** `vendor/lac/` (`vendor/PROVENANCE.md`) |
+| `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `evidence`, `search`, `ports`, `config` |
 | `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
 | `evidence_narrator_service/` | the chat service: `narration`, `llm_client`, `settings`, `app`; imports only `insight_contracts` |
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
@@ -80,21 +81,21 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 ## 3) Environment and commands
 
-| Task | Command (Windows paths; use `.venv/bin/python` elsewhere) |
+| Task | Command (`python` = the venv interpreter, see the top of this file) |
 |---|---|
-| gate | `.venv\Scripts\python.exe scripts\check.py` |
-| quick feedback | `.venv\Scripts\python.exe scripts\check.py --quick` |
-| one test | `.venv\Scripts\python.exe -m pytest tests\test_traversal.py -q` |
-| the model (once) | `.venv\Scripts\python.exe -m insight_graph_service.core.model_store` (verified against the pinned manifest) |
-| the stack on the host | `.venv\Scripts\python.exe -m llm_model_broker` (port 8080), then `.venv\Scripts\python.exe scripts\dev.py` → http://127.0.0.1:8765 |
-| containers | `docker compose up -d --build --wait`; verification `.venv\Scripts\python.exe scripts\compose_check.py [--tests] [--fresh]` |
+| gate | `python scripts/check.py` |
+| quick feedback | `python scripts/check.py --quick` |
+| one test | `python -m pytest tests/test_traversal.py -q` |
+| the model (once) | `python -m insight_graph_service.core.model_store` (verified against the pinned manifest) |
+| the stack on the host | `python -m llm_model_broker` (port 8080), then `python scripts/dev.py` → http://127.0.0.1:8765 |
+| containers | `docker compose up -d --build --wait`; verification `python scripts/compose_check.py [--tests] [--fresh]` |
 | demo, upload, ask, delete, reset | the HTTP API (`README.md` lists the `curl` calls); `POST /api/reset` only on request for the user's workspace |
-| hypothesis benchmark | `.venv\Scripts\python.exe scripts\experiment.py --k 3` |
-| multilingual benchmark | `.venv\Scripts\python.exe scripts\multilingual_benchmark.py --label <name>` |
-| live answers | `.venv\Scripts\python.exe scripts\eval_answers.py` (calls the LLM behind the broker: a paid call) |
+| hypothesis benchmark | `python scripts/experiment.py --k 3` |
+| multilingual benchmark | `python scripts/multilingual_benchmark.py --label <name>` |
+| live answers | `python scripts/eval_answers.py` (calls the LLM behind the broker: a paid call) |
 
 - Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere) and `fileio`'s Windows sharing retry (`fileio.retry_sharing`).
-- The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s, CUDA when available; the containers use the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
+- The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s; with `EMBEDDING_DEVICE=auto` on CUDA, or MPS on Apple silicon, when available; the containers use the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
 - `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` (Windows temp-dir permissions); do not remove it.
 - Processing a batch is sequential and checkpointed (`docs/09_operations.md`); when debugging a stuck or failed batch, read `workspace/registry/batches/<id>.json` first (`error`, `failed_stage`, `warnings`).
 
@@ -104,7 +105,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 - Behaviour changes, regressions and non-trivial edge cases get a test in the file that owns the transition (test map: `docs/10_verification.md` §10.1). Prefer extending an existing fixture over inventing a new workspace.
 - Planted-phenomenon tests (`test_discovery_contract.py`, `test_e2e.py`, `test_hypothesis_apparatus`) are the statistical regression suite: a change that makes them fail is a change to the mathematics and needs the owning chapter updated and a justification, not a loosened assertion.
 - Each library has a standalone test (`tests/test_*_standalone.py`) that uses it without the services (`tests/test_architecture.py` keeps its imports to the kernel); keep it passing when a library's API changes.
-- Browser test: Playwright with the locally installed Chromium (`tests/test_ui_smoke.py::_chromium` looks under `%LOCALAPPDATA%\ms-playwright` for the Windows or Linux build; elsewhere the test skips); it runs the console against the `scripts/dev.py` composite. UI changes keep its selectors working or update them in the same change.
+- Browser test: Playwright with the locally installed Chromium (`tests/test_ui_smoke.py::_chromium` looks under `%LOCALAPPDATA%\ms-playwright` for the Windows or Linux build; without `LOCALAPPDATA` — macOS, a default Linux host, the containers — the test skips); it runs the console against the `scripts/dev.py` composite. UI changes keep its selectors working or update them in the same change.
 - Never add network calls to tests. The LLM endpoint is the stub server, Neo4j the fake driver.
 
 ## 5) Statistical and representational changes
