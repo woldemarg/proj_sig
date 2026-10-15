@@ -283,6 +283,25 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
 
 
+def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
+    """An overlap or a region share of exactly 2/3 stays below a threshold of 0.66667, although it is stored as 0.6667."""
+    import subgroup_miner.spatial as spatial
+
+    monkeypatch.setattr(spatial, "GEO_COLOCATION_MIN", 0.66667)
+    monkeypatch.setattr(spatial, "GEO_REGION_MIN_SHARE", 0.66667)
+    apart = h3.grid_ring(h3.latlng_to_cell(48.5, 35.3, 8), 10)[::3][:4]  # no two neighbours: the dilation adds nothing
+    kids = sorted(h3.cell_to_children(h3.latlng_to_cell(40.0, 30.0, 7), 8))[:3]
+    out = spatial.derive_spatial(
+        [
+            _geo_dataset("pairs", apart, {"P-a": apart[:3], "P-b": [*apart[:2], apart[3]]}),  # |A ∩ B| / min = 2/3
+            _geo_dataset("share", kids, {"P-s": kids[:2]}),  # two of the region's three occupied cells
+        ],
+        (7, 5, 3, 1),
+    )
+    assert {(a, b): rel for a, b, rel, _ in out.co_located}[("P-a", "P-b")] == "adjacent"  # not overlaps
+    assert not any(p == "P-s" and r.startswith("R:7:") for p, r, _ in out.in_region)
+
+
 def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(tmp_path):
     """The spatial plane is derived from geo.npz and covers.npz: a snapshot of an older version is rebuilt with it,
     no upload again."""
