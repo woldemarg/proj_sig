@@ -280,7 +280,7 @@ class Engine:
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
-        if len(levels) > 1:  # each level applies the bins and categories it has
+        if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
         return [self.submit(path, geo=g, upload=(upload_id, level), **options) for g, level in levels]
 
@@ -661,22 +661,25 @@ class Engine:
         leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
         ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
-        return {"dataset_id": dataset_id, **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), {"dataset_id": dataset_id})}
+        return {
+            "dataset_id": dataset_id,
+            **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), {"dataset_id": dataset_id}, "unknown_dataset"),
+        }
 
     @_healthy
     def delete_upload(self, upload_id: str) -> dict[str, Any]:
         """Remove every level of one upload (the datasets its batches made) in one transaction, as ``delete_dataset``."""
-        return {"upload_id": upload_id, **self._delete(lambda b: b.get("upload_id") == upload_id, {"upload_id": upload_id})}
+        return {"upload_id": upload_id, **self._delete(lambda b: b.get("upload_id") == upload_id, {"upload_id": upload_id}, "unknown_upload")}
 
-    def _delete(self, chosen: Callable[[dict[str, Any]], bool], intent: dict[str, str]) -> dict[str, Any]:
+    def _delete(self, chosen: Callable[[dict[str, Any]], bool], intent: dict[str, str], unknown: str) -> dict[str, Any]:
         """Delete the datasets of the ``chosen`` batches with all their batches (``delete_dataset``); ``intent`` names
-        what is deleted (one key: ``dataset_id`` or ``upload_id``) for the refusals and the transaction marker."""
-        ((kind, key),) = intent.items()
+        what is deleted (``dataset_id`` or ``upload_id``) for the transaction marker, ``unknown`` the refusal's code."""
+        key = next(iter(intent.values()))
         with self._lock:
             every = self.ws.list_batches()
             picked = [b for b in every if chosen(b)]
             if not picked:
-                raise PipelineError(f"unknown_{kind.removesuffix('_id')}", key)
+                raise PipelineError(unknown, key)
             ids = {b["dataset_id"] for b in picked if b.get("dataset_id")}
             batches = [b for b in every if chosen(b) or b.get("dataset_id") in ids]
             if any(b["status"] not in TERMINAL for b in batches):

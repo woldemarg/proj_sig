@@ -95,7 +95,7 @@ def read_table(path: Path) -> pd.DataFrame:
 
 
 def select_present(
-    columns: list[str], frame: pd.DataFrame, *, explicit: bool, option: str, tolerated: set[str] = frozenset()
+    columns: list[str], frame: pd.DataFrame, *, explicit: bool, option: str, tolerated: set[str] | frozenset[str] = frozenset()
 ) -> tuple[list[str], list[str]]:
     """Split an option's columns into (present, missing). An explicit option must name existing
     columns, or ``tolerated`` ones (``invalid_options``); a configured default skips the ones this dataset lacks."""

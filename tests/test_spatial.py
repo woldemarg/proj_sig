@@ -338,3 +338,5 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
                 refused = client.post("/api/upload", files={"file": ("p.csv", f, "text/csv")}, data={"geo": geo, "table": table_level})
             assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
     assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
+    with path.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
+        assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
