@@ -319,8 +319,8 @@ def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(
 
 
 def test_one_upload_makes_one_dataset_per_level(tmp_path):
-    """``geo=<loc>@<r1>,<r2>`` and ``table`` make ordinary datasets, each with the id of its own upload, under one
-    ``upload_id``; a level is deleted alone or the whole upload at once."""
+    """``geo=<loc>@<r1>,<r2>`` and ``table`` make ordinary datasets under one ``upload_id``: each geo level with the id
+    of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
     from fastapi.testclient import TestClient
@@ -335,10 +335,13 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
     assert len({r["upload_id"] for r in done}) == len({r["source_path"] for r in done}) == 1  # one file, one upload id
     separate = [
-        load_dataset(path, engine.settings.miner, geo=g, bins=b).dataset_id for g, b in (("auto@8", "points:4"), ("auto", "points:4"), (None, ""))
+        load_dataset(path, engine.settings.miner, geo=g, bins=b, locator=loc).dataset_id
+        for g, b, loc in (("auto@8", "points:4", None), ("auto", "points:4", None), (None, "", "auto"))
     ]
     assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
-    assert any("points" in w for w in done[2]["warnings"])
+    assert done[2]["dataset_id"] != load_dataset(path, engine.settings.miner, bins="").dataset_id  # not a plain upload
+    assert not {"latitude", "longitude"} & set(done[2]["profile"]["numerics"])  # its point columns left out
+    assert any("points" in w for w in done[2]["warnings"]) and any("left out of the table level" in w for w in done[2]["warnings"])
     with pytest.raises(IngestionError, match="pointz"):  # a name in neither the file nor the cells fails the geo levels
         load_dataset(path, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
     graph, table = engine.graph(), done[2]["dataset_id"]

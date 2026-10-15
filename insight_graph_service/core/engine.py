@@ -297,7 +297,12 @@ class Engine:
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
-        return [self.submit(path, geo=g, upload=(upload_id, level), geo_levels=selection if g else None, **options) for g, level in levels]
+        return [  # the table level leaves the point columns out
+            self.submit(
+                path, geo=g, upload=(upload_id, level), geo_levels=selection if g else None, locator=None if g else locator.strip() or None, **options
+            )
+            for g, level in levels
+        ]
 
     @_healthy
     def submit(
@@ -314,6 +319,7 @@ class Engine:
         upload: tuple[str, str] | None = None,
         strict: bool = True,
         geo_levels: dict[str, Any] | None = None,
+        locator: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -323,7 +329,8 @@ class Engine:
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
         (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is (``upload_id``, level) for a batch
         of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
-        ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``.
+        ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``; ``locator`` the point
+        columns a table level leaves out.
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         path = Path(path)
@@ -339,6 +346,7 @@ class Engine:
             **({"upload_id": upload[0], "level": upload[1]} if upload else {}),
             **({} if strict else {"strict": False}),
             **({"geo_levels": geo_levels} if geo_levels else {}),
+            **({"locator": locator} if locator else {}),
             **trust,
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
@@ -374,6 +382,7 @@ class Engine:
                         categories=record.get("categories"),
                         geo=record.get("geo"),
                         strict=record.get("strict", True),
+                        locator=record.get("locator"),
                     )
                     ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings

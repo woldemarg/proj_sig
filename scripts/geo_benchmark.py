@@ -71,6 +71,7 @@ class Upload:
     geo: str | None  # the geo option; None ingests the table
     parts: dict[str, np.ndarray]  # planted part (a focus or "zone") -> mask over the frame's rows
     targets: dict[str, set[str]] = field(default_factory=dict)  # part -> its planted metrics besides load
+    locator: str | None = None  # the table level of a geo upload: its point columns left out
 
 
 @dataclass
@@ -193,7 +194,7 @@ def generate(name: str, seed: int) -> Scenario:
         if name == "S-levels":
             zone = lon > lon0 + dlon / 2
             frame = _events(rng, lat, lon, zone, BROAD, grid=(1, 2))  # two districts: west, east
-            uploads = [Upload("s_levels.csv", frame, geo, {"zone": zone}) for geo in (None, "lat,lon@7", "lat,lon@5")]
+            uploads = [Upload("s_levels.csv", frame, geo, {"zone": zone}, {}, None if geo else "lat,lon") for geo in (None, "lat,lon@7", "lat,lon@5")]
             return Scenario(name, uploads)
         cuts = lon0 + dlon * np.array([1 / 3, 2 / 3])
         zone = lat > lat0 + dlat / 2  # the northern half, across both cuts
@@ -299,7 +300,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     for upload in scenario.uploads:
         path = root / upload.name
         upload.frame.to_csv(path, index=False)
-        record = engine.process(engine.submit(path, geo=upload.geo)["batch_id"])
+        record = engine.process(engine.submit(path, geo=upload.geo, locator=upload.locator)["batch_id"])
         if record["status"] != "READY":
             raise SystemExit(f"{scenario.name} {upload.name} {upload.geo}: {record['status']} {record.get('error')}")
         patterns = _patterns(engine, record, upload)
