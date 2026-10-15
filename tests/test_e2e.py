@@ -105,6 +105,24 @@ def test_attractor_benchmark_apparatus(tmp_path):
     assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
 
 
+def test_geo_benchmark_apparatus(tmp_path):
+    import h3
+    import numpy as np
+    from geo_benchmark import FINE, REGION, generate, run_scenario
+
+    scenario = generate("S-regional", 1)
+    (upload,) = scenario.uploads
+    assert upload.frame.equals(generate("S-regional", 1).uploads[0].frame)  # the same seed writes the same file
+    planted = upload.frame[np.logical_or.reduce(list(upload.parts.values()))]
+    cells = {h3.latlng_to_cell(a, b, FINE) for a, b in zip(planted["lat"], planted["lon"], strict=True)}
+    assert len(cells) == 3 * 37 and {h3.cell_to_parent(c, REGION) for c in cells} == {scenario.truth["region"]}  # three foci, one region
+    result = run_scenario(scenario, tmp_path, make_engine(make_config(tmp_path / "ws")), k=5)
+    found = result["files"][0]["found"]
+    assert len({f["pattern"] for f in found.values()}) == 3 and all(f["coverage"] >= 0.9 for f in found.values())  # one insight per focus
+    assert result["recall"]["cases"] == 3 and 0.0 <= result["recall"]["recall"] <= 1.0
+    assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
+
+
 def test_chain_eval_apparatus(hashed_engine):
     from chain_eval import run_chain_eval
 

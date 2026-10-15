@@ -8,7 +8,7 @@
 
 ## 10.1 Test map
 
-133 collected tests in 22 files (132 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
+134 collected tests in 22 files (133 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
@@ -29,7 +29,7 @@
 | LLM model broker | `test_llm_model_broker.py` (3) | the broker forwards to the configured model with the pinned provider order and its bearer key, replacing the requested model and passing the other fields as sent; an upstream 429 keeps its status and `Retry-After`, a 5xx → 502, empty messages, `stream: true` or a malformed body → an OpenAI-shaped 400, missing settings → 503 with a live `/health`; the whole chain narrator client → broker → upstream over local HTTP, the key only in the broker |
 | model provisioning | `test_model_store.py` (2) | a verified seed is copied and a present copy kept; a corrupt file of the right size fails the SHA-256 check but passes the service's presence-and-size check, and is repaired from the seed; the bundled checkpoint matches the pinned manifest (`model`) |
 | golden regression | `test_golden.py` (1) | the demo (retail, no geo, hashing double) against `tests/golden/`: the node count per kind and how many nodes of each kind carry each prop, the dataset node, the edge counts, every pattern (scope, target, support, p, adjusted p, stability, weight, shifts) and every edge, floats equal to 1e-4 relative (the float32 anchor maths differs in its last bits between BLAS builds), batch ids masked; the evidence prompt for one question verbatim. `python -m pytest tests/test_golden.py --update-golden` rewrites both files |
-| end to end | `test_e2e.py` (9) | upload → … → grounded answer with provenance and cross-scope analogues (hashing double and real model); the benchmark ordering (`test_hypothesis_apparatus`); the chain-eval layers and their invariants (`test_chain_eval_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; `Engine.search` and `search.search` give the same structured context, and the narration adds the answer and its metrics; LLM failure keeps knowledge; empty graph |
+| end to end | `test_e2e.py` (10) | upload → … → grounded answer with provenance and cross-scope analogues (hashing double and real model); the benchmark ordering (`test_hypothesis_apparatus`); the chain-eval layers and their invariants (`test_chain_eval_apparatus`); the geo benchmark's generator and one scored scenario (`test_geo_benchmark_apparatus`); an answer embeds the question, never the corpus; missing document vectors are embedded on the first question only and saved; `Engine.search` and `search.search` give the same structured context, and the narration adds the answer and its metrics; LLM failure keeps knowledge; empty graph |
 | 3D sphere | `test_sphere.py` (3) | every insight and the themes it activates placed inside the unit ball, classes `up` / `down` / `cov`, hover text, edges only between placed nodes (ACTIVATES, RELATED_TO and SPECIALIZES among them); an answer's highlighted edges between placed nodes resolve among the sphere's edges; the projection is deterministic, `GET /api/sphere` serves it, an empty workspace gives the message |
 | self-containment | `test_self_contained.py` (4) | every loaded module and `sys.path` entry lies in the repository or the Python environment (interpreter, standard library, site-packages — also of a base environment the venv is layered on), the vendored engines load from the repository; no source string of the seven packages holds a machine path, and a relative path that climbs a folder appears only in a docstring and resolves inside the repository; every path setting of every section resolves inside the repository; the model loads from `models/` |
 | package boundaries | `test_architecture.py` (2) | every import of the seven packages is in the allow-list of [12.2](12_architecture.md#122-dependency-direction): the repository packages and the third-party modules each package may import (relative imports resolved); only the Neo4j mirror imports the driver |
@@ -149,6 +149,35 @@ disjoint ones; the latent layer connects every set pair and every disjoint pair,
 1.18, two-hop ball 93 %): with four anchors the layer is complete, and the benchmark's ordering comes from the walk's
 ranking, not from selective connectivity. `test_chain_eval_apparatus` guards the layer invariants.
 
+**The geo benchmark** (`python scripts/geo_benchmark.py`, [10.4](#104-measurement-scripts)). Point datasets with a planted
+effect, ingested with the geo option and scored against the truth they were generated from, so that a spatial change
+brings a number, not an impression. Every scenario raises the events' `load` by 2 sd on its planted part. A focus is a
+ring-3 disk of 37 cells at resolution 8: an insight covers at least `MIN_SUPPORT_ROWS` (30) cells, so a smaller focus can
+never be one, and three foci fit in one cell of resolution 5. Each focus also raises its own signature metric, so each is
+its own insight and not one pattern of busy cells. A part is found by the patterns with an upward shift of a planted
+metric (target or secondary) that draw at least half their events from it.
+
+| Scenario | Planted | Baseline (hashing double; the bundled model where it differs) |
+|---|---|---|
+| S-regional | three foci in one resolution-5 cell, 7+ cells apart (no CO_LOCATED between them) | 3/3 foci found (coverage ≥ 0.97); the walk from each reaches the other two, recall@5 1.0, mean rank 2.0 |
+| S-control | three foci in three resolution-5 cells | 3/3 found; recall@5 1.0, mean rank 2.5 (1.83) |
+| S-local | one focus | found (coverage 0.97) |
+| S-levels | the eastern half of a 2.4° × 3.4° area, one file as a table, at 7 and at 5 | found on every level: 25, 17 and 2 patterns holding 100 %, 99.8 % and 97.5 % of the zone's events; 1 of 3 cross-level pairs of best patterns shares an attractor |
+| S-parts | the northern half of the same area as three files split by longitude (28 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; 0 CO_LOCATED between datasets |
+| S-size | three datasets of about 9,500 cells at 8, ten foci each | 14 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,080 prompt characters |
+
+Measured on 2026-10-15, seed 1, k 5. Three readings bound what the spatial issues can show:
+- **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the pattern
+  of busy cells that all of them specialise (the lattice). A link by shared region adds recall only where that parent is
+  missing; the measure that separates the two scenarios is the rank of the same-region foci against S-control's.
+- **A coarser level finds only broad effects.** At resolution 5 the three foci of S-regional are a handful of cells, far
+  below 30, so no coarser insight can confirm them; only a zone of ≥ 30 coarse cells (S-levels) is found at every level.
+- **The table level of a geo file mines the coordinates.** The district condition restates `lon`, which becomes the
+  target, and the planted `load` is a secondary shift.
+
+S-size finds fewer than half of its foci because the batch keeps `VALIDATION_BUDGET` candidates, not because the foci are faint.
+`test_geo_benchmark_apparatus` guards the generator (same seed, same file; three foci in one region) and scores S-regional.
+
 ## 10.4 Measurement scripts
 
 The measurement scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j off and save their results to `.scratch/results/<name>_<label>.json`. The benchmark, grounding and live-answer numbers of [7.7](07_question_answering.md#77-measured-behaviour) and [10.3](#103-hypothesis-benchmark) come from them. `scripts/scratch.py` holds the shared helpers (`scratch_dir`, `write_demo_csv`, `build_engine`, `ingest_ready`, `demo_engine`, `save_result`) and loads `.env` like the services do.
@@ -157,6 +186,7 @@ The measurement scripts build throwaway workspaces under `.scratch/` (never `wor
 |---|---|
 | `experiment.py [--k K] [--label NAME]` | the hypothesis benchmark of [10.3](#103-hypothesis-benchmark) |
 | `attractor_benchmark.py [--seeds 201-230] [--per-workspace 5] [--k K] [--label NAME] [--override NAME=VALUE ...]` | the attractor benchmark of [10.3](#103-hypothesis-benchmark): the walk over the engine's attractors against the same walk over static k-means and over random memberships, and the non-graph rankers, on planted datasets; paired comparisons with a cluster bootstrap over datasets and Holm; `--override` sets attractor settings by name for an A/B |
+| `geo_benchmark.py [--scenarios S-regional,...] [--seed N] [--k K] [--encoder hashing\|model\|both] [--label NAME]` | the geo benchmark of [10.3](#103-hypothesis-benchmark): six planted point scenarios ingested with the geo option, per encoder (the model run skipped when it is missing): parts found, the walk between foci (recall@k, reached, rank), attractors shared across levels and files, CO_LOCATED between datasets, batch and compile seconds, edges by type, nodes visited per walk, prompt length |
 | `calibration.py` | the calibration sequence of [5.10](05_latent_anchors.md#510-calibration-per-embedder) under the current attractor settings: the demo, a same-domain batch, `housing.csv`; per batch the orphan rate, the anchors minted and the warnings |
 | `export_chain_demo.py <out.json>` | the demo graph (patterns with their committed vectors and scope literals, the planted sets, the snapshot's edges) as one JSON for an external chain evaluation (the lac repository's `eval_multihop` reads it as `sig_demo`) |
 | `chain_eval.py [--label NAME]` | the query-free evidence-chain connectivity of [10.3](#103-hypothesis-benchmark): per layer, the share of each planted set's pattern pairs within h semantic hops, the null, the lift and the ball |
