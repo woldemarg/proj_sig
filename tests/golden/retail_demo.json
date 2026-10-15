@@ -1,5 +1,5 @@
 {
- "version": 3,
+ "version": 4,
  "nodes": {
   "Attractor": 8,
   "Batch": 1,
@@ -62,11 +62,13 @@
    "emm_score": 28,
    "expression": 28,
    "id": 28,
+   "integrity": 28,
    "local": 28,
    "p_adjusted": 28,
    "p_value": 28,
    "phenomenon_type": 28,
    "provenance": 28,
+   "record_digest": 28,
    "row_hash": 28,
    "row_id": 28,
    "sd_raw_score": 28,

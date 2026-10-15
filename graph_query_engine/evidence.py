@@ -192,7 +192,8 @@ def _path_text(path: list[PathStep], role: str) -> str:
 
 def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig) -> Evidence:
     items: list[EvidenceItem] = []
-    chosen = result.patterns[: config.evidence_max_patterns]
+    forged = [r.node_id for r in result.patterns if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch"]
+    chosen = [r for r in result.patterns if r.node_id not in forged][: config.evidence_max_patterns]
     for idx, r in enumerate(chosen, start=1):
         node = graph.nodes[r.node_id]
         ins = graph.insight(r.node_id)
@@ -231,7 +232,8 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                 relationship=describe_covariance(ins.covariance) if material else "",
                 path=[asdict(st) for st in r.path],
                 path_text=_path_text(r.path, r.route),
-                validation=describe_validation(ins, config.thresholds),
+                validation=describe_validation(ins, config.thresholds)
+                + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
                 attractors=acts,
                 transversal_only=r.transversal_only,
                 provenance={
@@ -291,6 +293,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
             f"{', '.join(disjoint)} share no scope condition with the seeds; they were reached through "
             "latent anchors (the same phenomenon in a different part of the data)."
         )
+    notes += [f"{pid} excluded: integrity check failed (its statistics no longer match the record digest)." for pid in forged]
     if not items:
         notes.append("No pattern in the graph matched the question.")
     return Evidence(

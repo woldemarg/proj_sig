@@ -21,7 +21,7 @@ from insight_contracts.graph import (
     dimension_node_id,
     metric_node_id,
 )
-from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Rejection, Shift, pattern_id, stable_hash
+from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Rejection, Shift, pattern_id, record_digest, stable_hash
 from insight_contracts.payload import EvidencePayload
 
 __all__ = [
@@ -46,5 +46,6 @@ __all__ = [
     "dimension_node_id",
     "metric_node_id",
     "pattern_id",
+    "record_digest",
     "stable_hash",
 ]
