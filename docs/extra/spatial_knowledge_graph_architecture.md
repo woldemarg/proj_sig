@@ -465,7 +465,7 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 | прибирання перед ядром | #33 | реалізовано (реєстр у пам'яті, каталог при коміті, пороги-константи, `geo.npz` з п'яти масивів) |
 | регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | реалізовано (`derive_spatial`, `SNAPSHOT_VERSION` 5) |
 | `upload_id`, рівні як датасети, `table` | #28 | реалізовано (`resolve_levels`, `Engine.delete_upload`) |
-| вибір роздільностей з даних | #29 | план |
+| вибір роздільностей з даних | #29 | реалізовано (`select_levels`, `@auto`) |
 | автоматичний вертикальний зум, мітка `scale`, згортання, `SCALE CHAIN`, `picture` | #31 | план |
 | зона/контур як запит, `place_scores`, `resolution` | #16 | план |
 | `ZONES` | #14 | план |
