@@ -27,16 +27,19 @@ Rules:
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
    condition), point out that the same phenomenon recurs in a different part of the data.
-6. If the evidence does not answer the question, say so plainly.
-7. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
+6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
+   Say they are in the same area; do not explain one by the other, not even as a hypothesis.
+7. If the evidence does not answer the question, say so plainly.
+8. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
    original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
    Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
-   The one exception is rule 8.
-8. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
+   The one exception is rule 9.
+9. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
    already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
    values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
    9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
-   transversal, latent or anchor; say "зони" for map cells and "схожа картина в інших зонах" for recurrences.
+   transversal, latent or anchor; say "зони" for map cells, "схожа картина в інших зонах" for recurrences and "в тому самому районі" for items
+   reached only by location.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

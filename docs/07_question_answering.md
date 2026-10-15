@@ -71,7 +71,7 @@ semantic  = cos(v_pattern, v_query)
 score     = 0.35 · target + 0.25 · scope + 0.15 · direction + 0.15 · semantic + 0.10 · w
 ```
 
-and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in score order with `score ≥ max(SEED_MIN_SCORE (0.25), SEED_RELATIVE_MIN (0.75) · best)`, at most `SEED_TOP_K` (3), skipping direct SPECIALIZES / GENERALIZES neighbours of seeds already chosen (the walk reaches those anyway); fallback: the best semantic match. A seed's reported score is floored at `1e-3`.
+and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in score order with `score ≥ max(SEED_MIN_SCORE (0.25), SEED_RELATIVE_MIN (0.75) · best)`, at most `SEED_TOP_K` (3), skipping direct SPECIALIZES neighbours (either way) of seeds already chosen (the walk reaches those anyway); fallback: the best semantic match. A seed's reported score is floored at `1e-3`.
 
 > **Running example.** One seed, `P-bc4657a04746`, score 0.738 = 0.35 · 0.7 (margin is a secondary shift; its target is discount) + 0.25 · 1.0 + 0.15 · 1.0 + 0.15 · 0.087 + 0.10 · 0.805. The semantic term is small for an instructive reason: the question's phenomenon is "margin down" alone, and Qwen3 embeds "discount" and "margin" with a cosine of 0.71, so against the pattern's "discount up, margin down" the phenomenon cosine is −0.29 (`0.135 · 1 + 0.201 · 0.707 + 0.664 · (−0.285) = 0.087`). The lexical terms carry the seed.
 
@@ -84,7 +84,7 @@ P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO|CO_OCCURS){0,L}  <--ACTIVATES-
 h = STRUCTURAL_HOPS (1)     L = MAX_LATENT_HOPS (1)     total length ≤ TRAVERSAL_MAX_DEPTH (5)
 ```
 
-Lattice edges are `LATTICE_EDGES` (SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS and CO_LOCATED in both directions; CO_LOCATED exists only between patterns of a geo dataset, [6.1](06_graph_and_storage.md#61-the-structural-plane)); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
+Lattice edges are `LATTICE_EDGES` (SPECIALIZES, CONTRASTS and CO_LOCATED, each in both directions — a SPECIALIZES walked from the parent shows as `<-SPECIALIZES-`; CO_LOCATED exists only between geo patterns of one resolution, [6.1](06_graph_and_storage.md#61-the-structural-plane)); IN_REGION and PARENT_OF are not walked; SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
 
 | Step | Condition | Factor |
 |---|---|---|
@@ -92,7 +92,7 @@ Lattice edges are `LATTICE_EDGES` (SPECIALIZES, GENERALIZES — followed along t
 | RELATED_TO, anchor → anchor | every link the ontology kept (mutual kNN above `RELATED_TO_MIN_WEIGHT`, 0.30) | weight |
 | CO_OCCURS, anchor → anchor | every compiled co-occurrence link (anchors sharing members, [5.7](05_latent_anchors.md#57-links-between-anchors)) | weight (≤ 1) |
 | ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
-| lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS or CO_LOCATED either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS and CO_LOCATED |
+| lattice hop | SPECIALIZES, CONTRASTS or CO_LOCATED, either way | `STRUCTURAL_EDGE_DECAY` (0.85), × the edge weight for CONTRASTS and CO_LOCATED |
 
 The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` flag says which memberships those are. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
 
@@ -101,13 +101,14 @@ The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` 
 | node rank | path score · `insight_weight` (seeds keep their seed score) |
 | `route` | `seed`, `structural` (reached in phase P0), `transversal` (reached in phase P1, i.e. through an anchor) |
 | `scope_overlap` | maximum Jaccard similarity of conditions with any seed |
-| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup |
+| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup; not set when `located` is |
+| `located` | `same_region` or `adjacent` (`LOCATED_RELATIONS`) when the last step is a CO_LOCATED link of that relation and `scope_overlap = 0`: the same area, not a related finding; else empty |
 | `structural_distance` | BFS hops over all structural edges, including SIBLING, up to 5 (`None` = unreachable within 5) |
 | result | seeds first, then by rank, up to `|seeds| + MAX_RETRIEVED` (12) patterns, with their `PathStep(source, target, edge_type, weight, hop, edge_id, reverse)` lists; `used_edges` and `traversed_nodes` are the union of the selected paths |
 
-Because the skip rule for seeds covers only SPECIALIZES and GENERALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
+Because the skip rule for seeds covers only SPECIALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
 
-> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and five tablet insights that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 67 search states, 13 retrieved patterns, 2 anchors.
+> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and five tablet insights that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) <-SPECIALIZES- P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 67 search states, 13 retrieved patterns, 2 anchors.
 
 ## 7.4 The evidence object
 
@@ -128,7 +129,7 @@ Evidence(
         validation="bootstrap stability 0.95; adjusted p < 0.001",   # or "correlation change (...); no median test"
         path=[{source, target, edge_type, weight, hop, edge_id, reverse}, ...],   # the PathSteps as dicts
         path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
-        attractors=[{attractor, alignment, label}], transversal_only=True,
+        attractors=[{attractor, alignment, label}], transversal_only=True, located="",   # located: as on Retrieved
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight, type}], signature}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],
@@ -170,9 +171,9 @@ EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were reached through latent anchors (the same phenomenon in a different part of the data).
 ```
 
-Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows.
+Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows. A geo item adds a `place:` line (its cells and resolution, the `compactness` the commit derived, and the effective n). An item the walk reached last through a CO_LOCATED link whose relation is `same_region` or `adjacent`, sharing no condition with the seeds (`Retrieved.located`, set by the walk, which then leaves `transversal_only` false for the prompt, the highlight and the console alike), is tagged `[reached by location only: same area, zones do not overlap]` (or `zones touch or barely overlap`) instead of the scope-disjoint mark even after a latent step, and a NOTE says that being in the same area does not show the findings are related; system-prompt rule 6 asks the model to say so, and never to explain one by the other ([6.1](06_graph_and_storage.md#61-the-structural-plane)). The evidence-only summary marks it `(знайдено лише за місцем: той самий район)`.
 
-**Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `share of the cell's events whose vehicle type is bicycle (every such event also has: vehicle class two-wheeler)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 8 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
+**Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `share of the cell's events whose vehicle type is bicycle (every such event also has: vehicle class two-wheeler)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 9 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
 
 **The evidence-only summary** (`Evidence.summary`, carried as the payload's `evidence_summary`) follows the chat's language rule — Ukrainian around untouched literals — and is rendered from the numbers rather than from the English phrases: one cited line per item, `- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (…) | n=438 [P1]` (the phenomenon shifts, at most two; a covariance insight shows `кореляція a ~ b: +0.88 загалом → +0.73 у підгрупі`), with ` (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)` for transversal-only items; without items, `- У графі немає відповідних свідчень.` Whenever there is no LLM answer, the narrator frames these lines as the answer: `Спостереження:` before them and `Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).` after them (`narration._explain`).
 
@@ -203,16 +204,19 @@ Rules:
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
    condition), point out that the same phenomenon recurs in a different part of the data.
-6. If the evidence does not answer the question, say so plainly.
-7. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
+6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
+   Say they are in the same area; do not explain one by the other, not even as a hypothesis.
+7. If the evidence does not answer the question, say so plainly.
+8. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
    original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
    Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
-   The one exception is rule 8.
-8. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
+   The one exception is rule 9.
+9. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
    already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
    values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
    9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
-   transversal, latent or anchor; say "зони" for map cells and "схожа картина в інших зонах" for recurrences.
+   transversal, latent or anchor; say "зони" for map cells, "схожа картина в інших зонах" for recurrences and "в тому самому районі" for items
+   reached only by location.
 Be concise (at most ~250 words).
 ```
 
@@ -236,9 +240,9 @@ Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py
 
 | Grounded | Unknown citations | Citations | Prompt tokens | Completion tokens | Mean latency |
 |---|---|---|---|---|---|
-| 5/5 | 0 | 42 | 12,544 | 2,537 | 13.7 s |
+| 5/5 | 0 | 41 | 12,869 | 2,493 | 10.7 s |
 
-The five evidence prompts hold 4,750–6,282 characters, none of them outside ASCII, and 2,281–2,832 prompt tokens each. Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.54 → +0.10), separate the observations from the interpretation under `Спостереження:` and `Інтерпретація (гіпотези):` as rule 3 asks, cite the scope-disjoint analogues reached through an anchor, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
+The five evidence prompts hold 4,750–6,282 characters, none of them outside ASCII, and 2,346–2,897 prompt tokens each. Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.54 → +0.10), separate the observations from the interpretation under `Спостереження:` and `Інтерпретація (гіпотези):` as rule 3 asks, cite the scope-disjoint analogues reached through an anchor, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
 
 **Multilingual grounding benchmark** (`scripts/multilingual_benchmark.py`: 60 questions in four buckets of 15, on the demo and on a copy of the demo with Ukrainian category, city and channel values; every question's twin — the same question with each literal as stored — gives the gold seeds and evidence; the model's own embeddings, no LLM). Seed Recall@3 = gold seeds among the question's seeds; Consistency = Jaccard of the seed sets; Evidence overlap over the gold evidence; direction accuracy against the twin; FPGR = grounded spans whose symbol the twin does not hold:
 
@@ -257,7 +261,7 @@ No LLM reads the canonical documents: only the naive baseline and the `text_nn` 
 | `GROUNDING_MIN_COSINE` | 0.30 (centred cosine floor of the dense grounding layer, [7.1.1](#711-literal-grounding); embedder-specific) |
 | `SEED_TOP_K`, `SEED_MIN_SCORE`, `SEED_RELATIVE_MIN` | 3, 0.25, 0.75 (constants of `seeds.py`) |
 | `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 5 |
-| `STRUCTURAL_HOPS`, `STRUCTURAL_EDGE_DECAY`, `LATTICE_EDGES` | 1, 0.85, SPECIALIZES, GENERALIZES, CONTRASTS, CO_LOCATED (constants of `traversal.py`) |
+| `STRUCTURAL_HOPS`, `STRUCTURAL_EDGE_DECAY`, `LATTICE_EDGES` | 1, 0.85, SPECIALIZES (both ways), CONTRASTS, CO_LOCATED (constants of `traversal.py`) |
 | `MAX_RETRIEVED`; `EVIDENCE_MAX_PATTERNS` | 12; 10 (a constant of `evidence.py`) |
 | `INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S` | `http://127.0.0.1:8765` (the host composite of `scripts/dev.py`; compose sets `http://insight-graph:8000`), 300 |
 | `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` (the broker) |

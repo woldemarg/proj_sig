@@ -85,7 +85,6 @@ def toy():
         edge("P6", "A3", "ACTIVATES", 0.9),
         edge("P3", "A2", "ACTIVATES", 0.95),
         edge("P3", "P4", "SPECIALIZES"),
-        edge("P4", "P3", "GENERALIZES"),
     ]
     return DualGraph({"nodes": nodes, "edges": edges})
 

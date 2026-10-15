@@ -191,7 +191,6 @@ function graphStyle() {
     { selector: 'node[kind="PlaneLabel"]', style: { label: "data(label)", "background-opacity": 0, "font-size": 13, "font-weight": 700, color: muted, "text-valign": "center", "text-halign": "right", events: "no", "text-outline-width": 0 } },
     { selector: "edge", style: { width: 1, "line-color": edge, "curve-style": "bezier", opacity: 0.75 } },
     { selector: 'edge[type="SPECIALIZES"]', style: { "line-color": muted, "target-arrow-shape": "triangle", "target-arrow-color": muted, "arrow-scale": 0.7, opacity: 0.6 } },
-    { selector: 'edge[type="GENERALIZES"]', style: { display: "none" } },
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
     { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
@@ -606,7 +605,7 @@ async function inspect(id) {
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
     const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
-      "SPECIALIZES": "Narrower version of", "GENERALIZES": "Broader version of", "SPECIALIZES (in)": "Narrower insights", "GENERALIZES (in)": "Broader insights",
+      "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions",
       "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
       `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
@@ -644,7 +643,7 @@ function renderChain(item) {
   if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">matched your question</span></div>`;
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
-    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", CO_OCCURS: "co-occurring theme", SPECIALIZES: "broader", GENERALIZES: "narrower", CONTRASTS: "contrast", CO_LOCATED: "same place" }[st.edge_type] || st.edge_type;
+    const label = { ACTIVATES: st.reverse ? "member" : "theme", RELATED_TO: "related theme", CO_OCCURS: "co-occurring theme", SPECIALIZES: st.reverse ? "narrower" : "broader", CONTRASTS: "contrast", CO_LOCATED: "same place" }[st.edge_type] || st.edge_type;
     html += `<span class="e">→ ${esc(label)} ${num(st.weight)} →</span><span class="n ${st.target.startsWith("A-") ? "A" : ""}">${esc(st.target)}</span>`;
   }
   return `<div class="chain">${html}</div>`;

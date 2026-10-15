@@ -37,8 +37,8 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
                               canonical text ──► tripartite vector (scope ; target ; signed phenomenon)
                                     │                         │
    structural plane                 │                         ▼
-   SPECIALIZES / GENERALIZES /      │           latent plane: anchors (vendored lac)
-   SIBLING / CONTRASTS  ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO / CO_OCCURS (anchor ↔ anchor)
+   SPECIALIZES / SIBLING /          │           latent plane: anchors (vendored lac)
+   CONTRASTS            ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO / CO_OCCURS (anchor ↔ anchor)
                     │                                         │
                     └──────► graph snapshot + journals + state (+ Neo4j mirror) ◄┘
                                           │
@@ -52,7 +52,7 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
 | | Structural plane | Latent phenomenon plane |
 |---|---|---|
 | Nodes | `Pattern` (one validated insight); `Dimension`, `Metric` as schema anchors | `Attractor` = latent anchor = "theme" in the UI: a living unit-norm centroid |
-| Edges | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
+| Edges | SPECIALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts; for geo patterns the spatial plane (regions, IN_REGION, PARENT_OF, CO_LOCATED), derived from the cells | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
 | Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight); a *weak* membership (rerouted, or now aligned below `MIN_ACTIVATION_ALIGNMENT`) counts for coverage but is not walked | |
 | Schema and provenance | `Dimension`, `Metric`, `Dataset`, `Batch` nodes; HAS_SCOPE, TARGETS (Pattern → schema), DISCOVERED_IN, OF_DATASET (provenance) — never walked by retrieval | |
 | Never | embeddings never create structural edges | scope predicates never create latent edges |

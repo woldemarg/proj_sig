@@ -44,13 +44,22 @@ class Settings:
     web_host: str = "127.0.0.1"
     web_port: int = 8765
 
+    # the region levels of the spatial plane (docs/06_graph_and_storage.md §6.1): H3 resolutions, finest first
+    geo_region_levels: str = "7,5,3,1"
+
     miner: MinerConfig = MinerConfig()
     topology: TopologyConfig = TopologyConfig()
     query: QueryConfig = QueryConfig()
 
     def __post_init__(self) -> None:
+        if not all(0 <= lv <= 15 for lv in self.region_levels):
+            raise ValueError(f"GEO_REGION_LEVELS: H3 resolutions 0-15, got {self.geo_region_levels!r}")
         if not self.miner.thresholds == self.topology.thresholds == self.query.thresholds:
             raise ValueError("miner, topology and query must share one PhenomenonThresholds (build them with load_settings)")
+
+    @property
+    def region_levels(self) -> tuple[int, ...]:
+        return tuple(int(x) for x in self.geo_region_levels.split(",") if x.strip())
 
     @property
     def thresholds(self) -> PhenomenonThresholds:

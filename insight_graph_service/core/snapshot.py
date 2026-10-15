@@ -34,7 +34,8 @@ from insight_contracts import (
 from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.workspace import utc_now
-from subgroup_miner.lattice import colocation_edges, structural_edges
+from subgroup_miner.lattice import structural_edges
+from subgroup_miner.spatial import SpatialStructure
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -266,6 +267,25 @@ def _attractor_nodes(
     return nodes
 
 
+def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], structural: list[GraphEdge]) -> list[GraphEdge]:
+    """Region nodes (added to ``nodes``), IN_REGION, PARENT_OF and CO_LOCATED edges, and each geo pattern's
+    ``compactness``; a CO_LOCATED pair the lattice already links is left out."""
+    for rid, props in spatial.regions.items():
+        nodes[rid] = GraphNode(rid, "Region", f"res {props['resolution']} {props['h3']}", dict(props))
+    for pid, value in spatial.compactness.items():
+        if pid in nodes:
+            nodes[pid].props["compactness"] = value
+    linked = {frozenset((e.source, e.target)) for e in structural}
+    edges = [GraphEdge(p, r, EdgeType.IN_REGION, share, {"share": share}) for p, r, share in spatial.in_region if p in nodes]
+    edges += [GraphEdge(child, parent, EdgeType.PARENT_OF) for child, parent in spatial.parent_of]
+    edges += [
+        GraphEdge(a, b, EdgeType.CO_LOCATED, weight, {"relation": relation})
+        for a, b, relation, weight in spatial.co_located
+        if a in nodes and b in nodes and frozenset((a, b)) not in linked
+    ]
+    return edges
+
+
 def compute_integrity(record: dict[str, Any]) -> str:
     """``ok`` when the record's statistics match its stored digest, ``mismatch`` when they do not, ``unverified`` for a
     record journaled before digests."""
@@ -283,10 +303,12 @@ def build_snapshot(
     representation: dict[str, Any],
     ontology: LatentOntology,
     settings: Settings,
+    spatial: SpatialStructure | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
-    ``profile``); ``representation``: the recorded vector contract."""
+    ``profile``); ``representation``: the recorded vector contract; ``spatial``: the derived spatial plane of the geo
+    patterns (``subgroup_miner.spatial.derive_spatial``)."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
@@ -297,7 +319,7 @@ def build_snapshot(
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)
-    edges += structural + colocation_edges(insights, structural)
+    edges += structural + _spatial_plane(spatial or SpatialStructure(), nodes, structural)
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)

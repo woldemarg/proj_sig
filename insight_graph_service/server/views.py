@@ -34,6 +34,8 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
     nodes = []
     for n in graph.nodes.values():
         p = n["props"]
+        if n["kind"] == "Region":  # the map regions stay in the snapshot and in Neo4j, not in the graph view
+            continue
         if dataset and n["kind"] in {"Pattern", "Dimension", "Metric", "Dataset"} and p.get("dataset_id") != dataset:
             continue
         if dataset and n["kind"] == "Attractor" and dataset not in p.get("datasets", []):

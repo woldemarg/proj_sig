@@ -20,6 +20,7 @@ from insight_contracts.graph import (
     dataset_node_id,
     dimension_node_id,
     metric_node_id,
+    region_node_id,
 )
 from insight_contracts.insight import (
     Condition,
@@ -56,6 +57,7 @@ __all__ = [
     "dataset_node_id",
     "dimension_node_id",
     "metric_node_id",
+    "region_node_id",
     "pattern_id",
     "record_digest",
     "stable_hash",

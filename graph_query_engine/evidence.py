@@ -32,6 +32,10 @@ from insight_contracts.text import (
 
 EVIDENCE_MAX_PATTERNS = 10
 LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occurrence link from a centroid neighbour
+LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
+    "same_region": " [reached by location only: same area, zones do not overlap]",
+    "adjacent": " [reached by location only: zones touch or barely overlap]",
+}
 
 
 @dataclass
@@ -53,6 +57,7 @@ class EvidenceItem:
     attractors: list[dict[str, Any]]
     transversal_only: bool
     provenance: dict[str, Any]
+    located: str = ""  # adjacent | same_region: reached only by location, scope-disjoint from the seeds
 
 
 @dataclass
@@ -128,13 +133,14 @@ class Evidence:
             )
             spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
             if spatial and spatial.cells is not None and spatial.resolution is not None:
-                compactness = it.provenance["spatial"].get("compactness", 0)  # derived, outside the contract
+                compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
                 n_eff = f" (effective n {format_value(spatial.n_eff)})" if spatial.n_eff is not None else ""
                 lines.append(
-                    f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}), compactness {compactness:.2f}"
+                    f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}){compactness}"
                     f" | significance corrected for spatial autocorrelation{n_eff}"
                 )
-            lines.append(f"     retrieved via: {it.path_text}{' [scope-disjoint from seeds: no shared condition]' if it.transversal_only else ''}")
+            tag = " [scope-disjoint from seeds: no shared condition]" if it.transversal_only else LOCATION_TAG.get(it.located, "")
+            lines.append(f"     retrieved via: {it.path_text}{tag}")
         if self.notes:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
@@ -186,6 +192,7 @@ class Evidence:
                     for x in s["shifts"][: len(it.shift_text) or 1][:2]
                 )
             tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
+            tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
@@ -241,6 +248,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                     "weight": ins.weight,
                     "drivers": list(ins.drivers),
                     "covariance": ins.covariance,
+                    "compactness": node["props"].get("compactness"),
                 },
                 scope_text=describe_scope(ins.conditions),
                 shift_text=[describe_shift(s) for s in config.thresholds.phenomenon_shifts(ins)],
@@ -251,6 +259,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                 + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
                 attractors=acts,
                 transversal_only=r.transversal_only,
+                located=r.located,
                 provenance={
                     **ins.provenance,
                     "pattern_id": r.node_id,
@@ -306,6 +315,12 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                     "global_mad": mp["global_mad"],
                 } | {k: mp[k] for k in ("indicator", "unit") if k in mp}
     notes = []
+    located = [it.key for it in items if it.located]
+    if located:
+        notes.append(
+            f"{', '.join(located)} were reached only by location (the same area of the map, no shared condition with the seeds);"
+            " being in the same area does not show the findings are related."
+        )
     disjoint = [it.key for it in items if it.transversal_only]
     if disjoint:
         notes.append(

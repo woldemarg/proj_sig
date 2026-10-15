@@ -109,3 +109,39 @@ def test_a_snapshot_of_another_version_is_refused():
 
     with pytest.raises(ValueError, match="snapshot version"):
         DualGraph({**snapshot(), "version": 1})
+
+
+def test_an_item_reached_only_by_location_is_marked():
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    snap = snapshot()
+    snap["edges"].append(edge("P1", "P2", "CO_LOCATED", 1.0, relation="same_region"))  # stronger than the walk through A-1
+    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    found = search(QUESTION, state, encoder, QueryConfig())
+    item = next(it for it in found.evidence.items if it.pattern_id == "P2")
+    prompt = found.payload().evidence_prompt
+    assert item.located == "same_region" and "[reached by location only: same area, zones do not overlap]" in prompt
+    assert any("reached only by location" in n for n in found.evidence.notes)
+
+
+def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+    from graph_query_engine.evidence import LOCATION_TAG
+    from graph_query_engine.traversal import LOCATED_RELATIONS
+
+    snap = snapshot()
+    snap["nodes"].append(pattern("P3", ["region=APAC", "category=laptops"]))
+    snap["edges"].append(edge("P2", "P3", "CO_LOCATED", 1.0, relation="same_region"))  # P1 -> A-1 -> P2 -> P3
+    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0]), "P3": np.array([0.0, 0.0, 1.0])}
+    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {}, documents)), encoder, QueryConfig())
+    item = next(it for it in found.evidence.items if it.pattern_id == "P3")
+    assert [st["edge_type"] for st in item.path] == ["ACTIVATES", "ACTIVATES", "CO_LOCATED"]
+    assert item.located == "same_region" and not item.transversal_only  # only the place links it to P2's phenomenon
+    location, latent = (next(n for n in found.evidence.notes if mark in n) for mark in ("by location", "latent anchors"))
+    assert item.key in location and item.key not in latent
+    assert set(LOCATION_TAG) == LOCATED_RELATIONS  # every location-only relation has its tag
+    assert "P3" not in found.payload().view["traversal"]["baselines"]["transversal_only"]  # the console reads the same mark
