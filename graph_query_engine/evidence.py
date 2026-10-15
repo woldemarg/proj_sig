@@ -11,6 +11,7 @@ so answers are traceable to table slices.
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -87,9 +88,9 @@ class Evidence:
         lines.append("")
         lines.append("DATASETS:")
         for d in self.datasets:
-            trust = f" source={d['source']}" if d.get("source") else ""
-            if trust or d.get("reliability", "F") != "F":  # an undeclared dataset reads as before
-                trust += f" reliability={d['reliability']} ({RELIABILITY[d['reliability']]})"
+            trust = f" source={json.dumps(d['source'], ensure_ascii=False)}" if d.get("source") else ""  # quoted: free text
+            if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
+                trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
             lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         if plain:
             lines.append("")
@@ -276,8 +277,10 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
         batch = next((it.provenance["batch_id"] for it in items if it.provenance["dataset_id"] == ds), None)
         props = dnode["props"]
-        datasets.append({"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch})
-        datasets[-1].update({k: props[k] for k in ("source", "reliability") if k in props})
+        datasets.append(
+            {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
+            | {k: props[k] for k in ("source", "reliability") if k in props}
+        )
         if dnode["props"].get("glossary"):
             datasets[-1]["glossary"] = dnode["props"]["glossary"]
     for r in chosen:  # baselines of the metrics the prompt actually mentions

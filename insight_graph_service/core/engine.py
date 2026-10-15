@@ -251,6 +251,7 @@ class Engine:
         reliability: str | None = None,
     ) -> dict[str, Any]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
+        resolve_source_options(source, reliability)  # a bad value is refused before the file is stored
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
@@ -526,6 +527,8 @@ class Engine:
         record["status"] = "SKIPPED"
         record["duplicate_of"] = duplicate["batch_id"]
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
+        if record.get("source") or record.get("reliability"):
+            record["warnings"].append(f"a re-upload does not change the source or reliability: PATCH /api/datasets/{record['dataset_id']}")
         self.ws.save_batch(record)
         return record
 
@@ -576,9 +579,12 @@ class Engine:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
-            record = {k: v for k, v in {**record, **changes}.items() if v is not None or k not in changes}
-            self.ws.save_batch(record)
-            snapshot, state = self._derive(self.ontology())
+            record.update(changes)
+            for cleared in [k for k, v in changes.items() if v is None]:
+                del record[cleared]
+            with self.ws.transaction({"dataset_id": dataset_id}):  # the snapshot and the record change together
+                snapshot, state = self._derive(self.ontology(), pending=record)
+                self.ws.save_batch(record)
             return {
                 "dataset_id": dataset_id,
                 "source": record.get("source"),
