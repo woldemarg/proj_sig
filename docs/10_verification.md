@@ -52,7 +52,7 @@
 - `no_candidates` has no test.
 - The delay → returns mechanism is recovered on the demo, but only the benchmark guards it.
 - The UI smoke test resolves the highlighted *edges* against the graph.
-- The browser test looks for Chromium only under the Playwright folder of `%LOCALAPPDATA%` (Windows and Linux builds) and skips elsewhere.
+- The browser test takes the newest Chromium in Playwright's browser cache (`PLAYWRIGHT_BROWSERS_PATH`, else `%LOCALAPPDATA%\ms-playwright` on Windows, `~/Library/Caches/ms-playwright` on macOS, `~/.cache/ms-playwright` on Linux), whatever revision the installed Playwright pins, and skips when there is none.
 - The containers are verified by `scripts/compose_check.py`, outside pytest ([10.5](#105-quality-gate-and-container-check)).
 
 ## 10.2 The demo datasets
