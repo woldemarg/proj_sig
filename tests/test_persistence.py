@@ -14,6 +14,7 @@ from insight_graph_service.core import engine as engine_mod
 from insight_graph_service.core.neo4j_mirror import (
     EDGE_ENDPOINTS,
     LABELS,
+    STALE_TYPES_QUERY,
     edge_query,
     flatten_props,
     load_cypher,
@@ -603,7 +604,8 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     stale = {q: p for q, p in driver.log if "NOT" in q}
     assert {q for q in stale if "DETACH DELETE" in q} == {stale_node_query(label) for label in LABELS}
     assert sorted(stale[stale_node_query("Pattern")]["ids"]) == sorted(n["id"] for n in hashed_engine.graph().of_kind("Pattern"))
-    assert {q for q in stale if q.endswith("DELETE r")} == {stale_edge_query(t) for t in EDGE_ENDPOINTS}
+    assert {q for q in stale if q.endswith("DELETE r")} == {stale_edge_query(t) for t in EDGE_ENDPOINTS} | {STALE_TYPES_QUERY}
+    assert stale[STALE_TYPES_QUERY] == {"types": list(EDGE_ENDPOINTS), "labels": list(LABELS)}  # a type the schema dropped
     # an empty snapshot (a reset) clears the mirror
     empty = _Driver()
     publish_snapshot({"nodes": [], "edges": []}, hashed_engine.settings, driver=empty)
