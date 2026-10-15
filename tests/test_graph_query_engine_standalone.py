@@ -257,3 +257,18 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
     graph, _ = _levels_search(_levels(-1.2, ("7", "5")))
     (chain,) = vertical.scale_chain(graph, ["P1"])
     assert not chain.up and chain.scale == "regional"  # no step spent, the label still searched
+
+
+def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
+    """Three levels of one upload, the middle one ranked first: its finer level folds in, but a reversal above it stays
+    scale-dependent rather than being lifted to regional."""
+    snap = _levels(-1.2, ("7", "5", "3"), coarse_first=True)
+    top = pattern("P3", ["zone=east"], z=1.0, dataset="ds3")
+    top["props"]["provenance"]["spatial"] = {"resolution": 3, "cells": 40}
+    dataset = {"dataset_id": "ds3", "upload_id": "up-1", "level": "3", "upload_levels": ["7", "5", "3"]}
+    snap["nodes"] += [top, {"id": "DS:ds3", "kind": "Dataset", "label": "ds3", "props": dataset}]
+    snap["edges"] += [edge("P3", "A-1", "ACTIVATES", 0.7), edge("P3", "R:3:b", "IN_REGION", 1.0), edge("P7", "R:3:b", "IN_REGION", 1.0)]
+    _, found = _levels_search(snap, coarse_first=True)
+    items = {it.pattern_id: it for it in found.evidence.items}
+    assert items["P7"].scale == "scale-dependent" and items["P1"].folded_into == items["P7"].key
+    assert "scale: scale-dependent" in found.payload().evidence_prompt

@@ -305,7 +305,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
                 agrees = agrees and step.relation == "corresponds"
                 if agrees and upload is not None and upload_of(graph, step.pattern_id) == upload:
                     host.also.append(other.key)
-                    if step.direction == "down":  # the coarser host restates a finer level that holds: the group is regional
+                    if step.direction == "down" and host.scale == "insufficient":  # a finer level holds: the group is regional
                         host.scale = "regional"
                     if step.pattern_id not in hosts and other.role != "seed":
                         other.folded_into = other.folded_into or host.key

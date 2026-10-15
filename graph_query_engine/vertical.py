@@ -54,7 +54,8 @@ def _regions(graph: DualGraph, pid: str) -> dict[str, float]:
 def _finest(graph: DualGraph, pid: str) -> set[str]:
     """The pattern's regions at its finest level (its own resolution when that is a region level): a broad pattern has many."""
     levels = {r: graph.nodes[r]["props"]["resolution"] for r in _regions(graph, pid)}
-    return {r for r, lv in levels.items() if lv == max(levels.values())}
+    top = max(levels.values(), default=None)
+    return {r for r, lv in levels.items() if lv == top}
 
 
 def _home(graph: DualGraph, pid: str) -> str | None:
