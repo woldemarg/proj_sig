@@ -160,18 +160,19 @@ from a found focus counts an unfound one as a miss.
 
 | Scenario | Planted | Baseline (hashing double; the bundled model where it differs) |
 |---|---|---|
-| S-regional | three foci in one resolution-5 cell, centres 10–11 cells apart, the nearest cells of two foci 4 apart (no CO_LOCATED between them) | 3/3 foci found (coverage ≥ 0.97); the walk from each reaches the other two, recall@5 1.0, mean rank 2.0 |
+| S-regional | three foci in one resolution-5 cell, centres 10–11 cells apart, the nearest cells of two foci 4 apart (no CO_LOCATED between them; no `same_region` either: each focus covers 18–19 % of the region's occupied cells, below `GEO_REGION_MIN_SHARE` 0.2) | 3/3 foci found (coverage ≥ 0.97); the walk from each reaches the other two, recall@5 1.0, mean rank 2.0 |
 | S-control | three foci in three resolution-5 cells | 3/3 found; recall@5 1.0, mean rank 2.5 (1.83) |
 | S-local | one focus | found (coverage 0.97) |
 | S-levels | the eastern half of a 2.4° × 3.4° area, one file as a table, at 7 and at 5 | found on every level: 25, 17 and 2 patterns holding 100 %, 99.8 % and 97.5 % of the zone's events; 1 of 3 cross-level pairs of best patterns shares an attractor |
-| S-parts | the northern half of the same area as three files split by longitude (39 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; no CO_LOCATED between datasets, by construction (the edge is computed within one dataset) |
-| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,099 prompt characters |
+| S-parts | the northern half of the same area as three files split by longitude (39 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; 208 CO_LOCATED between datasets (185 `adjacent`, 23 `same_region`); the items they lead to share a condition with the seeds, so none is marked as reached by location only |
+| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 348 CO_LOCATED (230 between datasets), 215 SIBLING; 1.9–2.1 s per batch, of which 0.5–0.9 s compiles the graph; 364 (372) nodes visited per seed walk; 11,099 prompt characters |
 
 Measured on 2026-10-15, seed 1, k 5. Three readings bound what the spatial issues can show:
 - **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the anchors:
   one anchor they all activate in S-regional, anchors joined by RELATED_TO in S-control. The pattern of busy cells links
   them structurally too (two specialise it, the third is CO_LOCATED with it). A link by shared region cannot raise recall
-  here; what separates the two scenarios is the rank of the same-region foci against S-control's.
+  here; what separates the two scenarios is the rank of the same-region foci against S-control's, still 2.0 against 2.5
+  (1.83), as no `same_region` link forms (the S-regional row).
 - **A coarser level finds only broad effects.** At resolution 5 the three foci of S-regional are a handful of cells, far
   below 30, so no coarser insight can confirm them; only a zone of ≥ 30 coarse cells (S-levels) is found at every level.
 - **The table level of a geo file mines the coordinates.** The district condition restates `lon`, which becomes the
