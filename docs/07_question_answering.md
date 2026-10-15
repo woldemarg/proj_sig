@@ -232,13 +232,13 @@ The language split is deliberate: the prompt (machine-to-machine) stays English,
 
 ## 7.7 Measured behaviour
 
-Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py`, five fixed demo questions, Qwen3 → 384, the model's own token counts), measured on 2026-10-01 with an earlier wording of the system prompt that asked for English answers:
+Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py`, five fixed demo questions, Qwen3 → 384, the model's own token counts), measured on 2026-10-15 with the current prompts:
 
 | Grounded | Unknown citations | Citations | Prompt tokens | Completion tokens | Mean latency |
 |---|---|---|---|---|---|
-| 5/5 | 0 | 40 | 11,099 | 1,728 | 6.6 s |
+| 5/5 | 0 | 42 | 12,544 | 2,537 | 13.7 s |
 
-The five evidence prompts hold 4,713–6,164 characters, none of them outside ASCII, and 2,010–2,543 prompt tokens each. Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.57 → +0.09), separate the observations from the interpretation as rule 3 asks (with the current prompt under `Спостереження:` and `Інтерпретація (гіпотези):`), cite the scope-disjoint analogues reached through `A-1`, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
+The five evidence prompts hold 4,750–6,282 characters, none of them outside ASCII, and 2,281–2,832 prompt tokens each. Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.54 → +0.10), separate the observations from the interpretation under `Спостереження:` and `Інтерпретація (гіпотези):` as rule 3 asks, cite the scope-disjoint analogues reached through an anchor, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
 
 **Multilingual grounding benchmark** (`scripts/multilingual_benchmark.py`: 60 questions in four buckets of 15, on the demo and on a copy of the demo with Ukrainian category, city and channel values; every question's twin — the same question with each literal as stored — gives the gold seeds and evidence; the model's own embeddings, no LLM). Seed Recall@3 = gold seeds among the question's seeds; Consistency = Jaccard of the seed sets; Evidence overlap over the gold evidence; direction accuracy against the twin; FPGR = grounded spans whose symbol the twin does not hold:
 

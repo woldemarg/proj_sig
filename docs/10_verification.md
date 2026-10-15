@@ -165,7 +165,7 @@ from a found focus counts an unfound one as a miss.
 | S-local | one focus | found (coverage 0.97) |
 | S-levels | the eastern half of a 2.4° × 3.4° area, one file as a table, at 7 and at 5 | found on every level: 25, 17 and 2 patterns holding 100 %, 99.8 % and 97.5 % of the zone's events; 1 of 3 cross-level pairs of best patterns shares an attractor |
 | S-parts | the northern half of the same area as three files split by longitude (39 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; no CO_LOCATED between datasets, by construction (the edge is computed within one dataset) |
-| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,080 prompt characters |
+| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,099 prompt characters |
 
 Measured on 2026-10-15, seed 1, k 5. Three readings bound what the spatial issues can show:
 - **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the anchors:
