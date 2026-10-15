@@ -324,7 +324,8 @@ def build_snapshot(
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
-    nodes.update(_attractor_nodes(ontology, members, seq_to_batch, representation))
+    intact = {aid: [m for m in mem if nodes[m[0]["id"]].props["integrity"] != "mismatch"] for aid, mem in members.items()}
+    nodes.update(_attractor_nodes(ontology, intact, seq_to_batch, representation))  # a tampered member describes no anchor
     for rel in ontology.topology():
         edges.append(
             GraphEdge(

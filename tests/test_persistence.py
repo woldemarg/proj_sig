@@ -410,6 +410,11 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     assert {first.graph().nodes[r["id"]]["props"]["integrity"] for r in rows} == {"ok"}
     for field, value in (("emm_score", 9.9), ("support_fraction", 0.9), ("drivers", ["x"]), ("phenomenon_type", "covariance"), ("effect_size", -1.0)):
         assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # every number the prompt shows is covered
+    for field, value in (
+        ("canonical", {**rows[0]["canonical"], "components": [["fraud rate", 9.0]]}),
+        ("embedding", {**rows[0]["embedding"], "dim": 1}),
+    ):
+        assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # written once: the anchor labels read the components
     assert record_digest({**rows[0], "row_id": 999, "provenance": {}}) == rows[0]["record_digest"]  # what a deletion rewrites is not
     assert record_digest({**rows[0], "retired_field": 1}) != rows[0]["record_digest"]  # the record's own keys, not the class's
     for r in rows:
@@ -428,6 +433,10 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     evidence = found.evidence
     assert forged not in {it.pattern_id for it in evidence.items} | {s.pattern_id for s in found.seeds}
     assert any(n.startswith(f"{forged} excluded: integrity check failed") for n in evidence.notes)
+    graph = engine.graph()
+    for anchor in {e["target"] for e in graph.edges if e["type"] == "ACTIVATES" and e["source"] == forged}:
+        members = {e["source"] for e in graph.edges if e["type"] == "ACTIVATES" and e["target"] == anchor}
+        assert graph.nodes[anchor]["props"]["n_patterns"] == len(members - {forged})  # nor does it describe its anchors
     assert next(it for it in evidence.items if it.pattern_id == old).validation.endswith("integrity unverified")
     assert "integrity unverified" in engine.evidence(question).evidence_prompt
 
