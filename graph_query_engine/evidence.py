@@ -20,6 +20,7 @@ from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
 from insight_contracts import dataset_node_id, metric_node_id
 from insight_contracts.text import (
+    RELIABILITY,
     describe_covariance,
     describe_scope,
     describe_shift,
@@ -86,7 +87,10 @@ class Evidence:
         lines.append("")
         lines.append("DATASETS:")
         for d in self.datasets:
-            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}")
+            trust = f" source={d['source']}" if d.get("source") else ""
+            if trust or d.get("reliability", "F") != "F":  # an undeclared dataset reads as before
+                trust += f" reliability={d['reliability']} ({RELIABILITY[d['reliability']]})"
+            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         if plain:
             lines.append("")
             lines.append("PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):")
@@ -271,7 +275,9 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
     for ds in ds_ids:
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
         batch = next((it.provenance["batch_id"] for it in items if it.provenance["dataset_id"] == ds), None)
-        datasets.append({"dataset_id": ds, "filename": dnode["props"].get("filename"), "rows": dnode["props"].get("rows"), "batch_id": batch})
+        props = dnode["props"]
+        datasets.append({"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch})
+        datasets[-1].update({k: props[k] for k in ("source", "reliability") if k in props})
         if dnode["props"].get("glossary"):
             datasets[-1]["glossary"] = dnode["props"]["glossary"]
     for r in chosen:  # baselines of the metrics the prompt actually mentions

@@ -75,6 +75,8 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                 "filename": b.get("filename"),
                 "rows": profile.get("rows"),
                 "columns": profile.get("columns"),
+                **({"source": b["source"]} if b.get("source") else {}),
+                "reliability": b.get("reliability", "F"),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
             },
         )

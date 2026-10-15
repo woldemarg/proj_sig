@@ -119,7 +119,9 @@ function datasetCard(b) {
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
     `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}</div>` +
-    `<div class="ds-sub">${esc(when)}</div>${body}${del}</div>`;
+    `<div class="ds-sub">${esc(when)}</div>` +
+    (b.source || b.reliability ? `<div class="ds-src"><span class="chip" title="Source and its reliability (Admiralty code)">${esc(b.source || "source")} · ${esc(b.reliability || "F")}</span></div>` : "") +
+    `${body}${del}</div>`;
 }
 
 async function deleteDataset(id, name) {
@@ -165,6 +167,7 @@ async function upload() {
   const f = $("file").files[0]; if (!f) return;
   const fd = new FormData();
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
+  fd.append("source", $("source").value); fd.append("reliability", $("reliability").value);
   setUploadMsg(`Uploading ${f.name}…`);
   $("upload-btn").disabled = true;
   try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("Queued — progress is shown below."); $("file").value = ""; $("file-name").textContent = ""; refreshBatches(); }

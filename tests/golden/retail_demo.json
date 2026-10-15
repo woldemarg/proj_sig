@@ -34,6 +34,7 @@
    "columns": 1,
    "dataset_id": 1,
    "filename": 1,
+   "reliability": 1,
    "rows": 1
   },
   "Dimension": {
@@ -88,7 +89,8 @@
    "dataset_id": "ds-2ee0d2bafe4b",
    "filename": "retail_synthetic.csv",
    "rows": 5000,
-   "columns": 11
+   "columns": 11,
+   "reliability": "F"
   }
  ],
  "edge_counts": {

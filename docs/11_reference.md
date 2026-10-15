@@ -34,6 +34,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | evidence payload (`EvidencePayload`) | — | — | the evidence of one question as the graph service hands it to the narrator: prompt, summary, citation manifest, view, metrics ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
 | citation manifest | Sources | — | `P#` → pattern id, expression, dataset id, file name, batch id: what a citation is checked against ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
 | batch | dataset card | batch | one processing run of one uploaded file ([9.1](09_operations.md#91-the-batch-lifecycle)) |
+| source, reliability | *Source*, *Source reliability* | — | where a dataset comes from and how far it is trusted: the Admiralty source-reliability code `A` (completely reliable) … `E` (unreliable), `F` (cannot be judged, the default); metadata of the dataset, not of its findings ([2.1](02_discovery.md#21-ingestion)) |
 | workspace | — | — | the folder that holds one knowledge base (`WORKSPACE_DIR`) ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 | degraded start | — | — | a start on a workspace the engine cannot serve: writes and questions refused with `workspace_degraded` until a reset ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)) |
 | bounded context | — | — | a package that owns one part of the model and imports only what [12.2](12_architecture.md#122-dependency-direction) allows ([12.1](12_architecture.md#121-bounded-contexts)) |

@@ -491,6 +491,37 @@ def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):
     assert refused.status_code == 413 and refused.json()["code"] == "file_too_large"
 
 
+def test_dataset_source_and_reliability(engine, demo_csv):
+    """Source and reliability are upload options outside the dataset id; PATCH changes them on the batch record and
+    recompiles the snapshot (no new batch, the same pattern ids); the prompt names them only once declared."""
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+    from subgroup_miner.ingestion import load_dataset
+
+    question = "Why is margin lower for phones in the US?"
+    record = engine.process(engine.submit(demo_csv, source=" field\nreports ", reliability="b")["batch_id"])
+    assert record["status"] == "READY" and (record["source"], record["reliability"]) == ("field reports", "B")
+    ds = record["dataset_id"]
+    assert load_dataset(demo_csv, engine.settings.miner).dataset_id == ds  # the options are not part of the dataset id
+    patterns = sorted(p["id"] for p in engine.ws.patterns())
+    assert "source=field reports reliability=B (usually reliable)" in engine.evidence(question).evidence_prompt
+    with TestClient(create_app(engine)) as client:
+        changed = client.patch(f"/api/datasets/{ds}", json={"reliability": "e"}).json()
+        assert (changed["source"], changed["reliability"]) == ("field reports", "E")
+        assert client.patch(f"/api/datasets/{ds}", json={"reliability": "Z"}).json()["code"] == "invalid_options"
+        assert client.patch("/api/datasets/nope", json={"source": "x"}).status_code == 404
+        with open(demo_csv, "rb") as f:
+            refused = client.post("/api/upload", files={"file": ("demo.csv", f, "text/csv")}, data={"reliability": "G"})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+    assert len(engine.ws.list_batches()) == 1 and sorted(p["id"] for p in engine.ws.patterns()) == patterns
+    props = engine.graph().nodes[f"DS:{ds}"]["props"]
+    assert (props["source"], props["reliability"]) == ("field reports", "E")
+    assert "reliability=E (unreliable)" in engine.evidence(question).evidence_prompt
+    engine.update_dataset_source(ds, source="", reliability="")  # undeclared again: the prompt reads as before
+    assert "source=" not in engine.evidence(question).evidence_prompt and engine.graph().nodes[f"DS:{ds}"]["props"]["reliability"] == "F"
+
+
 def test_ingestion_failure_states(engine, tmp_path):
     bad = tmp_path / "data.xlsx"
     bad.write_bytes(b"not a table")

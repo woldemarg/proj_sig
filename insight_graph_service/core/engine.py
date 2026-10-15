@@ -36,6 +36,7 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
+from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot
@@ -54,6 +55,24 @@ class PipelineError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+SOURCE_MAX_CHARS = 120
+
+
+def resolve_source_options(source: str | None, reliability: str | None) -> dict[str, str | None]:
+    """The given dataset source options, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
+    upper-case Admiralty code A-F; an empty value is None (undeclared). A value not given (None) is left out."""
+    options: dict[str, str | None] = {}
+    if source is not None:
+        options["source"] = " ".join(source.split()) or None
+        if len(options["source"] or "") > SOURCE_MAX_CHARS:
+            raise PipelineError("invalid_options", f"source longer than {SOURCE_MAX_CHARS} characters")
+    if reliability is not None:
+        options["reliability"] = reliability.strip().upper() or None
+        if options["reliability"] not in (None, *RELIABILITY):
+            raise PipelineError("invalid_options", f"reliability '{reliability}' is not one of {', '.join(RELIABILITY)}")
+    return options
 
 
 def _healthy(method):
@@ -221,13 +240,21 @@ class Engine:
 
     @_healthy
     def upload(
-        self, name: str, stream: BinaryIO, *, bins: str | None = None, categories: str | None = None, geo: str | None = None
+        self,
+        name: str,
+        stream: BinaryIO,
+        *,
+        bins: str | None = None,
+        categories: str | None = None,
+        geo: str | None = None,
+        source: str | None = None,
+        reliability: str | None = None,
     ) -> dict[str, Any]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        return self.submit(path, filename=name, bins=bins, categories=categories, geo=geo)
+        return self.submit(path, filename=name, bins=bins, categories=categories, geo=geo, source=source, reliability=reliability)
 
     @_healthy
     def submit(
@@ -238,13 +265,17 @@ class Engine:
         bins: str | None = None,
         categories: str | None = None,
         geo: str | None = None,
+        source: str | None = None,
+        reliability: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
         ``bins`` / ``categories`` = None means "use BIN_COLUMNS / CATEGORICAL_COLUMNS"
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
+        ``source`` / ``reliability`` (A-F) describe where the data comes from; neither enters the dataset id.
         """
+        trust = {k: v for k, v in resolve_source_options(source, reliability).items() if v}
         path = Path(path)
         created = utc_now()
         record = {
@@ -255,6 +286,7 @@ class Engine:
             "bins": bins,
             "categories": categories,
             **({"geo": geo} if geo else {}),
+            **trust,
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
             "created_at": created,
@@ -534,6 +566,25 @@ class Engine:
         follows on the next question) and the optional Neo4j mirror is synced; returns the mirror status."""
         self._state = state
         return self.sync_neo4j(snapshot)
+
+    @_healthy
+    def update_dataset_source(self, dataset_id: str, *, source: str | None = None, reliability: str | None = None) -> dict[str, Any]:
+        """Change a READY dataset's ``source`` / ``reliability`` (None: unchanged, "": undeclared) on its batch record and
+        recompile the snapshot: no new batch, no mining, the same pattern ids (docs/06_graph_and_storage.md §6.2)."""
+        changes = resolve_source_options(source, reliability)
+        with self._lock:
+            record = self.ws.ready_batch_for(dataset_id)
+            if record is None:
+                raise PipelineError("unknown_dataset", dataset_id)
+            record = {k: v for k, v in {**record, **changes}.items() if v is not None or k not in changes}
+            self.ws.save_batch(record)
+            snapshot, state = self._derive(self.ontology())
+            return {
+                "dataset_id": dataset_id,
+                "source": record.get("source"),
+                "reliability": record.get("reliability", "F"),
+                "neo4j": self._publish(state, snapshot),
+            }
 
     @_healthy
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
