@@ -77,6 +77,7 @@ def test_demo_graph_and_prompt_match_the_golden_files(hashed_engine, request):
         prompt_file.write_text(prompt, encoding="utf-8")
         pytest.skip("golden files rewritten; review and commit the diff")
     golden = json.loads(graph_file.read_text(encoding="utf-8"))
+    assert summary.keys() == golden.keys() == {*EXACT, "patterns", "edges"}  # a new section must be compared somewhere
     assert {k: summary[k] for k in EXACT} == {k: golden[k] for k in EXACT}
     for section in ("patterns", "edges"):
         now, then = summary[section], golden[section]
