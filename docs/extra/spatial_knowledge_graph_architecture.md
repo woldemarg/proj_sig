@@ -73,13 +73,13 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 | `Dataset` | `ds-` + sha256(bytes ‖ bins ‖ categories ‖ geo)[:12] | `filename, rows, columns`, для гео — `glossary` | `ingestion.py:56-64`, `snapshot.py:68-79` |
 | `Batch` | `B<utc>-<hex>` | стадії, профіль, метрики | `engine.py:485-490` |
 | `Pattern` (інсайт) | `P-` + sha1(dataset_id, умови)[:12] | запис журналу без змін: умови, `target`, `shifts`, `support`, `effect_size`, `stability`, `p_adjusted`, `weight`, `provenance` | `insight_contracts/insight.py:112-114`, `docs/03` §3.1 |
-| гео-інсайт | той самий `Pattern` | `provenance.spatial = {resolution, cells (кількість), moran_i, n_eff, p_adjusted_iid}` плюс сьогодні `compactness`, `colocated` | `discovery.py:389-396`, `spatial.py:443-456` |
+| гео-інсайт | той самий `Pattern` | `provenance.spatial = {resolution, cells (кількість), moran_i, n_eff, p_adjusted_iid}` (`SpatialProvenance`); `compactness` на вузлі виводить коміт | `discovery.py:389-396`, `spatial.py:436` |
 | `Attractor` | `A-<k>` | одиничний центроїд 1152-d, маса; текст і члени — похідні на кожному коміті | `attractor_topology/vendor/lac/storage.py:21-35`, `snapshot.py:227-265` |
 | `Dimension`, `Metric` | `D:<ds>:<col>`, `M:<ds>:<col>` | схема датасету | `snapshot.py:89-113` |
 | комірка H3 | поза графом | `geo.npz`: `cells`, `point_cell` (рядок → комірка), `lonlat`, сусідство CSR | `workspace.py:230-252` |
 | екстент інсайту | похідне | позиції рядків у `covers.npz` → H3-id через `geo.npz["cells"]` | `workspace.py:216-221`, `engine.py:456-470` |
 
-Ребра: структурні всередині датасету (`SPECIALIZES`/`GENERALIZES` — покривальне відношення множин умов, `SIBLING`, `CONTRASTS`; `lattice.py:46-109`), `CO_LOCATED` (перекриття дилатованих екстентів ≥ 0.3, до 3 партнерів, лише всередині датасету; `spatial.py:407-426`, `lattice.py:112-123`), міст `ACTIVATES` (інсайт → атрактор, вага = вирівнювання, прапорець `weak`), латентні `RELATED_TO` (взаємні kNN центроїдів) і `CO_OCCURS` (спільні члени), схема `HAS_SCOPE`, `TARGETS`, провенанс `DISCOVERED_IN`, `OF_DATASET` (`insight_contracts/graph.py:28-59`).
+Ребра: структурні всередині датасету (`SPECIALIZES` — покривальне відношення множин умов, обхід іде ним в обидва боки, `SIBLING`, `CONTRASTS`; `lattice.py`), просторова площина з коміту (`CO_LOCATED` з `relation` `overlaps`/`adjacent`/`same_region` між інсайтами однієї роздільності будь-яких датасетів, `IN_REGION` і `PARENT_OF` до вузлів `Region`; `spatial.py:436`), міст `ACTIVATES` (інсайт → атрактор, вага = вирівнювання, прапорець `weak`), латентні `RELATED_TO` (взаємні kNN центроїдів) і `CO_OCCURS` (спільні члени), схема `HAS_SCOPE`, `TARGETS`, провенанс `DISCOVERED_IN`, `OF_DATASET` (`insight_contracts/graph.py:28-59`).
 
 ### 3.3 Атрактори: механіка, яка не змінюється
 
@@ -102,7 +102,7 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 
 ### 3.4 Гео-інгест на одному рівні
 
-Опція `geo=auto|<col>|<lat>,<lon>[@res]` (`spatial.py:75-132`): лише точки (GeoJSON `Point`, WKT `POINT`, пара lat/lon), одна комірка на точку (`h3.latlng_to_cell`, `spatial.py:239`), роздільність за замовчуванням 7, опція входить у `dataset_id` дослівно. Таблиця комірок: `points`, `<col>_active_days`, `<col>_late_share`, `<col>_median`, `<col>_mode`, `share_<col>_<level>` — ролі лише за dtype; лаги `neighbours_<counter>_band` і `lisa_points` (локальний Моран з аналітичним нулем і FDR 0.05) як звичайні категоріальні виміри; інтенсивні колонки NaN нижче `MIN_CELL_POINTS` (5) (`spatial.py:225-348`). Майнер той самий; для гео: правило тавтології (сусідська умова не пояснює метрику, з якої обчислена), `n_eff = n(1−ρ)/(1+ρ)` з ρ = Moran I підгрупи (однопараметрична апроксимація Clifford–Richardson–Hémon 1989, `spatial.py:435-440`), блоковий бутстрап по батьківських комірках `r−1` (`spatial.py:306`; не зберігаються). Після допуску `annotate_extents` пише `compactness` і `colocated` (`engine.py:317`) — саме це #32 прибирає.
+Опція `geo=auto|<col>|<lat>,<lon>[@res]` (`spatial.py:75-132`): лише точки (GeoJSON `Point`, WKT `POINT`, пара lat/lon), одна комірка на точку (`h3.latlng_to_cell`, `spatial.py:239`), роздільність за замовчуванням 7, опція входить у `dataset_id` дослівно. Таблиця комірок: `points`, `<col>_active_days`, `<col>_late_share`, `<col>_median`, `<col>_mode`, `share_<col>_<level>` — ролі лише за dtype; лаги `neighbours_<counter>_band` і `lisa_points` (локальний Моран з аналітичним нулем і FDR 0.05) як звичайні категоріальні виміри; інтенсивні колонки NaN нижче `MIN_CELL_POINTS` (5) (`spatial.py:225-348`). Майнер той самий; для гео: правило тавтології (сусідська умова не пояснює метрику, з якої обчислена), `n_eff = n(1−ρ)/(1+ρ)` з ρ = Moran I підгрупи (однопараметрична апроксимація Clifford–Richardson–Hémon 1989, `spatial.py:435-440`), блоковий бутстрап по батьківських комірках `r−1` (`spatial.py:306`; не зберігаються). Комірки й екстенти лишаються в `geo.npz` і `covers.npz`; `compactness` і просторову площину виводить `derive_spatial` при кожному коміті (`engine.py:236`), у журнал нічого не пишеться.
 
 ### 3.5 Запит
 
@@ -117,7 +117,7 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 | Пакет | Відповідальність сьогодні | Що додають issues |
 |---|---|---|
 | `insight_contracts` (лише stdlib) | `Insight`, словник графа, `EvidencePayload` | `SpatialProvenance` з п'яти полів (#25); `Region`, `IN_REGION`, `PARENT_OF`, площина `spatial`, без `GENERALIZES` (#32); `record_digest` (#5) |
-| `subgroup_miner` (єдиний з `h3`) | інгест, комірки, ознаки, LISA, майнінг, відбір, ґратка, `annotate_extents` | `derive_spatial` (#32), `select_levels` (#29), `geometry_to_cells` (#16), парсинг `indicators` (#34); `annotate_extents` і `colocation_edges` — видалити |
+| `subgroup_miner` (єдиний з `h3`) | інгест, комірки, ознаки, LISA, майнінг, відбір, ґратка, `derive_spatial` (#32), парсинг `indicators` (#34) | `select_levels` (#29), `geometry_to_cells` (#16) |
 | `attractor_topology` | вектори, живі атрактори | **нічого** |
 | `insight_graph_service/core` | батч, workspace, компілятор знімка, Neo4j | fan-out рівнів і `upload_id` (#28), `_derive` з `derive_spatial` (#32), `supersedes` (#27), `PATCH` метаданих (#6, #34), `integrity` (#5), `credibility` (#7, #15), `verify` (#9), прибирання (#33) |
 | `graph_query_engine` (без H3) | парсинг, seed-и, обхід, evidence | `scale_chain` + `SCALE CHAIN` + згортання (#31), `ZONES`/`picture` (#14), `place_scores` у seed-формулі (#16), `trust:` (#8), заголовок (#26) |
