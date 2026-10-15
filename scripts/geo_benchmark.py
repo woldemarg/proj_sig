@@ -6,11 +6,12 @@ scratch workspaces (no LLM), scored against the truth they were generated from.
 
 Every scenario raises the events' ``load`` by ``LIFT`` on its planted part (``load`` in a table, ``load_median`` in cells).
 A focus is a ring-3 disk of ``FINE`` cells (37 cells): the smallest disk above ``MIN_SUPPORT_ROWS`` (30), the floor below
-which no set of cells is an insight. Three foci fit in one ``REGION`` cell, the nearest ``GEO_REGION_LEVELS`` step at least
-two coarser than ``FINE``. Each focus also raises its own signature metric, so that it is its own insight. A part is found
-by the patterns with an upward shift of one of its planted metrics that draw at least half their events from it.
+which no set of cells is an insight. Three foci fit in one ``REGION`` cell, three resolutions coarser than ``FINE``. Each
+focus also raises its own signature metric, so that it is its own insight. A part is found when the patterns with an upward
+shift of one of its planted metrics that draw at least half their events from it hold at least ``FOUND`` of its events.
 
-    S-regional  three foci in one region cell, far enough apart that no CO_LOCATED links them
+    S-regional  three foci in one region cell, centres 10-11 cells apart (the nearest cells of two foci 4 apart), so no
+                CO_LOCATED links them
     S-control   three foci in three different region cells
     S-local     one focus; the rest of its region is ordinary
     S-levels    a broad zone (the eastern half of a large area) in one file, ingested as a table, at 7 and at 5
@@ -19,12 +20,12 @@ by the patterns with an upward shift of one of its planted metrics that draw at 
     S-size      about 10⁴ fine cells in three datasets of ten foci each
 
 Metrics, per encoder (the hashing double; the bundled model when present):
-    found        per file and planted part (a focus or the zone): the patterns that find it and the share of its events
-                 they hold together (coverage)
-    recall@k     the walk from each focus's best pattern (seed forced, as in attractor_benchmark) reaching the other
-                 foci's best patterns: at k, anywhere ("reached") and their mean rank
-    shared       pairs of best patterns from different files or levels that activate a common non-weak attractor
-    cross_coloc  CO_LOCATED edges between datasets
+    found        per file and planted part (a focus or the zone): the patterns that draw at least half their events from
+                 it, the share of its events they hold together (coverage) and whether that reaches FOUND
+    recall@k     the walk from each found focus's best pattern (seed forced, as in attractor_benchmark) to the other planted
+                 foci (an unfound one is a miss): at k, anywhere ("reached"), and the mean rank of those reached
+    shared       pairs of distinct best patterns (of different foci, levels or files) that activate a common non-weak attractor
+    cross_coloc  CO_LOCATED edges between datasets (none by construction: the edge is computed within one dataset)
     size         per batch the processing and graph-compile seconds; the snapshot's nodes and edges by type; the walk's
                  visited nodes per seed; the evidence prompt's length for one question
 
@@ -59,6 +60,7 @@ BROAD = (47.0, 33.0, 2.4, 3.4)  # lat0, lon0, dlat, dlon of S-levels and S-parts
 SIZE_BOX = (48.0, 34.6, 0.8, 1.2)  # about 10⁴ cells at FINE
 SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-size")
 QUESTION = "Where is load higher?"
+FOUND = 0.5  # share of a part's events its patterns must hold for the part to count as found
 SIGNATURES = ("wait", "cost", "size")  # focus i also raises SIGNATURES[i % 3]: its own phenomenon
 
 
@@ -75,7 +77,7 @@ class Upload:
 class Scenario:
     name: str
     uploads: list[Upload]
-    truth: dict[str, Any] = field(default_factory=dict)  # what the generator guarantees, for the features that read it
+    truth: dict[str, Any] = field(default_factory=dict)  # facts of the generated geometry
 
 
 def _events(
@@ -103,7 +105,7 @@ def _events(
     return pd.DataFrame(frame)
 
 
-def _district(lat: np.ndarray, lon: np.ndarray, box: tuple[float, ...], grid: tuple[int, int] = (6, 6)) -> list[str]:
+def _district(lat: np.ndarray, lon: np.ndarray, box: tuple[float, ...], grid: tuple[int, int]) -> list[str]:
     lat0, lon0, dlat, dlon = box
     row = np.clip(((lat - lat0) / dlat * grid[0]).astype(int), 0, grid[0] - 1)
     col = np.clip(((lon - lon0) / dlon * grid[1]).astype(int), 0, grid[1] - 1)
@@ -143,7 +145,7 @@ def _fits(region: str, box: tuple[float, ...]) -> list[str]:
     for c in sorted(kids):
         disk = h3.grid_disk(c, RADIUS)
         lat, lon = np.array([h3.cell_to_latlng(d) for d in disk]).T
-        if set(disk) <= kids and len(set(_district(lat, lon, box))) == 1:
+        if set(disk) <= kids and len(set(_district(lat, lon, box, (6, 6)))) == 1:
             fits.append(c)
     return sorted(fits, key=lambda c: (h3.grid_distance(c, centre), c))
 
@@ -177,14 +179,14 @@ def generate(name: str, seed: int) -> Scenario:
     area = _box_of(h3.grid_disk(region, 1))
     if name == "S-regional":
         centres = _spread(_fits(region, area), 3)
-        return Scenario(name, [_foci_upload(rng, "s_regional.csv", centres, area, 8000)], {"region": region, "same_region": True})
+        return Scenario(name, [_foci_upload(rng, "s_regional.csv", centres, area, 8000)], {"region": region})
     if name == "S-control":
         others = h3.grid_ring(region, 1)[::2]  # three region cells, no two adjacent
         centres = [_fits(r, area)[0] for r in others]
-        return Scenario(name, [_foci_upload(rng, "s_control.csv", centres, area, 8000)], {"regions": others, "same_region": False})
+        return Scenario(name, [_foci_upload(rng, "s_control.csv", centres, area, 8000)])
     if name == "S-local":
         centres = _fits(region, area)[:1]
-        return Scenario(name, [_foci_upload(rng, "s_local.csv", centres, area, 8000)], {"region": region, "scale": "not_found_coarser"})
+        return Scenario(name, [_foci_upload(rng, "s_local.csv", centres, area, 8000)])
     if name in ("S-levels", "S-parts"):
         lat, lon = _uniform(rng, 80000, BROAD)
         lat0, lon0, dlat, dlon = BROAD
@@ -192,7 +194,7 @@ def generate(name: str, seed: int) -> Scenario:
             zone = lon > lon0 + dlon / 2
             frame = _events(rng, lat, lon, zone, BROAD, grid=(1, 2))  # two districts: west, east
             uploads = [Upload("s_levels.csv", frame, geo, {"zone": zone}) for geo in (None, "lat,lon@7", "lat,lon@5")]
-            return Scenario(name, uploads, {"scale": "regional"})
+            return Scenario(name, uploads)
         cuts = lon0 + dlon * np.array([1 / 3, 2 / 3])
         zone = lat > lat0 + dlat / 2  # the northern half, across both cuts
         frame = _events(rng, lat, lon, zone, BROAD, grid=(2, 1))  # two districts: south, north
@@ -236,37 +238,38 @@ def _best(patterns: dict[str, tuple[dict[str, Any], np.ndarray]], part: np.ndarr
         if raises and hits >= 0.5 * mask.sum():
             inside.append((hits, pid, mask))
     if not inside:
-        return {"pattern": None, "patterns": 0, "coverage": 0.0}
+        return {"pattern": None, "patterns": 0, "coverage": 0.0, "found": False}
     union = np.logical_or.reduce([m for _, _, m in inside])
+    coverage = float((union & part).sum() / part.sum())
     return {
         "pattern": max(inside, key=lambda x: (x[0], x[1]))[1],
         "patterns": len(inside),
-        "coverage": round(float((union & part).sum() / part.sum()), 3),
+        "coverage": round(coverage, 3),
+        "found": coverage >= FOUND,
     }
 
 
-def _recall(engine: Engine, best: list[str], k: int) -> dict[str, Any]:
-    """The walk from each best pattern to the others: recall at k, the share reached, the mean rank of those reached;
-    foci sharing one pattern count as ``merged``."""
+def _recall(engine: Engine, foci: list[str | None], k: int) -> dict[str, Any]:
+    """The walk from each found focus (its best pattern; None when not found) to the other planted foci: recall at k and
+    the share reached, an unfound focus counting as a miss and one sharing the seed's pattern as a hit; the mean rank of
+    those reached."""
     state = engine.prepared()
     wide = replace(engine.settings.query, max_retrieved=len(state.graph.of_kind("Pattern")))
-    rows, merged = [], 0
-    for seed in best:
-        others = {b for b in best if b != seed}
-        if not others:
-            merged += 1
+    rows, ranks = [], []
+    for i, seed in enumerate(foci):
+        if seed is None:
             continue
+        others = [f for j, f in enumerate(foci) if j != i]
         ranked = [r.node_id for r in traverse(state.graph, [SeedMatch(seed, 1.0, {})], wide).patterns if r.node_id != seed]
-        rank = [ranked.index(o) + 1 for o in others if o in ranked]
+        ranks += [ranked.index(o) + 1 for o in others if o in ranked]
         rows.append(
             {
-                "recall": len(others & set(ranked[:k])) / len(others),
-                "reached": len(rank) / len(others),
-                "rank": float(np.mean(rank)) if rank else None,
+                "recall": sum(o == seed or o in ranked[:k] for o in others) / len(others),
+                "reached": sum(o == seed or o in ranked for o in others) / len(others),
             }
         )
-    mean = {m: round(float(np.mean([r[m] for r in rows if r[m] is not None])), 3) if rows else None for m in ("recall", "reached", "rank")}
-    return {"cases": len(rows), "merged": merged, **mean}
+    mean = {m: round(float(np.mean([r[m] for r in rows])), 3) if rows else None for m in ("recall", "reached")}
+    return {"cases": len(rows), **mean, "rank": round(float(np.mean(ranks)), 3) if ranks else None}
 
 
 def _graph(engine: Engine, best: list[str]) -> dict[str, Any]:
@@ -295,14 +298,13 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     files, best = [], []
     for upload in scenario.uploads:
         path = root / upload.name
-        if not path.exists():
-            upload.frame.to_csv(path, index=False)
+        upload.frame.to_csv(path, index=False)
         record = engine.process(engine.submit(path, geo=upload.geo)["batch_id"])
         if record["status"] != "READY":
             raise SystemExit(f"{scenario.name} {upload.name} {upload.geo}: {record['status']} {record.get('error')}")
         patterns = _patterns(engine, record, upload)
         found = {name: _best(patterns, part, upload.targets.get(name, set())) for name, part in upload.parts.items()}
-        best += [f["pattern"] for f in found.values() if f["pattern"]]
+        best += [f["pattern"] for f in found.values() if f["found"]]
         metrics = record["metrics"]
         files.append(
             {
@@ -315,7 +317,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
                 "graph_seconds": round(metrics["timings"].get("graph_s", 0.0), 2),
             }
         )
-    foci = [f["pattern"] for f in files[0]["found"].values() if f["pattern"]] if len(scenario.uploads) == 1 else []
+    foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(scenario.uploads) == 1 else []
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     return result | _graph(engine, best)
 
@@ -329,7 +331,7 @@ def format_table(results: list[dict[str, Any]]) -> str:
         row = (
             r["encoder"],
             r["scenario"],
-            f"{sum(bool(f['pattern']) for f in parts)}/{len(parts)}",
+            f"{sum(f['found'] for f in parts)}/{len(parts)}",
             *(rec.get(m) for m in ("recall", "reached", "rank")),
             r["shared"],
             r["cross_coloc"],
