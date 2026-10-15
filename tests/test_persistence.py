@@ -156,6 +156,13 @@ def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv, 
     assert broken.problem is None and broken.graph().insights and broken.committed().catalog is None
 
 
+def test_a_catalog_failure_at_the_commit_is_a_batch_warning(engine, demo_csv, monkeypatch):
+    monkeypatch.setattr(engine_mod, "build_catalog", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("model gone")))
+    record = engine.ingest_file(demo_csv)
+    assert record["status"] == "READY" and any("literal catalog not built" in w for w in record["warnings"])
+    assert engine.committed().catalog is None and engine.search("Why is margin lower for phones in the US?").evidence.items  # built on the question
+
+
 class Crash(BaseException):  # the process dies: no except-handler runs
     pass
 

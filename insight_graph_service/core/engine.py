@@ -402,6 +402,8 @@ class Engine:
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
                         snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
+                        if state.catalog is None:
+                            record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
 
                     record["metrics"] = batch_metrics(result, kept, rejections, update, spec, snapshot, timings, t0)
                     record["status"] = "READY"
