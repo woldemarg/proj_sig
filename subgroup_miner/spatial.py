@@ -89,6 +89,15 @@ def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
     return locator.strip(), resolution
 
 
+def parse_geo_levels(spec: str, default_resolution: int) -> list[tuple[str, int]]:
+    """``<locator>@<r1>,<r2>,...`` -> one (locator, resolution) per level, finest first; without ``@`` one level."""
+    locator, _, res = spec.strip().partition("@")
+    levels = [parse_geo(f"{locator}@{r}" if r.strip() else locator, default_resolution) for r in res.split(",")]
+    if len({r for _, r in levels}) < len(levels):
+        raise SpatialError(f"Bad geo spec '{spec}' (a resolution is listed twice)")
+    return sorted(levels, key=lambda level: -level[1])
+
+
 def parse_points(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:
     """GeoJSON Point or WKT ``POINT (x y)`` strings -> (lat, lon), NaN where a value is not a point."""
     text = values.astype("string")

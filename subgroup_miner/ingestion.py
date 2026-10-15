@@ -143,9 +143,11 @@ def load_dataset(
     bins: str | None = None,
     categories: str | None = None,
     geo: str | None = None,
+    strict: bool = True,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
-    dataset does not have are skipped); an explicit value is applied strictly. ``geo`` turns the
+    dataset does not have are skipped); an explicit value is applied strictly unless ``strict`` is False (the levels
+    of one upload share their options). ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table."""
     path = Path(path)
     if not path.is_file():
@@ -166,13 +168,13 @@ def load_dataset(
     if geo_spec:
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
         warnings += geo_warnings
-    cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical")
+    cats, missing_cats = select_present(cat_spec, frame, explicit=strict and categories is not None, option="Categorical")
     frame = apply_categories(frame, cats)
-    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin")
+    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=strict and bins is not None, option="Bin")
     present_bins = {c: bin_spec[c] for c in bin_cols}
     frame, derived = apply_bins(frame, present_bins)
     if missing_cats or missing_bins:
-        warnings.append(f"default column options not in this dataset (skipped): {missing_cats + missing_bins}")
+        warnings.append(f"column options not in this dataset (skipped): {missing_cats + missing_bins}")
     if not any(pd.api.types.is_numeric_dtype(frame[c]) for c in frame.columns):
         raise IngestionError("no_numeric_targets", "Dataset has no numeric columns to analyse")
     empty = [c for c in frame.columns if frame[c].isna().all()]

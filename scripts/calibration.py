@@ -29,7 +29,7 @@ def main() -> None:
         before = set(engine.ontology().attractor_ids)
         if path.name == "housing.csv":
             with path.open("rb") as stream:
-                record = engine.process(engine.upload(path.name, stream, bins=HOUSING_BINS)["batch_id"])
+                record = engine.process(engine.upload(path.name, stream, bins=HOUSING_BINS)[0]["batch_id"])
             if record["status"] != "READY":
                 raise SystemExit(f"housing: {record['status']} {record.get('error')}")
         else:

@@ -14,6 +14,7 @@ verbalises (``evidence``).
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import threading
 import time
@@ -44,7 +45,7 @@ from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatc
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import GeoDataset, cell_boundary, compactness, derive_spatial, sac_summary
+from subgroup_miner.spatial import GeoDataset, SpatialError, cell_boundary, compactness, derive_spatial, parse_geo_levels, sac_summary
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +80,22 @@ def resolve_dataset_metadata(source: str | None, reliability: str | None, indica
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
     return options
+
+
+def resolve_levels(geo: str | None, table: bool, region_levels: tuple[int, ...], default_resolution: int) -> list[tuple[str | None, str]]:
+    """The levels one upload makes, as (``geo`` option of the level's dataset, level): each listed resolution, finest
+    first, then ``table`` (no geo) when asked. A coarser resolution must be one of ``GEO_REGION_LEVELS``."""
+    if not geo:
+        if table:
+            raise PipelineError("invalid_options", "table=true needs the geo option: a plain upload is the table level already")
+        return [(None, "table")]
+    try:
+        levels = parse_geo_levels(geo, default_resolution)
+    except SpatialError as exc:
+        raise PipelineError("invalid_options", str(exc)) from exc
+    if stray := [r for _, r in levels[1:] if r not in region_levels]:
+        raise PipelineError("invalid_options", f"coarser geo levels {stray} are not GEO_REGION_LEVELS {list(region_levels)}")
+    return [(f"{loc}@{r}", str(r)) for loc, r in levels] + ([(None, "table")] if table else [])
 
 
 def _healthy(method):
@@ -251,15 +268,20 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
-    ) -> dict[str, Any]:
-        """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
+        table: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
+        dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
+        levels = resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        return self.submit(
-            path, filename=name, bins=bins, categories=categories, geo=geo, source=source, reliability=reliability, indicators=indicators
-        )
+        upload_id = "up-" + hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
+        if len(levels) > 1:  # each level applies the bins and categories it has
+            options["strict"] = False
+        return [self.submit(path, geo=g, upload=(upload_id, level), **options) for g, level in levels]
 
     @_healthy
     def submit(
@@ -273,6 +295,8 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
+        upload: tuple[str, str] | None = None,
+        strict: bool = True,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -280,7 +304,8 @@ class Engine:
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
-        (``metric:indicator[:unit],...``); none enters the dataset id.
+        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is (``upload_id``, level) for a batch
+        of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         path = Path(path)
@@ -293,6 +318,8 @@ class Engine:
             "bins": bins,
             "categories": categories,
             **({"geo": geo} if geo else {}),
+            **({"upload_id": upload[0], "level": upload[1]} if upload else {}),
+            **({} if strict else {"strict": False}),
             **trust,
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
@@ -327,6 +354,7 @@ class Engine:
                         bins=record.get("bins"),
                         categories=record.get("categories"),
                         geo=record.get("geo"),
+                        strict=record.get("strict", True),
                     )
                     ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
@@ -632,28 +660,40 @@ class Engine:
         leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
         ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
+        return {"dataset_id": dataset_id, **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), dataset_id, "unknown_dataset")}
+
+    @_healthy
+    def delete_upload(self, upload_id: str) -> dict[str, Any]:
+        """Remove every level of one upload (the datasets its batches made) in one transaction, as ``delete_dataset``."""
+        return {"upload_id": upload_id, **self._delete(lambda b: b.get("upload_id") == upload_id, upload_id, "unknown_upload")}
+
+    def _delete(self, chosen: Any, key: str, unknown: str) -> dict[str, Any]:
+        """Delete the datasets of the ``chosen`` batches with all their batches (``delete_dataset``)."""
         with self._lock:
-            batches = [b for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b["batch_id"])]
-            if not batches:
-                raise PipelineError("unknown_dataset", dataset_id)
+            every = self.ws.list_batches()
+            picked = [b for b in every if chosen(b)]
+            if not picked:
+                raise PipelineError(unknown, key)
+            ids = {b["dataset_id"] for b in picked if b.get("dataset_id")}
+            batches = [b for b in every if b in picked or b.get("dataset_id") in ids]
             if any(b["status"] not in TERMINAL for b in batches):
-                raise PipelineError("busy", f"dataset {dataset_id} has a batch in progress")
+                raise PipelineError("busy", f"{key} has a batch in progress")
             ontology = self.ontology()
             records, vectors = self.ws.patterns(), self.ws.vectors()
-            kept = [r for r in records if r["dataset_id"] != dataset_id]
+            kept = [r for r in records if r["dataset_id"] not in ids]
             row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
             all_acts = self.ws.activations()
             acts = [{**a, "row_id": row_of[a["row_id"]]} for a in all_acts if a["row_id"] in row_of]
             lost = {int(a["attractor_id"]) for a in all_acts if a["row_id"] not in row_of}  # the anchors the deletion touches
-            with self.ws.transaction({"dataset_id": dataset_id}, journal=True) as cp:  # commit point: the marker goes
-                self.ws.remove_dataset(dataset_id, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
+            with self.ws.transaction({"dataset_id": key}, journal=True) as cp:  # commit point: the marker goes
+                self.ws.remove_datasets(ids, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
                 kept_vectors = vectors[[r["row_id"] for r in kept]]
                 dropped = ontology.forget(acts, kept_vectors, lost)
                 self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], kept_vectors, acts)
                 ontology.save()
                 snapshot, state = self._derive(ontology)
             return {
-                "dataset_id": dataset_id,
+                "datasets": sorted(ids),
                 "batches": [b["batch_id"] for b in batches],
                 "patterns_removed": len(records) - len(kept),
                 "anchors_removed": dropped,

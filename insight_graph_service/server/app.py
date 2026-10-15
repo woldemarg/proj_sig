@@ -27,7 +27,12 @@ from insight_graph_service.core.workspace import RepresentationMismatch, Rollbac
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
 log = logging.getLogger(__name__)
-STATUS = {"file_too_large": 413, "unknown_dataset": 404, "invalid_options": 400}  # every other refusal is 409: busy, degraded, mismatch, rollback
+STATUS = {
+    "file_too_large": 413,
+    "unknown_dataset": 404,
+    "unknown_upload": 404,
+    "invalid_options": 400,
+}  # every other refusal is 409: busy, degraded, mismatch, rollback
 
 
 class SearchIn(BaseModel):
@@ -70,10 +75,11 @@ def create_app(engine: Engine) -> FastAPI:
     def run(job, *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
-    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **source: str | None) -> JSONResponse:
-        record = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **source)
-        run(engine.process, record["batch_id"])
-        return JSONResponse(record, status_code=202)
+    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
+        records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
+        for record in records:  # one worker thread: the levels run in turn
+            run(engine.process, record["batch_id"])
+        return JSONResponse(records[0], status_code=202)  # the finest level; GET /api/batches?upload_id= lists them all
 
     run(engine.startup_sync)  # on the batch thread: Neo4j writes stay sequential
 
@@ -93,8 +99,8 @@ def create_app(engine: Engine) -> FastAPI:
         }
 
     @app.get("/api/batches")
-    def batches() -> list[dict[str, Any]]:
-        return list(reversed(engine.ws.list_batches()))
+    def batches(upload_id: str | None = None) -> list[dict[str, Any]]:
+        return [b for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
@@ -113,6 +119,7 @@ def create_app(engine: Engine) -> FastAPI:
         source: str = Form(""),
         reliability: str = Form(""),
         indicators: str = Form(""),
+        table: bool = Form(False),
     ) -> JSONResponse:
         cap = engine.settings.max_upload_mb * 1024 * 1024
         if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
@@ -128,6 +135,7 @@ def create_app(engine: Engine) -> FastAPI:
             source=source,
             reliability=reliability,
             indicators=indicators,
+            table=table,
         )
 
     @app.post("/api/demo")
@@ -179,6 +187,10 @@ def create_app(engine: Engine) -> FastAPI:
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
         return engine.delete_dataset(dataset_id)
+
+    @app.delete("/api/uploads/{upload_id}")
+    def delete_upload(upload_id: str) -> dict[str, Any]:
+        return engine.delete_upload(upload_id)
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
