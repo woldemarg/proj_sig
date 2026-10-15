@@ -173,7 +173,9 @@ Measured on 2026-10-15, seed 1, k 5. Three readings bound what the spatial issue
   them structurally too (two specialise it, the third is CO_LOCATED with it). A link by shared region cannot raise recall
   here; what separates the two scenarios is the rank of the same-region foci against S-control's, still 2.0 against 2.5
   (1.83): the foci now share their resolution-5 region, but the partner cap leaves no `same_region` link between them
-  (the S-regional row).
+  (the S-regional row). Keeping that link (a cap pool per relation, measured for #58) does not move the rank either: the
+  location hop scores as the anchor path does (0.85 · 0.95 · insight weight ≈ 0.63), and scoring it higher would rank
+  "the same area" above "the same phenomenon" (system-prompt rule 6).
 - **A coarser level finds only broad effects.** At resolution 5 the three foci of S-regional are a handful of cells, far
   below 30, so no coarser insight can confirm them; only a zone of ≥ 30 coarse cells (S-levels) is found at every level.
 - **A geo file's coordinates are no metric.** Mined as a plain table, the district condition restates `lon`, which
