@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -98,9 +99,14 @@ def test_upload_process_render_query(client, demo_csv):
 
 
 def _chromium() -> str | None:
-    root = Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
-    found = sorted(root.glob("chromium-*/chrome-win64/chrome.exe")) + sorted(root.glob("chromium-*/chrome-linux/chrome"))
-    return str(found[-1]) if found else None
+    """The newest Chromium in Playwright's browser cache, whichever revision this Playwright pins."""
+    cache = {"win32": Path(os.environ.get("LOCALAPPDATA", "")), "darwin": Path.home() / "Library" / "Caches"}.get(
+        sys.platform, Path.home() / ".cache"
+    )
+    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or cache / "ms-playwright")
+    patterns = ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-linux*/chrome", "chromium-*/chrome-mac*/*.app/Contents/MacOS/*")
+    found = [exe for pattern in patterns for exe in root.glob(pattern)]
+    return str(max(found, key=lambda exe: int(exe.relative_to(root).parts[0].removeprefix("chromium-")))) if found else None
 
 
 @pytest.mark.browser
