@@ -289,14 +289,15 @@ def _graph(engine: Engine, best: list[str]) -> dict[str, Any]:
     dataset = {n["id"]: n["props"]["dataset_id"] for n in g.of_kind("Pattern")}
     pairs = list(itertools.combinations(sorted(set(best)), 2))
     walks = [traverse(g, [SeedMatch(p, 1.0, {})], engine.settings.query).visited_count for p in sorted(set(best))]
+    found = engine.search(QUESTION)
     return {
         "shared": f"{sum(bool(members.get(a, set()) & members.get(b, set())) for a, b in pairs)}/{len(pairs)}",
         "cross_coloc": sum(e["type"] == "CO_LOCATED" and dataset[e["source"]] != dataset[e["target"]] for e in g.edges),
         "nodes": {kind: len(g.of_kind(kind)) for kind in ("Pattern", "Attractor")},
         "edges": dict(sorted(g.snapshot["stats"]["edge_counts"].items())),
         "visited_per_seed": round(float(np.mean(walks)), 1) if walks else None,
-        "prompt_chars": len(engine.evidence(QUESTION).evidence_prompt),
-        "zones": [z["id"] for z in engine.search(QUESTION).evidence.zones],
+        "prompt_chars": len(found.payload().evidence_prompt),
+        "zones": [z["id"] for z in found.evidence.zones],
         "scale": {c.pattern_id: c.scale for c in scale_chain(g, sorted(set(best)))},
     }
 
@@ -335,7 +336,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     graph = _graph(engine, best)
     region = scenario.truth.get("region")
-    return result | graph | {"zone_first": None if region is None or not graph["zones"] else graph["zones"][0] == f"R:{REGION}:{region}"}
+    return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
 
 
 def format_table(results: list[dict[str, Any]]) -> str:

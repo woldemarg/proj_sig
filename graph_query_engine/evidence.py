@@ -169,7 +169,7 @@ class Evidence:
             lines.extend(f"- {self._chain_text(c)}" for c in chains)
             lines.extend(regions)
         if self.zones:
-            keys = {it.pattern_id: it.key for it in self.items}
+            keys = self._keys()
             lines.append("")
             lines.append(
                 "ZONES (where the evidence lies on the map: the regions of one level holding most of it; with a direction, only findings shifting that way count):"
@@ -183,6 +183,9 @@ class Evidence:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
         return "\n".join(lines)
+
+    def _keys(self) -> dict[str, str]:
+        return {it.pattern_id: it.key for it in self.items}
 
     @staticmethod
     def _level(it: EvidenceItem) -> str:
@@ -209,7 +212,7 @@ class Evidence:
     def _regions(self) -> list[str]:
         """The regions above the items that hold two or more of them, finest first; a coarser region holding the same items
         as a finer one is left out."""
-        keys = {it.pattern_id: it.key for it in self.items}
+        keys = self._keys()
         held: dict[str, tuple[dict[str, Any], list[str]]] = {}
         for chain in self.scale_chains:
             for r in chain["regions"]:
@@ -276,11 +279,8 @@ class Evidence:
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
-        keys = {it.pattern_id: it.key for it in self.items}
-        lines += [
-            f"- зона Z{n} ({z['id']}, рівень {z['resolution']}): {''.join(f'[{keys[p]}]' for p in z['holds'])}"
-            for n, z in enumerate(self.zones, start=1)
-        ]
+        keys = self._keys()
+        lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
@@ -330,10 +330,18 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
     return chains
 
 
-def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
-    """The ZONES section: only for a question without scope whose evidence holds a geo item."""
+def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, config: QueryConfig) -> list[dict[str, Any]]:
+    """The ZONES section, only for a question without scope: its geo items that answer it, i.e. that shift an asked
+    target (a phenomenon shift, as the prompt shows them) the asked way; without a target every geo item counts."""
+
+    def answers(pid: str) -> bool:
+        shifts = config.thresholds.phenomenon_shifts(graph.insight(pid))
+        return not query.targets or any(s.metric in query.targets and s.robust_z * (query.direction or s.robust_z) > 0 for s in shifts)
+
+    if query.conditions:
+        return []
     geo = [it.pattern_id for it in items if not it.folded_into and resolution(graph, it.pattern_id) is not None]
-    return rank_zones(graph, geo, query.targets, query.direction) if geo and not query.conditions else []
+    return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
 def _chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
@@ -476,5 +484,5 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         provenance=[{"key": it.key, **it.provenance} for it in items],
         notes=notes,
         scale_chains=chains,
-        zones=_zones(query, items, graph),
+        zones=_zones(query, items, graph, config),
     )

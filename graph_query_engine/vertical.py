@@ -161,23 +161,27 @@ def picture(graph: DualGraph, region: str) -> dict[str, int]:
 ZONES_MAX = 5  # zones in the evidence
 
 
-def rank_zones(graph: DualGraph, pattern_ids: list[str], targets: list[str], direction: int | None) -> list[dict[str, Any]]:
-    """The ZONES of a question without scope (docs/07_question_answering.md §7.4): the regions of one level that hold the
-    patterns (an IN_REGION share of at least ``VERTICAL_MIN_SHARE``), the level the coarsest where they lie in three or
-    more regions (else the finest they reach), ranked by the sum of insight weight × share over the patterns that shift
-    an asked target the asked way; at most ``ZONES_MAX`` with a positive score, each with its ``picture``."""
+def rank_zones(graph: DualGraph, geo_ids: list[str], answer_ids: list[str]) -> list[dict[str, Any]]:
+    """The ZONES of a question (docs/07_question_answering.md §7.4). A region holds a pattern with an IN_REGION share of at
+    least ``VERTICAL_MIN_SHARE``. The level is the coarsest where the evidence's geo patterns lie in three or more regions
+    and one holds an answering pattern (else the finest that holds one); its regions holding answering patterns rank by
+    their sum of insight weight × share; at most ``ZONES_MAX``, each with its ``picture``. Which patterns answer is the
+    caller's to say."""
     held: dict[int, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     score: dict[str, float] = defaultdict(float)
-    for pid in pattern_ids:
-        ins = graph.insight(pid)
-        asked = [s.robust_z for s in ins.shifts if s.metric in targets]
-        agrees = not direction or all(z * direction > 0 for z in asked)
+    answers = set(answer_ids)
+    for pid in geo_ids:
         for region, share in _regions(graph, pid).items():
             if share >= VERTICAL_MIN_SHARE:
                 held[graph.nodes[region]["props"]["resolution"]][region].append(pid)
-                score[region] += ins.weight * share * agrees
-    if not held:
+                if pid in answers:
+                    score[region] += graph.insight(pid).weight * share
+    answered = [lv for lv in sorted(held) if any(r in score for r in held[lv])]
+    if not answered:
         return []
-    level = next((lv for lv in sorted(held) if len(held[lv]) >= 3), max(held))
-    ranked = sorted((r for r in held[level] if score[r] > 0), key=lambda r: (-score[r], r))[:ZONES_MAX]
-    return [{"id": r, "resolution": level, "score": round(score[r], 4), "holds": held[level][r], **picture(graph, r)} for r in ranked]
+    level = next((lv for lv in answered if len(held[lv]) >= 3), answered[-1])
+    ranked = sorted((r for r in held[level] if r in score), key=lambda r: (-score[r], r))[:ZONES_MAX]
+    return [
+        {"id": r, "resolution": level, "score": round(score[r], 4), "holds": [p for p in held[level][r] if p in answers], **picture(graph, r)}
+        for r in ranked
+    ]
