@@ -655,7 +655,7 @@ function botCard(turn) {
   const answer = qa.answer || "";
   const notice = qa.answer_mode !== "fallback" ? ""
     : llm.error === "disabled" ? "Showing the evidence only (explanation turned off)."
-    : "The language model is unavailable — showing the verified evidence only.";
+    : "The language model is unavailable — showing the evidence only.";
   const cit = qa.citations || {};
   const b = (qa.view.traversal && qa.view.traversal.baselines) || {};
   const cross = items.filter((i) => i.transversal_only).length;

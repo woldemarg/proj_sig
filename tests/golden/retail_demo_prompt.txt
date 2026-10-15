@@ -16,7 +16,7 @@ LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
 - A-5 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-7 (1.00, shared members), A-6 (0.41), A-7 (0.90), A-0 (0.57)
 - A-0 "delivery days up and return rate up": 9 patterns over 9 distinct scopes; related: A-1 (1.00, shared members), A-5 (0.57), A-6 (0.69), A-1 (0.76)
 
-EVIDENCE (verified statistical observations; cite as [P#]):
+EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 [P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)
      shifts: discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)
      validation: bootstrap stability 0.98 | adjusted p < 0.001 | insight weight 0.80 | confounders: none detected

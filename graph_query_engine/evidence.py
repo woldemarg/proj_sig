@@ -104,7 +104,7 @@ class Evidence:
                     f'- {a["id"]} "{a["description"]}": {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes; related: {rel}'
                 )
         lines.append("")
-        lines.append("EVIDENCE (verified statistical observations; cite as [P#]):")
+        lines.append("EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):")
         for it in self.items:
             s = it.statistics
             scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
@@ -154,7 +154,7 @@ class Evidence:
         return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
-        """The verified observations, cited: one ``- …`` line each, in Ukrainian around untouched literals (or the
+        """The observations, cited: one ``- …`` line each, in Ukrainian around untouched literals (or the
         one line saying the graph holds no such evidence). The narrator frames them as the evidence-only answer.
 
         The prose of the evidence (``scope_text``, ``shift_text``) is the English LLM serializer, so this
