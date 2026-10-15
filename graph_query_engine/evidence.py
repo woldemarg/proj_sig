@@ -332,10 +332,14 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
 
 def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, config: QueryConfig) -> list[dict[str, Any]]:
     """The ZONES section, only for a question without scope: its geo items that answer it, i.e. that shift an asked
-    target (a phenomenon shift, as the prompt shows them) the asked way; without a target every geo item counts."""
+    target (a phenomenon shift, as the prompt shows them) the asked way, or for a question about a relationship whose
+    material correlation change involves an asked target; without a target every geo item counts."""
 
     def answers(pid: str) -> bool:
-        shifts = config.thresholds.phenomenon_shifts(graph.insight(pid))
+        ins = graph.insight(pid)
+        if query.covariance:
+            return config.thresholds.has_material_covariance(ins) and bool(set(ins.covariance["pair"]) & set(query.targets or ins.covariance["pair"]))
+        shifts = config.thresholds.phenomenon_shifts(ins)
         return not query.targets or any(s.metric in query.targets and s.robust_z * (query.direction or s.robust_z) > 0 for s in shifts)
 
     if query.conditions:

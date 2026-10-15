@@ -276,8 +276,9 @@ def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
 
 def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     """Only findings that shift an asked target the asked way count: one shifting it the other way, or not at all, is
-    neither scored nor listed, even in a region shared with answering ones; the level is the coarsest where the counted
-    findings lie in three or more regions; without a target every geo finding counts; a question with scope gets none."""
+    neither scored nor listed, even in a region shared with answering ones; the level is the coarsest where the geo
+    findings lie in three or more regions; a relationship question counts the correlation changes of its pair; without
+    a target every geo finding counts; a question with scope gets none."""
     from types import SimpleNamespace
 
     from graph_query_engine import DualGraph, QueryConfig
@@ -320,6 +321,15 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     assert zones[0]["score"] == round(0.8 * 0.9 + 0.6 * 0.8, 4) and zones[0]["resolution"] == 5
     every = _zones(ParsedQuery("what is on the map?"), items, graph, QueryConfig())
     assert ["A", "B", "C"] == every[0]["holds"] and any(z["holds"] == ["E"] for z in every)
+    graph.nodes["E"]["props"] |= {
+        "phenomenon_type": "covariance",
+        "covariance": {"pair": ["margin", "discount"], "local_corr": 0.1, "global_corr": -0.6, "delta": 0.7},
+    }
+    graph = DualGraph(graph.snapshot)  # E now a correlation change between margin and discount
+    related = _zones(
+        ParsedQuery("where does margin follow discount less?", targets=["margin", "discount"], covariance=True), items, graph, QueryConfig()
+    )
+    assert [z["holds"] for z in related] == [["E"]]  # the mean shifts of A-D do not answer a relationship question
 
     _, found = _levels_search(_levels(-1.2, ("7", "5")))
     assert not found.evidence.zones  # the question names phones and the US
