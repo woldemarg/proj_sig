@@ -71,7 +71,9 @@ def parse_columns(spec: str | None) -> list[str]:
     return [c.strip() for c in (spec or "").split(",") if c.strip()]
 
 
-def dataset_fingerprint(payload: bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None) -> str:
+def dataset_fingerprint(
+    payload: bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
+) -> str:
     """Content-addressed dataset id: same bytes + same derivation options -> same id."""
     h = hashlib.sha256(payload)
     h.update(repr(sorted(bins.items())).encode("utf-8"))
@@ -79,6 +81,8 @@ def dataset_fingerprint(payload: bytes, bins: dict[str, int], categories: list[s
         h.update(repr(sorted(categories)).encode("utf-8"))
     if geo:
         h.update(f"geo={geo}".encode())
+    if left_out:  # the table level of a geo upload: its point columns left out
+        h.update(f"left_out={sorted(left_out)}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -147,11 +151,13 @@ def load_dataset(
     categories: str | None = None,
     geo: str | None = None,
     strict: bool = True,
+    locator: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
     upload share their options) a geo level skips the file's own columns and the table level any column: a name in
-    neither the file nor the cells still fails the geo levels. ``geo`` turns the
+    neither the file nor the cells still fails the geo levels. ``locator`` (the table level of a geo upload) leaves
+    the columns it locates the points in out of the table. ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table."""
     path = Path(path)
     if not path.is_file():
@@ -169,6 +175,14 @@ def load_dataset(
         raise IngestionError("invalid_schema", f"Only {len(frame)} rows (MIN_ROWS={config.min_rows})")
     warnings = []
     spatial = None
+    left_out = []
+    if locator and not geo_spec:
+        try:
+            left_out = locate_points(frame, locator)[2]
+        except SpatialError as exc:
+            raise IngestionError("invalid_options", str(exc)) from exc
+        frame = frame.drop(columns=left_out)
+        warnings.append(f"point columns {left_out} left out of the table level")
     tolerated = set() if strict else set(frame.columns) if geo_spec else set(cat_spec) | set(bin_spec)
     if geo_spec:
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
@@ -187,7 +201,7 @@ def load_dataset(
         warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats, geo=_geo_text(geo_spec)),
+        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,
