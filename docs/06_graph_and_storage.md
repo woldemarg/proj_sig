@@ -149,9 +149,10 @@ Guarantees (tests: `test_lattice.py`; `test_persistence.py`: write → reload �
 * No transitive SPECIALIZES edges; structural edges connect patterns of one dataset, CO_LOCATED patterns of one resolution in any datasets; RELATED_TO and CO_OCCURS connect only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` RELATED_TO edges, and every CO_OCCURS endpoint has a non-weak member.
 * `journal rows == vector rows == ConceptStore.next_chunk_id`; snapshot ids are identical after reload and after rebuild.
 * `READY` implies that journals, state and snapshot are mutually consistent; no transaction starts while `pending.json` exists.
-* A field changed in `journal/patterns.jsonl` after the append makes its pattern `integrity: mismatch` at the next compile (a commit, or a start on a snapshot of another version). Such a pattern is never a seed and never an evidence item ([7.4](07_question_answering.md#74-the-evidence-object)). The limits:
+* A field changed in `journal/patterns.jsonl` after the append makes its pattern `integrity: mismatch` at the next compile (a commit, or a start on a snapshot of another version). Such a pattern is never a seed and never an evidence item ([7.4](07_question_answering.md#74-the-evidence-object)), and it does not describe its anchors: their labels, signatures and counts are computed from the other members ([5.8](05_latent_anchors.md#58-how-an-anchor-is-described)). The limits:
   * The digest is an unkeyed SHA-256. It catches an edit that leaves it stale (by hand, or by a tool that rewrites numbers), not a writer who recomputes it.
   * It guards the journal, not the snapshot file, which is derived and rebuilt from it.
+  * It does not cover `provenance` (only its spatial ingest fields), so the file name a citation footer shows can be edited unnoticed.
   * It does not cover the spatial plane, which is derived at every commit (`compactness`, regions, CO_LOCATED).
   * A walk may still pass through a tampered pattern: its id can appear in another item's path.
   * The map endpoints serve the journal as stored.

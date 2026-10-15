@@ -137,7 +137,7 @@ Two or three atoms per insight make anchors mixtures of phenomena: the grown gra
 
 ## 5.8 How an anchor is described
 
-lac stores **no text** for an anchor: only its centroid, its mass (lac's `chunk_counts` array, here the summed member weights), `last_updated_batch` and `created_at` (`state/concepts.npz`, `state/state.json`). Everything readable is derived from the members at snapshot time (`snapshot._attractor_nodes` and `snapshot.attractor_signature` in `insight_graph_service/core/snapshot.py`, over `LatentOntology.attractors()`) and recomputed after every batch, so the description follows the membership. Over the members `(record_i, alignment_i, strength_i)` — weak memberships included, with their small strength:
+lac stores **no text** for an anchor: only its centroid, its mass (lac's `chunk_counts` array, here the summed member weights), `last_updated_batch` and `created_at` (`state/concepts.npz`, `state/state.json`). Everything readable is derived from the members at snapshot time (`snapshot._attractor_nodes` and `snapshot.attractor_signature` in `insight_graph_service/core/snapshot.py`, over `LatentOntology.attractors()`) and recomputed after every batch, so the description follows the membership. Over the members `(record_i, alignment_i, strength_i)` — weak memberships included, with their small strength; a member whose record fails its digest (`integrity: mismatch`, [6.7](06_graph_and_storage.md#67-configuration-and-guarantees)) is left out, so a tampered record does not describe its anchors:
 
 ```text
 signature(label) = Σ_i strength_i · coef_i(label) / max_l |coef_i(l)|  /  Σ_i strength_i        (each member's components scaled to [−1, 1] first)

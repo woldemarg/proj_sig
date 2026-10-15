@@ -132,7 +132,7 @@ class SpatialProvenance:
 
 # fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
 SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
-UNDIGESTED = frozenset({"provenance", "row_id", "canonical", "embedding", "record_digest"})  # rewritten or derived after the write
+UNDIGESTED = frozenset({"provenance", "row_id", "record_digest"})  # set after the digest (rows_ref) or rewritten by a deletion (row_id)
 
 
 def record_digest(record: dict[str, Any]) -> str:
