@@ -8,7 +8,7 @@ the other patterns expressing the same phenomenon whose scope shares no conditio
 with S. Four retrievers rank all other patterns from S:
 
     transversal   graph_query_engine.traversal (seed forced to S)
-    structural    BFS over all structural edges (SPECIALIZES/GENERALIZES/SIBLING/CONTRASTS)
+    structural    BFS over all structural edges (SPECIALIZES/SIBLING/CONTRASTS/CO_LOCATED)
     text_nn       cosine of canonical-document text embeddings (naive vector RAG)
     vector_nn     cosine of the insight vectors (same space, no attractor graph)
 

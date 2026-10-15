@@ -181,7 +181,12 @@ def test_geo_batch_end_to_end(tmp_path):
     geo = record["profile"]["geo"]
     assert geo["resolution"] == 7 and geo["sac"]["significant_corrected"] <= geo["sac"]["significant_iid"]
     patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == record["dataset_id"]]
-    assert all({"cells", "compactness", "n_eff", "colocated"} <= set(p["provenance"]["spatial"]) for p in patterns)
+    assert all(set(p["provenance"]["spatial"]) == {"resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid"} for p in patterns)  # ingest only
+    graph = engine.graph()
+    assert all(0 <= graph.nodes[p["id"]]["props"]["compactness"] <= 1 for p in patterns)  # derived at the commit
+    regions = graph.of_kind("Region")
+    assert regions and {r["props"]["resolution"] for r in regions} == {7, 5, 3, 1}  # own level included
+    assert {e["type"] for e in graph.edges} >= {"IN_REGION", "PARENT_OF"}
     for p in patterns:  # a neighbourhood condition never explains the counters it is computed from
         if any(c["attribute"] in ("lisa_points", "neighbours_points_band") for c in p["conditions"]):
             assert p["target"] not in ("points", "when_active_days")
@@ -218,3 +223,46 @@ def test_spatial_provenance_is_the_five_ingest_fields():
     assert SpatialProvenance.from_dict({"resolution": 7, "cells": 40}).moran_i is None  # an older record reads
     assert SpatialProvenance.from_dict(None) is None and SpatialProvenance.from_dict({}) is None
     assert tuple(SpatialProvenance.__dataclass_fields__) == SPATIAL_DIGEST_FIELDS  # widening either is a decision about stored digests
+
+
+def _geo_dataset(name, cells, covers):
+    from subgroup_miner.spatial import GeoDataset, _neighbour_graph
+
+    cells = np.array(sorted(set(cells)), dtype=object)
+    ptr, idx, _ = _neighbour_graph(cells)
+    pos = {c: i for i, c in enumerate(cells)}
+    return GeoDataset(name, cells, ptr, idx, {p: np.array(sorted({pos[c] for c in cs})) for p, cs in covers.items()})
+
+
+def test_derive_spatial_relations_regions_and_the_partner_cap():
+    from subgroup_miner.spatial import derive_spatial
+
+    c = h3.latlng_to_cell(48.5, 35.3, 8)
+    touching = h3.grid_ring(c, 7)[0]  # two radius-3 disks seven cells apart touch without overlapping
+    region = h3.cell_to_parent(c, 5)
+    kids = set(h3.cell_to_children(region, 8))
+    inside = sorted(k for k in kids if set(h3.grid_disk(k, 2)) <= kids)
+    x = inside[0]
+    y = max(inside, key=lambda k: h3.grid_distance(x, k))  # far apart in one resolution-5 region
+    near, far = h3.grid_disk(x, 2), h3.grid_disk(y, 2)
+    coarse = [h3.cell_to_parent(k, 7) for k in near]
+    elsewhere = h3.latlng_to_cell(40.0, 30.0, 8)
+    crowd = {f"P-q{i}": h3.grid_disk(elsewhere, 2) for i in range(5)}
+    spatial = derive_spatial(
+        [
+            _geo_dataset("one", h3.grid_disk(c, 15), {"P-a": h3.grid_disk(c, 3), "P-b": h3.grid_disk(c, 3), "P-c": h3.grid_disk(touching, 3)}),
+            _geo_dataset("two", near + far, {"P-x": near, "P-y": far}),
+            _geo_dataset("coarse", coarse, {"P-z": coarse}),  # resolution 7
+            _geo_dataset("crowd", h3.grid_disk(elsewhere, 4), {"P-p": h3.grid_disk(elsewhere, 2), **crowd}),
+        ],
+        (7, 5, 3, 1),
+    )
+    relation = {(a, b): rel for a, b, rel, _ in spatial.co_located}
+    assert relation[("P-a", "P-b")] == "overlaps" and relation[("P-a", "P-c")] == "adjacent" and relation[("P-x", "P-y")] == "same_region"
+    assert sum("P-p" in pair for pair in relation) == 3  # five overlapping partners, three kept
+    assert not any("P-z" in pair for pair in relation)  # CO_LOCATED joins one resolution only
+    shared = f"R:5:{region}"
+    members = {p for p, r, _ in spatial.in_region if r == shared}
+    assert {"P-x", "P-y", "P-z"} <= members  # one region for datasets of resolution 8 and 7
+    assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
+    assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)

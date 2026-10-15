@@ -56,6 +56,6 @@ EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 [P10] role=transversal | scope: category is tablets, channel is online, and region is APAC | support 117 rows (2.3%)
      shifts: delivery days: strong increase, +2.28 sd (median 6.1 vs 3.4 overall); discount: strong increase, +2.22 sd (median 19.25 vs 10.74 overall); return rate: moderate increase, +1.73 sd (median 0.0814 vs 0.0555 overall); margin: moderate decrease, -1.17 sd (median 14.45 vs 19.45 overall)
      validation: bootstrap stability 0.97 | adjusted p < 0.001 | insight weight 0.75 | confounders: none detected
-     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 -CO_OCCURS(1.00)-> A-5 <-ACTIVATES(0.99)- P-307b61369c91 -GENERALIZES(1.00)-> P-71e7ef544eab [scope-disjoint from seeds: no shared condition]
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 -CO_OCCURS(1.00)-> A-5 <-ACTIVATES(0.99)- P-307b61369c91 <-SPECIALIZES(1.00)- P-71e7ef544eab [scope-disjoint from seeds: no shared condition]
 
 NOTE: P2, P5, P6, P7, P9, P10 share no scope condition with the seeds; they were reached through latent anchors (the same phenomenon in a different part of the data).

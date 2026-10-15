@@ -26,7 +26,7 @@ def test_specializes_uses_covering_relations_only():
     c = ins("C", {"r": "EU", "c": "lap", "ch": "on"}, [("m", 3.0)])
     spec = edges_of([a, b, c], EdgeType.SPECIALIZES)
     assert spec == {("B", "A"), ("C", "B")}  # no transitive C->A
-    assert edges_of([a, b, c], EdgeType.GENERALIZES) == {(t, s) for s, t in spec}  # exact inverse
+    assert "GENERALIZES" not in EdgeType.__members__  # the walk follows SPECIALIZES both ways
 
 
 def test_sibling_requires_same_parent_and_partition_attribute():

@@ -71,7 +71,7 @@ def test_graph_consistency(hashed_engine):
             assert kinds[e["source"]] == "Pattern" and kinds[e["target"]] == "Attractor"
         if e["type"] in {"RELATED_TO", "CO_OCCURS"}:
             assert kinds[e["source"]] == kinds[e["target"]] == "Attractor" and e["source"] != e["target"] and 0 < e["weight"] <= 1
-        if e["type"] in {"SPECIALIZES", "GENERALIZES", "SIBLING", "CONTRASTS"}:
+        if e["type"] in {"SPECIALIZES", "SIBLING", "CONTRASTS"}:
             assert kinds[e["source"]] == kinds[e["target"]] == "Pattern"
     activated = {e["source"] for e in g.edges if e["type"] == "ACTIVATES"}
     assert activated == {nid for nid, k in kinds.items() if k == "Pattern"}
@@ -79,9 +79,7 @@ def test_graph_consistency(hashed_engine):
     floor = hashed_engine.settings.topology.min_activation_alignment
     assert all(e["props"]["weak"] or e["weight"] >= floor for e in g.edges if e["type"] == "ACTIVATES")
     assert {e["target"] for e in g.edges if e["type"] == "ACTIVATES"} == {nid for nid, k in kinds.items() if k == "Attractor"}
-    spec = {(e["source"], e["target"]) for e in g.edges if e["type"] == "SPECIALIZES"}
-    gen = {(e["target"], e["source"]) for e in g.edges if e["type"] == "GENERALIZES"}
-    assert spec == gen and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
+    assert "GENERALIZES" not in counts and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
     # mutual k-NN keeps the latent plane sparse
     assert counts["RELATED_TO"] <= hashed_engine.settings.topology.related_to_peer_count * len(g.of_kind("Attractor")) / 2
     # a co-occurrence link needs a member insight on both sides

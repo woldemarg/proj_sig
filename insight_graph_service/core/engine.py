@@ -44,7 +44,7 @@ from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatc
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import annotate_extents, cell_boundary, sac_summary
+from subgroup_miner.spatial import GeoDataset, cell_boundary, compactness, derive_spatial, sac_summary
 
 log = logging.getLogger(__name__)
 
@@ -220,6 +220,11 @@ class Engine:
         if pending is not None:
             batches[pending["batch_id"]] = {**pending, "status": "READY"}
         records, vectors = self.ws.patterns(), self.ws.vectors()
+        geo = []  # every READY geo dataset's stored cells and extents: the spatial plane is derived, never journaled
+        for b in batches.values():
+            stored = self.ws.load_geo(b["dataset_id"]) if b.get("status") == "READY" and (b.get("profile") or {}).get("geo") else None
+            if stored is not None:
+                geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
         snapshot = build_snapshot(
             records=records,
             activations=self.ws.activations(),
@@ -228,6 +233,7 @@ class Engine:
             representation=self.ws.representation() or {},
             ontology=ontology,
             settings=self.settings,
+            spatial=derive_spatial(geo, self.settings.region_levels),
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
@@ -353,7 +359,6 @@ class Engine:
                     kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
                     if loaded.spatial:
                         record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
-                        annotate_extents(kept, covers, loaded.spatial)
                         self.ws.save_profile(ds, record["profile"])
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])
@@ -480,7 +485,10 @@ class Engine:
                 "phenomenon_type": r["phenomenon_type"],
                 "support": r["support"],
                 "weight": r["weight"],
-                "spatial": r["provenance"].get("spatial", {}),
+                "spatial": {
+                    **r["provenance"].get("spatial", {}),
+                    "compactness": round(compactness(covers[r["id"]], ctx.nbr_ptr, ctx.nbr_idx), 4),
+                },
             }
             for r in self.ws.patterns()
             if r["dataset_id"] == dataset_id and r["id"] in covers

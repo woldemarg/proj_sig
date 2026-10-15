@@ -7,13 +7,16 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
                 and ``components``) and ``embedding`` (the vector contract)
 * ``Attractor`` ``attractor_id``, ``mass``, ``n_patterns``, ``distinct_scopes``, ``signature`` [{component, value}],
                 ``targets``, ``datasets``, ``dimensions``, ``dispersion``, ``centroid``
-* ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``
+* ``Region``    ``resolution``, ``h3``, ``cells_covered`` (patterns' cells inside it), ``patterns`` (IN_REGION members)
+* ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
 
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
 ``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
-``CO_LOCATED`` (geo datasets) carries ``overlap`` of the two one-ring-dilated cell extents.
+``CO_LOCATED`` (geo patterns of one resolution, any datasets) carries ``relation`` (overlaps | adjacent | same_region);
+``IN_REGION`` carries ``share`` (of the region's occupied cells the pattern covers); ``PARENT_OF`` runs from a region to
+its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, derived at the commit.
 """
 
 from __future__ import annotations
@@ -22,12 +25,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 4  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 5  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
     SPECIALIZES = "SPECIALIZES"
-    GENERALIZES = "GENERALIZES"
     SIBLING = "SIBLING"
     CONTRASTS = "CONTRASTS"
     HAS_SCOPE = "HAS_SCOPE"
@@ -36,19 +38,22 @@ class EdgeType(str, Enum):
     RELATED_TO = "RELATED_TO"
     CO_OCCURS = "CO_OCCURS"
     CO_LOCATED = "CO_LOCATED"
+    IN_REGION = "IN_REGION"
+    PARENT_OF = "PARENT_OF"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
 
 
-STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.GENERALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}
+STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}  # pattern <-> pattern
 LATENT_EDGES = {EdgeType.RELATED_TO, EdgeType.CO_OCCURS}  # anchor <-> anchor: centroid neighbours, shared members
 UNDIRECTED_EDGES = {EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED, EdgeType.RELATED_TO, EdgeType.CO_OCCURS}
 EDGE_PLANE = {
     EdgeType.SPECIALIZES: "structural",
-    EdgeType.GENERALIZES: "structural",
     EdgeType.SIBLING: "structural",
     EdgeType.CONTRASTS: "structural",
-    EdgeType.CO_LOCATED: "structural",
+    EdgeType.CO_LOCATED: "spatial",
+    EdgeType.IN_REGION: "spatial",
+    EdgeType.PARENT_OF: "spatial",
     EdgeType.RELATED_TO: "latent",
     EdgeType.CO_OCCURS: "latent",
     EdgeType.ACTIVATES: "bridge",
@@ -62,7 +67,7 @@ EDGE_PLANE = {
 @dataclass
 class GraphNode:
     id: str
-    kind: str  # Pattern | Attractor | Dimension | Metric | Dataset | Batch
+    kind: str  # Pattern | Attractor | Region | Dimension | Metric | Dataset | Batch
     label: str
     props: dict[str, Any] = field(default_factory=dict)
 
@@ -113,6 +118,11 @@ def batch_node_id(batch_id: str) -> str:
 
 def metric_node_id(dataset_id: str, name: str) -> str:
     return f"M:{dataset_id}:{name}"
+
+
+def region_node_id(resolution: int, cell: str) -> str:
+    """A region is an H3 cell at a listed resolution, the same node for every dataset that reaches it."""
+    return f"R:{resolution}:{cell}"
 
 
 def dimension_node_id(dataset_id: str, name: str) -> str:

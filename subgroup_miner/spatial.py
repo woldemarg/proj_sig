@@ -17,7 +17,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.stats import false_discovery_control, norm
 
-from insight_contracts import Insight
+from insight_contracts import Insight, region_node_id
 
 POINT_PARSE_SHARE = 0.95  # share of non-null values that must parse as points for a column to be the location
 LAT_NAMES = frozenset({"lat", "latitude"})
@@ -43,7 +43,8 @@ NESTED_SHARE = 0.9  # nesting above which a mode condition never explains the ot
 GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also become per-level share metrics
 GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
 GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
-COLOCATED_TOP = 3  # CO_LOCATED partners kept per pattern (the largest overlaps)
+COLOCATED_TOP = 3  # CO_LOCATED partners kept per pattern (the strongest relations)
+GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: share of the region's occupied cells the pattern covers
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 
 
@@ -397,32 +398,118 @@ def _nesting(a: pd.Series, b: pd.Series) -> float:
     return float(max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum())
 
 
-def compactness(rows: np.ndarray, ctx: SpatialContext) -> float:
+def compactness(rows: np.ndarray, nbr_ptr: np.ndarray, nbr_idx: np.ndarray) -> float:
     """Share of the extent's neighbour links that stay inside the extent (1 = one solid block, 0 = isolated cells)."""
-    total = int(np.diff(ctx.nbr_ptr)[rows].sum())
-    return induced_links(rows, ctx).nnz / total if total else 0.0
+    inside = np.zeros(len(nbr_ptr) - 1, dtype=bool)
+    inside[rows] = True
+    owner = np.repeat(np.arange(len(nbr_ptr) - 1), np.diff(nbr_ptr))
+    total = int(np.diff(nbr_ptr)[rows].sum())
+    return int((inside[owner] & inside[nbr_idx]).sum()) / total if total else 0.0
 
 
-def colocated(extents: dict[str, np.ndarray], ctx: SpatialContext) -> list[tuple[str, str, float]]:
-    """Pairs of extents whose one-ring dilations overlap by ``|A ∩ B| / min(|A|, |B|) >= GEO_COLOCATION_MIN``."""
-    ids = sorted(extents)
-    if len(ids) < 2:
-        return []
-    grown = np.zeros((len(ids), len(ctx.cells)), dtype=np.float32)
-    for i, pid in enumerate(ids):
-        rows = extents[pid]
-        grown[i, rows] = 1
-        if len(rows):
-            grown[i, np.concatenate([ctx.neighbours(r) for r in rows])] = 1
-    inter = grown @ grown.T
-    size = grown.sum(axis=1)
-    pairs = []
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            overlap = float(inter[i, j] / max(min(size[i], size[j]), 1))
-            if overlap >= GEO_COLOCATION_MIN:
-                pairs.append((ids[i], ids[j], round(overlap, 4)))
-    return pairs
+@dataclass
+class GeoDataset:
+    """What ``derive_spatial`` reads of one geo dataset: its ``geo.npz`` arrays and its patterns' cell rows (``covers``)."""
+
+    dataset_id: str
+    cells: np.ndarray  # H3 id per cell row
+    nbr_ptr: np.ndarray  # CSR over cell rows: ring-1 neighbours present in the dataset
+    nbr_idx: np.ndarray
+    covers: dict[str, np.ndarray]  # pattern id -> its extent's cell rows
+
+
+@dataclass
+class SpatialStructure:
+    """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1)."""
+
+    regions: dict[str, dict[str, int | str]] = field(default_factory=dict)  # R:<res>:<h3> -> resolution, h3, cells_covered, patterns
+    in_region: list[tuple[str, str, float]] = field(default_factory=list)  # (pattern, region, share of the region's cells it covers)
+    parent_of: list[tuple[str, str]] = field(default_factory=list)  # (region, its parent at the next coarser listed level)
+    co_located: list[tuple[str, str, str, float]] = field(default_factory=list)  # (a, b, relation, weight), a < b
+    compactness: dict[str, float] = field(default_factory=dict)
+
+
+RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
+
+
+def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> SpatialStructure:
+    """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
+
+    A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
+    it covers at least ``GEO_REGION_MIN_SHARE`` of the region's occupied cells. Two patterns of one resolution, of any
+    datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
+    of the smaller, else ``adjacent`` when the extents touch, else ``same_region`` when both are IN_REGION of one region
+    at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP`` strongest partners
+    (relation first, then weight); a pair is kept when it is among the partners of its smaller id."""
+    out = SpatialStructure()
+    levels = tuple(sorted(set(levels), reverse=True))
+    raw, grown, ring, res_of, shares, covered = {}, {}, {}, {}, {}, {}
+    for d in datasets:
+        if not len(d.cells):
+            continue
+        res = h3.get_resolution(str(d.cells[0]))
+        own = [lv for lv in levels if lv <= res]
+        parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in map(str, d.cells)]) for lv in own}
+        occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
+        for pid, rows in d.covers.items():
+            rows = np.unique(np.asarray(rows, dtype=np.int64))
+            res_of[pid] = res
+            raw[pid] = {str(c) for c in d.cells[rows]}
+            near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
+            grown[pid] = {str(c) for c in d.cells[near]}
+            ring[pid] = {n for c in raw[pid] for n in h3.grid_ring(c, 1)}
+            out.compactness[pid] = round(compactness(rows, d.nbr_ptr, d.nbr_idx), 4)
+            for lv in own:
+                regions, counts = np.unique(parents[lv][rows], return_counts=True)
+                for cell, n in zip(regions, counts, strict=True):
+                    rid = region_node_id(lv, str(cell))
+                    covered.setdefault(rid, set()).update((d.dataset_id, c) for c in d.cells[rows][parents[lv][rows] == cell])
+                    share = round(float(n / occupied[lv][cell]), 4)
+                    if share >= GEO_REGION_MIN_SHARE:
+                        out.in_region.append((pid, rid, share))
+                        shares[(pid, rid)] = share
+    for _, rid, _ in out.in_region:  # a region and its ancestors at the coarser listed levels
+        lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
+        for up in [x for x in levels if x <= lv]:
+            out.regions.setdefault(region_node_id(up, h3.cell_to_parent(cell, up) if up < lv else cell), {"resolution": up})
+    for rid, props in out.regions.items():
+        lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
+        props.update(h3=cell, cells_covered=len(covered.get(rid, ())), patterns=sum(r == rid for _, r, _ in out.in_region))
+        coarser = [x for x in levels if x < lv]
+        if coarser:
+            out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(cell, coarser[0]))))
+    regions_of: dict[str, set[str]] = {}
+    for pid, rid, _ in out.in_region:
+        regions_of.setdefault(pid, set()).add(rid)
+    partners: dict[str, list[tuple[int, float, str]]] = {pid: [] for pid in raw}
+    by_res: dict[int, list[str]] = {}
+    for pid in sorted(raw):
+        by_res.setdefault(res_of[pid], []).append(pid)
+    for res, pids in by_res.items():
+        level = next((lv for lv in levels if res - lv >= 2), None)
+        for i, a in enumerate(pids):
+            for b in pids[i + 1 :]:
+                overlap = round(float(len(grown[a] & grown[b]) / max(min(len(grown[a]), len(grown[b])), 1)), 4)
+                if overlap >= GEO_COLOCATION_MIN:
+                    found = ("overlaps", overlap)
+                elif not raw[a] & raw[b] and (ring[a] & raw[b] or ring[b] & raw[a]):
+                    found = ("adjacent", round(len(ring[a] & raw[b]) / max(min(len(raw[a]), len(raw[b])), 1), 4))
+                else:
+                    common = {r for r in regions_of.get(a, set()) & regions_of.get(b, set()) if level is not None and r.startswith(f"R:{level}:")}
+                    found = ("same_region", max(min(shares[(a, r)], shares[(b, r)]) for r in common)) if common else None
+                if found:
+                    rank = RELATIONS.index(found[0])
+                    partners[a].append((rank, -found[1], b))
+                    partners[b].append((rank, -found[1], a))
+    kept = {}
+    for a, found in partners.items():
+        for rank, neg, b in sorted(found)[:COLOCATED_TOP]:
+            if a < b:
+                kept[(a, b)] = (RELATIONS[rank], -neg)
+    out.co_located = [(a, b, rel, w) for (a, b), (rel, w) in sorted(kept.items())]
+    out.in_region.sort()
+    out.parent_of.sort()
+    return out
 
 
 def cell_boundary(cell: str) -> list[list[float]]:
@@ -437,22 +524,6 @@ def effective_n_factor(rho: float) -> float:
     (``subgroup_moran``), so a solid block is discounted and scattered cells are not."""
     rho = min(max(rho, 0.0), 0.99)
     return (1.0 - rho) / (1.0 + rho)
-
-
-def annotate_extents(insights: list[Insight], covers: dict[str, np.ndarray], ctx: SpatialContext) -> None:
-    """Add ``compactness`` and the ``colocated`` partners to each insight's ``provenance["spatial"]`` (in place)."""
-    extents = {i.id: covers[i.expression] for i in insights}
-    partners: dict[str, list[dict[str, float | str]]] = {i.id: [] for i in insights}
-    for a, b, overlap in colocated(extents, ctx):
-        partners[a].append({"pattern_id": b, "overlap": overlap})
-        partners[b].append({"pattern_id": a, "overlap": overlap})
-    for found in partners.values():
-        found.sort(key=lambda x: (-x["overlap"], x["pattern_id"]))
-        del found[COLOCATED_TOP:]
-    for ins in insights:
-        spatial = ins.provenance["spatial"]
-        spatial["compactness"] = round(compactness(extents[ins.id], ctx), 4)
-        spatial["colocated"] = partners[ins.id]
 
 
 def sac_summary(insights: list[Insight], alpha: float) -> dict[str, int]:

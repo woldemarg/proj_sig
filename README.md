@@ -108,7 +108,7 @@ Without an LLM everything still works: answers fall back to a cited, evidence-on
 - A reset clears it.
 - A start of the graph service syncs a non-empty, healthy workspace.
 
-SIG owns its six node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
+SIG owns its seven node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
 
 ### Using the console
 1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Demo: table** (the synthetic retail orders) or **Demo: map** (California housing block groups, analysed as H3 cells).

@@ -96,7 +96,7 @@ def resolve_seeds(
     for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds
         if len(seeds) >= SEED_TOP_K or cand.score < floor:
             break
-        near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES", "GENERALIZES"])}
+        near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:
             seeds.append(cand)
     if not seeds and scored:

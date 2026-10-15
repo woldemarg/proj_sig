@@ -17,13 +17,14 @@ from typing import Any
 from insight_graph_service.core.settings import Settings
 
 CYPHER_DIR = Path(__file__).parent / "cypher"
-LABELS = ("Pattern", "Attractor", "Dimension", "Metric", "Dataset", "Batch")
+LABELS = ("Pattern", "Attractor", "Region", "Dimension", "Metric", "Dataset", "Batch")
 EDGE_ENDPOINTS = {
     "SPECIALIZES": ("Pattern", "Pattern"),
-    "GENERALIZES": ("Pattern", "Pattern"),
     "SIBLING": ("Pattern", "Pattern"),
     "CONTRASTS": ("Pattern", "Pattern"),
     "CO_LOCATED": ("Pattern", "Pattern"),
+    "IN_REGION": ("Pattern", "Region"),
+    "PARENT_OF": ("Region", "Region"),
     "HAS_SCOPE": ("Pattern", "Dimension"),
     "TARGETS": ("Pattern", "Metric"),
     "ACTIVATES": ("Pattern", "Attractor"),

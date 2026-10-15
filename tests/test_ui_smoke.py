@@ -60,7 +60,7 @@ def test_upload_process_render_query(client, demo_csv):
     kinds = {n["data"]["kind"] for n in g["nodes"]}
     types = {e["data"]["type"] for e in g["edges"]}
     assert {"Pattern", "Attractor", "Dimension", "Metric"} <= kinds
-    assert {"ACTIVATES", "RELATED_TO", "SPECIALIZES", "GENERALIZES", "CONTRASTS", "SIBLING", "HAS_SCOPE", "TARGETS"} <= types
+    assert {"ACTIVATES", "RELATED_TO", "SPECIALIZES", "CONTRASTS", "SIBLING", "HAS_SCOPE", "TARGETS"} <= types
     node_ids = {n["data"]["id"] for n in g["nodes"]}
     assert all(e["data"]["source"] in node_ids and e["data"]["target"] in node_ids for e in g["edges"])
 
