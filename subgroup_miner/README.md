@@ -17,6 +17,6 @@ insights = select_insights(
 prompt_context = describe(insights, limit=10)  # numbered ASCII lines, ready for a prompt
 ```
 
-`Insight.to_record()` is a plain dictionary that can be stored or sent anywhere. `structural_edges(insights, config)` adds the subgroup lattice: SPECIALIZES, GENERALIZES, SIBLING and CONTRASTS between the scopes.
+`Insight.to_record()` is a plain dictionary that can be stored or sent anywhere. `structural_edges(insights, config)` adds the subgroup lattice: SPECIALIZES, SIBLING and CONTRASTS between the scopes; `spatial.derive_spatial` derives the spatial plane of geo patterns (regions, IN_REGION, PARENT_OF, CO_LOCATED, compactness) from their cells.
 
 The EDA engine under `vendor/eda/` is a modified copy (`vendor/PROVENANCE.md`). `tests/test_subgroup_miner_standalone.py` runs the example above; `tests/test_architecture.py` checks that the package imports only the kernel.

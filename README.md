@@ -39,7 +39,7 @@ Each library imports only the shared kernel; `tests/test_architecture.py` enforc
 file → ingestion → EDA pass 1 (reused) → closed intents, identical / near-duplicate cohorts merged → EDA pass 2 validation
      → validity rules + insight_weight → admission → canonical scope / target / signed components → tripartite vectors
      → lac ontology (reused, with density damping + trust region): attractors, ACTIVATES (+ compiled co-memberships), RELATED_TO + CO_OCCURS
-     → structural lattice: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS → journals + state + graph snapshot (+ Neo4j)
+     → structural lattice: SPECIALIZES / SIBLING / CONTRASTS (+ regions and CO_LOCATED for geo) → journals + state + graph snapshot (+ Neo4j)
 question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO | CO_OCCURS→ Attractor ←ACTIVATES─ Pattern ─lattice→ …
          → evidence payload → Gemma 4 (or evidence-only fallback) → cited answer + highlighted path in the console
 ```

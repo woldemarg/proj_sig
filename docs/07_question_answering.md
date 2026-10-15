@@ -71,7 +71,7 @@ semantic  = cos(v_pattern, v_query)
 score     = 0.35 · target + 0.25 · scope + 0.15 · direction + 0.15 · semantic + 0.10 · w
 ```
 
-and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in score order with `score ≥ max(SEED_MIN_SCORE (0.25), SEED_RELATIVE_MIN (0.75) · best)`, at most `SEED_TOP_K` (3), skipping direct SPECIALIZES / GENERALIZES neighbours of seeds already chosen (the walk reaches those anyway); fallback: the best semantic match. A seed's reported score is floored at `1e-3`.
+and `score = 0.70 · semantic + 0.30 · w` otherwise. Seeds are the patterns in score order with `score ≥ max(SEED_MIN_SCORE (0.25), SEED_RELATIVE_MIN (0.75) · best)`, at most `SEED_TOP_K` (3), skipping direct SPECIALIZES neighbours (either way) of seeds already chosen (the walk reaches those anyway); fallback: the best semantic match. A seed's reported score is floored at `1e-3`.
 
 > **Running example.** One seed, `P-bc4657a04746`, score 0.738 = 0.35 · 0.7 (margin is a secondary shift; its target is discount) + 0.25 · 1.0 + 0.15 · 1.0 + 0.15 · 0.087 + 0.10 · 0.805. The semantic term is small for an instructive reason: the question's phenomenon is "margin down" alone, and Qwen3 embeds "discount" and "margin" with a cosine of 0.71, so against the pattern's "discount up, margin down" the phenomenon cosine is −0.29 (`0.135 · 1 + 0.201 · 0.707 + 0.664 · (−0.285) = 0.087`). The lexical terms carry the seed.
 
@@ -84,7 +84,7 @@ P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO|CO_OCCURS){0,L}  <--ACTIVATES-
 h = STRUCTURAL_HOPS (1)     L = MAX_LATENT_HOPS (1)     total length ≤ TRAVERSAL_MAX_DEPTH (5)
 ```
 
-Lattice edges are `LATTICE_EDGES` (SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS and CO_LOCATED in both directions; CO_LOCATED exists only between patterns of a geo dataset, [6.1](06_graph_and_storage.md#61-the-structural-plane)); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
+Lattice edges are `LATTICE_EDGES` (SPECIALIZES, CONTRASTS and CO_LOCATED, each in both directions — a SPECIALIZES walked from the parent shows as `<-SPECIALIZES-`; CO_LOCATED exists only between geo patterns of one resolution, [6.1](06_graph_and_storage.md#61-the-structural-plane)); IN_REGION and PARENT_OF are not walked; SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
 
 | Step | Condition | Factor |
 |---|---|---|
@@ -92,7 +92,7 @@ Lattice edges are `LATTICE_EDGES` (SPECIALIZES, GENERALIZES — followed along t
 | RELATED_TO, anchor → anchor | every link the ontology kept (mutual kNN above `RELATED_TO_MIN_WEIGHT`, 0.30) | weight |
 | CO_OCCURS, anchor → anchor | every compiled co-occurrence link (anchors sharing members, [5.7](05_latent_anchors.md#57-links-between-anchors)) | weight (≤ 1) |
 | ACTIVATES against its direction, anchor → pattern (not a seed) | not `weak` | alignment |
-| lattice hop | SPECIALIZES / GENERALIZES out-edge, CONTRASTS or CO_LOCATED either way | `STRUCTURAL_EDGE_DECAY` (0.85), × overlap for CONTRASTS and CO_LOCATED |
+| lattice hop | SPECIALIZES, CONTRASTS or CO_LOCATED, either way | `STRUCTURAL_EDGE_DECAY` (0.85), × the edge weight for CONTRASTS and CO_LOCATED |
 
 The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` flag says which memberships those are. A membership is `weak` — counted for coverage, drawn dashed, not walked — when it was rerouted below `MIN_ACTIVATION_ALIGNMENT` at ingest or its alignment to the living centroid has since drifted below that floor ([5.9](05_latent_anchors.md#59-activation-records-and-batch-metrics)); a weak path would in any case rank low, since the factors multiply. Every factor is at most 1, so best-first order is meaningful. The search state is `(node, phase, structural hops used, latent hops used)` — Dijkstra over the budgeted grammar — so a higher-scoring arrival with less budget left cannot shadow one that can still expand. Per node the best path wins.
 
@@ -105,9 +105,9 @@ The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` 
 | `structural_distance` | BFS hops over all structural edges, including SIBLING, up to 5 (`None` = unreachable within 5) |
 | result | seeds first, then by rank, up to `|seeds| + MAX_RETRIEVED` (12) patterns, with their `PathStep(source, target, edge_type, weight, hop, edge_id, reverse)` lists; `used_edges` and `traversed_nodes` are the union of the selected paths |
 
-Because the skip rule for seeds covers only SPECIALIZES and GENERALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
+Because the skip rule for seeds covers only SPECIALIZES, a second seed that is a CONTRASTS neighbour of a stronger one can be reported with route `structural`.
 
-> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and five tablet insights that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) -GENERALIZES-> P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 67 search states, 13 retrieved patterns, 2 anchors.
+> **Running example.** From the seed the walk enters `A-1` (alignment 0.98) and descends to its other members: the three channel refinements of phones ∧ US (structural distance 1) and five tablet insights that share no condition with the seed (`transversal_only`, structural distance 2–4) — among them `tablets ∧ retail ∧ EU` and `tablets ∧ retail ∧ APAC` at rank scores 0.565. One more arrives after a lattice hop: `P-de94f9a092ae (tablets ∧ APAC) <-SPECIALIZES- P-33b175b166ec (tablets ∧ online ∧ APAC)`. `A-0` is visited too. 67 search states, 13 retrieved patterns, 2 anchors.
 
 ## 7.4 The evidence object
 
@@ -170,7 +170,7 @@ EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were reached through latent anchors (the same phenomenon in a different part of the data).
 ```
 
-Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows.
+Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows. A geo item adds a `place:` line (its cells and resolution, the `compactness` the commit derived, and the effective n). An item the walk reached last through a CO_LOCATED link whose relation is `same_region` or `adjacent`, sharing no condition with the seeds (`EvidenceItem.located`), is tagged `[reached by location only: same area, zones do not overlap]` (or `zones touch, do not overlap`), and a NOTE says that being in the same area does not show the findings are related; system-prompt rule 6 asks the model to say so, and never to explain one by the other ([6.1](06_graph_and_storage.md#61-the-structural-plane)). The evidence-only summary marks it `(знайдено лише за місцем: той самий район, інше явище)`.
 
 **Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `share of the cell's events whose vehicle type is bicycle (every such event also has: vehicle class two-wheeler)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 9 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
 

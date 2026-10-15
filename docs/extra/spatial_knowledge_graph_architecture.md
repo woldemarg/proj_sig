@@ -463,7 +463,7 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 | заголовок без «verified» | #26 | реалізовано (`graph_query_engine/evidence.py`, `SYSTEM_PROMPT`; фраза «trust is given per item» — з рядками `trust:` у #8) |
 | `SpatialProvenance` з п'яти полів | #25 | реалізовано (`insight_contracts`; пише discovery, читає evidence, задає поля дайджесту) |
 | прибирання перед ядром | #33 | реалізовано (реєстр у пам'яті, каталог при коміті, пороги-константи, `geo.npz` з п'яти масивів) |
-| регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | план |
+| регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | реалізовано (`derive_spatial`, `SNAPSHOT_VERSION` 5) |
 | `upload_id`, рівні як датасети, `table` | #28 | план |
 | вибір роздільностей з даних | #29 | план |
 | автоматичний вертикальний зум, мітка `scale`, згортання, `SCALE CHAIN`, `picture` | #31 | план |
