@@ -209,16 +209,6 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
-def _located(r: Any, graph: DualGraph) -> str:
-    """``adjacent`` or ``same_region`` when the walk's last step to ``r`` is such a CO_LOCATED link and ``r`` shares no
-    condition with the seeds; "" otherwise (an overlapping place is the same zone, not only the same area)."""
-    if r.route == "seed" or r.scope_overlap or not r.path or r.path[-1].edge_type != "CO_LOCATED":
-        return ""
-    edge = next((e for e, _ in graph.incident(r.node_id, ["CO_LOCATED"]) if e["id"] == r.path[-1].edge_id), None)
-    relation = edge["props"].get("relation", "") if edge else ""
-    return relation if relation in LOCATION_TAG else ""
-
-
 def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig) -> Evidence:
     items: list[EvidenceItem] = []
     chosen, forged = [], []  # the first EVIDENCE_MAX_PATTERNS intact patterns; the tampered ones ranked among them
@@ -228,7 +218,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         (forged if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch" else chosen).append(r)
     for idx, r in enumerate(chosen, start=1):
         node = graph.nodes[r.node_id]
-        ins, located = graph.insight(r.node_id), _located(r, graph)
+        ins = graph.insight(r.node_id)
         material = config.thresholds.has_material_covariance(ins)
         acts = [
             {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
@@ -268,8 +258,8 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                 validation=describe_validation(ins, config.thresholds)
                 + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
                 attractors=acts,
-                transversal_only=r.transversal_only and not located,  # the last step is the place, not the phenomenon
-                located=located,
+                transversal_only=r.transversal_only,
+                located=r.located,
                 provenance={
                     **ins.provenance,
                     "pattern_id": r.node_id,

@@ -36,6 +36,7 @@ SEED_SCORE_FLOOR = 1e-3
 LATTICE_EDGES = frozenset({"SPECIALIZES", "CONTRASTS", "CO_LOCATED"})  # the structural hops walked; SIBLING stays in the graph
 STRUCTURAL_HOPS = 1
 STRUCTURAL_EDGE_DECAY = 0.85
+LOCATED_RELATIONS = frozenset({"adjacent", "same_region"})  # CO_LOCATED relations that mean the same area, not the same zone
 
 
 @dataclass
@@ -60,7 +61,8 @@ class Retrieved:
     path: list[PathStep]
     structural_distance: int | None = None  # lattice hops (incl. SIBLING) to nearest seed
     scope_overlap: float = 0.0  # max Jaccard of scope conditions with any seed
-    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed
+    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed, not ``located``
+    located: str = ""  # adjacent | same_region: the last step is such a CO_LOCATED link and no condition is shared
 
 
 @dataclass
@@ -89,6 +91,14 @@ class TraversalResult:
 
 def _conds(graph: DualGraph, pid: str) -> set[str]:
     return {c.expr for c in graph.insight(pid).conditions}
+
+
+def _located(graph: DualGraph, node: str, path: list[PathStep]) -> str:
+    """The relation of the CO_LOCATED link the walk reached ``node`` by last, when it means only the same area."""
+    if not path or path[-1].edge_type != "CO_LOCATED":
+        return ""
+    relation = next((e["props"].get("relation", "") for e, _ in graph.incident(node, ["CO_LOCATED"]) if e["id"] == path[-1].edge_id), "")
+    return relation if relation in LOCATED_RELATIONS else ""
 
 
 def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None) -> dict[str, int]:
@@ -185,7 +195,9 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             structural_distance=closure.get(node),
             scope_overlap=round(overlap, 3),
         )
-        r.transversal_only = route == "transversal" and overlap == 0.0
+        if route != "seed" and overlap == 0.0:
+            r.located = _located(graph, node, path)
+            r.transversal_only = route == "transversal" and not r.located
         if node not in best or r.score > best[node].score:
             best[node] = r
 

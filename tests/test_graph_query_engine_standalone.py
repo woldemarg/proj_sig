@@ -141,3 +141,4 @@ def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     assert item.located == "same_region" and not item.transversal_only  # only the place links it to P2's phenomenon
     location, latent = (next(n for n in found.evidence.notes if mark in n) for mark in ("by location", "latent anchors"))
     assert item.key in location and item.key not in latent
+    assert "P3" not in found.payload().view["traversal"]["baselines"]["transversal_only"]  # the console reads the same mark
