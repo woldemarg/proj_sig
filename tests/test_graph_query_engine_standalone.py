@@ -147,8 +147,16 @@ def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     assert "P3" not in found.payload().view["traversal"]["baselines"]["transversal_only"]  # the console reads the same mark
 
 
-def _levels(coarse_z: float | None, planned: tuple[str, ...]) -> dict:
-    """P1 at resolution 7 and, unless ``coarse_z`` is None, P7 at 5 of the same upload: one anchor, one region R:5:a."""
+def _levels(
+    coarse_z: float | None,
+    planned: tuple[str, ...],
+    *,
+    upload: str | None = "up-1",
+    coarse_regions: tuple[str, ...] = ("R:5:a",),
+    coarse_first: bool = False,
+) -> dict:
+    """P1 at resolution 7 and, unless ``coarse_z`` is None, P7 at 5 of ``upload``: one anchor; P1 lies in R:5:a, P7 covers
+    ``coarse_regions``."""
     from insight_contracts import SNAPSHOT_VERSION
 
     def geo(pid, conds, res, ds, z):
@@ -161,34 +169,41 @@ def _levels(coarse_z: float | None, planned: tuple[str, ...]) -> dict:
             "id": f"DS:{ds}",
             "kind": "Dataset",
             "label": ds,
-            "props": {"dataset_id": ds, "upload_id": "up-1", "level": level, "upload_levels": list(planned)},
+            "props": {"dataset_id": ds, "level": level, "upload_levels": list(planned)} | ({"upload_id": upload} if upload else {}),
         }
 
     signature = [{"component": "margin", "value": -1.0}]
+    conds = [["region=US", "category=phones"], ["district=north"]][:: -1 if coarse_first else 1]  # the question names the first
     nodes = [
-        geo("P1", ["region=US", "category=phones"], 7, "ds7", -1.5),
+        geo("P1", conds[0], 7, "ds7", -1.5),
         dataset("ds7", "7"),
         {"id": "A-1", "kind": "Attractor", "label": "margin ↓", "props": {"n_patterns": 2, "distinct_scopes": 2, "signature": signature}},
-        *({"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}} for r in ("R:5:a", "R:3:b", "R:1:c")),
+        *(
+            {"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}}
+            for r in ("R:5:a", "R:5:z", "R:3:b", "R:1:c")
+        ),
     ]
     edges = [
         edge("P1", "A-1", "ACTIVATES", 0.9),
         edge("P1", "R:5:a", "IN_REGION", 0.72),
         edge("R:5:a", "R:3:b", "PARENT_OF"),
+        edge("R:5:z", "R:3:b", "PARENT_OF"),
         edge("R:3:b", "R:1:c", "PARENT_OF"),
     ]
     if coarse_z is not None:
-        nodes += [geo("P7", ["district=north"], 5, "ds5", coarse_z), dataset("ds5", "5")]
-        edges += [edge("P7", "A-1", "ACTIVATES", 0.8), edge("P7", "R:5:a", "IN_REGION", 1.0)]
+        nodes += [geo("P7", conds[1], 5, "ds5", coarse_z), dataset("ds5", "5")]
+        edges += [edge("P7", "A-1", "ACTIVATES", 0.8), *(edge("P7", r, "IN_REGION", 1.0) for r in coarse_regions)]
     return {"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges}
 
 
-def _levels_search(snap: dict):
+def _levels_search(snap: dict, coarse_first: bool = False):
     from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
 
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
     documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.0, 1.0, 0.0])}
+    if coarse_first:  # the coarser level matches the question, the finer one is reached through the anchor
+        vectors = {"P1": vectors["P7"], "P7": vectors["P1"]}
     return graph, search(
         QUESTION, CommittedState(graph, LatentFrame({k: v for k, v in vectors.items() if k in graph.insights}, {}, documents)), encoder, QueryConfig()
     )
@@ -220,3 +235,25 @@ def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
     assert found.evidence.items[0].scale == "not_found_coarser" and any("not proof the effect is local" in n for n in found.evidence.notes)
     _, found = _levels_search(_levels(None, ("7",)))
     assert found.evidence.items[0].scale == "insufficient" and "scale:" not in found.payload().evidence_prompt
+
+
+def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkeypatch):
+    """A coarser pattern over several regions still steps up from the one holding P; a coarser level ranked first keeps
+    the group regional with its ``also at``; datasets of no upload never fold; the label does not depend on the budget."""
+    import graph_query_engine.vertical as vertical
+
+    _, found = _levels_search(_levels(-1.2, ("7", "5"), coarse_regions=("R:5:z", "R:5:a")))  # P7's finest regions: two
+    assert next(it for it in found.evidence.items if it.pattern_id == "P1").scale == "regional"
+
+    _, found = _levels_search(_levels(-1.2, ("7", "5"), coarse_first=True), coarse_first=True)
+    items = {it.pattern_id: it for it in found.evidence.items}
+    assert items["P7"].role == "seed" and items["P7"].scale == "regional" and items["P1"].folded_into == items["P7"].key
+    assert f"also at res 7 [{items['P1'].key}]" in found.payload().evidence_prompt
+
+    _, found = _levels_search(_levels(-1.2, ("7", "5"), upload=None))
+    assert not any(it.folded_into for it in found.evidence.items) and "[P2] role=" in found.payload().evidence_prompt
+
+    monkeypatch.setattr(vertical, "VERTICAL_MAX_TOTAL", 0)
+    graph, _ = _levels_search(_levels(-1.2, ("7", "5")))
+    (chain,) = vertical.scale_chain(graph, ["P1"])
+    assert not chain.up and chain.scale == "regional"  # no step spent, the label still searched

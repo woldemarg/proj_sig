@@ -42,8 +42,9 @@ Rules:
    values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
    9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
    transversal, latent or anchor; say "зони" for map cells, "схожа картина в інших зонах" for recurrences and "в тому самому районі" for items
-   reached only by location, "тримається і на рівні району" for a finding that holds at the coarser level and
-   "на рівні району окремо не підтверджено" for one not found there.
+   reached only by location, "тримається і на рівні району" for a finding that holds at the coarser level,
+   "на рівні району зсув протилежний" for one that reverses there and "на рівні району окремо не підтверджено"
+   for one not found there.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

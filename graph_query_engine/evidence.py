@@ -42,6 +42,11 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
     "scale-dependent": "scale-dependent (reverses at a coarser level of this upload; see SCALE CHAIN)",
     "not_found_coarser": "not found at the coarser level",
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
+SCALE_WORDS = {  # the same labels in the evidence-only summary
+    "regional": " (тримається і на рівні району)",
+    "scale-dependent": " (на рівні району зсув протилежний)",
+    "not_found_coarser": " (на рівні району окремо не підтверджено)",
+}
 
 
 @dataclass
@@ -172,8 +177,12 @@ class Evidence:
         spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
         return f"res {spatial.resolution}" if spatial else "table"
 
+    @staticmethod
+    def _shift_of(it: EvidenceItem, metric: str) -> dict[str, Any] | None:
+        return next((x for x in it.statistics["shifts"] if x["metric"] == metric), None)
+
     def _shift(self, it: EvidenceItem, metric: str) -> str:
-        shift = next((x for x in it.statistics["shifts"] if x["metric"] == metric), it.statistics["shifts"][0])
+        shift = self._shift_of(it, metric) or it.statistics["shifts"][0]
         return f"{self.reword(humanize(shift['metric']))} {shift['robust_z']:+.2f} sd"
 
     def _chain_text(self, chain: dict[str, Any]) -> str:
@@ -181,8 +190,8 @@ class Evidence:
         by_id = {it.pattern_id: it for it in self.items}
         host = by_id[chain["pattern_id"]]
         steps = [by_id[s["pattern_id"]] for s in reversed(chain["down"])] + [host] + [by_id[s["pattern_id"]] for s in chain["up"]]
-        z = [next((x["robust_z"] for x in it.statistics["shifts"] if x["metric"] == host.target), None) for it in steps]
-        parts = [f"{self._level(it)}: {it.key}" + (f" {v:+.2f} sd" if v is not None else "") for it, v in zip(steps, z, strict=True)]
+        shifts = [self._shift_of(it, host.target) for it in steps]
+        parts = [f"{self._level(it)}: {it.key}" + (f" {x['robust_z']:+.2f} sd" if x else "") for it, x in zip(steps, shifts, strict=True)]
         return " -> ".join(parts + [f"region {r['id']}" for r in chain["regions"][:1]])
 
     def _regions(self) -> list[str]:
@@ -239,8 +248,6 @@ class Evidence:
         correlation pair for a covariance insight.
         """
         lines = []
-        scale_words = {"regional": " (тримається і на рівні району)", "scale-dependent": " (на рівні району зсув протилежний)"}
-        scale_words["not_found_coarser"] = " (на рівні району окремо не підтверджено)"
         for it in self.items:
             if it.folded_into:
                 continue
@@ -255,7 +262,7 @@ class Evidence:
                 )
             tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
-            tag += scale_words.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
+            tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
@@ -275,7 +282,8 @@ def _path_text(path: list[PathStep], role: str) -> str:
 def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> list[dict[str, Any]]:
     """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
     (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
-    the item it restates, so two levels of one mechanism never stand as two facts."""
+    the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
+    first; a seed is never folded (it matched the question), and a host with a finer level folded in is regional too."""
     by_id = {it.pattern_id: it for it in items}
     hosts: set[str] = set()
     chains = []
@@ -285,6 +293,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
             continue
         hosts.add(chain.pattern_id)
         host.scale = chain.scale
+        upload = upload_of(graph, chain.pattern_id)
         for steps in (chain.up, chain.down):
             agrees = True
             for step in steps:
@@ -294,9 +303,11 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
                     other = by_id[step.pattern_id] = item(f"P{len(items) + 1}", step.pattern_id, f"vertical_{step.direction}", [], path_text)
                     items.append(other)
                 agrees = agrees and step.relation == "corresponds"
-                if agrees and upload_of(graph, step.pattern_id) == upload_of(graph, chain.pattern_id):
+                if agrees and upload is not None and upload_of(graph, step.pattern_id) == upload:
                     host.also.append(other.key)
-                    if step.pattern_id not in hosts:
+                    if step.direction == "down":  # the coarser host restates a finer level that holds: the group is regional
+                        host.scale = "regional"
+                    if step.pattern_id not in hosts and other.role != "seed":
                         other.folded_into = other.folded_into or host.key
         chains.append(_chain_dict(chain, graph))
     return chains
