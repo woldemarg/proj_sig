@@ -535,7 +535,9 @@ def test_indicator_registry(engine, demo_csv):
 
     question = "Why is margin lower for phones in the US?"
     record = engine.process(engine.submit(demo_csv, indicators="margin: gross margin :%, discount:discount_rate, nosuch:x")["batch_id"])
-    assert record["status"] == "READY" and any("nosuch" in w for w in record["warnings"])
+    assert record["status"] == "READY" and any("nosuch" in w for w in record["warnings"]) and "nosuch" not in record["indicators"]
+    again = engine.process(engine.submit(demo_csv, indicators="margin:other")["batch_id"])
+    assert any("PATCH /api/datasets/" in w for w in again["warnings"])  # a re-upload never changes the registry
     ds, patterns = record["dataset_id"], sorted(p["id"] for p in engine.ws.patterns())
     margin = engine.graph().nodes[f"M:{ds}:margin"]["props"]
     assert (margin["indicator"], margin["unit"]) == ("gross margin", "%") and "unit" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]
@@ -546,7 +548,7 @@ def test_indicator_registry(engine, demo_csv):
         }
         assert client.patch(f"/api/datasets/{ds}", json={"indicators": "nosuch:x"}).json()["code"] == "invalid_options"
         assert client.patch(f"/api/datasets/{ds}", json={"indicators": "margin"}).status_code == 400
-    assert len(engine.ws.list_batches()) == 1 and sorted(p["id"] for p in engine.ws.patterns()) == patterns
+    assert [b["status"] for b in engine.ws.list_batches()].count("READY") == 1 and sorted(p["id"] for p in engine.ws.patterns()) == patterns
     assert "indicator" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]  # PATCH replaces the registry
     engine.update_dataset_metadata(ds, indicators="")
     assert "(indicator" not in engine.evidence(question).evidence_prompt

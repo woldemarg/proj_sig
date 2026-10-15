@@ -99,9 +99,8 @@ class Evidence:
         lines.append("")
         lines.append("METRIC BASELINES (whole dataset):")
         for m in self.metrics:
-            meaning = f" (indicator {json.dumps(m['indicator'], ensure_ascii=False)}" if "indicator" in m else ""
-            if meaning:
-                meaning += f", unit {json.dumps(m['unit'], ensure_ascii=False)})" if "unit" in m else ")"
+            parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
+            meaning = f" ({', '.join(parts)})" if parts else ""
             lines.append(
                 f"- {self.reword(humanize(m['metric']))}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}"
             )

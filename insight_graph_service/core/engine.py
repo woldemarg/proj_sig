@@ -350,7 +350,11 @@ class Engine:
                     if loaded.spatial:
                         record["profile"]["geo"] = self._geo_profile(loaded)
                     if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
-                        record["warnings"].append(f"indicators: no metric named {unknown} in the dataset; ignored (PATCH /api/datasets/{ds})")
+                        record["warnings"].append(
+                            f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"
+                        )
+                        kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
+                        record.update({"indicators": kept} if kept else {})
                     self.ws.save_profile(ds, record["profile"])
 
                 with self._stage(record, "VALIDATING_INSIGHTS", timings, "select_s"):
@@ -540,8 +544,10 @@ class Engine:
         record["status"] = "SKIPPED"
         record["duplicate_of"] = duplicate["batch_id"]
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
-        if record.get("source") or record.get("reliability"):
-            record["warnings"].append(f"a re-upload does not change the source or reliability: PATCH /api/datasets/{record['dataset_id']}")
+        if record.get("source") or record.get("reliability") or record.get("indicators"):
+            record["warnings"].append(
+                f"a re-upload does not change the source, reliability or indicators: PATCH /api/datasets/{record['dataset_id']}"
+            )
         self.ws.save_batch(record)
         return record
 
