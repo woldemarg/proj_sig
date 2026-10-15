@@ -160,7 +160,7 @@ def test_ukrainian_comparatives_and_directed_drivers():
 
 def seeds(engine, question):
     graph = engine.graph()
-    parsed = parse_query(question, graph, engine.settings.query, engine.prepared().catalog)
+    parsed = parse_query(question, graph, engine.settings.query, engine.committed().catalog)
     return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.settings.query))
 
 
@@ -177,22 +177,22 @@ def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
     cfg = make_config(tmp_path / "ws")
     writer = make_engine(cfg)
     assert writer.ingest_file(demo_csv)["status"] == "READY"
-    built = writer.prepared().catalog  # the first question after the commit embeds the literals and saves their vectors
+    built = writer.committed().catalog  # the commit embeds the literals and saves their vectors
     assert writer.ws.load_literals(writer.encoder.spec.fingerprint).keys() == set(built.texts)
     assert writer.ws.load_literals("another-fingerprint") == {}
     reader = make_engine(cfg, recover=False)
     calls = []
     original = reader.encoder.embedder.embed
     reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
-    catalog = reader.prepared().catalog
+    catalog = reader.committed().catalog
     assert isinstance(catalog, LiteralCatalog) and catalog.texts == built.texts and calls == []  # loaded, not re-embedded
-    assert np.allclose(catalog.vectors, built.vectors) and reader.prepared().catalog is catalog  # cached until the next commit
+    assert np.allclose(catalog.vectors, built.vectors) and reader.committed().catalog is catalog  # cached until the next commit
     assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "graph" / "literals.npz.tmp").exists()
 
 
 @pytest.mark.model
 def test_b3_translated_question_parses_like_english(model_engine):
-    catalog = model_engine.prepared().catalog
+    catalog = model_engine.committed().catalog
     en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.settings.query, catalog)
     uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.settings.query, catalog)
     assert set(uk.conditions) == set(en.conditions) == {("category", "phones"), ("region", "US")} and uk.direction == en.direction == -1
@@ -212,7 +212,7 @@ def test_b4_inflected_ukrainian_value(tmp_path):
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
     engine = make_engine(make_config(tmp_path / "ws"), embedder=None)
     assert engine.ingest_file(path)["status"] == "READY"
-    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.prepared().catalog)
+    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.committed().catalog)
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 

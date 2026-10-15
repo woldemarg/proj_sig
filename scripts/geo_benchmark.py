@@ -253,7 +253,7 @@ def _recall(engine: Engine, foci: list[str | None], k: int) -> dict[str, Any]:
     """The walk from each found focus (its best pattern; None when not found) to the other planted foci: recall at k and
     the share reached, an unfound focus counting as a miss and one sharing the seed's pattern as a hit; the mean rank of
     those reached."""
-    state = engine.prepared()
+    state = engine.committed()
     wide = replace(engine.settings.query, max_retrieved=len(state.graph.of_kind("Pattern")))
     rows, ranks = [], []
     for i, seed in enumerate(foci):
@@ -274,7 +274,7 @@ def _recall(engine: Engine, foci: list[str | None], k: int) -> dict[str, Any]:
 
 def _graph(engine: Engine, best: list[str]) -> dict[str, Any]:
     """Attractors shared by the best patterns, CO_LOCATED across datasets, and the size of the graph, the walk and the prompt."""
-    state = engine.prepared()
+    state = engine.committed()
     g = state.graph
     members: dict[str, set[str]] = {}
     for e in g.edges:

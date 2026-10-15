@@ -25,9 +25,9 @@ _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transv
 
 @dataclass
 class CommittedState:
-    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. ``catalog`` and the
-    document vectors ``frame`` lacks are caches: filled once, on the first question (by the caller; the catalog by
-    ``search`` if the caller did not), and never replaced. A commit replaces the whole object, never a part of it."""
+    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. The graph service
+    builds it complete at the commit; a library caller may leave ``catalog`` None and ``search`` builds it on first
+    use. A commit replaces the whole object, never a part of it."""
 
     graph: DualGraph
     frame: LatentFrame

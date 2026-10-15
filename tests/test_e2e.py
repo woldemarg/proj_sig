@@ -156,8 +156,9 @@ def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch
     assert seen and not documents & set(seen)
 
 
-def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatch):
-    """A batch without stored document vectors is embedded on the first question only, and a writer saves them."""
+def test_missing_document_vectors_are_filled_at_start(tmp_path, demo_csv, monkeypatch):
+    """A batch without stored document vectors is embedded when the engine loads its state, never by a question,
+    and a writer saves them."""
     import numpy as np
 
     cfg = make_config(tmp_path / "ws")
@@ -168,16 +169,15 @@ def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatc
         np.savez_compressed(path, **kept)
     engine = make_engine(cfg)
     graph = engine.graph()
-    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
+    ids = {n["id"] for n in graph.of_kind("Pattern")}
+    assert set(engine.frame().documents) == ids  # filled when the state was loaded
+    documents = {graph.canonical_document(i) for i in ids}
     seen: list[str] = []
     original = engine.encoder.embedder.embed
     monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
     engine.evidence("Why is margin lower for phones in the US?")
-    assert documents <= set(seen)  # filled on the first question
-    seen.clear()
-    engine.evidence("Why is margin lower for phones in the US?")
-    assert not documents & set(seen)  # kept on the frame
-    assert set(make_engine(cfg, recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
+    assert not documents & set(seen)  # a question embeds no document
+    assert set(make_engine(cfg, recover=False).frame().documents) == ids  # saved
 
 
 def test_search_is_the_structured_context_the_narrator_verbalises(hashed_engine):

@@ -24,7 +24,7 @@ def main() -> None:
     out = Path(sys.argv[1]).resolve()
     ws = scratch_dir("export_chain_demo") / "ws"
     engine = build_engine(ws) if (ws / "graph" / "snapshot.json").exists() else demo_engine("export_chain_demo")
-    state = engine.prepared()
+    state = engine.committed()
     g, frame = state.graph, state.frame
     truth = planted_scopes()
     patterns = [

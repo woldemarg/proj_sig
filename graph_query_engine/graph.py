@@ -19,8 +19,8 @@ class LatentFrame:
     """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid,
     plus the canonical-document embeddings the naive text baseline compares questions with.
 
-    Frozen fields, but ``documents`` is a cache: a document vector the commit lacks is added in place, once, on the
-    first question (by the caller); no entry is replaced."""
+    Frozen fields, but ``documents`` is a cache: a document vector the stored batch lacks is added in place, once,
+    when the graph service builds the committed state; no entry is replaced."""
 
     patterns: dict[str, np.ndarray]
     attractors: dict[int, np.ndarray]

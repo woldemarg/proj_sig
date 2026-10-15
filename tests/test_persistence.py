@@ -218,10 +218,10 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     before_members = Counter(e["target"] for e in g.edges if e["type"] == "ACTIVATES" and g.nodes[e["source"]]["props"]["dataset_id"] != ds)
     linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
     anchors_before = {n["id"] for n in g.of_kind("Attractor")}
-    assert any(t.startswith("x_") for t in engine.prepared().catalog.texts)  # the literal cache now holds both datasets' literals
+    assert any(t.startswith("x_") for t in engine.committed().catalog.texts)  # the literal cache now holds both datasets' literals
 
     out = engine.delete_dataset(ds)
-    catalog = engine.prepared().catalog  # the first question after the deletion rewrites the cache
+    catalog = engine.committed().catalog  # the deletion's commit rewrites the cache
     cached = engine.ws.load_literals(engine.encoder.spec.fingerprint)
     assert set(cached) == set(catalog.texts) and not any(t.startswith("x_") for t in cached)  # its literals are gone
     assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]

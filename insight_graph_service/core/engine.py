@@ -20,7 +20,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -111,19 +111,12 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
-        self._prepare_lock = threading.Lock()  # catalog build and document back-fill: never the batch lock
         self._open()
 
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
         touch the journal or a lock, so they neither race nor wait for a batch."""
         return self._state
-
-    def prepared(self) -> CommittedState:
-        """The committed state made ready for questions, once per commit (``_prepare``)."""
-        state = self._state
-        self._prepare(state)
-        return state
 
     def graph(self) -> DualGraph:
         return self.committed().graph
@@ -158,41 +151,31 @@ class Engine:
         if snapshot and snapshot.get("version") != SNAPSHOT_VERSION:
             return self._derive(self.ontology())[1]
         graph = DualGraph(snapshot) if snapshot else DualGraph.empty()
-        return CommittedState(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
+        return self._committed_state(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
 
     @staticmethod
     def _empty_state() -> CommittedState:
         return CommittedState(DualGraph.empty(), LatentFrame({}, {}, {}))
 
-    def _prepare(self, state: CommittedState) -> None:
-        """Fill what a question needs and the commit did not compute: the canonical-document vector of every pattern
-        (stored at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the
-        literal catalog (docs/07_question_answering.md §7.1.1; vectors of known literals from the workspace's literal
-        cache). Both stay on ``state``; a writer saves them, so no later question or restart pays for them again."""
-        graph, documents = state.graph, state.frame.documents
-        with self._prepare_lock:
-            missing = [pid for pid in graph.insights if pid not in documents]
-            if missing:
-                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
-                documents.update(filled)
-                self._persist(state, lambda: self.ws.save_document_vectors(documents, set(filled)))
-            if state.catalog is None and graph.insights:
-                fingerprint = self.encoder.spec.fingerprint
-                known = self.ws.load_literals(fingerprint)
-                state.catalog = build_catalog(graph, self.encoder.embedder, known)
-                if known.keys() != set(state.catalog.texts):  # new literals, or a deleted dataset's gone
-                    catalog = state.catalog
-                    self._persist(state, lambda: self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors))
-
-    def _persist(self, state: CommittedState, save: Callable[[], None]) -> None:
-        """Save a cache derived on a question (a writer only), unless a write runs — a reset or a deletion may be
-        removing its files — or a newer commit replaced ``state``; a later question saves it instead."""
-        if self._writer and self._lock.acquire(blocking=False):
-            try:
-                if state is self._state:
-                    save()
-            finally:
-                self._lock.release()
+    def _committed_state(self, graph: DualGraph, frame: LatentFrame) -> CommittedState:
+        """The read state of a commit, complete before readers see it: every pattern's canonical-document vector (stored
+        at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the literal
+        catalog (docs/07_question_answering.md §7.1.1; known literals from the workspace's literal cache). A writer
+        saves both, so no later commit or restart pays for them again."""
+        missing = [pid for pid in graph.insights if pid not in frame.documents]
+        if missing:
+            filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
+            frame.documents.update(filled)
+            if self._writer:
+                self.ws.save_document_vectors(frame.documents, set(filled))
+        if not graph.insights:
+            return CommittedState(graph, frame)
+        fingerprint = self.encoder.spec.fingerprint
+        known = self.ws.load_literals(fingerprint)
+        catalog = build_catalog(graph, self.encoder.embedder, known)
+        if self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
+            self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors)
+        return CommittedState(graph, frame, catalog)
 
     def ontology(self) -> LatentOntology:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
@@ -212,9 +195,8 @@ class Engine:
     def _search(self, question: str, state: CommittedState) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        self._prepare(state)  # the literal catalog; every document vector for the naive baseline
         found = search(question, state, self.encoder, self.settings.query)
-        found.seconds = time.perf_counter() - start  # with the preparation of the first question after a commit
+        found.seconds = time.perf_counter() - start
         return found
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
@@ -242,7 +224,7 @@ class Engine:
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
-        return snapshot, CommittedState(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
+        return snapshot, self._committed_state(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
     @_healthy
     def upload(
