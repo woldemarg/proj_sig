@@ -106,6 +106,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | `graph_query_engine/` | `graph.py` | `DualGraph` (the read model of a snapshot), `LatentFrame` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `question.py` | question parsing with multilingual literal grounding | [7.1](07_question_answering.md#71-from-question-to-query) |
 | | `seeds.py`, `traversal.py` | seed scoring; the transversal walk, structural closure | [7.2](07_question_answering.md#72-seeds), [7.3](07_question_answering.md#73-transversal-traversal) |
+| | `vertical.py` | the scale chain: a geo pattern's coarser and finer levels of the same phenomenon, the regions above, the `scale` label | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `evidence.py` | the evidence object, the LLM prompt and the evidence-only summary | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `search.py`, `ports.py`, `config.py` | one question end to end over a `CommittedState`; the embedder shape it needs; `QueryConfig` | [7](07_question_answering.md) |
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
