@@ -319,6 +319,8 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     ]
     assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
     assert any("points" in w for w in done[2]["warnings"])
+    with pytest.raises(IngestionError, match="pointz"):  # a name in neither the file nor the cells fails the geo levels
+        load_dataset(path, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
     graph, table = engine.graph(), done[2]["dataset_id"]
     assert graph.nodes[f"DS:{table}"]["props"]["level"] == "table"
     assert not any(graph.insight(e["source"]).dataset_id == table for e in graph.edges if e["type"] in ("IN_REGION", "CO_LOCATED"))
@@ -331,7 +333,7 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
         assert client.delete(f"/api/uploads/{upload_id}").json()["datasets"] == sorted([done[0]["dataset_id"], table])
         assert not engine.ws.list_batches() and not Path(done[0]["source_path"]).exists()
         assert client.delete(f"/api/uploads/{upload_id}").status_code == 404
-        for geo, table_level in (("auto@8,6", False), ("auto@7,7", False), ("", True)):  # 6 is no region level; twice; no geo
+        for geo, table_level in (("auto@8,6", False), ("auto@7,7", False), ("auto@8,,7", False), ("auto@7,", False), ("", True)):
             with path.open("rb") as f:
                 refused = client.post("/api/upload", files={"file": ("p.csv", f, "text/csv")}, data={"geo": geo, "table": table_level})
             assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"

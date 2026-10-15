@@ -94,12 +94,14 @@ def read_table(path: Path) -> pd.DataFrame:
         raise IngestionError("unreadable_file", f"Could not parse {path.name}: {exc}") from exc
 
 
-def select_present(columns: list[str], frame: pd.DataFrame, *, explicit: bool, option: str) -> tuple[list[str], list[str]]:
+def select_present(
+    columns: list[str], frame: pd.DataFrame, *, explicit: bool, option: str, tolerated: set[str] = frozenset()
+) -> tuple[list[str], list[str]]:
     """Split an option's columns into (present, missing). An explicit option must name existing
-    columns (``invalid_options``); a configured default skips the ones this dataset lacks."""
+    columns, or ``tolerated`` ones (``invalid_options``); a configured default skips the ones this dataset lacks."""
     missing = [c for c in columns if c not in frame.columns]
-    if missing and explicit:
-        raise IngestionError("invalid_options", f"{option} column(s) not in dataset: {missing}")
+    if explicit and (refused := [c for c in missing if c not in tolerated]):
+        raise IngestionError("invalid_options", f"{option} column(s) not in dataset: {refused}")
     return [c for c in columns if c in frame.columns], missing
 
 
@@ -146,8 +148,9 @@ def load_dataset(
     strict: bool = True,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
-    dataset does not have are skipped); an explicit value is applied strictly unless ``strict`` is False (the levels
-    of one upload share their options). ``geo`` turns the
+    dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
+    upload share their options) a geo level skips the file's own columns and the table level any column: a name in
+    neither the file nor the cells still fails the geo levels. ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table."""
     path = Path(path)
     if not path.is_file():
@@ -165,12 +168,13 @@ def load_dataset(
         raise IngestionError("invalid_schema", f"Only {len(frame)} rows (MIN_ROWS={config.min_rows})")
     warnings = []
     spatial = None
+    tolerated = set() if strict else set(frame.columns) if geo_spec else set(cat_spec) | set(bin_spec)
     if geo_spec:
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
         warnings += geo_warnings
-    cats, missing_cats = select_present(cat_spec, frame, explicit=strict and categories is not None, option="Categorical")
+    cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)
-    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=strict and bins is not None, option="Bin")
+    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin", tolerated=tolerated)
     present_bins = {c: bin_spec[c] for c in bin_cols}
     frame, derived = apply_bins(frame, present_bins)
     if missing_cats or missing_bins:

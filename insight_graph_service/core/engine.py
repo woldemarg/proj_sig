@@ -21,7 +21,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -277,7 +277,8 @@ class Engine:
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        upload_id = "up-" + hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        with path.open("rb") as stored:
+            upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
         if len(levels) > 1:  # each level applies the bins and categories it has
             options["strict"] = False
@@ -660,22 +661,24 @@ class Engine:
         leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
         ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
         """
-        return {"dataset_id": dataset_id, **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), dataset_id, "unknown_dataset")}
+        return {"dataset_id": dataset_id, **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), {"dataset_id": dataset_id})}
 
     @_healthy
     def delete_upload(self, upload_id: str) -> dict[str, Any]:
         """Remove every level of one upload (the datasets its batches made) in one transaction, as ``delete_dataset``."""
-        return {"upload_id": upload_id, **self._delete(lambda b: b.get("upload_id") == upload_id, upload_id, "unknown_upload")}
+        return {"upload_id": upload_id, **self._delete(lambda b: b.get("upload_id") == upload_id, {"upload_id": upload_id})}
 
-    def _delete(self, chosen: Any, key: str, unknown: str) -> dict[str, Any]:
-        """Delete the datasets of the ``chosen`` batches with all their batches (``delete_dataset``)."""
+    def _delete(self, chosen: Callable[[dict[str, Any]], bool], intent: dict[str, str]) -> dict[str, Any]:
+        """Delete the datasets of the ``chosen`` batches with all their batches (``delete_dataset``); ``intent`` names
+        what is deleted (one key: ``dataset_id`` or ``upload_id``) for the refusals and the transaction marker."""
+        ((kind, key),) = intent.items()
         with self._lock:
             every = self.ws.list_batches()
             picked = [b for b in every if chosen(b)]
             if not picked:
-                raise PipelineError(unknown, key)
+                raise PipelineError(f"unknown_{kind.removesuffix('_id')}", key)
             ids = {b["dataset_id"] for b in picked if b.get("dataset_id")}
-            batches = [b for b in every if b in picked or b.get("dataset_id") in ids]
+            batches = [b for b in every if chosen(b) or b.get("dataset_id") in ids]
             if any(b["status"] not in TERMINAL for b in batches):
                 raise PipelineError("busy", f"{key} has a batch in progress")
             ontology = self.ontology()
@@ -685,7 +688,7 @@ class Engine:
             all_acts = self.ws.activations()
             acts = [{**a, "row_id": row_of[a["row_id"]]} for a in all_acts if a["row_id"] in row_of]
             lost = {int(a["attractor_id"]) for a in all_acts if a["row_id"] not in row_of}  # the anchors the deletion touches
-            with self.ws.transaction({"dataset_id": key}, journal=True) as cp:  # commit point: the marker goes
+            with self.ws.transaction(intent, journal=True) as cp:  # commit point: the marker goes
                 self.ws.remove_datasets(ids, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
                 kept_vectors = vectors[[r["row_id"] for r in kept]]
                 dropped = ontology.forget(acts, kept_vectors, lost)
