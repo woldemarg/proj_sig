@@ -137,7 +137,7 @@ Evidence(
 
 Rendering happens here, with the configuration: `shift_text` holds the phenomenon shifts only (the target and `|z| ≥ MIN_COMPONENT_Z`), `relationship` appears only when the correlation change is material, the scope is prose, and an anchor's `description` comes from its signature ([5.8](05_latent_anchors.md#58-how-an-anchor-is-described)). `metrics` holds the global median and MAD of every metric the prompt mentions. A note lists the items that share no scope condition with the seeds (they may still be structurally reachable; `structural_distance` says how far), or says that no pattern matched.
 
-**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; for a geo dataset `PLAIN LANGUAGE (…):` (below); `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (verified statistical observations; cite as [P#]):` with one block per item, key first (scope and support; `shifts:`; `relationship:` when material; `validation:` — bootstrap stability and adjusted p, or for a covariance insight `correlation change (divergence score …) | no median test` — with the insight weight and confounders; `retrieved via:`); `NOTE:`. There is no free-form graph dump. From the demo:
+**The prompt** (`Evidence.to_prompt`) is ASCII for ASCII data and has fixed sections, in order: `QUESTION:`; `PARSED:` (`target=… | direction=up|down | scope=…`, or `no explicit metric/scope recognised`); `UNITS:` (shifts are robust standard deviations); `DATASETS:`; for a geo dataset `PLAIN LANGUAGE (…):` (below); `METRIC BASELINES (whole dataset):`; `LATENT ANCHORS VISITED`; `EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):` with one block per item, key first (scope and support; `shifts:`; `relationship:` when material; `validation:` — bootstrap stability and adjusted p, or for a covariance insight `correlation change (divergence score …) | no median test` — with the insight weight and confounders; `retrieved via:`); `NOTE:`. There is no free-form graph dump. From the demo:
 
 ```text
 QUESTION: Why is margin lower for phones in the US?
@@ -157,7 +157,7 @@ LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
 - A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.19, shared members), A-0 (0.61)
 - A-0 "delivery days up and return rate up": 11 patterns over 11 distinct scopes; related: A-1 (0.19, shared members), A-2 (0.55), A-1 (0.61)
 
-EVIDENCE (verified statistical observations; cite as [P#]):
+EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 [P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)
      shifts: discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)
      validation: bootstrap stability 0.97 | adjusted p < 0.001 | insight weight 0.84 | confounders: none detected
@@ -198,7 +198,7 @@ Rules:
 1. Use ONLY the evidence. Do not invent numbers, subgroups, metrics or datasets.
 2. Cite every factual statement with its key, e.g. [P1] or [P2][P4].
 3. Structure the answer in two labelled parts:
-   "Спостереження:" - what the verified statistics show (medians, shifts in sd, support).
+   "Спостереження:" - what the statistics show (medians, shifts in sd, support).
    "Інтерпретація (гіпотези):" - possible explanations, explicitly marked as hypotheses.
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared

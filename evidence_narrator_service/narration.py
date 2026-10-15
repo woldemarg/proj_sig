@@ -22,7 +22,7 @@ Rules:
 1. Use ONLY the evidence. Do not invent numbers, subgroups, metrics or datasets.
 2. Cite every factual statement with its key, e.g. [P1] or [P2][P4].
 3. Structure the answer in two labelled parts:
-   "Спостереження:" - what the verified statistics show (medians, shifts in sd, support).
+   "Спостереження:" - what the statistics show (medians, shifts in sd, support).
    "Інтерпретація (гіпотези):" - possible explanations, explicitly marked as hypotheses.
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
