@@ -12,6 +12,16 @@ from collections.abc import Iterable
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
 
+# the source reliability scale of the Admiralty code (STANAG 2511); F is the default of an undeclared one
+RELIABILITY = {
+    "A": "completely reliable",
+    "B": "usually reliable",
+    "C": "fairly reliable",
+    "D": "not usually reliable",
+    "E": "unreliable",
+    "F": "reliability cannot be judged",
+}
+
 
 def humanize(name: str) -> str:
     return name.replace("_", " ").strip()

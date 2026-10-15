@@ -43,6 +43,18 @@
           <label class="small" for="geo">Spatial analysis (H3 cells)</label>
           <input class="field" id="geo" placeholder="e.g. auto@7 · geometry · lat,lon">
           <div class="hint">Rows are points: analyse H3 cells instead — <span class="mono">auto</span> finds a GeoJSON/WKT point or lat/lon columns; <span class="mono">@7</span> is the resolution.</div>
+          <label class="small" for="source">Source</label>
+          <input class="field" id="source" maxlength="120" placeholder="e.g. field reports, sensor network">
+          <label class="small" for="reliability">Source reliability</label>
+          <select class="field" id="reliability">
+            <option value="">Not stated (F)</option>
+            <option value="A">A — completely reliable</option>
+            <option value="B">B — usually reliable</option>
+            <option value="C">C — fairly reliable</option>
+            <option value="D">D — not usually reliable</option>
+            <option value="E">E — unreliable</option>
+          </select>
+          <div class="hint">Where the data comes from and how far you trust it (Admiralty code). Shown to the model with the dataset; not part of the analysis.</div>
         </details>
         <div class="rail-actions">
           <button type="submit" class="btn" id="upload-btn" disabled>Analyse</button>

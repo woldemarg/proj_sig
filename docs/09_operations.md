@@ -43,7 +43,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 
 One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the HTTP app uses a single worker thread). Any exception before the READY save rolls back (`Workspace.transaction`, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. If the rollback itself fails, the record also carries the warning `rollback failed`, and later batches fail with `rollback_pending` until a writer restart has finished it. Nothing after the READY save can turn the batch FAILED: the committed graph and frame were loaded before it, and switching them in is an assignment. A failure to save the record after the Neo4j sync propagates out of `process()`; the batch stays READY on disk.
 
-**Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}}`. The checkpoint of a committing batch lives in `pending.json`, not in the record.
+**Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, geo?, source?, reliability?, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}}`. The checkpoint of a committing batch lives in `pending.json`, not in the record.
 
 ## 9.2 Command line
 
@@ -110,7 +110,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 
 | Code | Meaning | Stage |
 |---|---|---|
-| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options | VALIDATING |
+| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source` or `reliability` is refused before the file is stored or a batch exists: HTTP 400) | VALIDATING |
 | `invalid_schema` | too few rows or columns; no categorical dimension after profiling | VALIDATING / PROFILING |
 | `no_numeric_targets` | no numeric column | VALIDATING / PROFILING |
 | `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING) | PROFILING / DISCOVERING |

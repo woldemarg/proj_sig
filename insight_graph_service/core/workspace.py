@@ -357,7 +357,7 @@ class Workspace:
 
     @contextmanager
     def transaction(self, intent: dict[str, Any], *, journal: bool = False) -> Iterator[dict[str, Any]]:
-        """One all-or-nothing write (a batch commit, a dataset deletion): checkpoint, then ``pending.json`` holding
+        """One all-or-nothing write (a batch commit, a dataset deletion, a source or reliability change): checkpoint, then ``pending.json`` holding
         ``intent`` and the checkpoint. An error in the body rolls back; a crash leaves the marker for ``recover``.
         A rollback that fails itself leaves the marker too, and no transaction starts again until ``recover`` ran."""
         if self.pending_path.exists():
