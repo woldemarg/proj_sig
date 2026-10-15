@@ -19,6 +19,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
+from graph_query_engine.vertical import ScaleChain, picture, scale_chain, upload_of
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
@@ -35,6 +36,16 @@ LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occur
 LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
     "same_region": " [reached by location only: same area, zones do not overlap]",
     "adjacent": " [reached by location only: zones touch or barely overlap]",
+}
+SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md §7.4)
+    "regional": "regional (holds at a coarser level of this upload)",
+    "scale-dependent": "scale-dependent (reverses at a coarser level of this upload; see SCALE CHAIN)",
+    "not_found_coarser": "not found at the coarser level",
+}  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
+SCALE_WORDS = {  # the same labels in the evidence-only summary
+    "regional": " (тримається і на рівні району)",
+    "scale-dependent": " (на рівні району зсув протилежний)",
+    "not_found_coarser": " (на рівні району окремо не підтверджено)",
 }
 
 
@@ -58,6 +69,9 @@ class EvidenceItem:
     transversal_only: bool
     provenance: dict[str, Any]
     located: str = ""  # adjacent | same_region: reached only by location, scope-disjoint from the seeds
+    scale: str = ""  # regional | scale-dependent | not_found_coarser | insufficient (ScaleChain.scale)
+    folded_into: str = ""  # the key of the item this one restates at another level of the same upload
+    also: list[str] = field(default_factory=list)  # the keys of the levels of the same upload that restate this item
 
 
 @dataclass
@@ -72,6 +86,7 @@ class Evidence:
     datasets: list[dict[str, Any]]
     provenance: list[dict[str, Any]]
     notes: list[str] = field(default_factory=list)
+    scale_chains: list[dict[str, Any]] = field(default_factory=list)  # ScaleChain as dicts, the items' keys added
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -121,6 +136,8 @@ class Evidence:
         lines.append("")
         lines.append("EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):")
         for it in self.items:
+            if it.folded_into:  # restated on its host's scale line
+                continue
             s = it.statistics
             scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
             lines.append(f"[{it.key}] role={it.role} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
@@ -139,12 +156,62 @@ class Evidence:
                     f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}){compactness}"
                     f" | significance corrected for spatial autocorrelation{n_eff}"
                 )
+            if it.scale in SCALE_TEXT:
+                also = "".join(f"; also at {self._level(f)} [{f.key}]: {self._shift(f, it.target)}" for f in self.items if f.key in it.also)
+                lines.append(f"     scale: {SCALE_TEXT[it.scale]}{also}")
             tag = " [scope-disjoint from seeds: no shared condition]" if it.transversal_only else LOCATION_TAG.get(it.located, "")
             lines.append(f"     retrieved via: {it.path_text}{tag}")
+        chains, regions = [c for c in self.scale_chains if c["up"] or c["down"]], self._regions()
+        if chains or regions:
+            lines.append("")
+            lines.append("SCALE CHAIN (one phenomenon at finer and coarser levels: a shared anchor and region; then the regions above it):")
+            lines.extend(f"- {self._chain_text(c)}" for c in chains)
+            lines.extend(regions)
         if self.notes:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
         return "\n".join(lines)
+
+    @staticmethod
+    def _level(it: EvidenceItem) -> str:
+        spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
+        return f"res {spatial.resolution}" if spatial else "table"
+
+    @staticmethod
+    def _shift_of(it: EvidenceItem, metric: str) -> dict[str, Any] | None:
+        return next((x for x in it.statistics["shifts"] if x["metric"] == metric), None)
+
+    def _shift(self, it: EvidenceItem, metric: str) -> str:
+        shift = self._shift_of(it, metric) or it.statistics["shifts"][0]
+        return f"{self.reword(humanize(shift['metric']))} {shift['robust_z']:+.2f} sd"
+
+    def _chain_text(self, chain: dict[str, Any]) -> str:
+        """``res 7: P1 +1.60 sd -> res 5: P7 +1.10 sd -> region R:3:…``, finest first, on the host's target."""
+        by_id = {it.pattern_id: it for it in self.items}
+        host = by_id[chain["pattern_id"]]
+        steps = [by_id[s["pattern_id"]] for s in reversed(chain["down"])] + [host] + [by_id[s["pattern_id"]] for s in chain["up"]]
+        shifts = [self._shift_of(it, host.target) for it in steps]
+        parts = [f"{self._level(it)}: {it.key}" + (f" {x['robust_z']:+.2f} sd" if x else "") for it, x in zip(steps, shifts, strict=True)]
+        return " -> ".join(parts + [f"region {r['id']}" for r in chain["regions"][:1]])
+
+    def _regions(self) -> list[str]:
+        """The regions above the items that hold two or more of them, finest first; a coarser region holding the same items
+        as a finer one is left out."""
+        keys = {it.pattern_id: it.key for it in self.items}
+        held: dict[str, tuple[dict[str, Any], list[str]]] = {}
+        for chain in self.scale_chains:
+            for r in chain["regions"]:
+                held.setdefault(r["id"], (r, []))[1].append(keys[chain["pattern_id"]])
+        shown, seen = [], set()
+        for rid in sorted((rid for rid, (_, ks) in held.items() if len(ks) > 1), key=lambda rid: (-int(rid.split(":")[1]), rid)):
+            if (members := frozenset(held[rid][1])) not in seen:
+                seen.add(members)
+                shown.append(rid)
+        return [
+            f"- region {rid} holds {', '.join(held[rid][1])}: {held[rid][0]['patterns']} patterns over {held[rid][0]['datasets']} datasets,"
+            f" {held[rid][0]['themes']} themes"
+            for rid in shown
+        ]
 
     def _glossary(self) -> dict[str, str]:
         return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
@@ -182,6 +249,8 @@ class Evidence:
         """
         lines = []
         for it in self.items:
+            if it.folded_into:
+                continue
             s = it.statistics
             if it.phenomenon_type == "covariance" and s["covariance"].get("pair"):
                 a, b = s["covariance"]["pair"]
@@ -193,6 +262,7 @@ class Evidence:
                 )
             tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
+            tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
@@ -209,6 +279,44 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
+def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> list[dict[str, Any]]:
+    """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
+    (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
+    the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
+    first; a seed is never folded (it matched the question), and a host with a finer level folded in is regional too."""
+    by_id = {it.pattern_id: it for it in items}
+    hosts: set[str] = set()
+    chains = []
+    for chain in scale_chain(graph, [it.pattern_id for it in items]):
+        host = by_id[chain.pattern_id]
+        if host.folded_into:
+            continue
+        hosts.add(chain.pattern_id)
+        host.scale = chain.scale
+        upload = upload_of(graph, chain.pattern_id)
+        for steps in (chain.up, chain.down):
+            agrees = True
+            for step in steps:
+                other = by_id.get(step.pattern_id)
+                if other is None:
+                    path_text = f"vertical {step.direction} from {by_id[step.origin].key} through {step.attractor} in {step.region}"
+                    other = by_id[step.pattern_id] = item(f"P{len(items) + 1}", step.pattern_id, f"vertical_{step.direction}", [], path_text)
+                    items.append(other)
+                agrees = agrees and step.relation == "corresponds"
+                if agrees and upload is not None and upload_of(graph, step.pattern_id) == upload:
+                    host.also.append(other.key)
+                    if step.direction == "down" and host.scale == "insufficient":  # a finer level holds: the group is regional
+                        host.scale = "regional"
+                    if step.pattern_id not in hosts and other.role != "seed":
+                        other.folded_into = other.folded_into or host.key
+        chains.append(_chain_dict(chain, graph))
+    return chains
+
+
+def _chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
+    return asdict(chain) | {"regions": [{"id": r, **picture(graph, r)} for r in chain.regions]}
+
+
 def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig) -> Evidence:
     items: list[EvidenceItem] = []
     chosen, forged = [], []  # the first EVIDENCE_MAX_PATTERNS intact patterns; the tampered ones ranked among them
@@ -216,59 +324,56 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         if len(chosen) == EVIDENCE_MAX_PATTERNS:
             break
         (forged if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch" else chosen).append(r)
-    for idx, r in enumerate(chosen, start=1):
-        node = graph.nodes[r.node_id]
-        ins = graph.insight(r.node_id)
+
+    def item(key: str, pid: str, role: str, path: list[PathStep], path_text: str, transversal_only: bool = False, located: str = "") -> EvidenceItem:
+        node = graph.nodes[pid]
+        ins = graph.insight(pid)
         material = config.thresholds.has_material_covariance(ins)
         acts = [
             {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
-            for e, _ in graph.incident(r.node_id, ["ACTIVATES"])
-            if e["source"] == r.node_id
+            for e, _ in graph.incident(pid, ["ACTIVATES"])
+            if e["source"] == pid
         ]
-        items.append(
-            EvidenceItem(
-                key=f"P{idx}",
-                pattern_id=r.node_id,
-                role=r.route,
-                headline=node["label"],
-                scope=[c.expr for c in ins.conditions],
-                target=ins.target,
-                phenomenon_type=ins.phenomenon_type,
-                statistics={
-                    "support": ins.support,
-                    "support_fraction": ins.support_fraction,
-                    "baseline": ins.baseline,
-                    "local": ins.local,
-                    "effect_size": ins.effect_size,
-                    "shifts": [asdict(s) for s in ins.shifts],
-                    "emm_score": ins.emm_score,
-                    "stability": ins.stability,
-                    "p_value": ins.p_value,
-                    "p_adjusted": ins.p_adjusted,
-                    "weight": ins.weight,
-                    "drivers": list(ins.drivers),
-                    "covariance": ins.covariance,
-                    "compactness": node["props"].get("compactness"),
-                },
-                scope_text=describe_scope(ins.conditions),
-                shift_text=[describe_shift(s) for s in config.thresholds.phenomenon_shifts(ins)],
-                relationship=describe_covariance(ins.covariance) if material else "",
-                path=[asdict(st) for st in r.path],
-                path_text=_path_text(r.path, r.route),
-                validation=describe_validation(ins, config.thresholds)
-                + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
-                attractors=acts,
-                transversal_only=r.transversal_only,
-                located=r.located,
-                provenance={
-                    **ins.provenance,
-                    "pattern_id": r.node_id,
-                    "expression": ins.expression,
-                    "dataset_id": ins.dataset_id,
-                    "batch_id": ins.batch_id,
-                },
-            )
+        return EvidenceItem(
+            key=key,
+            pattern_id=pid,
+            role=role,
+            headline=node["label"],
+            scope=[c.expr for c in ins.conditions],
+            target=ins.target,
+            phenomenon_type=ins.phenomenon_type,
+            statistics={
+                "support": ins.support,
+                "support_fraction": ins.support_fraction,
+                "baseline": ins.baseline,
+                "local": ins.local,
+                "effect_size": ins.effect_size,
+                "shifts": [asdict(s) for s in ins.shifts],
+                "emm_score": ins.emm_score,
+                "stability": ins.stability,
+                "p_value": ins.p_value,
+                "p_adjusted": ins.p_adjusted,
+                "weight": ins.weight,
+                "drivers": list(ins.drivers),
+                "covariance": ins.covariance,
+                "compactness": node["props"].get("compactness"),
+            },
+            scope_text=describe_scope(ins.conditions),
+            shift_text=[describe_shift(s) for s in config.thresholds.phenomenon_shifts(ins)],
+            relationship=describe_covariance(ins.covariance) if material else "",
+            path=[asdict(st) for st in path],
+            path_text=path_text,
+            validation=describe_validation(ins, config.thresholds)
+            + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
+            attractors=acts,
+            transversal_only=transversal_only,
+            located=located,
+            provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
         )
+
+    for idx, r in enumerate(chosen, start=1):
+        items.append(item(f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located))
+    chains = _add_vertical(items, graph, item)
 
     attractors = []
     for a in result.attractors:
@@ -299,8 +404,8 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         )
         if dnode["props"].get("glossary"):
             datasets[-1]["glossary"] = dnode["props"]["glossary"]
-    for r in chosen:  # baselines of the metrics the prompt actually mentions
-        ins = graph.insight(r.node_id)
+    for it in items:  # baselines of the metrics the prompt actually mentions
+        ins = graph.insight(it.pattern_id)
         named = [s.metric for s in config.thresholds.phenomenon_shifts(ins)]
         if config.thresholds.has_material_covariance(ins):
             named += ins.covariance["pair"]
@@ -327,6 +432,12 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
             f"{', '.join(disjoint)} share no scope condition with the seeds; they were reached through "
             "latent anchors (the same phenomenon in a different part of the data)."
         )
+    unconfirmed = [it.key for it in items if it.scale == "not_found_coarser"]
+    if unconfirmed:
+        notes.append(
+            f"{', '.join(unconfirmed)} were not found at the coarser level of their upload: that is missing evidence at that level,"
+            " not proof the effect is local."
+        )
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
     if not items and not forged:
         notes.append("No pattern in the graph matched the question.")
@@ -341,4 +452,5 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         datasets=datasets,
         provenance=[{"key": it.key, **it.provenance} for it in items],
         notes=notes,
+        scale_chains=chains,
     )

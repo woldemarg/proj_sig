@@ -640,6 +640,7 @@ function md(text, keyTo) {
 }
 
 function renderChain(item) {
+  if (item.role.startsWith("vertical_")) return `<div class="chain"><span class="n">${esc(item.path_text)}</span></div>`;  // a level up or down
   if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">matched your question</span></div>`;
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
@@ -671,12 +672,14 @@ function botCard(turn) {
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
   const understood = grounded.length ? `<div class="understood" title="Question words matched to data literals (by characters or by meaning)">Understood: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
   const evid = items.map((it, i) => {
+    if (it.folded_into) return "";  // another level of the same finding: shown on its host's card
     const s = it.statistics;
     const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
       ? esc(it.relationship || "correlation change")
       : s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
-    return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme" }[it.role] || it.role)}</span>` +
-      (it.transversal_only ? `<span class="role cross">other segment</span>` : "") + `</div>` +
+    return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
+      (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
+      (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${renderChain(it)}</div>`;
   }).join("");

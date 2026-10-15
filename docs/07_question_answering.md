@@ -101,7 +101,7 @@ The walk crosses exactly the edges the ontology kept, and the snapshot's `weak` 
 | node rank | path score · `insight_weight` (seeds keep their seed score) |
 | `route` | `seed`, `structural` (reached in phase P0), `transversal` (reached in phase P1, i.e. through an anchor) |
 | `scope_overlap` | maximum Jaccard similarity of conditions with any seed |
-| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup; not set when `located` is |
+| `transversal_only` | `transversal` **and** `scope_overlap = 0`: the same phenomenon in a part of the data that shares nothing with the question's subgroup; not set when `located` is, nor for another level of a seed's upload (the same `upload_id`) |
 | `located` | `same_region` or `adjacent` (`LOCATED_RELATIONS`) when the last step is a CO_LOCATED link of that relation and `scope_overlap = 0`: the same area, not a related finding; else empty |
 | `structural_distance` | BFS hops over all structural edges, including SIBLING, up to 5 (`None` = unreachable within 5) |
 | result | seeds first, then by rank, up to `|seeds| + MAX_RETRIEVED` (12) patterns, with their `PathStep(source, target, edge_type, weight, hop, edge_id, reverse)` lists; `used_edges` and `traversed_nodes` are the union of the selected paths |
@@ -112,14 +112,14 @@ Because the skip rule for seeds covers only SPECIALIZES, a second seed that is a
 
 ## 7.4 The evidence object
 
-`build_evidence(parsed, result, graph, config)` takes the first `EVIDENCE_MAX_PATTERNS` (10) retrieved patterns in rank order and assigns citation keys `P1 … Pn`:
+`build_evidence(parsed, result, graph, config)` takes the first `EVIDENCE_MAX_PATTERNS` (10) retrieved patterns (then adds the vertical ones, below) in rank order and assigns citation keys `P1 … Pn`:
 
 ```python
 Evidence(
     query, parsed,                        # question + ParsedQuery.to_dict()
     seed_patterns=["P1", ...],            # keys of the seeds
     items=[EvidenceItem(
-        key="P4", pattern_id, role,       # seed | structural | transversal
+        key="P4", pattern_id, role,       # seed | structural | transversal | vertical_up | vertical_down
         headline, scope, target, phenomenon_type,
         statistics={support, support_fraction, baseline, local, effect_size, shifts, emm_score,
                     stability, p_value, p_adjusted, weight, drivers, covariance},
@@ -130,6 +130,7 @@ Evidence(
         path=[{source, target, edge_type, weight, hop, edge_id, reverse}, ...],   # the PathSteps as dicts
         path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
         attractors=[{attractor, alignment, label}], transversal_only=True, located="",   # located: as on Retrieved
+        scale="", folded_into="", also=[],   # the vertical zoom, below
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight, type}], signature}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],
@@ -173,7 +174,9 @@ NOTE: P4, P5, P6, P8, P9, P10 share no scope condition with the seeds; they were
 
 Paths use node ids and edge weights — `-TYPE(w)->` along the stored direction, `<-TYPE(w)-` against it — so the model can name the anchor it came through. A `relationship:` line (`correlation between a and b weakens from -0.57 overall to +0.09 in the subgroup (divergence 0.09)`) appears only for a material correlation change, and a covariance insight reads `shifts: no validated median shift`: its median shifts failed the shift test, so only the correlation change is cited. The prompt carries subgroup statistics, never rows. A geo item adds a `place:` line (its cells and resolution, the `compactness` the commit derived, and the effective n). An item the walk reached last through a CO_LOCATED link whose relation is `same_region` or `adjacent`, sharing no condition with the seeds (`Retrieved.located`, set by the walk, which then leaves `transversal_only` false for the prompt, the highlight and the console alike), is tagged `[reached by location only: same area, zones do not overlap]` (or `zones touch or barely overlap`) instead of the scope-disjoint mark even after a latent step, and a NOTE says that being in the same area does not show the findings are related; system-prompt rule 6 asks the model to say so, and never to explain one by the other ([6.1](06_graph_and_storage.md#61-the-structural-plane)). The evidence-only summary marks it `(знайдено лише за місцем: той самий район)`.
 
-**Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `share of the cell's events whose vehicle type is bicycle (every such event also has: vehicle class two-wheeler)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 9 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
+**The vertical zoom** (`graph_query_engine/vertical.py`, `scale_chain`). After the walk, every geo item is followed up and down the levels with no new edge, from ACTIVATES, IN_REGION and PARENT_OF alone. A step up from `P` goes to a coarser pattern `Q` that shares a non-weak anchor with `P` and one of whose finest regions (a broad `Q` has many) holds `P` with an IN_REGION share of at least `VERTICAL_MIN_SHARE` (0.5); a step down is the same from the other end. The step `corresponds` when the two shift their first common target the same way, else `contrasts`; candidates rank by `alignment(P) · alignment(Q) · share`, a pattern of the same upload first. Each pattern takes up to `VERTICAL_MAX_PER_PATTERN` (3) steps each way, a question at most `VERTICAL_MAX_TOTAL` (10) vertical patterns; above the top pattern the chain goes on through the PARENT_OF ancestors of the region the last step met in (without a step, of the item's finest region with the largest share). A zone from the map ([#16](https://github.com/woldemarg/proj_sig/issues/16)) calls the same function on its patterns. The item's `scale` compares it with the coarser levels of its own upload (`upload_levels` on the Dataset node, [2.9](02_discovery.md#29-spatial-datasets-the-geo-option)): `regional` — a corresponding coarser pattern of the upload; `scale-dependent` — a contrasting one (a reversal under aggregation); `not_found_coarser` — a coarser level was planned, no corresponding pattern there (missing evidence, not proof the effect is local; a NOTE says so, and plain language reads «на рівні району окремо не підтверджено»); `insufficient` — no coarser level planned (kept on the item, not printed). The label compares with the item itself and is searched for even when the budget leaves its chain no step. A corresponding level of the same upload restates its item: it becomes an item for its key but is folded (`folded_into`) into the item the walk ranked first — the questions name no level, so the rank stands for the level nearest the question —, a host with a finer level folded in is `regional` too, a seed is never folded (it matched the question), and datasets of no upload never fold; the host's line reads `scale: regional (…); also at res 5 [P7]: … +1.10 sd`, so two levels of one mechanism are never two facts; other vertical patterns are items of their own with `role=vertical_up|vertical_down`, after the first 10. The `SCALE CHAIN` section holds one line per chain with a step — `res 7: P1 +1.60 sd -> res 5: P7 +1.10 sd -> region R:3:…` — and the regions above the items that hold two or more of them, finest first, a coarser one holding the same items left out: `region R:5:… holds P2, P3, P4: 6 patterns over 1 datasets, 4 themes` (`picture`: its IN_REGION patterns over every dataset, their datasets and anchors). Without geo items the section and the labels are absent and the prompt is unchanged.
+
+**Plain language for geo datasets.** A geo dataset's columns are derived by the ingestion ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), which records what each means in plain words (`profile.geo.glossary`: `column → meaning`, and `column=value → phrase` for the neighbourhood bands and the LISA classes; a share metric also names the coarser values every such event has, e.g. `share of the cell's events whose vehicle type is bicycle (every such event also has: vehicle class two-wheeler)`). The snapshot carries it on the Dataset node (`glossary`), the evidence on the dataset entry. When the evidence names such columns, the prompt gains a `PLAIN LANGUAGE` section listing their meanings, and the item lines are rewritten through it (`Evidence.reword`, `Evidence.reword_condition`): scopes read `a hot spot: a busy cell surrounded by busy cells; the surrounding cells are among the busiest quarter (number of events in the map cell)` instead of `lisa_points=hot spot; neighbours_points_band=q4`, and shifts, baselines, relationships and confounders name meanings instead of columns. System-prompt rule 10 then asks for everyday Ukrainian, ratios instead of sd and no analyst vocabulary. A dataset without a glossary gets exactly the prompt above.
 
 **The evidence-only summary** (`Evidence.summary`, carried as the payload's `evidence_summary`) follows the chat's language rule — Ukrainian around untouched literals — and is rendered from the numbers rather than from the English phrases: one cited line per item, `- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (…) | n=438 [P1]` (the phenomenon shifts, at most two; a covariance insight shows `кореляція a ~ b: +0.88 загалом → +0.73 у підгрупі`), with ` (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)` for transversal-only items; without items, `- У графі немає відповідних свідчень.` Whenever there is no LLM answer, the narrator frames these lines as the answer: `Спостереження:` before them and `Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).` after them (`narration._explain`).
 
@@ -206,17 +209,22 @@ Rules:
    condition), point out that the same phenomenon recurs in a different part of the data.
 6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
    Say they are in the same area; do not explain one by the other, not even as a hypothesis.
-7. If the evidence does not answer the question, say so plainly.
-8. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
+7. SCALE: a "scale:" line and the SCALE CHAIN follow a finding to coarser and finer levels of the same phenomenon.
+   Say whether it holds at the coarser level or reverses there; "not found at the coarser level" means it is not
+   confirmed there on its own, never that it is local.
+8. If the evidence does not answer the question, say so plainly.
+9. LANGUAGE: write the answer in Ukrainian. Copy every data literal byte-for-byte from the evidence, in its
    original script - column names, category values, dataset and file names, ids, "sd" and the [P#] keys.
    Never translate or transliterate them (write `margin`, `phones`, `US`, not their Ukrainian equivalents).
-   The one exception is rule 9.
-9. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
+   The one exception is rule 10.
+10. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
    already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
    values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
    9% проти 1%"), not in sd. Do not use the words sd, median, MAD, quartile, q1-q4, LISA, subgroup, seed,
    transversal, latent or anchor; say "зони" for map cells, "схожа картина в інших зонах" for recurrences and "в тому самому районі" for items
-   reached only by location.
+   reached only by location, "тримається і на рівні району" for a finding that holds at the coarser level,
+   "на рівні району зсув протилежний" for one that reverses there and "на рівні району окремо не підтверджено"
+   for one not found there.
 Be concise (at most ~250 words).
 ```
 
@@ -240,9 +248,9 @@ Live against `google/gemma-4-26b-a4b-it` on OpenRouter (`scripts/eval_answers.py
 
 | Grounded | Unknown citations | Citations | Prompt tokens | Completion tokens | Mean latency |
 |---|---|---|---|---|---|
-| 5/5 | 0 | 41 | 12,869 | 2,493 | 10.7 s |
+| 5/5 | 0 | 43 | 13,419 | 2,551 | 7.9 s |
 
-The five evidence prompts hold 4,750–6,282 characters, none of them outside ASCII, and 2,346–2,897 prompt tokens each. Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.54 → +0.10), separate the observations from the interpretation under `Спостереження:` and `Інтерпретація (гіпотези):` as rule 3 asks, cite the scope-disjoint analogues reached through an anchor, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
+The five evidence prompts hold 4,750–6,282 characters, none of them outside ASCII, and 2,456–3,007 prompt tokens each (the system prompt's scale rule adds about 110). Latency depends on the provider. Answers keep the planted directions (US phones: lower margin, higher discount; the EU∧phones correlation −0.54 → +0.10), separate the observations from the interpretation under `Спостереження:` and `Інтерпретація (гіпотези):` as rule 3 asks, cite the scope-disjoint analogues reached through an anchor, and use grouped citations, which are parsed and linked. `scripts/eval_answers.py` re-measures these numbers with the current prompt; it calls the LLM behind the broker, a paid call.
 
 **Multilingual grounding benchmark** (`scripts/multilingual_benchmark.py`: 60 questions in four buckets of 15, on the demo and on a copy of the demo with Ukrainian category, city and channel values; every question's twin — the same question with each literal as stored — gives the gold seeds and evidence; the model's own embeddings, no LLM). Seed Recall@3 = gold seeds among the question's seeds; Consistency = Jaccard of the seed sets; Evidence overlap over the gold evidence; direction accuracy against the twin; FPGR = grounded spans whose symbol the twin does not hold:
 
@@ -263,6 +271,7 @@ No LLM reads the canonical documents: only the naive baseline and the `text_nn` 
 | `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 5 |
 | `STRUCTURAL_HOPS`, `STRUCTURAL_EDGE_DECAY`, `LATTICE_EDGES` | 1, 0.85, SPECIALIZES (both ways), CONTRASTS, CO_LOCATED (constants of `traversal.py`) |
 | `MAX_RETRIEVED`; `EVIDENCE_MAX_PATTERNS` | 12; 10 (a constant of `evidence.py`) |
+| `VERTICAL_MAX_PER_PATTERN`, `VERTICAL_MAX_TOTAL`, `VERTICAL_MIN_SHARE` | 3 steps each way, 10 vertical patterns per question, 0.5 (constants of `vertical.py`) |
 | `INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S` | `http://127.0.0.1:8765` (the host composite of `scripts/dev.py`; compose sets `http://insight-graph:8000`), 300 |
 | `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` (the broker) |
 | `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` | 120, 0.1, 1200 |

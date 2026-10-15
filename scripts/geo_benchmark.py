@@ -13,8 +13,8 @@ shift of one of its planted metrics that draw at least half their events from it
     S-regional  three foci in one region cell, centres 10-11 cells apart (the nearest cells of two foci 4 apart), so no
                 CO_LOCATED links them
     S-control   three foci in three different region cells
-    S-local     one focus; the rest of its region is ordinary
-    S-levels    a broad zone (the eastern half of a large area) in one file, ingested as a table, at 7 and at 5
+    S-local     one focus, uploaded at FINE and 7; the rest of its region is ordinary
+    S-levels    a broad zone (the eastern half of a large area) in one file, uploaded at 7 and 5 with its table level
     S-parts     the large area as three files split by longitude, the split lines cutting region cells; the zone its
                 northern half, across both splits
     S-size      about 10⁴ fine cells in three datasets of ten foci each
@@ -26,6 +26,8 @@ Metrics, per encoder (the hashing double; the bundled model when present):
                  foci (an unfound one is a miss): at k, anywhere ("reached"), and the mean rank of those reached
     shared       pairs of distinct best patterns (of different foci, levels or files) that activate a common non-weak attractor
     cross_coloc  CO_LOCATED edges between datasets (derive_spatial links patterns of one resolution from any datasets)
+    scale        the scale label of each best geo pattern (scale_chain): reg(ional), dep(endent), nfc (not found coarser),
+                 ins(ufficient)
     size         per batch the processing and graph-compile seconds; the snapshot's nodes and edges by type; the walk's
                  visited nodes per seed; the evidence prompt's length for one question
 
@@ -38,6 +40,7 @@ import argparse
 import itertools
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -50,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script:
 
 from graph_query_engine.seeds import SeedMatch  # noqa: E402
 from graph_query_engine.traversal import traverse  # noqa: E402
+from graph_query_engine.vertical import scale_chain  # noqa: E402
 from insight_graph_service.core.engine import Engine  # noqa: E402
 
 FINE, REGION = 8, 5
@@ -68,10 +72,10 @@ SIGNATURES = ("wait", "cost", "size")  # focus i also raises SIGNATURES[i % 3]: 
 class Upload:
     name: str
     frame: pd.DataFrame
-    geo: str | None  # the geo option; None ingests the table
+    geo: str | None  # the geo option (levels as @r1,r2); None ingests the table
     parts: dict[str, np.ndarray]  # planted part (a focus or "zone") -> mask over the frame's rows
     targets: dict[str, set[str]] = field(default_factory=dict)  # part -> its planted metrics besides load
-    locator: str | None = None  # the table level of a geo upload: its point columns left out
+    table: bool = False  # the table level too (its point columns left out)
 
 
 @dataclass
@@ -187,14 +191,14 @@ def generate(name: str, seed: int) -> Scenario:
         return Scenario(name, [_foci_upload(rng, "s_control.csv", centres, area, 8000)])
     if name == "S-local":
         centres = _fits(region, area)[:1]
-        return Scenario(name, [_foci_upload(rng, "s_local.csv", centres, area, 8000)])
+        return Scenario(name, [replace(_foci_upload(rng, "s_local.csv", centres, area, 8000), geo=f"lat,lon@{FINE},7")])
     if name in ("S-levels", "S-parts"):
         lat, lon = _uniform(rng, 80000, BROAD)
         lat0, lon0, dlat, dlon = BROAD
         if name == "S-levels":
             zone = lon > lon0 + dlon / 2
             frame = _events(rng, lat, lon, zone, BROAD, grid=(1, 2))  # two districts: west, east
-            uploads = [Upload("s_levels.csv", frame, geo, {"zone": zone}, {}, None if geo else "lat,lon") for geo in (None, "lat,lon@7", "lat,lon@5")]
+            uploads = [Upload("s_levels.csv", frame, "lat,lon@7,5", {"zone": zone}, table=True)]
             return Scenario(name, uploads)
         cuts = lon0 + dlon * np.array([1 / 3, 2 / 3])
         zone = lat > lat0 + dlat / 2  # the northern half, across both cuts
@@ -291,6 +295,7 @@ def _graph(engine: Engine, best: list[str]) -> dict[str, Any]:
         "edges": dict(sorted(g.snapshot["stats"]["edge_counts"].items())),
         "visited_per_seed": round(float(np.mean(walks)), 1) if walks else None,
         "prompt_chars": len(engine.evidence(QUESTION).evidence_prompt),
+        "scale": {c.pattern_id: c.scale for c in scale_chain(g, sorted(set(best)))},
     }
 
 
@@ -300,31 +305,38 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     for upload in scenario.uploads:
         path = root / upload.name
         upload.frame.to_csv(path, index=False)
-        record = engine.process(engine.submit(path, geo=upload.geo, locator=upload.locator)["batch_id"])
-        if record["status"] != "READY":
-            raise SystemExit(f"{scenario.name} {upload.name} {upload.geo}: {record['status']} {record.get('error')}")
-        patterns = _patterns(engine, record, upload)
-        found = {name: _best(patterns, part, upload.targets.get(name, set())) for name, part in upload.parts.items()}
-        best += [f["pattern"] for f in found.values() if f["found"]]
-        metrics = record["metrics"]
-        files.append(
-            {
-                "file": upload.name,
-                "level": upload.geo.rsplit("@", 1)[1] if upload.geo else "table",
-                "cells": record["profile"].get("geo", {}).get("cells"),
-                "patterns": len(patterns),
-                "found": found,
-                "seconds": round(metrics["processing_duration_s"], 2),
-                "graph_seconds": round(metrics["timings"].get("graph_s", 0.0), 2),
-            }
-        )
-    foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(scenario.uploads) == 1 else []
+        with path.open("rb") as stream:
+            levels = engine.upload(upload.name, stream, geo=upload.geo, table=upload.table)
+        for level in levels:
+            record = engine.process(level["batch_id"])
+            if record["status"] == "FAILED" and record["error"]["code"] == "no_viable_insights" and level is not levels[0]:
+                files.append({"file": upload.name, "level": record["level"], "found": {}, "seconds": 0.0, "status": "no_viable_insights"})
+                continue  # a coarser level mined and found nothing: a level, not a failure of the run
+            if record["status"] != "READY":
+                raise SystemExit(f"{scenario.name} {upload.name} {record['level']}: {record['status']} {record.get('error')}")
+            patterns = _patterns(engine, record, upload)
+            found = {name: _best(patterns, part, upload.targets.get(name, set())) for name, part in upload.parts.items()}
+            best += [f["pattern"] for f in found.values() if f["found"]]
+            metrics = record["metrics"]
+            files.append(
+                {
+                    "file": upload.name,
+                    "level": record["level"],
+                    "cells": record["profile"].get("geo", {}).get("cells"),
+                    "patterns": len(patterns),
+                    "found": found,
+                    "seconds": round(metrics["processing_duration_s"], 2),
+                    "graph_seconds": round(metrics["timings"].get("graph_s", 0.0), 2),
+                }
+            )
+    foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     return result | _graph(engine, best)
 
 
 def format_table(results: list[dict[str, Any]]) -> str:
-    head = ("encoder", "scenario", "found", "recall@k", "reached", "rank", "shared", "x-coloc", "visited", "prompt", "sec")
+    head = ("encoder", "scenario", "found", "recall@k", "reached", "rank", "shared", "x-coloc", "scale", "visited", "prompt", "sec")
+    short = {"regional": "reg", "scale-dependent": "dep", "not_found_coarser": "nfc", "insufficient": "ins"}
     lines = [" ".join(f"{h:>9}" for h in head)]
     for r in results:
         parts = [f for file in r["files"] for f in file["found"].values()]
@@ -336,6 +348,7 @@ def format_table(results: list[dict[str, Any]]) -> str:
             *(rec.get(m) for m in ("recall", "reached", "rank")),
             r["shared"],
             r["cross_coloc"],
+            ",".join(f"{short[k]}{n}" for k, n in sorted(Counter(r["scale"].values()).items())) or None,
             r["visited_per_seed"],
             r["prompt_chars"],
             round(sum(f["seconds"] for f in r["files"]), 1),
