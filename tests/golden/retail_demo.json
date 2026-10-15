@@ -1,75 +1,85 @@
 {
  "version": 3,
+ "nodes": {
+  "Attractor": 8,
+  "Batch": 1,
+  "Dataset": 1,
+  "Dimension": 3,
+  "Metric": 4,
+  "Pattern": 28
+ },
  "props": {
-  "Attractor": [
-   "attractor_id",
-   "centroid",
-   "datasets",
-   "dimensions",
-   "dispersion",
-   "distinct_scopes",
-   "evidence_mass",
-   "last_updated_batch",
-   "mass",
-   "n_patterns",
-   "signature",
-   "targets"
-  ],
-  "Batch": [
-   "batch_id",
-   "batch_seq",
-   "status"
-  ],
-  "Dataset": [
-   "columns",
-   "dataset_id",
-   "filename",
-   "rows"
-  ],
-  "Dimension": [
-   "cardinality",
-   "dataset_id",
-   "entropy",
-   "name"
-  ],
-  "Metric": [
-   "dataset_id",
-   "global_mad",
-   "global_median",
-   "name"
-  ],
-  "Pattern": [
-   "aliases",
-   "baseline",
-   "batch_id",
-   "canonical",
-   "conditions",
-   "covariance",
-   "dataset_id",
-   "drivers",
-   "effect_size",
-   "embedding",
-   "emm_score",
-   "expression",
-   "id",
-   "local",
-   "p_adjusted",
-   "p_value",
-   "phenomenon_type",
-   "provenance",
-   "row_hash",
-   "row_id",
-   "sd_raw_score",
-   "sd_score",
-   "shifts",
-   "stability",
-   "support",
-   "support_fraction",
-   "target",
-   "volume_utility",
-   "weight",
-   "weight_factors"
-  ]
+  "Attractor": {
+   "attractor_id": 8,
+   "centroid": 8,
+   "created_at": 8,
+   "datasets": 8,
+   "dimensions": 8,
+   "dispersion": 8,
+   "distinct_scopes": 8,
+   "evidence_mass": 8,
+   "last_updated_batch": 8,
+   "mass": 8,
+   "n_patterns": 8,
+   "signature": 8,
+   "targets": 8
+  },
+  "Batch": {
+   "batch_id": 1,
+   "batch_seq": 1,
+   "created_at": 1,
+   "status": 1
+  },
+  "Dataset": {
+   "columns": 1,
+   "dataset_id": 1,
+   "filename": 1,
+   "rows": 1
+  },
+  "Dimension": {
+   "cardinality": 3,
+   "dataset_id": 3,
+   "entropy": 3,
+   "name": 3
+  },
+  "Metric": {
+   "dataset_id": 4,
+   "global_mad": 4,
+   "global_median": 4,
+   "name": 4
+  },
+  "Pattern": {
+   "aliases": 28,
+   "baseline": 28,
+   "batch_id": 28,
+   "canonical": 28,
+   "conditions": 28,
+   "covariance": 28,
+   "dataset_id": 28,
+   "drivers": 28,
+   "effect_size": 28,
+   "embedding": 28,
+   "emm_score": 28,
+   "expression": 28,
+   "id": 28,
+   "local": 28,
+   "p_adjusted": 28,
+   "p_value": 28,
+   "phenomenon_type": 28,
+   "provenance": 28,
+   "row_hash": 28,
+   "row_id": 28,
+   "sd_raw_score": 28,
+   "sd_score": 28,
+   "shifts": 28,
+   "stability": 28,
+   "support": 28,
+   "support_fraction": 28,
+   "target": 28,
+   "volume_utility": 28,
+   "weight": 28,
+   "weight_factors": 28
+  }
  },
  "datasets": [
   {
