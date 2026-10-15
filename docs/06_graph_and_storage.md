@@ -44,7 +44,7 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 | Attractor | `A-<k>` | the anchor label | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
 | Dimension | `D:<dataset>:<column>` | raw column name | `name, cardinality, entropy` — the EDA-selected dimensions plus every attribute a closed intent uses |
 | Metric | `M:<dataset>:<column>` | `humanize(name)` | `name, global_median, global_mad`; `indicator` and `unit` when the dataset's indicator registry names the metric ([2.1](02_discovery.md#21-ingestion)) |
-| Dataset | `DS:<dataset_id>` | file name | `filename, rows, columns`, `reliability` (`A`–`F` from the batch record, `F` when undeclared), `source` when declared ([2.1](02_discovery.md#21-ingestion)). `Engine.update_dataset_metadata` (`PATCH /api/datasets/{id}`) rewrites them, and the indicator registry, on the READY batch record and recompiles the snapshot: no new batch, no mining, the same pattern ids |
+| Dataset | `DS:<dataset_id>` | file name | `filename, rows, columns`, `reliability` (`A`–`F` from the batch record, `F` when undeclared), `source` when declared ([2.1](02_discovery.md#21-ingestion)), `upload_id` and `level` for an HTTP upload ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)). `Engine.update_dataset_metadata` (`PATCH /api/datasets/{id}`) rewrites them, and the indicator registry, on the READY batch record and recompiles the snapshot: no new batch, no mining, the same pattern ids |
 | Batch | `B:<batch_id>` | batch id | `batch_seq, created_at, status` |
 
 | Edge | From → to | Plane | Weight and properties |
@@ -158,7 +158,7 @@ Guarantees (tests: `test_lattice.py`; `test_persistence.py`: write → reload �
 
 ## 6.8 Deleting a dataset
 
-`Engine.delete_dataset(dataset_id)` (`DELETE /api/datasets/{id}`, the card's *Delete* button; the id may also be the batch id of an upload that failed before it had a dataset id) removes one dataset from the knowledge base while the rest stays intact — the counterpart of the reset, which removes everything. It is a writer operation under the engine lock, refused with `busy` while one of the dataset's batches is still running, with `unknown_dataset` (HTTP 404) when no batch carries that id, and with `workspace_degraded` on a degraded workspace. It is all or nothing:
+`Engine.delete_dataset(dataset_id)` (`DELETE /api/datasets/{id}`, the card's *Delete* button; the id may also be the batch id of an upload that failed before it had a dataset id) removes one dataset from the knowledge base while the rest stays intact — the counterpart of the reset, which removes everything. It is a writer operation under the engine lock, refused with `busy` while one of the dataset's batches is still running, with `unknown_dataset` (HTTP 404) when no batch carries that id, and with `workspace_degraded` on a degraded workspace. `Engine.delete_upload(upload_id)` (`DELETE /api/uploads/{id}`; `unknown_upload`, HTTP 404) removes every dataset the upload's levels made or found already ingested, in the same one transaction. An upload file stays while a batch of another level still points at it. It is all or nothing:
 
 ```text
 transaction (6.4): checkpoint (state, journal, snapshot) + marker pending.json → datasets/<id>/,

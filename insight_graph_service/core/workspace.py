@@ -438,18 +438,20 @@ class Workspace:
     def rewrite_journal(self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]]) -> None:
         self.journal.rewrite(patterns, vectors, activations)
 
-    def remove_dataset(self, dataset_id: str, batches: list[dict[str, Any]], trash: Path) -> None:
-        """Move a dataset's artefacts — its folder, its batches' blocks, records and uploads — into ``trash`` (inside
-        the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them."""
+    def remove_datasets(self, dataset_ids: set[str], batches: list[dict[str, Any]], trash: Path) -> None:
+        """Move the datasets' artefacts — their folders, their batches' blocks, records and uploads — into ``trash`` (inside
+        the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them. An upload another
+        batch still points at (another level of the same upload) stays."""
         root = self.root.resolve()
-        paths = [self.datasets_dir / dataset_id]
+        for b in batches:
+            self._batches.pop(b["batch_id"], None)
+        shared = {b.get("source_path") for b in self._batches.values()}
+        paths = [self.datasets_dir / ds for ds in sorted(dataset_ids)]
         for b in batches:
             source = Path(b.get("source_path") or "")
             paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
-            if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()):
+            if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()) and str(source) not in shared:
                 paths.append(source)
-        for b in batches:
-            self._batches.pop(b["batch_id"], None)
         for path in paths:
             if path.exists():
                 dest = trash / path.resolve().relative_to(root)

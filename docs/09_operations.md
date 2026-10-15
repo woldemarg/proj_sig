@@ -9,10 +9,10 @@
 ## 9.1 The batch lifecycle
 
 `Engine(settings, *, embedder=None, recover=True)` (`insight_graph_service/core/engine.py`) works on one workspace:
-- **Upload.** `Engine.upload(name, stream, bins=, categories=)` stores an uploaded file, refused with `file_too_large` above `MAX_UPLOAD_MB`, and registers it. `Engine.submit(path, filename=, bins=, categories=)` creates the `UPLOADED` record (`None` = workspace defaults).
+- **Upload.** `Engine.upload(name, stream, bins=, categories=, geo=, table=)` stores an uploaded file, refused with `file_too_large` above `MAX_UPLOAD_MB`, and registers one batch per level ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), returning their records. `Engine.submit(path, filename=, bins=, categories=)` creates the `UPLOADED` record (`None` = workspace defaults).
 - **Processing.** `Engine.process(batch_id)` runs a batch; `Engine.ingest_file()` submits and processes in one call (tests and scripts). The HTTP app queues `process` on its single worker thread ([8.1](08_interface.md#81-http-api)). Read-only callers pass `recover=False` ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)).
 - **Questions.** Over the committed state, `Engine.search(question)` returns the `SearchResult` and `Engine.evidence(question)` its `EvidencePayload` (the empty payload while the graph holds no insight) ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)). No language model runs in this process; the narrator verbalises the payload.
-- **Other writes.** `Engine.delete_dataset(id)` and `Engine.reset()`. A reset is refused with `busy` at once while a batch or a deletion runs or an upload waits.
+- **Other writes.** `Engine.delete_dataset(id)`, `Engine.delete_upload(upload_id)` (every level of one upload) and `Engine.reset()`. A reset is refused with `busy` at once while a batch or a deletion runs or an upload waits.
 - **Readers.** Readers see the committed state through `Engine.committed()`: graph, vectors and literal catalog of one commit, loaded when the engine starts ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). `graph()` and `frame()` read from it; it holds the literal catalog and every document vector from the moment it is committed.
 
 **Start.** The server first checks the model files, before anything touches the workspace (exit 3 when one is missing; [9.3](#93-configuration)). A writer engine then takes the workspace's writer lock — another writer process gets `WorkspaceBusy`, and the server exits with code 2 — and:
@@ -43,7 +43,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 
 One writer process works on a workspace at a time — it holds the workspace's writer lock ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) — and within it batches run one at a time (a re-entrant lock; the HTTP app uses a single worker thread). Any exception before the READY save rolls back (`Workspace.transaction`, [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)) and marks the batch `FAILED` with `error {code, message[, trace]}` and `failed_stage`. If the rollback itself fails, the record also carries the warning `rollback failed`, and later batches fail with `rollback_pending` until a writer restart has finished it. Nothing after the READY save can turn the batch FAILED: the committed graph and frame were loaded before it, and switching them in is an assignment. A failure to save the record after the Neo4j sync propagates out of `process()`; the batch stays READY on disk.
 
-**Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, geo?, source?, reliability?, indicators?, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}}`. The checkpoint of a committing batch lives in `pending.json`, not in the record.
+**Batch record** (`registry/batches/<batch_id>.json`): `{batch_id, batch_seq, dataset_id, filename, source_path, bins, categories, geo?, upload_id?, level?, strict?, source?, reliability?, indicators?, status, stage_times {STAGE: iso}, created_at, updated_at, profile {rows, columns, numerics, categoricals, dropped_columns, selected_dimensions, search_space_size, global_medians, global_mads, dimension_cardinality, dimension_entropy, derived_columns, bins, categorical_overrides}, metrics {…}, warnings [], error, failed_stage, duplicate_of, neo4j {status, …}}`. The checkpoint of a committing batch lives in `pending.json`, not in the record.
 
 ## 9.2 Command line
 
@@ -67,10 +67,10 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | ingest the demo | `POST /api/demo` | 202 + the `UPLOADED` record |
 | ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record |
-| status | `GET /api/batches`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
+| status | `GET /api/batches[?upload_id=]`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
 | ask | `POST /api/chat/query` `{question, use_llm}` | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
 | evidence only | `POST /api/search` `{question}` | the `EvidencePayload` |
-| delete a dataset | `DELETE /api/datasets/<dataset id>` (or the batch id of an upload that failed before it had one) | what was removed |
+| delete a dataset | `DELETE /api/datasets/<dataset id>` (or the batch id of an upload that failed before it had one); every level of one upload: `DELETE /api/uploads/<upload id>` | what was removed |
 | reset | `POST /api/reset` | the workspace deleted, the mirror cleared |
 
 A batch is queued and runs on the service's worker thread; poll `GET /api/batches/<id>` until it is READY, FAILED or SKIPPED. The Neo4j mirror follows by itself: after every commit, deletion and reset, and at start ([6.6](06_graph_and_storage.md#66-neo4j-mirror)). The sphere is served as data (`GET /api/sphere`, [8.4](08_interface.md#84-the-latent-sphere)).
@@ -128,6 +128,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `busy` (not a batch code) | a reset while a batch or a deletion runs or an upload waits; a deletion while one of the dataset's batches runs (HTTP 409) | — |
 | `unknown_batch` (not a batch code) | `Engine.process` was given an id with no record; over HTTP, `GET /api/batches/{id}` answers a plain 404 `{detail}` for an unknown id | — |
 | `unknown_dataset` (not a batch code) | `Engine.delete_dataset` was given an id no batch carries (HTTP 404) | — |
+| `unknown_upload` (not a batch code) | `Engine.delete_upload` was given an upload id no batch carries (HTTP 404) | — |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | question |
 
