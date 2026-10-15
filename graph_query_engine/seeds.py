@@ -80,7 +80,11 @@ def resolve_seeds(
     target_text = "; ".join(humanize(t) for t in query.targets)
     qvec = encoder.encode_query(scope_text, target_text, query.components(), query.text)
     scored = sorted(
-        (score_pattern(ins, query, qvec, pattern_vectors.get(pid), config) for pid, ins in graph.insights.items()),
+        (
+            score_pattern(ins, query, qvec, pattern_vectors.get(pid), config)
+            for pid, ins in graph.insights.items()
+            if graph.nodes[pid]["props"].get("integrity") != "mismatch"  # a tampered pattern never starts a walk
+        ),
         key=lambda s: -s.score,
     )
     seeds: list[SeedMatch] = []

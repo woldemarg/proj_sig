@@ -9,7 +9,7 @@ import pytest
 from conftest import make_config, make_engine
 
 from graph_query_engine.graph import DualGraph
-from insight_contracts import LATENT_EDGES, EdgeType, GraphEdge
+from insight_contracts import LATENT_EDGES, EdgeType, GraphEdge, record_digest
 from insight_graph_service.core import engine as engine_mod
 from insight_graph_service.core.neo4j_mirror import (
     EDGE_ENDPOINTS,
@@ -422,6 +422,9 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     forged, old = (it.pattern_id for it in first.search(question).evidence.items[:2])
     rows = first.ws.patterns()
     assert {first.graph().nodes[r["id"]]["props"]["integrity"] for r in rows} == {"ok"}
+    for field, value in (("emm_score", 9.9), ("support_fraction", 0.9), ("drivers", ["x"]), ("phenomenon_type", "covariance"), ("effect_size", -1.0)):
+        assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # every number the prompt shows is covered
+    assert record_digest({**rows[0], "row_id": 999, "provenance": {}}) == rows[0]["record_digest"]  # what a deletion rewrites is not
     for r in rows:
         if r["id"] == forged:
             r["p_adjusted"] = 0.5
@@ -434,8 +437,9 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     assert engine.problem is None
     props = {pid: engine.graph().nodes[pid]["props"]["integrity"] for pid in (forged, old)}
     assert props == {forged: "mismatch", old: "unverified"}
-    evidence = engine.search(question).evidence
-    assert forged not in {it.pattern_id for it in evidence.items}
+    found = engine.search(question)
+    evidence = found.evidence
+    assert forged not in {it.pattern_id for it in evidence.items} | {s.pattern_id for s in found.seeds}
     assert any(n.startswith(f"{forged} excluded: integrity check failed") for n in evidence.notes)
     assert next(it for it in evidence.items if it.pattern_id == old).validation.endswith("integrity unverified")
     assert "integrity unverified" in engine.evidence(question).evidence_prompt

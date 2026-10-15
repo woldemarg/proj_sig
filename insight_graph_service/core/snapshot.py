@@ -263,7 +263,7 @@ def _attractor_nodes(
     return nodes
 
 
-def integrity(record: dict[str, Any]) -> str:
+def compute_integrity(record: dict[str, Any]) -> str:
     """``ok`` when the record's statistics match its stored digest, ``mismatch`` when they do not, ``unverified`` for a
     record journaled before digests."""
     if "record_digest" not in record:
@@ -288,7 +288,9 @@ def build_snapshot(
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
     # The journal record is the pattern contract. Readers rehydrate it with Insight.from_record.
-    nodes = {ins.id: GraphNode(ins.id, "Pattern", headline(ins), {**by_pid[ins.id], "integrity": integrity(by_pid[ins.id])}) for ins in insights}
+    nodes = {
+        ins.id: GraphNode(ins.id, "Pattern", headline(ins), {**by_pid[ins.id], "integrity": compute_integrity(by_pid[ins.id])}) for ins in insights
+    }
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)

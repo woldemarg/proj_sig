@@ -35,7 +35,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight, record_digest
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot
@@ -341,7 +341,6 @@ class Engine:
                         patterns = pattern_records(kept, canon, update.row_ids, spec)
                         for rec in patterns:
                             rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
-                            rec["record_digest"] = record_digest(rec)
                         self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
                         self._enter(record, "PERSISTING")
                         self._refuse_journaled(kept)

@@ -136,7 +136,12 @@ Guarantees (tests: `test_lattice.py`; `test_persistence.py`: write → reload �
 * GENERALIZES = inverse(SPECIALIZES); no transitive SPECIALIZES edges; structural edges connect patterns of one dataset; RELATED_TO and CO_OCCURS connect only anchors; the latent plane has at most `RELATED_TO_PEER_COUNT · N / 2` RELATED_TO edges, and every CO_OCCURS endpoint has a non-weak member.
 * `journal rows == vector rows == ConceptStore.next_chunk_id`; snapshot ids are identical after reload and after rebuild.
 * `READY` implies that journals, state and snapshot are mutually consistent; no transaction starts while `pending.json` exists.
-* A statistic changed in `journal/patterns.jsonl` after the append makes its pattern `integrity: mismatch` at the next compile (a commit, or a start on a snapshot of another version), and the evidence leaves it out ([7.4](07_question_answering.md#74-the-evidence-object)). The digest guards the journal, not the snapshot file, which is derived and rebuilt from it.
+* A field changed in `journal/patterns.jsonl` after the append makes its pattern `integrity: mismatch` at the next compile (a commit, or a start on a snapshot of another version). Such a pattern is never a seed and never an evidence item ([7.4](07_question_answering.md#74-the-evidence-object)). The limits:
+  * The digest is an unkeyed SHA-256. It catches an edit that leaves it stale (by hand, or by a tool that rewrites numbers), not a writer who recomputes it.
+  * It guards the journal, not the snapshot file, which is derived and rebuilt from it.
+  * It does not cover the derived `provenance.spatial` annotations (`compactness`, `colocated`).
+  * A walk may still pass through a tampered pattern: its id can appear in another item's path.
+  * The map endpoints serve the journal as stored.
 
 ## 6.8 Deleting a dataset
 

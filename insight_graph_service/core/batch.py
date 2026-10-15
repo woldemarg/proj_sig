@@ -12,12 +12,12 @@ import numpy as np
 
 from attractor_topology.models import CanonicalInsight, EmbeddingSpec
 from attractor_topology.ontology import OntologyUpdate
-from insight_contracts import Insight, Rejection
+from insight_contracts import Insight, Rejection, record_digest
 from subgroup_miner.discovery import DiscoveryResult
 
 
 def pattern_records(kept: list[Insight], canon: list[CanonicalInsight], row_ids: list[int], spec: EmbeddingSpec) -> list[dict[str, Any]]:
-    """Journal records: the Insight plus its journal row, canonical form and vector contract."""
+    """Journal records: the Insight plus its journal row, canonical form, vector contract and record digest."""
     embedding = {"fingerprint": spec.fingerprint, "model_id": spec.model_id, "dim": spec.dim, "representation_version": spec.representation_version}
     records = []
     for ins, can, row_id in zip(kept, canon, row_ids):
@@ -27,6 +27,7 @@ def pattern_records(kept: list[Insight], canon: list[CanonicalInsight], row_ids:
             canonical={**asdict(can), "document": can.document(), "components": [list(c) for c in can.components]},
             embedding=embedding,
         )
+        rec["record_digest"] = record_digest(rec)
         records.append(rec)
     return records
 
