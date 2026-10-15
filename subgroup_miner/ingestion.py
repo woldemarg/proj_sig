@@ -49,6 +49,23 @@ def parse_bins(spec: str | None) -> dict[str, int]:
     return bins
 
 
+INDICATOR_FIELD_MAX = 60
+
+
+def parse_indicators(spec: str | None) -> dict[str, dict[str, str]]:
+    """``"price:retail_price:UAH, qty:units_sold"`` -> {metric: {"indicator", "unit" when given}}: what each metric
+    measures, so that two datasets' metrics can be compared by meaning rather than by name (whitespace collapsed)."""
+    registry: dict[str, dict[str, str]] = {}
+    for part in (spec or "").split(","):
+        if not part.strip():
+            continue
+        fields = [" ".join(f.split()) for f in part.split(":")]
+        if len(fields) not in (2, 3) or not all(fields) or max(map(len, fields)) > INDICATOR_FIELD_MAX or fields[0] in registry:
+            raise IngestionError("invalid_options", f"Bad indicator spec '{part.strip()}' (expected metric:indicator[:unit], each metric once)")
+        registry[fields[0]] = {"indicator": fields[1], **({"unit": fields[2]} if len(fields) == 3 else {})}
+    return registry
+
+
 def parse_columns(spec: str | None) -> list[str]:
     return [c.strip() for c in (spec or "").split(",") if c.strip()]
 

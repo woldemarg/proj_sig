@@ -112,6 +112,7 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                     "name": name,
                     "global_median": profile.get("global_medians", {}).get(name),
                     "global_mad": profile.get("global_mads", {}).get(name),
+                    **b.get("indicators", {}).get(name, {}),
                 },
             )
 

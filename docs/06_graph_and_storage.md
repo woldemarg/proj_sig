@@ -31,8 +31,8 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 | Pattern | `P-<hash>` | the headline ([8.5](08_interface.md#85-text-shown-to-people)) | the journal record unchanged: `Insight` fields + `row_id`, `canonical`, `embedding`, `record_digest`; plus `integrity`, computed at every compile: `ok` when the record's statistics match its digest, `mismatch` when they do not, `unverified` for a record journaled without one |
 | Attractor | `A-<k>` | the anchor label | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
 | Dimension | `D:<dataset>:<column>` | raw column name | `name, cardinality, entropy` — the EDA-selected dimensions plus every attribute a closed intent uses |
-| Metric | `M:<dataset>:<column>` | `humanize(name)` | `name, global_median, global_mad` |
-| Dataset | `DS:<dataset_id>` | file name | `filename, rows, columns`, `reliability` (`A`–`F` from the batch record, `F` when undeclared), `source` when declared ([2.1](02_discovery.md#21-ingestion)). `Engine.update_dataset_source` (`PATCH /api/datasets/{id}`) rewrites both on the READY batch record and recompiles the snapshot: no new batch, no mining, the same pattern ids |
+| Metric | `M:<dataset>:<column>` | `humanize(name)` | `name, global_median, global_mad`; `indicator` and `unit` when the dataset's indicator registry names the metric ([2.1](02_discovery.md#21-ingestion)) |
+| Dataset | `DS:<dataset_id>` | file name | `filename, rows, columns`, `reliability` (`A`–`F` from the batch record, `F` when undeclared), `source` when declared ([2.1](02_discovery.md#21-ingestion)). `Engine.update_dataset_metadata` (`PATCH /api/datasets/{id}`) rewrites them, and the indicator registry, on the READY batch record and recompiles the snapshot: no new batch, no mining, the same pattern ids |
 | Batch | `B:<batch_id>` | batch id | `batch_seq, created_at, status` |
 
 | Edge | From → to | Plane | Weight and properties |

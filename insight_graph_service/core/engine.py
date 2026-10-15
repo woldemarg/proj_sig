@@ -42,7 +42,7 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import load_dataset
+from subgroup_miner.ingestion import IngestionError, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import annotate_extents, cell_boundary, sac_summary
 
@@ -60,10 +60,11 @@ class PipelineError(RuntimeError):
 SOURCE_MAX_CHARS = 120
 
 
-def resolve_source_options(source: str | None, reliability: str | None) -> dict[str, str | None]:
-    """The given dataset source options, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
-    upper-case Admiralty code A-F; an empty value is None (undeclared). A value not given (None) is left out."""
-    options: dict[str, str | None] = {}
+def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
+    """The given dataset metadata, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
+    upper-case Admiralty code A-F, ``indicators`` the parsed registry (``parse_indicators``); an empty value is None
+    (undeclared). A value not given (None) is left out."""
+    options: dict[str, Any] = {}
     if source is not None:
         options["source"] = " ".join(source.split()) or None
         if len(options["source"] or "") > SOURCE_MAX_CHARS:
@@ -72,6 +73,11 @@ def resolve_source_options(source: str | None, reliability: str | None) -> dict[
         options["reliability"] = reliability.strip().upper() or None
         if options["reliability"] not in (None, *RELIABILITY):
             raise PipelineError("invalid_options", f"reliability '{reliability}' is not one of {', '.join(RELIABILITY)}")
+    if indicators is not None:
+        try:
+            options["indicators"] = parse_indicators(indicators) or None
+        except IngestionError as exc:
+            raise PipelineError(exc.code, str(exc)) from exc
     return options
 
 
@@ -249,13 +255,16 @@ class Engine:
         geo: str | None = None,
         source: str | None = None,
         reliability: str | None = None,
+        indicators: str | None = None,
     ) -> dict[str, Any]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register it (UPLOADED); processing is a separate call."""
-        resolve_source_options(source, reliability)  # a bad value is refused before the file is stored
+        resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
         if not path.exists():  # the workspace was reset while the file streamed in
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
-        return self.submit(path, filename=name, bins=bins, categories=categories, geo=geo, source=source, reliability=reliability)
+        return self.submit(
+            path, filename=name, bins=bins, categories=categories, geo=geo, source=source, reliability=reliability, indicators=indicators
+        )
 
     @_healthy
     def submit(
@@ -268,15 +277,17 @@ class Engine:
         geo: str | None = None,
         source: str | None = None,
         reliability: str | None = None,
+        indicators: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
         ``bins`` / ``categories`` = None means "use BIN_COLUMNS / CATEGORICAL_COLUMNS"
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
-        ``source`` / ``reliability`` (A-F) describe where the data comes from; neither enters the dataset id.
+        ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
+        (``metric:indicator[:unit],...``); none enters the dataset id.
         """
-        trust = {k: v for k, v in resolve_source_options(source, reliability).items() if v}
+        trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         path = Path(path)
         created = utc_now()
         record = {
@@ -338,6 +349,8 @@ class Engine:
                     }
                     if loaded.spatial:
                         record["profile"]["geo"] = self._geo_profile(loaded)
+                    if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
+                        record["warnings"].append(f"indicators: no metric named {unknown} in the dataset; ignored (PATCH /api/datasets/{ds})")
                     self.ws.save_profile(ds, record["profile"])
 
                 with self._stage(record, "VALIDATING_INSIGHTS", timings, "select_s"):
@@ -571,14 +584,20 @@ class Engine:
         return self.sync_neo4j(snapshot)
 
     @_healthy
-    def update_dataset_source(self, dataset_id: str, *, source: str | None = None, reliability: str | None = None) -> dict[str, Any]:
-        """Change a READY dataset's ``source`` / ``reliability`` (None: unchanged, "": undeclared) on its batch record and
-        recompile the snapshot: no new batch, no mining, the same pattern ids (docs/06_graph_and_storage.md §6.2)."""
-        changes = resolve_source_options(source, reliability)
+    def update_dataset_metadata(
+        self, dataset_id: str, *, source: str | None = None, reliability: str | None = None, indicators: str | None = None
+    ) -> dict[str, Any]:
+        """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` (None: unchanged, "": undeclared) on its
+        batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
+        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused."""
+        changes = resolve_dataset_metadata(source, reliability, indicators)
         with self._lock:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
+            unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
+            if unknown:
+                raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
@@ -590,6 +609,7 @@ class Engine:
                 "dataset_id": dataset_id,
                 "source": record.get("source"),
                 "reliability": record.get("reliability", "F"),
+                "indicators": record.get("indicators", {}),
                 "neo4j": self._publish(state, snapshot),
             }
 
