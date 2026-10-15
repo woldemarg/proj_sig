@@ -582,7 +582,8 @@ class Engine:
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
-            with self.ws.transaction({"dataset_id": dataset_id}):  # the snapshot and the record change together
+            # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
+            with self.ws.transaction({"dataset_id": dataset_id}):
                 snapshot, state = self._derive(self.ontology(), pending=record)
                 self.ws.save_batch(record)
             return {

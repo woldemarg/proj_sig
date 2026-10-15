@@ -110,7 +110,7 @@ function datasetCard(b) {
     body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +
       (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") + `<div class="why mono" style="margin-top:6px">${esc(b.error.message)}</div></div>`;
   } else if (b.status === "SKIPPED") {
-    body = `<div class="ds-note">Already analysed — nothing new to add.${b.source || b.reliability ? " A re-upload does not change the source or reliability; use PATCH /api/datasets/{id}." : ""}</div>`;
+    body = `<div class="ds-note">Already analysed — nothing new to add.</div>`;
   }
   const chip = running ? `<span class="chip run">Processing</span>` : b.status === "READY" ? `<span class="chip ok">Ready</span>`
     : b.status === "FAILED" ? `<span class="chip bad">Failed</span>` : `<span class="chip">Skipped</span>`;
