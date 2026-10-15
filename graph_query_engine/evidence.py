@@ -99,7 +99,11 @@ class Evidence:
         lines.append("")
         lines.append("METRIC BASELINES (whole dataset):")
         for m in self.metrics:
-            lines.append(f"- {self.reword(humanize(m['metric']))}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
+            parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
+            meaning = f" ({', '.join(parts)})" if parts else ""
+            lines.append(
+                f"- {self.reword(humanize(m['metric']))}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}"
+            )
         if self.attractors:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
@@ -297,7 +301,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
                     "dataset_id": ins.dataset_id,
                     "global_median": mp["global_median"],
                     "global_mad": mp["global_mad"],
-                }
+                } | {k: mp[k] for k in ("indicator", "unit") if k in mp}
     notes = []
     disjoint = [it.key for it in items if it.transversal_only]
     if disjoint:

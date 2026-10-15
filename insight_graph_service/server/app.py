@@ -34,9 +34,10 @@ class SearchIn(BaseModel):
     question: str
 
 
-class DatasetSourceIn(BaseModel):
+class DatasetMetadataIn(BaseModel):
     source: str | None = None  # None: unchanged; "": undeclared
     reliability: str | None = None
+    indicators: str | None = None
 
 
 def _log_failure(future: Future) -> None:
@@ -111,13 +112,23 @@ def create_app(engine: Engine) -> FastAPI:
         geo: str = Form(""),
         source: str = Form(""),
         reliability: str = Form(""),
+        indicators: str = Form(""),
     ) -> JSONResponse:
         cap = engine.settings.max_upload_mb * 1024 * 1024
         if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
         name = Path(file.filename or "upload.csv").name
-        return accept(name, file.file, bins.strip() or None, categories.strip() or None, geo.strip() or None, source=source, reliability=reliability)
+        return accept(
+            name,
+            file.file,
+            bins.strip() or None,
+            categories.strip() or None,
+            geo.strip() or None,
+            source=source,
+            reliability=reliability,
+            indicators=indicators,
+        )
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -162,8 +173,8 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)
 
     @app.patch("/api/datasets/{dataset_id}")
-    def update_dataset(dataset_id: str, body: DatasetSourceIn) -> dict[str, Any]:
-        return engine.update_dataset_source(dataset_id, source=body.source, reliability=body.reliability)
+    def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
+        return engine.update_dataset_metadata(dataset_id, source=body.source, reliability=body.reliability, indicators=body.indicators)
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:

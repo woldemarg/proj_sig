@@ -167,7 +167,7 @@ async function upload() {
   const f = $("file").files[0]; if (!f) return;
   const fd = new FormData();
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
-  fd.append("source", $("source").value); fd.append("reliability", $("reliability").value);
+  fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   setUploadMsg(`Uploading ${f.name}…`);
   $("upload-btn").disabled = true;
   try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("Queued — progress is shown below."); $("file").value = ""; $("file-name").textContent = ""; refreshBatches(); }

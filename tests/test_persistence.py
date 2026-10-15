@@ -522,8 +522,36 @@ def test_dataset_source_and_reliability(engine, demo_csv):
     assert "reliability=E (unreliable)" in engine.evidence(question).evidence_prompt
     again = engine.process(engine.submit(demo_csv, source="other")["batch_id"])
     assert again["status"] == "SKIPPED" and any("PATCH /api/datasets/" in w for w in again["warnings"])  # a re-upload changes nothing
-    engine.update_dataset_source(ds, source="", reliability="")  # undeclared again: no source in the prompt
+    engine.update_dataset_metadata(ds, source="", reliability="")  # undeclared again: no source in the prompt
     assert "source=" not in engine.evidence(question).evidence_prompt and engine.graph().nodes[f"DS:{ds}"]["props"]["reliability"] == "F"
+
+
+def test_indicator_registry(engine, demo_csv):
+    """What each metric measures: an upload option outside the dataset id (an unknown metric only warns), on the Metric
+    nodes and, quoted, in the prompt's baselines; PATCH replaces it strictly, without a new batch or new pattern ids."""
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+
+    question = "Why is margin lower for phones in the US?"
+    record = engine.process(engine.submit(demo_csv, indicators="margin: gross margin :%, discount:discount_rate, nosuch:x")["batch_id"])
+    assert record["status"] == "READY" and any("nosuch" in w for w in record["warnings"]) and "nosuch" not in record["indicators"]
+    again = engine.process(engine.submit(demo_csv, indicators="margin:other")["batch_id"])
+    assert any("PATCH /api/datasets/" in w for w in again["warnings"])  # a re-upload never changes the registry
+    ds, patterns = record["dataset_id"], sorted(p["id"] for p in engine.ws.patterns())
+    margin = engine.graph().nodes[f"M:{ds}:margin"]["props"]
+    assert (margin["indicator"], margin["unit"]) == ("gross margin", "%") and "unit" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]
+    assert '- margin (indicator "gross margin", unit "%"): median' in engine.evidence(question).evidence_prompt
+    with TestClient(create_app(engine)) as client:
+        assert client.patch(f"/api/datasets/{ds}", json={"indicators": "margin:net_margin"}).json()["indicators"] == {
+            "margin": {"indicator": "net_margin"}
+        }
+        assert client.patch(f"/api/datasets/{ds}", json={"indicators": "nosuch:x"}).json()["code"] == "invalid_options"
+        assert client.patch(f"/api/datasets/{ds}", json={"indicators": "margin"}).status_code == 400
+    assert [b["status"] for b in engine.ws.list_batches()].count("READY") == 1 and sorted(p["id"] for p in engine.ws.patterns()) == patterns
+    assert "indicator" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]  # PATCH replaces the registry
+    engine.update_dataset_metadata(ds, indicators="")
+    assert "(indicator" not in engine.evidence(question).evidence_prompt
 
 
 def test_ingestion_failure_states(engine, tmp_path):
