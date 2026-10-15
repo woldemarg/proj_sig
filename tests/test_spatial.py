@@ -340,3 +340,34 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
     with path.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
         assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
+
+
+def test_auto_picks_the_levels_from_the_points(tmp_path):
+    """``@auto``: the finest resolution with enough cells, enough of them dense, then the coarser region levels; the
+    same file the same levels; a denser file a finer level; an upload with ``@auto`` is the upload of its levels."""
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from subgroup_miner.ingestion import auto_levels
+    from subgroup_miner.spatial import select_levels
+
+    cfg, levels = MinerConfig(), (7, 5, 3, 1)
+    california = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
+    picked = auto_levels(california, "auto", cfg, levels)
+    assert picked["chosen"] == [5] and picked == auto_levels(california, "auto", cfg, levels)
+    rng = np.random.default_rng(0)
+    finest = {
+        n: select_levels(rng.uniform(48, 49, n), rng.uniform(35, 36, n), levels, min_rows=50, min_cell_points=5)["chosen"][0] for n in (2_000, 50_000)
+    }
+    assert finest[50_000] > finest[2_000]  # the denser file gets the finer level
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        (record,) = engine.upload("points.csv", f, geo="auto@auto")
+    done = engine.process(record["batch_id"])
+    assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7]
+    assert done["dataset_id"] == load_dataset(path, engine.settings.miner, geo="auto@7").dataset_id
+    pd.DataFrame({"lat": [48.5] * 60, "lon": [35.3] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
+    with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
+        engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
+    assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
