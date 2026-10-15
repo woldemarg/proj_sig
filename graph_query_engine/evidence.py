@@ -19,7 +19,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
-from graph_query_engine.vertical import ScaleChain, picture, scale_chain, upload_of
+from graph_query_engine.vertical import ScaleChain, picture, rank_zones, resolution, scale_chain, upload_of
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
@@ -87,6 +87,7 @@ class Evidence:
     provenance: list[dict[str, Any]]
     notes: list[str] = field(default_factory=list)
     scale_chains: list[dict[str, Any]] = field(default_factory=list)  # ScaleChain as dicts, the items' keys added
+    zones: list[dict[str, Any]] = field(default_factory=list)  # rank_zones: a question without scope over geo items
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,10 +168,24 @@ class Evidence:
             lines.append("SCALE CHAIN (one phenomenon at finer and coarser levels: a shared anchor and region; then the regions above it):")
             lines.extend(f"- {self._chain_text(c)}" for c in chains)
             lines.extend(regions)
+        if self.zones:
+            keys = self._keys()
+            lines.append("")
+            lines.append(
+                "ZONES (where the evidence lies on the map: the regions of one level holding most of it; with a direction, only findings shifting that way count):"
+            )
+            lines.extend(
+                f"- Z{n} = {z['id']} (res {z['resolution']}): contains {', '.join(keys[p] for p in z['holds'])}; score {z['score']:.2f};"
+                f" {z['patterns']} patterns over {z['datasets']} datasets, {z['themes']} themes"
+                for n, z in enumerate(self.zones, start=1)
+            )
         if self.notes:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
         return "\n".join(lines)
+
+    def _keys(self) -> dict[str, str]:
+        return {it.pattern_id: it.key for it in self.items}
 
     @staticmethod
     def _level(it: EvidenceItem) -> str:
@@ -197,7 +212,7 @@ class Evidence:
     def _regions(self) -> list[str]:
         """The regions above the items that hold two or more of them, finest first; a coarser region holding the same items
         as a finer one is left out."""
-        keys = {it.pattern_id: it.key for it in self.items}
+        keys = self._keys()
         held: dict[str, tuple[dict[str, Any], list[str]]] = {}
         for chain in self.scale_chains:
             for r in chain["regions"]:
@@ -208,7 +223,7 @@ class Evidence:
                 seen.add(members)
                 shown.append(rid)
         return [
-            f"- region {rid} holds {', '.join(held[rid][1])}: {held[rid][0]['patterns']} patterns over {held[rid][0]['datasets']} datasets,"
+            f"- {', '.join(held[rid][1])} lie in one region, {rid}: {held[rid][0]['patterns']} patterns over {held[rid][0]['datasets']} datasets,"
             f" {held[rid][0]['themes']} themes"
             for rid in shown
         ]
@@ -264,6 +279,8 @@ class Evidence:
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
+        keys = self._keys()
+        lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
@@ -311,6 +328,24 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
                         other.folded_into = other.folded_into or host.key
         chains.append(_chain_dict(chain, graph))
     return chains
+
+
+def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, config: QueryConfig) -> list[dict[str, Any]]:
+    """The ZONES section, only for a question without scope: its geo items that answer it, i.e. that shift an asked
+    target (a phenomenon shift, as the prompt shows them) the asked way, or for a question about a relationship whose
+    material correlation change involves an asked target; without a target every geo item counts."""
+
+    def answers(pid: str) -> bool:
+        ins = graph.insight(pid)
+        if query.covariance:
+            return config.thresholds.has_material_covariance(ins) and bool(set(ins.covariance["pair"]) & set(query.targets or ins.covariance["pair"]))
+        shifts = config.thresholds.phenomenon_shifts(ins)
+        return not query.targets or any(s.metric in query.targets and s.robust_z * (query.direction or s.robust_z) > 0 for s in shifts)
+
+    if query.conditions:
+        return []
+    geo = [it.pattern_id for it in items if not it.folded_into and resolution(graph, it.pattern_id) is not None]
+    return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
 def _chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
@@ -453,4 +488,5 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         provenance=[{"key": it.key, **it.provenance} for it in items],
         notes=notes,
         scale_chains=chains,
+        zones=_zones(query, items, graph, config),
     )

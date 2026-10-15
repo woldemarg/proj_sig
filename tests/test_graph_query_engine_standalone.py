@@ -272,3 +272,71 @@ def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
     items = {it.pattern_id: it for it in found.evidence.items}
     assert items["P7"].scale == "scale-dependent" and items["P1"].folded_into == items["P7"].key
     assert "scale: scale-dependent" in found.payload().evidence_prompt
+
+
+def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
+    """Only findings that shift an asked target the asked way count: one shifting it the other way, or not at all, is
+    neither scored nor listed, even in a region shared with answering ones; the level is the coarsest where the geo
+    findings lie in three or more regions; a relationship question counts the correlation changes of its pair; without
+    a target every geo finding counts; a question with scope gets none."""
+    from types import SimpleNamespace
+
+    from graph_query_engine import DualGraph, QueryConfig
+    from graph_query_engine.evidence import _zones
+    from graph_query_engine.question import ParsedQuery
+    from insight_contracts import SNAPSHOT_VERSION
+
+    def geo(pid, z, w, target="margin"):
+        node = pattern(pid, [f"cell={pid}"], target=target, z=z, w=w)
+        node["props"]["provenance"]["spatial"] = {"resolution": 7, "cells": 40}
+        return node
+
+    regions = [
+        {"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}}
+        for r in ("R:5:x", "R:5:y", "R:5:z", "R:5:v", "R:3:w")
+    ]
+    nodes = [
+        geo("A", -1.0, 0.8),
+        geo("B", -1.0, 0.6),
+        geo("C", 1.0, 0.9),
+        geo("D", -1.0, 0.5),
+        geo("E", -1.0, 0.9, "discount"),
+        geo("F", -1.0, 0.4),
+        *regions,
+    ]
+    shares = (
+        ("A", "R:5:x", 0.9),
+        ("B", "R:5:x", 0.8),
+        ("C", "R:5:x", 0.9),
+        ("E", "R:5:y", 0.9),
+        ("D", "R:5:z", 0.6),
+        ("D", "R:5:x", 0.3),
+        ("F", "R:5:v", 0.9),
+    )
+    edges = [edge(p, r, "IN_REGION", s) for p, r, s in shares] + [edge(p, "R:3:w", "IN_REGION", 1.0) for p in "ABCDEF"]
+    graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
+    items = [SimpleNamespace(pattern_id=p, folded_into="") for p in "ABCDEF"]
+    zones = _zones(ParsedQuery("where is margin lower?", targets=["margin"], direction=-1), items, graph, QueryConfig())
+    assert [(z["id"], z["holds"]) for z in zones] == [("R:5:x", ["A", "B"]), ("R:5:v", ["F"]), ("R:5:z", ["D"])]  # C, E and D's 0.3 out
+    assert zones[0]["score"] == round(0.8 * 0.9 + 0.6 * 0.8, 4) and zones[0]["resolution"] == 5
+    every = _zones(ParsedQuery("what is on the map?"), items, graph, QueryConfig())
+    assert ["A", "B", "C"] == every[0]["holds"] and any(z["holds"] == ["E"] for z in every)
+    graph.nodes["E"]["props"] |= {
+        "phenomenon_type": "covariance",
+        "covariance": {"pair": ["margin", "discount"], "local_corr": 0.1, "global_corr": -0.6, "delta": 0.7},
+    }
+    graph = DualGraph(graph.snapshot)  # E now a correlation change between margin and discount
+    related = _zones(
+        ParsedQuery("where does margin follow discount less?", targets=["margin", "discount"], covariance=True), items, graph, QueryConfig()
+    )
+    assert [z["holds"] for z in related] == [["E"]]  # the mean shifts of A-D do not answer a relationship question
+
+    _, found = _levels_search(_levels(-1.2, ("7", "5")))
+    assert not found.evidence.zones  # the question names phones and the US
+    from graph_query_engine import CommittedState, LatentFrame, QueryConfig, search
+
+    graph, encoder = DualGraph(_levels(-1.2, ("7", "5"))), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.8, 0.6, 0.0])}
+    found = search("Where is margin lower?", CommittedState(graph, LatentFrame(vectors, {}, documents)), encoder, QueryConfig())
+    assert [z["id"] for z in found.evidence.zones] == ["R:5:a"] and "- Z1 = R:5:a (res 5): contains P1" in found.payload().evidence_prompt

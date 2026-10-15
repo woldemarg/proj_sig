@@ -44,7 +44,9 @@ Rules:
    transversal, latent or anchor; say "зони" for map cells, "схожа картина в інших зонах" for recurrences and "в тому самому районі" for items
    reached only by location, "тримається і на рівні району" for a finding that holds at the coarser level,
    "на рівні району зсув протилежний" for one that reverses there and "на рівні району окремо не підтверджено"
-   for one not found there.
+   for one not found there. The ZONES are larger areas: call them "зона Z1", "зона Z2" and say which findings
+   each contains. Findings that lie in one region of the SCALE CHAIN are "в тому самому районі", which says nothing
+   about their scale. Never write a region id.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

@@ -7,7 +7,9 @@ chain reads ACTIVATES, IN_REGION and PARENT_OF of the snapshot.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from graph_query_engine.graph import DualGraph
 from insight_contracts import SpatialProvenance, dataset_node_id
@@ -154,3 +156,32 @@ def picture(graph: DualGraph, region: str) -> dict[str, int]:
         "datasets": len({graph.insight(p).dataset_id for p in members}),
         "themes": len({a for p in members for a in _anchors(graph, p)}),
     }
+
+
+ZONES_MAX = 5  # zones in the evidence
+
+
+def rank_zones(graph: DualGraph, geo_ids: list[str], answer_ids: list[str]) -> list[dict[str, Any]]:
+    """The ZONES of a question (docs/07_question_answering.md §7.4). A region holds a pattern with an IN_REGION share of at
+    least ``VERTICAL_MIN_SHARE``. The level is the coarsest where the evidence's geo patterns lie in three or more regions
+    and one holds an answering pattern (else the finest that holds one); its regions holding answering patterns rank by
+    their sum of insight weight × share; at most ``ZONES_MAX``, each with its ``picture``. Which patterns answer is the
+    caller's to say."""
+    held: dict[int, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    score: dict[str, float] = defaultdict(float)
+    answers = set(answer_ids)
+    for pid in geo_ids:
+        for region, share in _regions(graph, pid).items():
+            if share >= VERTICAL_MIN_SHARE:
+                held[graph.nodes[region]["props"]["resolution"]][region].append(pid)
+                if pid in answers:
+                    score[region] += graph.insight(pid).weight * share
+    answered = [lv for lv in sorted(held) if any(r in score for r in held[lv])]
+    if not answered:
+        return []
+    level = next((lv for lv in answered if len(held[lv]) >= 3), answered[-1])
+    ranked = sorted((r for r in held[level] if r in score), key=lambda r: (-score[r], r))[:ZONES_MAX]
+    return [
+        {"id": r, "resolution": level, "score": round(score[r], 4), "holds": [p for p in held[level][r] if p in answers], **picture(graph, r)}
+        for r in ranked
+    ]
