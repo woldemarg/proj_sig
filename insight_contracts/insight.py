@@ -110,13 +110,15 @@ class Insight:
 
 
 SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")  # the ingest part of provenance.spatial
+UNDIGESTED = frozenset({"provenance", "row_id", "canonical", "embedding", "record_digest"})  # rewritten or derived after the write
 
 
 def record_digest(record: dict[str, Any]) -> str:
-    """SHA-256 of a journal record's canonical JSON over every ``Insight`` field except ``provenance``, plus the ingest
-    fields of ``provenance.spatial``: a number changed in the journal no longer matches the digest stored beside it."""
+    """SHA-256 of a journal record's canonical JSON over every key it was written with except ``UNDIGESTED``, plus the
+    ingest fields of ``provenance.spatial``: a number changed in the journal no longer matches the digest stored beside
+    it, whatever fields ``Insight`` gains or loses later."""
     spatial = record.get("provenance", {}).get("spatial", {})
-    covered = {k: v for k, v in record.items() if k in Insight.__dataclass_fields__ and k != "provenance"}
+    covered = {k: v for k, v in record.items() if k not in UNDIGESTED}
     covered["spatial"] = {k: spatial[k] for k in SPATIAL_DIGEST_FIELDS if k in spatial}
     return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
