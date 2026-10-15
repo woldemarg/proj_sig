@@ -297,9 +297,11 @@ class Engine:
         options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
-        located = {"locator": locator.strip()} if geo else {}  # the table level leaves the point columns out
-        return [
-            self.submit(path, geo=g, upload=(upload_id, level), **({"geo_levels": selection} if g else located), **options) for g, level in levels
+        return [  # the table level leaves the point columns out
+            self.submit(
+                path, geo=g, upload=(upload_id, level), geo_levels=selection if g else None, locator=None if g else locator.strip() or None, **options
+            )
+            for g, level in levels
         ]
 
     @_healthy

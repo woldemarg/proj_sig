@@ -194,9 +194,7 @@ def generate(name: str, seed: int) -> Scenario:
         if name == "S-levels":
             zone = lon > lon0 + dlon / 2
             frame = _events(rng, lat, lon, zone, BROAD, grid=(1, 2))  # two districts: west, east
-            uploads = [
-                Upload("s_levels.csv", frame, geo, {"zone": zone}, locator=None if geo else "lat,lon") for geo in (None, "lat,lon@7", "lat,lon@5")
-            ]
+            uploads = [Upload("s_levels.csv", frame, geo, {"zone": zone}, {}, None if geo else "lat,lon") for geo in (None, "lat,lon@7", "lat,lon@5")]
             return Scenario(name, uploads)
         cuts = lon0 + dlon * np.array([1 / 3, 2 / 3])
         zone = lat > lat0 + dlat / 2  # the northern half, across both cuts
