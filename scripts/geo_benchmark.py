@@ -25,7 +25,7 @@ Metrics, per encoder (the hashing double; the bundled model when present):
     recall@k     the walk from each found focus's best pattern (seed forced, as in attractor_benchmark) to the other planted
                  foci (an unfound one is a miss): at k, anywhere ("reached"), and the mean rank of those reached
     shared       pairs of distinct best patterns (of different foci, levels or files) that activate a common non-weak attractor
-    cross_coloc  CO_LOCATED edges between datasets (none by construction: the edge is computed within one dataset)
+    cross_coloc  CO_LOCATED edges between datasets (derive_spatial links patterns of one resolution from any datasets)
     size         per batch the processing and graph-compile seconds; the snapshot's nodes and edges by type; the walk's
                  visited nodes per seed; the evidence prompt's length for one question
 

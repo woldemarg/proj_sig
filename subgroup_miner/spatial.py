@@ -522,8 +522,9 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                 regions, counts = np.unique(parents[lv][rows], return_counts=True)
                 for cell, n in zip(regions, counts, strict=True):
                     rid = region_node_id(lv, str(cell))
-                    share = round(float(n / occupied[lv][cell]), 4)
-                    if share >= GEO_REGION_MIN_SHARE:
+                    share = float(n / occupied[lv][cell])
+                    if share >= GEO_REGION_MIN_SHARE:  # the threshold reads the exact share, the edge stores it rounded
+                        share = round(share, 4)
                         out.in_region.append((pid, rid, share))
                         shares[(pid, rid)] = share
                         for up in [x for x in levels if x <= lv]:  # the region and its ancestors at the coarser listed levels
@@ -546,9 +547,9 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         level = next((lv for lv in levels if res - lv >= 2), None)
         for i, a in enumerate(pids):
             for b in pids[i + 1 :]:
-                overlap = round(float(len(grown[a] & grown[b]) / max(min(len(grown[a]), len(grown[b])), 1)), 4)
+                overlap = len(grown[a] & grown[b]) / max(min(len(grown[a]), len(grown[b])), 1)
                 if overlap >= GEO_COLOCATION_MIN:
-                    links[(a, b)] = ("overlaps", overlap)
+                    links[(a, b)] = ("overlaps", round(overlap, 4))
                 elif raw[a] & raw[b] or ring[a] & raw[b]:  # share of both extents' cells on the common edge
                     edge = len((raw[a] | ring[a]) & raw[b]) + len((raw[b] | ring[b]) & raw[a])
                     links[(a, b)] = ("adjacent", round(edge / (len(raw[a]) + len(raw[b])), 4))
