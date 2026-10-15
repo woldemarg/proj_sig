@@ -287,7 +287,7 @@ class Engine:
         if not path.exists():  # the workspace was reset while the file streamed in or was read
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
         if refused:
-            path.unlink()  # refused: the file is not kept
+            path.unlink(missing_ok=True)  # refused: the file is not kept
             raise refused
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
