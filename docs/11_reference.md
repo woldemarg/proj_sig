@@ -143,7 +143,7 @@ Two version strings in `attractor_topology/models.py` and one fingerprint decide
 | `CANONICAL_VERSION` | `ltir-canon-4` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients (covariance insights cite only their correlation change) ([4.2](04_representation.md#42-the-canonical-form)) |
 | `REPRESENTATION_VERSION` | `ltir-rep-3` | what is embedded and how it is composed: block layout, re-normalisation, the uncentred frame ([4.3](04_representation.md#43-the-tripartite-vector)) |
 | fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, storage and compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
-| `SNAPSHOT_VERSION` | 3 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
+| `SNAPSHOT_VERSION` | 4 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 
 How the engine treats a stored workspace ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)):
 - **Another version.** Journals written under another `CANONICAL_VERSION` or `REPRESENTATION_VERSION` give a degraded start ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)).

@@ -17,6 +17,32 @@ def stable_hash(*parts: Any, length: int = 12) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:length]
 
 
+# the journal fields a record digest signs: the ingest statistics, not the derived annotations
+DIGEST_FIELDS = (
+    "dataset_id",
+    "conditions",
+    "target",
+    "shifts",
+    "support",
+    "baseline",
+    "local",
+    "p_value",
+    "p_adjusted",
+    "stability",
+    "weight",
+    "covariance",
+)
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
+
+
+def record_digest(record: dict[str, Any]) -> str:
+    """SHA-256 of a journal record's statistics (``DIGEST_FIELDS`` and the ingest fields of ``provenance.spatial``),
+    canonical JSON: a changed number in the journal no longer matches the digest stored beside it."""
+    spatial = record.get("provenance", {}).get("spatial", {})
+    signed = {k: record.get(k) for k in DIGEST_FIELDS} | {"spatial": {k: spatial[k] for k in SPATIAL_DIGEST_FIELDS if k in spatial}}
+    return hashlib.sha256(json.dumps(signed, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True, order=True)
 class Condition:
     """One equality selector ``attribute == value`` of a subgroup scope."""

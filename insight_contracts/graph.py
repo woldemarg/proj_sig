@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 3  # 3: CO_OCCURS edges in the latent plane; 2: Pattern props are the journal Insight record
+SNAPSHOT_VERSION = 4  # 4: Pattern integrity; 3: CO_OCCURS edges in the latent plane; 2: Pattern props are the journal Insight record
 
 
 class EdgeType(str, Enum):

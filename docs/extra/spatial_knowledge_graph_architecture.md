@@ -458,7 +458,7 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 |---|---|---|
 | golden без нових опцій | #4 | реалізовано (`tests/test_golden.py`, `tests/golden/`) |
 | геобенчмарк із закладеною істиною | #3 | реалізовано (`scripts/geo_benchmark.py`, базові числа в `docs/10` §10.3) |
-| цілісність запису | #5 | план |
+| цілісність запису | #5 | реалізовано (`record_digest`, `integrity` на вузлі Pattern, виключення з evidence) |
 | джерело і надійність | #6 | план |
 | заголовок без «verified» | #26 | реалізовано (`graph_query_engine/evidence.py`, `SYSTEM_PROMPT`; фраза «trust is given per item» — з рядками `trust:` у #8) |
 | `SpatialProvenance` з п'яти полів | #25 | план |

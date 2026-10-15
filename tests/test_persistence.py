@@ -412,6 +412,35 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
+def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unverified(tmp_path, demo_csv):
+    """A p-value edited in the journal no longer matches its digest: after the rebuild the pattern is ``mismatch`` and
+    left out of the evidence. A record without a digest (journaled before digests) reads ``unverified``, not degraded."""
+    cfg = make_config(tmp_path / "ws")
+    first = make_engine(cfg)
+    assert first.ingest_file(demo_csv)["status"] == "READY"
+    question = "Why is margin lower for phones in the US?"
+    forged, old = (it.pattern_id for it in first.search(question).evidence.items[:2])
+    rows = first.ws.patterns()
+    assert {first.graph().nodes[r["id"]]["props"]["integrity"] for r in rows} == {"ok"}
+    for r in rows:
+        if r["id"] == forged:
+            r["p_adjusted"] = 0.5
+        if r["id"] == old:
+            del r["record_digest"]
+    first.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    first.ws.save_graph({**first.ws.load_graph(), "version": 3})  # a snapshot of the previous version: rebuilt at start
+
+    engine = make_engine(cfg)
+    assert engine.problem is None
+    props = {pid: engine.graph().nodes[pid]["props"]["integrity"] for pid in (forged, old)}
+    assert props == {forged: "mismatch", old: "unverified"}
+    evidence = engine.search(question).evidence
+    assert forged not in {it.pattern_id for it in evidence.items}
+    assert any(n.startswith(f"{forged} excluded: integrity check failed") for n in evidence.notes)
+    assert next(it for it in evidence.items if it.pattern_id == old).validation.endswith("integrity unverified")
+    assert "integrity unverified" in engine.evidence(question).evidence_prompt
+
+
 def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_csv, monkeypatch):
     """A rollback that cannot finish leaves the queued uploads failed (no process runs them), so the reset that
     recovers is never refused as busy."""
