@@ -30,6 +30,7 @@ from insight_contracts.text import (
     humanize,
 )
 
+EVIDENCE_MAX_PATTERNS = 10
 LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occurrence link from a centroid neighbour
 
 
@@ -203,7 +204,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
     items: list[EvidenceItem] = []
     chosen, forged = [], []  # the first EVIDENCE_MAX_PATTERNS intact patterns; the tampered ones ranked among them
     for r in result.patterns:
-        if len(chosen) == config.evidence_max_patterns:
+        if len(chosen) == EVIDENCE_MAX_PATTERNS:
             break
         (forged if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch" else chosen).append(r)
     for idx, r in enumerate(chosen, start=1):

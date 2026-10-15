@@ -346,7 +346,7 @@ class Engine:
                     kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
                     if loaded.spatial:
                         record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
-                        annotate_extents(kept, covers, loaded.spatial, self.settings.miner.geo_colocation_min)
+                        annotate_extents(kept, covers, loaded.spatial)
                         self.ws.save_profile(ds, record["profile"])
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])

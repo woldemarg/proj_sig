@@ -43,7 +43,7 @@ def geo_frame(seed: int = 3) -> pd.DataFrame:
 
 
 def cells_of(frame: pd.DataFrame, **kw):
-    opts = dict(min_cell_points=5, share_max_levels=8, mode_max_levels=40) | kw
+    opts = dict(min_cell_points=5) | kw
     return build_cells(frame, "auto", 7, **opts)
 
 

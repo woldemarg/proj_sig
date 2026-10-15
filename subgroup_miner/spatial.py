@@ -40,6 +40,9 @@ COUNTER = "points"
 PLACE_PURITY = 0.9  # mean top-level share per dense cell above which a categorical describes the place
 FUNCTIONAL_SHARE = 0.98  # nesting above which a mode column is dropped (it restates a share column)
 NESTED_SHARE = 0.9  # nesting above which a mode condition never explains the other column's shares
+GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also become per-level share metrics
+GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
+GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
 COLOCATED_TOP = 3  # CO_LOCATED partners kept per pattern (the largest overlaps)
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 
@@ -228,8 +231,6 @@ def build_cells(
     resolution: int,
     *,
     min_cell_points: int,
-    share_max_levels: int,
-    mode_max_levels: int,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Source rows -> (cell table, spatial context, warnings)."""
     lat, lon, location = locate_points(frame, locator)
@@ -273,11 +274,11 @@ def build_cells(
         else:
             text = values.astype("string")
             levels = text.dropna().value_counts()
-            if 2 <= len(levels) <= mode_max_levels:
+            if 2 <= len(levels) <= GEO_MODE_MAX_LEVELS:
                 categorical[str(col)] = text
             else:
                 dropped.append(str(col))
-    mode_cols, share_cols = _categorical_roles(categorical, codes, len(cells), dense, share_max_levels)
+    mode_cols, share_cols = _categorical_roles(categorical, codes, len(cells), dense)
     nested: dict[str, list[str]] = {}  # mode column -> share columns it is (largely) nested with
     for col in mode_cols:
         if any(_nesting(categorical[col], categorical[o]) >= FUNCTIONAL_SHARE for o in share_cols):
@@ -371,9 +372,7 @@ def _level_counts(text: pd.Series, codes: np.ndarray, n_cells: int) -> pd.DataFr
     return pd.crosstab(codes, text.to_numpy()).reindex(index=range(n_cells), columns=order, fill_value=0)
 
 
-def _categorical_roles(
-    columns: dict[str, pd.Series], codes: np.ndarray, n_cells: int, dense: np.ndarray, share_max_levels: int
-) -> tuple[list[str], list[str]]:
+def _categorical_roles(columns: dict[str, pd.Series], codes: np.ndarray, n_cells: int, dense: np.ndarray) -> tuple[list[str], list[str]]:
     """(mode columns, share columns). A column whose dense cells are almost pure (mean top-level share >=
     ``PLACE_PURITY``) describes the place: its mode is a condition. A mixed column with few levels becomes
     per-level share metrics; a mixed column with more levels a mode condition."""
@@ -382,7 +381,7 @@ def _categorical_roles(
         table = _level_counts(text, codes, n_cells).to_numpy(float)[dense]
         total = table.sum(axis=1)
         purity = float(np.mean(table.max(axis=1)[total > 0] / total[total > 0])) if (total > 0).any() else 1.0
-        if purity < PLACE_PURITY and table.shape[1] <= share_max_levels:
+        if purity < PLACE_PURITY and table.shape[1] <= GEO_SHARE_MAX_LEVELS:
             shares.append(col)
         else:
             modes.append(col)
@@ -404,8 +403,8 @@ def compactness(rows: np.ndarray, ctx: SpatialContext) -> float:
     return induced_links(rows, ctx).nnz / total if total else 0.0
 
 
-def colocated(extents: dict[str, np.ndarray], ctx: SpatialContext, min_overlap: float) -> list[tuple[str, str, float]]:
-    """Pairs of extents whose one-ring dilations overlap by ``|A ∩ B| / min(|A|, |B|) >= min_overlap``."""
+def colocated(extents: dict[str, np.ndarray], ctx: SpatialContext) -> list[tuple[str, str, float]]:
+    """Pairs of extents whose one-ring dilations overlap by ``|A ∩ B| / min(|A|, |B|) >= GEO_COLOCATION_MIN``."""
     ids = sorted(extents)
     if len(ids) < 2:
         return []
@@ -421,7 +420,7 @@ def colocated(extents: dict[str, np.ndarray], ctx: SpatialContext, min_overlap: 
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
             overlap = float(inter[i, j] / max(min(size[i], size[j]), 1))
-            if overlap >= min_overlap:
+            if overlap >= GEO_COLOCATION_MIN:
                 pairs.append((ids[i], ids[j], round(overlap, 4)))
     return pairs
 
@@ -440,11 +439,11 @@ def effective_n_factor(rho: float) -> float:
     return (1.0 - rho) / (1.0 + rho)
 
 
-def annotate_extents(insights: list[Insight], covers: dict[str, np.ndarray], ctx: SpatialContext, min_overlap: float) -> None:
+def annotate_extents(insights: list[Insight], covers: dict[str, np.ndarray], ctx: SpatialContext) -> None:
     """Add ``compactness`` and the ``colocated`` partners to each insight's ``provenance["spatial"]`` (in place)."""
     extents = {i.id: covers[i.expression] for i in insights}
     partners: dict[str, list[dict[str, float | str]]] = {i.id: [] for i in insights}
-    for a, b, overlap in colocated(extents, ctx, min_overlap):
+    for a, b, overlap in colocated(extents, ctx):
         partners[a].append({"pattern_id": b, "overlap": overlap})
         partners[b].append({"pattern_id": a, "overlap": overlap})
     for found in partners.values():

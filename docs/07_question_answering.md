@@ -84,7 +84,7 @@ P0 (lattice){0,h}  --ACTIVATES-->  A  (RELATED_TO|CO_OCCURS){0,L}  <--ACTIVATES-
 h = STRUCTURAL_HOPS (1)     L = MAX_LATENT_HOPS (1)     total length ≤ TRAVERSAL_MAX_DEPTH (5)
 ```
 
-Lattice edges are `TRAVERSAL_STRUCTURAL_EDGES` (default SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS and CO_LOCATED in both directions; CO_LOCATED exists only between patterns of a geo dataset, [6.1](06_graph_and_storage.md#61-the-structural-plane)); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
+Lattice edges are `LATTICE_EDGES` (SPECIALIZES, GENERALIZES — followed along their stored direction — and CONTRASTS and CO_LOCATED in both directions; CO_LOCATED exists only between patterns of a geo dataset, [6.1](06_graph_and_storage.md#61-the-structural-plane)); SIBLING stays in the graph for exploration and the structural baseline. The path score is the seed score times the product of the edge factors:
 
 | Step | Condition | Factor |
 |---|---|---|
@@ -255,10 +255,10 @@ No LLM reads the canonical documents: only the naive baseline and the `text_nn` 
 | Parameter | Default |
 |---|---|
 | `GROUNDING_MIN_COSINE` | 0.30 (centred cosine floor of the dense grounding layer, [7.1.1](#711-literal-grounding); embedder-specific) |
-| `SEED_TOP_K`, `SEED_MIN_SCORE`, `SEED_RELATIVE_MIN` | 3, 0.25, 0.75 |
-| `STRUCTURAL_HOPS`, `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 1, 5 |
-| `STRUCTURAL_EDGE_DECAY`, `TRAVERSAL_STRUCTURAL_EDGES` | 0.85, `SPECIALIZES,GENERALIZES,CONTRASTS,CO_LOCATED` |
-| `MAX_RETRIEVED`, `EVIDENCE_MAX_PATTERNS` | 12, 10 |
+| `SEED_TOP_K`, `SEED_MIN_SCORE`, `SEED_RELATIVE_MIN` | 3, 0.25, 0.75 (constants of `seeds.py`) |
+| `MAX_LATENT_HOPS`, `TRAVERSAL_MAX_DEPTH` | 1, 5 |
+| `STRUCTURAL_HOPS`, `STRUCTURAL_EDGE_DECAY`, `LATTICE_EDGES` | 1, 0.85, SPECIALIZES, GENERALIZES, CONTRASTS, CO_LOCATED (constants of `traversal.py`) |
+| `MAX_RETRIEVED`; `EVIDENCE_MAX_PATTERNS` | 12; 10 (a constant of `evidence.py`) |
 | `INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S` | `http://127.0.0.1:8765` (the host composite of `scripts/dev.py`; compose sets `http://insight-graph:8000`), 300 |
 | `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` (the broker) |
 | `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` | 120, 0.1, 1200 |

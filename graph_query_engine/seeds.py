@@ -15,6 +15,10 @@ from graph_query_engine.question import ParsedQuery
 from insight_contracts import Insight
 from insight_contracts.text import humanize
 
+SEED_TOP_K = 3
+SEED_MIN_SCORE = 0.25
+SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
+
 
 @dataclass
 class SeedMatch:
@@ -88,9 +92,9 @@ def resolve_seeds(
         key=lambda s: -s.score,
     )
     seeds: list[SeedMatch] = []
-    floor = max(config.seed_min_score, config.seed_relative_min * scored[0].score) if scored else 1.0
+    floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * scored[0].score) if scored else 1.0
     for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds
-        if len(seeds) >= config.seed_top_k or cand.score < floor:
+        if len(seeds) >= SEED_TOP_K or cand.score < floor:
             break
         near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES", "GENERALIZES"])}
         if cand.pattern_id not in near:

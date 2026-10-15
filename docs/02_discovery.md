@@ -168,7 +168,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `REDUNDANCY_JACCARD` | 0.88 | near-duplicate threshold |
 | `EDA_RANDOM_SEED` | 42 | bootstrap seed |
 | `GEO_RESOLUTION`, `MIN_CELL_POINTS` | 7, 5 | H3 resolution when the geo option names none; points below which a cell's intensive metrics are NaN ([2.9](#29-spatial-datasets-the-geo-option)) |
-| `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_COLOCATION_MIN` | 8, 40, 0.3 | categorical roles, the `CO_LOCATED` overlap |
+| `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_COLOCATION_MIN` | 8, 40, 0.3 | categorical roles, the `CO_LOCATED` overlap — constants of `subgroup_miner/spatial.py`, not settings |
 
 ## 2.7 Failure modes and guarantees
 
