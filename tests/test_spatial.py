@@ -290,16 +290,17 @@ def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
     monkeypatch.setattr(spatial, "GEO_COLOCATION_MIN", 0.66667)
     monkeypatch.setattr(spatial, "GEO_REGION_MIN_SHARE", 0.66667)
     apart = h3.grid_ring(h3.latlng_to_cell(48.5, 35.3, 8), 10)[::3][:4]  # no two neighbours: the dilation adds nothing
-    kids = sorted(h3.cell_to_children(h3.latlng_to_cell(40.0, 30.0, 7), 8))[:3]
+    home = h3.latlng_to_cell(40.0, 30.0, 7)
+    kids, away = sorted(h3.cell_to_children(home, 8))[:3], h3.cell_to_center_child(h3.grid_ring(home, 2)[0], 8)
     out = spatial.derive_spatial(
         [
             _geo_dataset("pairs", apart, {"P-a": apart[:3], "P-b": [*apart[:2], apart[3]]}),  # |A ∩ B| / min = 2/3
-            _geo_dataset("share", kids, {"P-s": kids[:2]}),  # two of the region's three occupied cells
+            _geo_dataset("share", [*kids, away], {"P-s": [*kids[:2], away]}),  # two of its three cells in a region of three
         ],
         (7, 5, 3, 1),
     )
     assert {(a, b): rel for a, b, rel, _ in out.co_located}[("P-a", "P-b")] == "adjacent"  # not overlaps
-    assert not any(p == "P-s" and r.startswith("R:7:") for p, r, _ in out.in_region)
+    assert not any(p == "P-s" and r == f"R:7:{home}" for p, r, _ in out.in_region)
 
 
 def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(tmp_path):

@@ -145,3 +145,78 @@ def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     assert item.key in location and item.key not in latent
     assert set(LOCATION_TAG) == LOCATED_RELATIONS  # every location-only relation has its tag
     assert "P3" not in found.payload().view["traversal"]["baselines"]["transversal_only"]  # the console reads the same mark
+
+
+def _levels(coarse_z: float | None, planned: tuple[str, ...]) -> dict:
+    """P1 at resolution 7 and, unless ``coarse_z`` is None, P7 at 5 of the same upload: one anchor, one region R:5:a."""
+    from insight_contracts import SNAPSHOT_VERSION
+
+    def geo(pid, conds, res, ds, z):
+        node = pattern(pid, conds, z=z, dataset=ds)
+        node["props"]["provenance"]["spatial"] = {"resolution": res, "cells": 40}
+        return node
+
+    def dataset(ds, level):
+        return {
+            "id": f"DS:{ds}",
+            "kind": "Dataset",
+            "label": ds,
+            "props": {"dataset_id": ds, "upload_id": "up-1", "level": level, "upload_levels": list(planned)},
+        }
+
+    signature = [{"component": "margin", "value": -1.0}]
+    nodes = [
+        geo("P1", ["region=US", "category=phones"], 7, "ds7", -1.5),
+        dataset("ds7", "7"),
+        {"id": "A-1", "kind": "Attractor", "label": "margin ↓", "props": {"n_patterns": 2, "distinct_scopes": 2, "signature": signature}},
+        *({"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}} for r in ("R:5:a", "R:3:b", "R:1:c")),
+    ]
+    edges = [
+        edge("P1", "A-1", "ACTIVATES", 0.9),
+        edge("P1", "R:5:a", "IN_REGION", 0.72),
+        edge("R:5:a", "R:3:b", "PARENT_OF"),
+        edge("R:3:b", "R:1:c", "PARENT_OF"),
+    ]
+    if coarse_z is not None:
+        nodes += [geo("P7", ["district=north"], 5, "ds5", coarse_z), dataset("ds5", "5")]
+        edges += [edge("P7", "A-1", "ACTIVATES", 0.8), edge("P7", "R:5:a", "IN_REGION", 1.0)]
+    return {"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges}
+
+
+def _levels_search(snap: dict):
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.0, 1.0, 0.0])}
+    return graph, search(
+        QUESTION, CommittedState(graph, LatentFrame({k: v for k, v in vectors.items() if k in graph.insights}, {}, documents)), encoder, QueryConfig()
+    )
+
+
+def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
+    """The coarser level that shifts the same way is folded into the finer item (``also at``), labelled regional, and the
+    chain runs up through the shared anchor and region to the regions above; a reversal is scale-dependent and stays a fact;
+    a planned coarser level with nothing there is not_found_coarser; no coarser level planned prints no scale."""
+    from graph_query_engine.vertical import picture, scale_chain
+
+    graph, found = _levels_search(_levels(-1.2, ("7", "5")))
+    items = {it.pattern_id: it for it in found.evidence.items}
+    prompt = found.payload().evidence_prompt
+    p1, p7 = items["P1"], items["P7"]
+    assert p1.scale == "regional" and p1.also == [p7.key] and p7.folded_into == p1.key and not p7.transversal_only
+    assert f"also at res 5 [{p7.key}]" in prompt and f"[{p7.key}] role=" not in prompt  # one fact, still citable
+    assert f"- res 7: {p1.key} -1.50 sd -> res 5: {p7.key} -1.20 sd -> region R:3:b" in prompt
+    assert p7.key in found.payload().citations
+    (chain,) = scale_chain(graph, ["P1"])  # what a zone from the map will call for the same pattern
+    assert [s.pattern_id for s in chain.up] == ["P7"] and chain.regions == ["R:3:b", "R:1:c"]
+    assert picture(graph, "R:5:a") == {"patterns": 2, "datasets": 2, "themes": 1}
+
+    _, found = _levels_search(_levels(+1.2, ("7", "5")))
+    p1 = next(it for it in found.evidence.items if it.pattern_id == "P1")
+    assert p1.scale == "scale-dependent" and "[P2] role=" in found.payload().evidence_prompt  # a reversal is its own fact
+
+    _, found = _levels_search(_levels(None, ("7", "5")))
+    assert found.evidence.items[0].scale == "not_found_coarser" and any("not proof the effect is local" in n for n in found.evidence.notes)
+    _, found = _levels_search(_levels(None, ("7",)))
+    assert found.evidence.items[0].scale == "insufficient" and "scale:" not in found.payload().evidence_prompt
