@@ -450,7 +450,7 @@ def annotate_extents(insights: list[Insight], covers: dict[str, np.ndarray], ctx
         found.sort(key=lambda x: (-x["overlap"], x["pattern_id"]))
         del found[COLOCATED_TOP:]
     for ins in insights:
-        spatial = ins.provenance.setdefault("spatial", {"resolution": ctx.resolution, "cells": len(extents[ins.id])})
+        spatial = ins.provenance["spatial"]
         spatial["compactness"] = round(compactness(extents[ins.id], ctx), 4)
         spatial["colocated"] = partners[ins.id]
 

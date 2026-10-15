@@ -109,7 +109,29 @@ class Insight:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")  # the ingest part of provenance.spatial
+@dataclass(frozen=True)
+class SpatialProvenance:
+    """The ingest statistics of a geo insight, ``provenance["spatial"]`` (docs/03_insights.md §3.1): what discovery
+    measured on its cells. The spatial structure derived from them (compactness, partners, regions) is not part of it.
+    A field an older record lacks reads None."""
+
+    resolution: int | None = None  # H3 resolution of the cells
+    cells: int | None = None  # cells in the extent
+    moran_i: float | None = None  # the subgroup's own Moran's I of the primary metric
+    n_eff: float | None = None  # effective sample size of the median test
+    p_adjusted_iid: float | None = None  # the adjusted p-value without the n_eff correction
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> SpatialProvenance | None:
+        """The five fields of a stored ``provenance["spatial"]`` (other keys ignored); None for a non-geo insight."""
+        return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data}) if data else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
 UNDIGESTED = frozenset({"provenance", "row_id", "canonical", "embedding", "record_digest"})  # rewritten or derived after the write
 
 

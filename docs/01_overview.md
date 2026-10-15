@@ -88,7 +88,7 @@ The repository is split into bounded contexts: four libraries, which import only
 
 | Package | Module | Role | Chapter |
 |---|---|---|---|
-| `insight_contracts/` (shared kernel, standard library only) | `insight.py` | `Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `record_digest`, `PhenomenonThresholds` (what counts as part of a phenomenon) | [3](03_insights.md) |
+| `insight_contracts/` (shared kernel, standard library only) | `insight.py` | `Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `record_digest`, `SpatialProvenance`, `PhenomenonThresholds` (what counts as part of a phenomenon) | [3](03_insights.md) |
 | | `graph.py` | edge types and planes, node ids, `GraphNode` / `GraphEdge`, `SNAPSHOT_VERSION` and the snapshot schema | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `text.py` | how an insight reads: scope, shift, correlation and validation phrases, number formatting, headlines | [4.2](04_representation.md#42-the-canonical-form) |
 | | `payload.py` | `EvidencePayload`, the contract between the graph service and the narrator | [12.4](12_architecture.md#124-services-and-contracts) |
