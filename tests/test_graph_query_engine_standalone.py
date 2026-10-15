@@ -77,6 +77,19 @@ def test_the_citations_come_from_the_insight_not_its_free_form_provenance():
     assert payload.view["evidence"]["datasets"][0]["batch_id"] == "B1"
 
 
+def test_a_partial_spatial_provenance_reads_without_the_missing_fields():
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    snap = snapshot()
+    spatial = {"resolution": 7, "cells": 40}  # an older record: no n_eff
+    snap["nodes"] = [{**n, "props": {**n["props"], "provenance": {"spatial": spatial}}} if n["kind"] == "Pattern" else n for n in snap["nodes"]]
+    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    prompt = search(QUESTION, state, encoder, QueryConfig()).payload().evidence_prompt
+    assert "place: 40 H3 cells (resolution 7)" in prompt and "effective n" not in prompt
+
+
 def test_the_payload_contract_is_strict():
     import pytest
 

@@ -130,8 +130,7 @@ class SpatialProvenance:
         return asdict(self)
 
 
-# the provenance.spatial fields stored digests cover: fixed, not derived from SpatialProvenance, since a field added
-# there that stored records already hold (compactness) would turn every one of them into a mismatch
+# fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
 SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
 UNDIGESTED = frozenset({"provenance", "row_id", "canonical", "embedding", "record_digest"})  # rewritten or derived after the write
 
