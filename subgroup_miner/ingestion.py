@@ -202,8 +202,6 @@ def _to_cells(frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig) -
             frame,
             *spec,
             min_cell_points=config.min_cell_points,
-            share_max_levels=config.geo_share_max_levels,
-            mode_max_levels=config.geo_mode_max_levels,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc

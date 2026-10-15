@@ -6,7 +6,7 @@ Layout under ``WORKSPACE_DIR``::
     datasets/<dataset_id>/profile.json     schema / profile summary
     datasets/<dataset_id>/covers.npz       pattern_id -> covered row positions
     datasets/<dataset_id>/rejections.json  pruned candidates with reason codes
-    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, cell table, point -> cell, neighbour graph
+    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, point -> cell, points, neighbour graph
     datasets/<dataset_id>/cells.geojson    a geo dataset: the map's GeoJSON (cells, patterns' extents), written with the batch
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
@@ -30,6 +30,7 @@ reset can delete the folder while it is held); see ``acquire_writer_lock``.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -46,7 +47,7 @@ import numpy as np
 
 from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION, EmbeddingSpec
 from insight_graph_service.core.chunk_journal import ChunkJournal
-from insight_graph_service.core.fileio import replace_file, retry_sharing
+from insight_graph_service.core.fileio import replace_file
 from insight_graph_service.core.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -57,13 +58,13 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=1, default=str)
-    replace_file(tmp, path)  # waits out a reader of the old file (Windows)
+    replace_file(tmp, path)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.is_file():
         return default
-    return json.loads(retry_sharing(lambda: path.read_text(encoding="utf-8")))  # waits out a replace (Windows)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class WorkspaceBusy(RuntimeError):
@@ -156,6 +157,14 @@ class Workspace:
         for d in (self.registry_dir, self.datasets_dir, self.journal_dir / "blocks", self.state_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.journal = ChunkJournal(self.journal_dir, records_name="patterns.jsonl")
+        self._batches: dict[str, dict[str, Any]] = {}
+        self._load_cache()
+
+    def _load_cache(self) -> None:
+        """The batch registry and the vector contract, read once and written through: the console polls them, and a
+        reader never opens a file the writer is replacing. Merged, not replaced: a record saved meanwhile stays."""
+        self._batches.update({b["batch_id"]: b for b in map(read_json, self.registry_dir.glob("*.json")) if b})
+        self._representation = read_json(self.state_dir / "representation.json")
 
     def batch_path(self, batch_id: str) -> Path:
         return self.registry_dir / f"{batch_id}.json"
@@ -163,13 +172,14 @@ class Workspace:
     def save_batch(self, record: dict[str, Any]) -> None:
         record["updated_at"] = utc_now()
         atomic_write_json(self.batch_path(record["batch_id"]), record)
+        self._batches[record["batch_id"]] = json.loads(json.dumps(record, default=str))  # what the file holds
 
     def load_batch(self, batch_id: str) -> dict[str, Any] | None:
-        return read_json(self.batch_path(batch_id))
+        """A copy: a caller edits it and saves it, or drops it."""
+        return copy.deepcopy(self._batches.get(batch_id))
 
     def list_batches(self) -> list[dict[str, Any]]:
-        batches = [read_json(p) for p in self.registry_dir.glob("*.json")]
-        return sorted((b for b in batches if b), key=lambda b: b.get("created_at", ""))
+        return sorted(copy.deepcopy(list(self._batches.values())), key=lambda b: b.get("created_at", ""))
 
     def ready_batch_for(self, dataset_id: str) -> dict[str, Any] | None:
         return next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
@@ -227,29 +237,21 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, geo: dict[str, Any]) -> None:
-        """A geo dataset's spatial context, cell table and meta, in the shape ``load_geo`` returns."""
-        names = list(geo["columns"])
-        payload = {k: v for k, v in geo.items() if k not in ("columns", "meta")}
-        payload.update({f"col{i}": np.asarray(geo["columns"][n]) for i, n in enumerate(names)})
-        payload["meta"] = np.array(json.dumps({**geo["meta"], "columns": names}, ensure_ascii=False))
-        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **payload)
+    def save_geo(self, dataset_id: str, geo: dict[str, np.ndarray]) -> None:
+        """A geo dataset's spatial context (``cells``, ``point_cell``, ``lonlat``, ``nbr_ptr``, ``nbr_idx``)."""
+        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **geo)
 
     def geo_cells_path(self, dataset_id: str) -> Path:
         """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
         return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str) -> dict[str, Any] | None:
-        """``{"meta", "columns": {name: array}, <array>: ...}`` of a geo dataset; None for any other dataset."""
+        """The spatial context ``save_geo`` stored for a geo dataset; None for any other dataset."""
         path = self.datasets_dir / dataset_id / "geo.npz"
         if not path.is_file():
             return None
         with np.load(path, allow_pickle=False) as data:
-            meta = json.loads(str(data["meta"]))
-            out = {k: data[k] for k in data.files if k != "meta" and not k.startswith("col")}
-            out["columns"] = {n: data[f"col{i}"] for i, n in enumerate(meta["columns"])}
-        out["meta"] = meta
-        return out
+            return {k: data[k] for k in data.files}
 
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.
@@ -279,11 +281,12 @@ class Workspace:
 
     def record_representation(self, spec: EmbeddingSpec) -> None:
         """Persist the vector contract on the first committed batch."""
-        if self.representation() is None:
+        if self._representation is None:
             atomic_write_json(self.state_dir / "representation.json", spec.to_dict())
+            self._representation = spec.to_dict()
 
     def representation(self) -> dict[str, Any] | None:
-        return read_json(self.state_dir / "representation.json")
+        return copy.deepcopy(self._representation)
 
     def save_literals(self, fingerprint: str, texts: list[str], vectors: np.ndarray) -> None:
         """Literal-catalog vectors by text (docs/07_question_answering.md §7.1.1) in ``graph/literals.npz``. A cache checked on load (the
@@ -297,7 +300,7 @@ class Workspace:
         """Cached literal vectors (text -> unit vector) written for this representation; ``{}`` otherwise."""
         if not self.literals_path.is_file():
             return {}
-        with retry_sharing(lambda: np.load(self.literals_path)) as data:
+        with np.load(self.literals_path) as data:
             if str(data["fingerprint"]) != fingerprint:
                 return {}
             return dict(zip(map(str, data["texts"]), data["vectors"]))
@@ -318,7 +321,7 @@ class Workspace:
             path = self.journal_dir / "blocks" / f"{batch_id}.npz"
             if not path.is_file():
                 continue
-            with retry_sharing(lambda path=path: np.load(path)) as data:
+            with np.load(path) as data:
                 if "document" in data.files and "pattern_ids" in data.files:
                     out.update(zip(data["pattern_ids"].tolist(), data["document"]))
         return out
@@ -339,7 +342,7 @@ class Workspace:
         path = self.journal_dir / "blocks" / f"{batch_id}.npz"
         arrays: dict[str, np.ndarray] = {}
         if path.is_file():
-            with retry_sharing(lambda: np.load(path)) as data:
+            with np.load(path) as data:
                 arrays = {k: data[k] for k in data.files}
         arrays["document"] = np.asarray(vectors, dtype=np.float32)
         arrays["pattern_ids"] = np.array(pattern_ids)
@@ -430,6 +433,7 @@ class Workspace:
             dest = self.root / f.relative_to(removed)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(f), str(dest))
+        self._load_cache()  # the restored state and batch records
 
     def rewrite_journal(self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]]) -> None:
         self.journal.rewrite(patterns, vectors, activations)
@@ -444,6 +448,8 @@ class Workspace:
             paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
             if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()):
                 paths.append(source)
+        for b in batches:
+            self._batches.pop(b["batch_id"], None)
         for path in paths:
             if path.exists():
                 dest = trash / path.resolve().relative_to(root)

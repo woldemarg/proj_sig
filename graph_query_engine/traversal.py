@@ -33,6 +33,9 @@ LATENT = {e.value for e in LATENT_EDGES}
 UNDIRECTED = {e.value for e in UNDIRECTED_EDGES}
 WEIGHTED_HOPS = {"CONTRASTS", "CO_LOCATED"}  # hops whose weight (scope / cell overlap) scales the path score
 SEED_SCORE_FLOOR = 1e-3
+LATTICE_EDGES = frozenset({"SPECIALIZES", "GENERALIZES", "CONTRASTS", "CO_LOCATED"})  # the structural hops walked; SIBLING stays in the graph
+STRUCTURAL_HOPS = 1
+STRUCTURAL_EDGE_DECAY = 0.85
 
 
 @dataclass
@@ -106,7 +109,6 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
 
 
 def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> TraversalResult:
-    lattice = config.lattice_edges
     counter = itertools.count()
     heap: list[tuple] = []
     for s in seeds:
@@ -137,13 +139,13 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             return path + [PathStep(node, other, e["type"], float(w), hop, e["id"], reverse=reverse)]
 
         if phase in ("P0", "P1"):
-            if s_cnt < config.structural_hops:
-                for e, other in graph.incident(node, lattice):
+            if s_cnt < STRUCTURAL_HOPS:
+                for e, other in graph.incident(node, LATTICE_EDGES):
                     if e["type"] in ("SPECIALIZES", "GENERALIZES") and e["source"] != node:
                         continue  # both directions are materialised; follow out-edges only
                     if phase == "P1" and other in seed_ids:
                         continue
-                    factor = config.structural_edge_decay * (e["weight"] if e["type"] in WEIGHTED_HOPS else 1.0)
+                    factor = STRUCTURAL_EDGE_DECAY * (e["weight"] if e["type"] in WEIGHTED_HOPS else 1.0)
                     push(score * factor, other, phase, s_cnt + 1, l_cnt, seed, step(e, other, e["weight"]))
             if phase == "P0":
                 for e, other in graph.incident(node, ["ACTIVATES"]):

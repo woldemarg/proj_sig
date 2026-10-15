@@ -17,7 +17,7 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import LiteralCatalog, ParsedQuery, build_catalog, parse_query
 from graph_query_engine.seeds import SeedMatch, resolve_seeds
-from graph_query_engine.traversal import TraversalResult, naive_nearest, structural_closure, traverse
+from graph_query_engine.traversal import LATTICE_EDGES, TraversalResult, naive_nearest, structural_closure, traverse
 from insight_contracts.payload import CITATION_FIELDS, EvidencePayload
 
 _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transversal_only")
@@ -25,9 +25,9 @@ _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transv
 
 @dataclass
 class CommittedState:
-    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. ``catalog`` and the
-    document vectors ``frame`` lacks are caches: filled once, on the first question (by the caller; the catalog by
-    ``search`` if the caller did not), and never replaced. A commit replaces the whole object, never a part of it."""
+    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. The graph service
+    builds it complete at the commit; a library caller may leave ``catalog`` None and ``search`` builds it on first
+    use. A commit replaces the whole object, never a part of it."""
 
     graph: DualGraph
     frame: LatentFrame
@@ -91,7 +91,7 @@ def compute_baselines(
 ) -> dict[str, Any]:
     """What structural-only and naive text retrieval would have returned (§7.6). The documents were embedded at
     ingest, so the question is the only text embedded here; a pattern without a document vector is left out."""
-    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, config.lattice_edges)
+    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES)
     doc_vecs = {pid: frame.documents[pid] for pid in graph.insights if pid in frame.documents}
     naive = naive_nearest(encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved)
     retrieved = {r.node_id for r in result.patterns}

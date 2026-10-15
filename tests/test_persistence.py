@@ -137,6 +137,30 @@ def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     csv2.write_text(demo_csv.read_text().replace("\n", "\n", 1) + "\n")  # different bytes -> new dataset id
     rec = other.ingest_file(csv2)
     assert rec["status"] == "FAILED" and rec["error"]["code"] == "representation_mismatch"
+    literals = other.ws.literals_path.read_bytes()
+    assert make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0))).committed().catalog is None  # no cache built or saved
+    assert other.ws.literals_path.read_bytes() == literals
+
+
+def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv, tmp_path):
+    """The literal catalog is built when the state is loaded; if the model fails there, the engine still starts, not degraded."""
+    from doubles import HashingEmbedder
+
+    class Broken(HashingEmbedder):
+        def embed(self, texts):
+            raise RuntimeError("CUDA out of memory")
+
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    engine.ws.literals_path.unlink()  # the start must embed the literals
+    broken = make_engine(make_config(tmp_path / "ws"), embedder=Broken())
+    assert broken.problem is None and broken.graph().insights and broken.committed().catalog is None
+
+
+def test_a_catalog_failure_at_the_commit_is_a_batch_warning(engine, demo_csv, monkeypatch):
+    monkeypatch.setattr(engine_mod, "build_catalog", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("model gone")))
+    record = engine.ingest_file(demo_csv)
+    assert record["status"] == "READY" and any("literal catalog not built" in w for w in record["warnings"])
+    assert engine.committed().catalog is None and engine.search("Why is margin lower for phones in the US?").evidence.items  # built on the question
 
 
 class Crash(BaseException):  # the process dies: no except-handler runs
@@ -171,43 +195,6 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_p
     fresh = make_engine(make_config(tmp_path / "ws"))
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists()
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
-
-
-def test_records_survive_a_concurrent_reader(tmp_path):
-    """A record rewritten while another thread reads it (the UI polls batch records): neither side fails.
-
-    On Windows a plain ``os.replace`` over an open file, and a read during the replace, both raise
-    PermissionError (WinError 5); a batch then failed with that message."""
-    import threading
-    import time
-
-    from insight_graph_service.core.workspace import atomic_write_json, read_json
-
-    target = tmp_path / "B-test.json"
-    atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
-    stop, errors = threading.Event(), []
-
-    def reader():
-        while not stop.is_set():
-            try:
-                assert read_json(target)["pad"]
-            except Exception as exc:
-                errors.append(f"read: {exc!r}")
-
-    thread = threading.Thread(target=reader, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 1.0
-    try:
-        while time.monotonic() < deadline:
-            try:
-                atomic_write_json(target, {"status": "PROFILING", "pad": "x" * 20000})
-            except Exception as exc:
-                errors.append(f"write: {exc!r}")
-    finally:
-        stop.set()
-        thread.join()
-    assert errors == []
-    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
@@ -255,10 +242,10 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
     before_members = Counter(e["target"] for e in g.edges if e["type"] == "ACTIVATES" and g.nodes[e["source"]]["props"]["dataset_id"] != ds)
     linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
     anchors_before = {n["id"] for n in g.of_kind("Attractor")}
-    assert any(t.startswith("x_") for t in engine.prepared().catalog.texts)  # the literal cache now holds both datasets' literals
+    assert any(t.startswith("x_") for t in engine.committed().catalog.texts)  # the literal cache now holds both datasets' literals
 
     out = engine.delete_dataset(ds)
-    catalog = engine.prepared().catalog  # the first question after the deletion rewrites the cache
+    catalog = engine.committed().catalog  # the deletion's commit rewrites the cache
     cached = engine.ws.load_literals(engine.encoder.spec.fingerprint)
     assert set(cached) == set(catalog.texts) and not any(t.startswith("x_") for t in cached)  # its literals are gone
     assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]
@@ -288,8 +275,8 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
 
 
 def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo_csv, monkeypatch):
-    """The READY record is the commit marker. If writing it fails (a Windows sharing violation that outlasts
-    the retry), the batch rolls back completely: journal, state and the snapshot it had already written."""
+    """The READY record is the commit marker. If writing it fails (a full disk, a permission error), the batch rolls
+    back completely: journal, state and the snapshot it had already written."""
     cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     save = engine.ws.save_batch
@@ -345,7 +332,7 @@ def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypa
         monkeypatch.undo()
         if isinstance(failure, Crash):
             assert engine.ws.pending_path.exists() and state() != before  # half done, marker left
-            make_engine(cfg)  # the next writer start
+            engine = make_engine(cfg)  # the next writer start; the crashed process reads nothing more
         assert state() == before and not engine.ws.pending_path.exists()
     assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
 

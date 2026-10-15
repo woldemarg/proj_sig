@@ -111,7 +111,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
 | | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question | [9](09_operations.md) |
 | | `snapshot.py` | the dual-graph compiler and the anchor descriptions | [6.2](06_graph_and_storage.md#62-the-graph-schema), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
-| | `workspace.py`, `chunk_journal.py`, `fileio.py` | workspace layout, journals, transactions and recovery, the writer lock; atomic file replacement that waits out Windows sharing violations | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
+| | `workspace.py`, `chunk_journal.py`, `fileio.py` | workspace layout, journals, transactions and recovery, the writer lock; atomic file replacement | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | | `neo4j_mirror.py`, `cypher/` | the Neo4j mirror | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 | | `demo.py`, `model_store.py` | the demo data with planted mechanisms; the embedding model provisioned and verified | [10.2](10_verification.md#102-the-demo-datasets), [4.4](04_representation.md#44-the-embedding-model) |
 | `insight_graph_service/server/` | `app.py`, `views.py` | the graph service's HTTP API; graph, node and sphere JSON for the console | [8](08_interface.md) |

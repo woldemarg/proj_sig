@@ -94,7 +94,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | multilingual benchmark | `python scripts/multilingual_benchmark.py --label <name>` |
 | live answers | `python scripts/eval_answers.py` (calls the LLM behind the broker: a paid call) |
 
-- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere) and `fileio`'s Windows sharing retry (`fileio.retry_sharing`).
+- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere).
 - The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s; with `EMBEDDING_DEVICE=auto` on CUDA, or MPS on Apple silicon, when available; the containers use the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
 - `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` (Windows temp-dir permissions); do not remove it.
 - Processing a batch is sequential and checkpointed (`docs/09_operations.md`); when debugging a stuck or failed batch, read `workspace/registry/batches/<id>.json` first (`error`, `failed_stage`, `warnings`).

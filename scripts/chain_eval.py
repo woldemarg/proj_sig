@@ -92,7 +92,7 @@ def layer_measures(d: np.ndarray, sets: list[list[int]], disjoint: list[tuple[in
 
 def run_chain_eval(engine: Engine) -> dict[str, Any]:
     """The measures per layer on the committed graph's planted sets."""
-    g = engine.prepared().graph
+    g = engine.committed().graph
     patterns = [node["id"] for node in g.of_kind("Pattern")]
     index = {p: i for i, p in enumerate(patterns)}
     anchors = sorted({e["target"] for e in g.edges if e["type"] == "ACTIVATES"})

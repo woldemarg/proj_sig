@@ -97,7 +97,7 @@ def _score(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
 
 
 def run_experiment(engine: Engine, *, k: int = 5) -> dict[str, Any]:
-    state = engine.prepared()  # one commit for the graph, both vector sets and the cases
+    state = engine.committed()  # one commit for the graph, both vector sets and the cases
     g, cfg = state.graph, engine.settings.query
     truth = planted_scopes()
     cases = build_cases(state, truth)

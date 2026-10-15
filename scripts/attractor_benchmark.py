@@ -215,7 +215,7 @@ def _score(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
 
 def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[dict[str, Any]]:
     """Every ranker's scores per case, on the engine's committed state."""
-    state = engine.prepared()
+    state = engine.committed()
     g, cfg = state.graph, engine.settings.query
     ids = [n["id"] for n in g.of_kind("Pattern")]
     wide = replace(cfg, max_retrieved=len(ids))

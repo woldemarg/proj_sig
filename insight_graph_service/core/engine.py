@@ -20,7 +20,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -111,19 +111,12 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
-        self._prepare_lock = threading.Lock()  # catalog build and document back-fill: never the batch lock
         self._open()
 
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
         touch the journal or a lock, so they neither race nor wait for a batch."""
         return self._state
-
-    def prepared(self) -> CommittedState:
-        """The committed state made ready for questions, once per commit (``_prepare``)."""
-        state = self._state
-        self._prepare(state)
-        return state
 
     def graph(self) -> DualGraph:
         return self.committed().graph
@@ -158,41 +151,38 @@ class Engine:
         if snapshot and snapshot.get("version") != SNAPSHOT_VERSION:
             return self._derive(self.ontology())[1]
         graph = DualGraph(snapshot) if snapshot else DualGraph.empty()
-        return CommittedState(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
+        return self._committed_state(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
 
     @staticmethod
     def _empty_state() -> CommittedState:
         return CommittedState(DualGraph.empty(), LatentFrame({}, {}, {}))
 
-    def _prepare(self, state: CommittedState) -> None:
-        """Fill what a question needs and the commit did not compute: the canonical-document vector of every pattern
-        (stored at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the
-        literal catalog (docs/07_question_answering.md §7.1.1; vectors of known literals from the workspace's literal
-        cache). Both stay on ``state``; a writer saves them, so no later question or restart pays for them again."""
-        graph, documents = state.graph, state.frame.documents
-        with self._prepare_lock:
-            missing = [pid for pid in graph.insights if pid not in documents]
+    def _committed_state(self, graph: DualGraph, frame: LatentFrame) -> CommittedState:
+        """The read state of a commit, complete before readers see it: every pattern's canonical-document vector (stored
+        at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the literal
+        catalog (docs/07_question_answering.md §7.1.1; known literals from the workspace's literal cache). A writer
+        saves both, so no later commit or restart pays for them again. Neither is built for a workspace of another
+        representation (its questions are refused) nor when the model fails: then ``search`` builds the catalog on the
+        first question, and a pattern without a document vector stays out of the naive baseline."""
+        if not graph.insights:
+            return CommittedState(graph, frame)
+        try:
+            self.ws.check_representation(self.encoder.spec)  # never embed or save with a model the workspace does not use
+            missing = [pid for pid in graph.insights if pid not in frame.documents]
             if missing:
                 filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
-                documents.update(filled)
-                self._persist(state, lambda: self.ws.save_document_vectors(documents, set(filled)))
-            if state.catalog is None and graph.insights:
-                fingerprint = self.encoder.spec.fingerprint
-                known = self.ws.load_literals(fingerprint)
-                state.catalog = build_catalog(graph, self.encoder.embedder, known)
-                if known.keys() != set(state.catalog.texts):  # new literals, or a deleted dataset's gone
-                    catalog = state.catalog
-                    self._persist(state, lambda: self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors))
-
-    def _persist(self, state: CommittedState, save: Callable[[], None]) -> None:
-        """Save a cache derived on a question (a writer only), unless a write runs — a reset or a deletion may be
-        removing its files — or a newer commit replaced ``state``; a later question saves it instead."""
-        if self._writer and self._lock.acquire(blocking=False):
-            try:
-                if state is self._state:
-                    save()
-            finally:
-                self._lock.release()
+                frame.documents.update(filled)
+                if self._writer:
+                    self.ws.save_document_vectors(frame.documents, set(filled))
+            fingerprint = self.encoder.spec.fingerprint
+            known = self.ws.load_literals(fingerprint)
+            catalog = build_catalog(graph, self.encoder.embedder, known)
+            if self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
+                self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors)
+        except Exception as exc:  # the graph is committed; a missing cache costs the first question, never the workspace
+            log.warning("committed state without its literal catalog: %s: %s", type(exc).__name__, exc)
+            return CommittedState(graph, frame)
+        return CommittedState(graph, frame, catalog)
 
     def ontology(self) -> LatentOntology:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
@@ -212,9 +202,8 @@ class Engine:
     def _search(self, question: str, state: CommittedState) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        self._prepare(state)  # the literal catalog; every document vector for the naive baseline
         found = search(question, state, self.encoder, self.settings.query)
-        found.seconds = time.perf_counter() - start  # with the preparation of the first question after a commit
+        found.seconds = time.perf_counter() - start
         return found
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
@@ -242,7 +231,7 @@ class Engine:
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
-        return snapshot, CommittedState(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
+        return snapshot, self._committed_state(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
     @_healthy
     def upload(
@@ -364,7 +353,7 @@ class Engine:
                     kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
                     if loaded.spatial:
                         record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
-                        annotate_extents(kept, covers, loaded.spatial, self.settings.miner.geo_colocation_min)
+                        annotate_extents(kept, covers, loaded.spatial)
                         self.ws.save_profile(ds, record["profile"])
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])
@@ -397,11 +386,24 @@ class Engine:
                         blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
                         if loaded.spatial:  # the map's file, from the journaled patterns
-                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, self._save_geo(ds, loaded)))
+                            ctx = loaded.spatial
+                            self.ws.save_geo(
+                                ds,
+                                {
+                                    "cells": ctx.cells.astype(str),
+                                    "point_cell": ctx.point_cell,
+                                    "lonlat": ctx.lonlat,
+                                    "nbr_ptr": ctx.nbr_ptr,
+                                    "nbr_idx": ctx.nbr_idx,
+                                },
+                            )
+                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, loaded))
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
                         snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
+                        if state.catalog is None:
+                            record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
 
                     record["metrics"] = batch_metrics(result, kept, rejections, update, spec, snapshot, timings, t0)
                     record["status"] = "READY"
@@ -431,21 +433,6 @@ class Engine:
             "glossary": ctx.glossary,
         }
 
-    def _save_geo(self, ds: str, loaded: Any) -> dict[str, Any]:
-        """Store the geo dataset's context and cell table; returns them in the shape ``Workspace.load_geo`` gives back."""
-        ctx = loaded.spatial
-        geo = {
-            "cells": ctx.cells.astype(str),
-            "point_cell": ctx.point_cell,
-            "lonlat": ctx.lonlat,
-            "nbr_ptr": ctx.nbr_ptr,
-            "nbr_idx": ctx.nbr_idx,
-            "columns": {c: loaded.frame[c].to_numpy(dtype=float if loaded.frame[c].dtype.kind in "fiu" else str) for c in loaded.frame.columns},
-            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(loaded.frame.columns)},
-        }
-        self.ws.save_geo(ds, geo)
-        return geo
-
     def geo_datasets(self) -> list[dict[str, Any]]:
         """READY datasets analysed as H3 cells, with what the map needs to offer them."""
         out = []
@@ -466,12 +453,13 @@ class Engine:
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
         return self.ws.geo_cells_path(dataset_id)
 
-    def geo_cells(self, dataset_id: str, geo: dict[str, Any]) -> dict[str, Any]:
-        """The dataset's cells (``geo``: its stored context, in ``Workspace.load_geo``'s shape) as a GeoJSON FeatureCollection
-        with the journaled patterns' extents; properties are the cell-table columns."""
-        cols = geo["columns"]
+    def geo_cells(self, dataset_id: str, loaded: Any) -> dict[str, Any]:
+        """The dataset's cells as a GeoJSON FeatureCollection with the journaled patterns' extents; properties are the
+        columns of the analysed cell table (``loaded.frame``), read once, when the batch writes the file."""
+        ctx, frame = loaded.spatial, loaded.frame
+        cols = {c: frame[c].to_numpy(dtype=float if frame[c].dtype.kind in "fiu" else str) for c in frame.columns}
         features = []
-        for i, cell in enumerate(geo["cells"]):
+        for i, cell in enumerate(ctx.cells):
             props: dict[str, Any] = {"h3": str(cell), "row": i}
             for name, values in cols.items():
                 v = values[i]
@@ -479,7 +467,7 @@ class Engine:
             features.append(
                 {"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props}
             )
-        lonlat = geo["lonlat"][geo["point_cell"] >= 0]
+        lonlat = ctx.lonlat[ctx.point_cell >= 0]
         bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
         covers = self.ws.load_covers(dataset_id)
         patterns = [
@@ -497,7 +485,13 @@ class Engine:
             for r in self.ws.patterns()
             if r["dataset_id"] == dataset_id and r["id"] in covers
         ]
-        return {"type": "FeatureCollection", "features": features, "bbox": bbox, "meta": geo["meta"], "patterns": patterns}
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "bbox": bbox,
+            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
+            "patterns": patterns,
+        }
 
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
         """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""
@@ -584,8 +578,8 @@ class Engine:
         return record
 
     def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
-        """After a commit (batch or deletion): readers switch to the new state in one assignment (the literal catalog
-        follows on the next question) and the optional Neo4j mirror is synced; returns the mirror status."""
+        """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and
+        the optional Neo4j mirror is synced; returns the mirror status."""
         self._state = state
         return self.sync_neo4j(snapshot)
 
