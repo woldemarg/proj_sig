@@ -9,6 +9,7 @@ categorical modes and neighbourhood conditions as text dimensions.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 import h3
@@ -43,7 +44,7 @@ NESTED_SHARE = 0.9  # nesting above which a mode condition never explains the ot
 GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also become per-level share metrics
 GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
 GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
-COLOCATED_TOP = 3  # CO_LOCATED partners kept per pattern (the strongest relations)
+COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset and of the others (the strongest relations)
 GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: share of the region's occupied cells the pattern covers
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 
@@ -438,12 +439,14 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
     it covers at least ``GEO_REGION_MIN_SHARE`` of the region's occupied cells. Two patterns of one resolution, of any
     datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
-    of the smaller, else ``adjacent`` when the extents touch, else ``same_region`` when both are IN_REGION of one region
-    at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP`` strongest partners
-    (relation first, then weight); a pair is kept when it is among the partners of its smaller id."""
+    of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
+    IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
+    strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
+    either side keeps is an edge."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
-    raw, grown, ring, res_of, shares, covered = {}, {}, {}, {}, {}, {}
+    raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
+    covered: Counter[str] = Counter()
     for d in datasets:
         if not len(d.cells):
             continue
@@ -455,11 +458,10 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
         for lv in own:  # each dataset's cells inside a region that some pattern covers
             for cell, n in zip(*np.unique(parents[lv][union], return_counts=True), strict=True):
-                rid = region_node_id(lv, str(cell))
-                covered[rid] = covered.get(rid, 0) + int(n)
+                covered[region_node_id(lv, str(cell))] += int(n)
         for pid, rows in d.covers.items():
             rows = np.unique(np.asarray(rows, dtype=np.int64))
-            res_of[pid] = res
+            res_of[pid], dataset_of[pid] = res, d.dataset_id
             raw[pid] = {str(c) for c in d.cells[rows]}
             near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
             grown[pid] = {str(c) for c in d.cells[near]}
@@ -473,48 +475,47 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                     if share >= GEO_REGION_MIN_SHARE:
                         out.in_region.append((pid, rid, share))
                         shares[(pid, rid)] = share
-    for _, rid, _ in out.in_region:  # a region and its ancestors at the coarser listed levels
-        lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
-        for up in [x for x in levels if x <= lv]:
-            out.regions.setdefault(region_node_id(up, h3.cell_to_parent(cell, up) if up < lv else cell), {"resolution": up})
-    members: dict[str, int] = {}
-    for _, rid, _ in out.in_region:
-        members[rid] = members.get(rid, 0) + 1
+                        for up in [x for x in levels if x <= lv]:  # the region and its ancestors at the coarser listed levels
+                            up_cell = str(cell) if up == lv else h3.cell_to_parent(str(cell), up)
+                            out.regions.setdefault(region_node_id(up, up_cell), {"resolution": up, "h3": up_cell})
+    members = Counter(rid for _, rid, _ in out.in_region)
     for rid, props in out.regions.items():
-        lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
-        props.update(h3=cell, cells_covered=covered.get(rid, 0), patterns=members.get(rid, 0))
-        coarser = [x for x in levels if x < lv]
+        props.update(cells_covered=covered[rid], patterns=members[rid])
+        coarser = [x for x in levels if x < props["resolution"]]
         if coarser:
-            out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(cell, coarser[0]))))
-    regions_of: dict[str, set[str]] = {}
-    for pid, rid, _ in out.in_region:
-        regions_of.setdefault(pid, set()).add(rid)
-    partners: dict[str, list[tuple[int, float, str]]] = {pid: [] for pid in raw}
-    by_res: dict[int, list[str]] = {}
+            out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(props["h3"], coarser[0]))))
+    regions_of: defaultdict[str, set[str]] = defaultdict(set)
+    for pid, rid in shares:
+        regions_of[pid].add(rid)
+    by_res: defaultdict[int, list[str]] = defaultdict(list)
     for pid in sorted(raw):
-        by_res.setdefault(res_of[pid], []).append(pid)
+        by_res[res_of[pid]].append(pid)
+    links: dict[tuple[str, str], tuple[str, float]] = {}
     for res, pids in by_res.items():
         level = next((lv for lv in levels if res - lv >= 2), None)
         for i, a in enumerate(pids):
             for b in pids[i + 1 :]:
                 overlap = round(float(len(grown[a] & grown[b]) / max(min(len(grown[a]), len(grown[b])), 1)), 4)
                 if overlap >= GEO_COLOCATION_MIN:
-                    found = ("overlaps", overlap)
-                elif not raw[a] & raw[b] and (ring[a] & raw[b] or ring[b] & raw[a]):
-                    found = ("adjacent", round(len(ring[a] & raw[b]) / max(min(len(raw[a]), len(raw[b])), 1), 4))
+                    links[(a, b)] = ("overlaps", overlap)
+                elif raw[a] & raw[b] or ring[a] & raw[b]:  # share of both extents' cells on the common edge
+                    edge = len((raw[a] | ring[a]) & raw[b]) + len((raw[b] | ring[b]) & raw[a])
+                    links[(a, b)] = ("adjacent", round(edge / (len(raw[a]) + len(raw[b])), 4))
                 else:
-                    common = {r for r in regions_of.get(a, set()) & regions_of.get(b, set()) if level is not None and r.startswith(f"R:{level}:")}
-                    found = ("same_region", max(min(shares[(a, r)], shares[(b, r)]) for r in common)) if common else None
-                if found:
-                    rank = RELATIONS.index(found[0])
-                    partners[a].append((rank, -found[1], b))
-                    partners[b].append((rank, -found[1], a))
-    kept = {}
-    for a, found in partners.items():
-        for rank, neg, b in sorted(found)[:COLOCATED_TOP]:
-            if a < b:
-                kept[(a, b)] = (RELATIONS[rank], -neg)
-    out.co_located = [(a, b, rel, w) for (a, b), (rel, w) in sorted(kept.items())]
+                    common = [r for r in regions_of[a] & regions_of[b] if level is not None and r.startswith(f"R:{level}:")]
+                    if common:
+                        links[(a, b)] = ("same_region", max(min(shares[(a, r)], shares[(b, r)]) for r in common))
+    pool: defaultdict[tuple[str, bool], list[tuple[int, float, str]]] = defaultdict(list)  # (pattern, across datasets)
+    for (a, b), (relation, weight) in links.items():
+        cross = dataset_of[a] != dataset_of[b]
+        pool[(a, cross)].append((RELATIONS.index(relation), -weight, b))
+        pool[(b, cross)].append((RELATIONS.index(relation), -weight, a))
+    top = {key: {p for _, _, p in sorted(found)[:COLOCATED_TOP]} for key, found in pool.items()}
+    out.co_located = [
+        (a, b, relation, weight)
+        for (a, b), (relation, weight) in sorted(links.items())
+        if b in top[(a, dataset_of[a] != dataset_of[b])] or a in top[(b, dataset_of[a] != dataset_of[b])]
+    ]
     out.in_region.sort()
     out.parent_of.sort()
     return out

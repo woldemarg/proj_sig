@@ -59,7 +59,7 @@ class Settings:
 
     @property
     def region_levels(self) -> tuple[int, ...]:
-        return tuple(sorted({int(x) for x in self.geo_region_levels.split(",") if x.strip()}, reverse=True))
+        return tuple(int(x) for x in self.geo_region_levels.split(",") if x.strip())
 
     @property
     def thresholds(self) -> PhenomenonThresholds:

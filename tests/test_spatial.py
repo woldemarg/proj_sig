@@ -248,18 +248,32 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     coarse = [h3.cell_to_parent(k, 7) for k in near]
     elsewhere = h3.latlng_to_cell(40.0, 30.0, 8)
     crowd = {f"P-q{i}": h3.grid_disk(elsewhere, 2) for i in range(5)}
+    shifted = h3.grid_ring(elsewhere, 2)[0]
+    lone = h3.latlng_to_cell(45.0, 20.0, 8)
+    apart = h3.grid_ring(lone, 8)[0]  # radius-4 disks eight cells apart share their midpoint cells only
     spatial = derive_spatial(
         [
             _geo_dataset("one", h3.grid_disk(c, 15), {"P-a": h3.grid_disk(c, 3), "P-b": h3.grid_disk(c, 3), "P-c": h3.grid_disk(touching, 3)}),
             _geo_dataset("two", near + far, {"P-x": near, "P-y": far}),
             _geo_dataset("coarse", coarse, {"P-z": coarse}),  # resolution 7
             _geo_dataset("crowd", h3.grid_disk(elsewhere, 4), {"P-p": h3.grid_disk(elsewhere, 2), **crowd}),
+            _geo_dataset("other", h3.grid_disk(elsewhere, 6), {f"P-r{i}": h3.grid_disk(shifted, 2) for i in range(4)}),
+            _geo_dataset("dot", [lone], {"P-d": [lone]}),
+            _geo_dataset("ring", h3.grid_ring(lone, 1), {"P-e": h3.grid_ring(lone, 1)}),
+            _geo_dataset("lens", h3.grid_disk(lone, 14), {"P-f": h3.grid_disk(lone, 4), "P-g": h3.grid_disk(apart, 4)}),
         ],
         (7, 5, 3, 1),
     )
     relation = {(a, b): rel for a, b, rel, _ in spatial.co_located}
     assert relation[("P-a", "P-b")] == "overlaps" and relation[("P-a", "P-c")] == "adjacent" and relation[("P-x", "P-y")] == "same_region"
-    assert sum("P-p" in pair for pair in relation) == 3  # five overlapping partners, three kept
+    weight = {(a, b): w for a, b, _, w in spatial.co_located}
+    assert relation[("P-d", "P-e")] == "adjacent" and weight[("P-d", "P-e")] == 1.0  # a cell and its ring: the whole edge, not 6
+    assert relation[("P-f", "P-g")] == "adjacent"  # shared cells below the overlap threshold still touch
+    assert all(0 < w <= 1 for w in weight.values())
+    crowded = {"P-p", *crowd}
+    own = [pair for pair in relation if set(pair) <= crowded]
+    assert len(own) < 15 and all(sum(p in pair for pair in own) >= 3 for p in crowded)  # each keeps three of five
+    assert any(pair[0] in crowded and pair[1].startswith("P-r") for pair in relation)  # other datasets are ranked apart
     assert not any("P-z" in pair for pair in relation)  # CO_LOCATED joins one resolution only
     shared = f"R:5:{region}"
     members = {p for p, r, _ in spatial.in_region if r == shared}
