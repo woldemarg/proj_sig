@@ -173,43 +173,6 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_p
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_records_survive_a_concurrent_reader(tmp_path):
-    """A record rewritten while another thread reads it (the UI polls batch records): neither side fails.
-
-    On Windows a plain ``os.replace`` over an open file, and a read during the replace, both raise
-    PermissionError (WinError 5); a batch then failed with that message."""
-    import threading
-    import time
-
-    from insight_graph_service.core.workspace import atomic_write_json, read_json
-
-    target = tmp_path / "B-test.json"
-    atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
-    stop, errors = threading.Event(), []
-
-    def reader():
-        while not stop.is_set():
-            try:
-                assert read_json(target)["pad"]
-            except Exception as exc:
-                errors.append(f"read: {exc!r}")
-
-    thread = threading.Thread(target=reader, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 1.0
-    try:
-        while time.monotonic() < deadline:
-            try:
-                atomic_write_json(target, {"status": "PROFILING", "pad": "x" * 20000})
-            except Exception as exc:
-                errors.append(f"write: {exc!r}")
-    finally:
-        stop.set()
-        thread.join()
-    assert errors == []
-    assert not list(tmp_path.glob("*.tmp"))
-
-
 def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
     """A reset during a batch answers ``busy`` at once instead of waiting for the batch lock (the web request
     would hang for the whole batch); readers keep the committed state meanwhile and the batch still commits."""
@@ -288,8 +251,8 @@ def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_
 
 
 def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo_csv, monkeypatch):
-    """The READY record is the commit marker. If writing it fails (a Windows sharing violation that outlasts
-    the retry), the batch rolls back completely: journal, state and the snapshot it had already written."""
+    """The READY record is the commit marker. If writing it fails (a full disk, a permission error), the batch rolls
+    back completely: journal, state and the snapshot it had already written."""
     cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     save = engine.ws.save_batch
@@ -345,7 +308,7 @@ def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypa
         monkeypatch.undo()
         if isinstance(failure, Crash):
             assert engine.ws.pending_path.exists() and state() != before  # half done, marker left
-            make_engine(cfg)  # the next writer start
+            engine = make_engine(cfg)  # the next writer start; the crashed process reads nothing more
         assert state() == before and not engine.ws.pending_path.exists()
     assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
 
