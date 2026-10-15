@@ -272,3 +272,41 @@ def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
     items = {it.pattern_id: it for it in found.evidence.items}
     assert items["P7"].scale == "scale-dependent" and items["P1"].folded_into == items["P7"].key
     assert "scale: scale-dependent" in found.payload().evidence_prompt
+
+
+def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
+    """The coarsest level where the findings lie in three or more regions; a finding mostly outside a region, or one
+    shifting against the asked direction, adds nothing; a question with scope gets no ZONES."""
+    from graph_query_engine import DualGraph
+    from graph_query_engine.vertical import rank_zones
+    from insight_contracts import SNAPSHOT_VERSION
+
+    def geo(pid, z, w):
+        node = pattern(pid, [f"cell={pid}"], z=z, w=w)
+        node["props"]["provenance"]["spatial"] = {"resolution": 7, "cells": 40}
+        return node
+
+    regions = [
+        {"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}}
+        for r in ("R:5:x", "R:5:y", "R:5:z", "R:3:w")
+    ]
+    nodes = [geo("A", -1.0, 0.8), geo("B", -1.0, 0.6), geo("C", 1.0, 0.9), geo("D", -1.0, 0.5), *regions]
+    edges = [
+        edge(p, r, "IN_REGION", s)
+        for p, r, s in (("A", "R:5:x", 0.9), ("B", "R:5:x", 0.8), ("C", "R:5:y", 0.9), ("D", "R:5:z", 0.6), ("D", "R:5:x", 0.3))
+    ]
+    edges += [edge(p, "R:3:w", "IN_REGION", 1.0) for p in "ABCD"]
+    graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
+    zones = rank_zones(graph, list("ABCD"), ["margin"], -1)  # where is margin lower?
+    assert [z["id"] for z in zones] == ["R:5:x", "R:5:z"] and zones[0]["holds"] == ["A", "B"]  # C rises: no weight; D's 0.3: not held
+    assert zones[0]["score"] == round(0.8 * 0.9 + 0.6 * 0.8, 4) and zones[0]["resolution"] == 5
+
+    _, found = _levels_search(_levels(-1.2, ("7", "5")))
+    assert not found.evidence.zones  # the question names phones and the US
+    from graph_query_engine import CommittedState, LatentFrame, QueryConfig, search
+
+    graph, encoder = DualGraph(_levels(-1.2, ("7", "5"))), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.8, 0.6, 0.0])}
+    found = search("Where is margin lower?", CommittedState(graph, LatentFrame(vectors, {}, documents)), encoder, QueryConfig())
+    assert [z["id"] for z in found.evidence.zones] == ["R:5:a"] and "- Z1 = R:5:a (res 5): contains P1" in found.payload().evidence_prompt
