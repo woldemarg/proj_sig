@@ -78,6 +78,10 @@ def llm_stub():
         yield f"{url}/v1", seen
 
 
+def pytest_addoption(parser):
+    parser.addoption("--update-golden", action="store_true", help="rewrite tests/golden/ from the current code (test_golden.py)")
+
+
 def pytest_collection_modifyitems(config, items):
     from attractor_topology.encoder import model_folder
     from insight_graph_service.core.model_store import problems
