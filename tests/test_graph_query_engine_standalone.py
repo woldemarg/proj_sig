@@ -109,3 +109,18 @@ def test_a_snapshot_of_another_version_is_refused():
 
     with pytest.raises(ValueError, match="snapshot version"):
         DualGraph({**snapshot(), "version": 1})
+
+
+def test_an_item_reached_only_by_location_is_marked():
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    snap = snapshot()
+    snap["edges"].append(edge("P1", "P2", "CO_LOCATED", 1.0, relation="same_region"))  # stronger than the walk through A-1
+    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
+    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    found = search(QUESTION, state, encoder, QueryConfig())
+    item = next(it for it in found.evidence.items if it.pattern_id == "P2")
+    prompt = found.payload().evidence_prompt
+    assert item.located == "same_region" and "[reached by location only: same area, zones do not overlap]" in prompt
+    assert any("reached only by location" in n for n in found.evidence.notes)

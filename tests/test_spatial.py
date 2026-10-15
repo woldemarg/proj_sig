@@ -266,3 +266,19 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert {"P-x", "P-y", "P-z"} <= members  # one region for datasets of resolution 8 and 7
     assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
+
+
+def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(tmp_path):
+    """The spatial plane is derived from geo.npz and covers.npz: a snapshot of an older version is rebuilt with it,
+    no upload again."""
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    cfg = make_config(tmp_path / "ws")
+    engine = make_engine(cfg)
+    assert engine.process(engine.submit(path, geo="auto")["batch_id"])["status"] == "READY"
+    old = engine.ws.load_graph()
+    old["nodes"] = [n for n in old["nodes"] if n["kind"] != "Region"]
+    old["edges"] = [e for e in old["edges"] if e["type"] not in ("IN_REGION", "PARENT_OF", "CO_LOCATED")]
+    engine.ws.save_graph({**old, "version": 4})
+    graph = make_engine(cfg).graph()
+    assert graph.of_kind("Region") and {e["props"]["relation"] for e in graph.edges if e["type"] == "CO_LOCATED"} >= {"overlaps"}

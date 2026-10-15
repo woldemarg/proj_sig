@@ -451,6 +451,12 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         own = [lv for lv in levels if lv <= res]
         parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in map(str, d.cells)]) for lv in own}
         occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
+        extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
+        union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
+        for lv in own:  # each dataset's cells inside a region that some pattern covers
+            for cell, n in zip(*np.unique(parents[lv][union], return_counts=True), strict=True):
+                rid = region_node_id(lv, str(cell))
+                covered[rid] = covered.get(rid, 0) + int(n)
         for pid, rows in d.covers.items():
             rows = np.unique(np.asarray(rows, dtype=np.int64))
             res_of[pid] = res
@@ -463,7 +469,6 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                 regions, counts = np.unique(parents[lv][rows], return_counts=True)
                 for cell, n in zip(regions, counts, strict=True):
                     rid = region_node_id(lv, str(cell))
-                    covered.setdefault(rid, set()).update((d.dataset_id, c) for c in d.cells[rows][parents[lv][rows] == cell])
                     share = round(float(n / occupied[lv][cell]), 4)
                     if share >= GEO_REGION_MIN_SHARE:
                         out.in_region.append((pid, rid, share))
@@ -472,9 +477,12 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
         for up in [x for x in levels if x <= lv]:
             out.regions.setdefault(region_node_id(up, h3.cell_to_parent(cell, up) if up < lv else cell), {"resolution": up})
+    members: dict[str, int] = {}
+    for _, rid, _ in out.in_region:
+        members[rid] = members.get(rid, 0) + 1
     for rid, props in out.regions.items():
         lv, cell = int(rid.split(":")[1]), rid.split(":")[2]
-        props.update(h3=cell, cells_covered=len(covered.get(rid, ())), patterns=sum(r == rid for _, r, _ in out.in_region))
+        props.update(h3=cell, cells_covered=covered.get(rid, 0), patterns=members.get(rid, 0))
         coarser = [x for x in levels if x < lv]
         if coarser:
             out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(cell, coarser[0]))))
