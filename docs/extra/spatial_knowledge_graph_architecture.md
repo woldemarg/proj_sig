@@ -460,7 +460,7 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 | геобенчмарк із закладеною істиною | #3 | реалізовано (`scripts/geo_benchmark.py`, базові числа в `docs/10` §10.3) |
 | цілісність запису | #5 | план |
 | джерело і надійність | #6 | план |
-| заголовок без «verified» | #26 | план |
+| заголовок без «verified» | #26 | реалізовано (`graph_query_engine/evidence.py`, `SYSTEM_PROMPT`; фраза «trust is given per item» — з рядками `trust:` у #8) |
 | `SpatialProvenance` з п'яти полів | #25 | план |
 | прибирання перед ядром | #33 | план |
 | регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | план |
