@@ -154,28 +154,32 @@ effect, ingested with the geo option and scored against the truth they were gene
 brings a number, not an impression. Every scenario raises the events' `load` by 2 sd on its planted part. A focus is a
 ring-3 disk of 37 cells at resolution 8: an insight covers at least `MIN_SUPPORT_ROWS` (30) cells, so a smaller focus can
 never be one, and three foci fit in one cell of resolution 5. Each focus also raises its own signature metric, so each is
-its own insight and not one pattern of busy cells. A part is found by the patterns with an upward shift of a planted
-metric (target or secondary) that draw at least half their events from it.
+its own insight and not one pattern of busy cells. A part is found when the patterns with an upward shift of a planted
+metric (target or secondary) that draw at least half their events from it hold at least half of its events. The walk
+from a found focus counts an unfound one as a miss.
 
 | Scenario | Planted | Baseline (hashing double; the bundled model where it differs) |
 |---|---|---|
-| S-regional | three foci in one resolution-5 cell, 7+ cells apart (no CO_LOCATED between them) | 3/3 foci found (coverage ≥ 0.97); the walk from each reaches the other two, recall@5 1.0, mean rank 2.0 |
+| S-regional | three foci in one resolution-5 cell, centres 10–11 cells apart, the nearest cells of two foci 4 apart (no CO_LOCATED between them) | 3/3 foci found (coverage ≥ 0.97); the walk from each reaches the other two, recall@5 1.0, mean rank 2.0 |
 | S-control | three foci in three resolution-5 cells | 3/3 found; recall@5 1.0, mean rank 2.5 (1.83) |
 | S-local | one focus | found (coverage 0.97) |
 | S-levels | the eastern half of a 2.4° × 3.4° area, one file as a table, at 7 and at 5 | found on every level: 25, 17 and 2 patterns holding 100 %, 99.8 % and 97.5 % of the zone's events; 1 of 3 cross-level pairs of best patterns shares an attractor |
-| S-parts | the northern half of the same area as three files split by longitude (28 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; 0 CO_LOCATED between datasets |
-| S-size | three datasets of about 9,500 cells at 8, ten foci each | 14 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,080 prompt characters |
+| S-parts | the northern half of the same area as three files split by longitude (39 resolution-5 cells hold events of two parts) | found in every part (14–17 patterns, ≥ 99.8 %); the parts' best patterns share an attractor; no CO_LOCATED between datasets, by construction (the edge is computed within one dataset) |
+| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 61 CO_LOCATED, 215 SIBLING; 1.6–2.6 s per batch, of which 0.3–0.4 s compiles the graph; 335 (348) nodes visited per seed walk; 11,080 prompt characters |
 
 Measured on 2026-10-15, seed 1, k 5. Three readings bound what the spatial issues can show:
-- **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the pattern
-  of busy cells that all of them specialise (the lattice). A link by shared region adds recall only where that parent is
-  missing; the measure that separates the two scenarios is the rank of the same-region foci against S-control's.
+- **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the anchors:
+  one anchor they all activate in S-regional, anchors joined by RELATED_TO in S-control. The pattern of busy cells links
+  them structurally too (two specialise it, the third is CO_LOCATED with it). A link by shared region cannot raise recall
+  here; what separates the two scenarios is the rank of the same-region foci against S-control's.
 - **A coarser level finds only broad effects.** At resolution 5 the three foci of S-regional are a handful of cells, far
   below 30, so no coarser insight can confirm them; only a zone of ≥ 30 coarse cells (S-levels) is found at every level.
 - **The table level of a geo file mines the coordinates.** The district condition restates `lon`, which becomes the
   target, and the planted `load` is a secondary shift.
 
-S-size finds fewer than half of its foci because the batch keeps `VALIDATION_BUDGET` candidates, not because the foci are faint.
+S-size finds fewer than half of its foci because the batch keeps `VALIDATION_BUDGET` (50) candidates, not because the
+foci are faint: with 400 it finds 30 of 30. The cut is not even: the foci of one signature (`wait`) go in every file,
+while other foci keep up to four patterns each.
 `test_geo_benchmark_apparatus` guards the generator (same seed, same file; three foci in one region) and scores S-regional.
 
 ## 10.4 Measurement scripts
