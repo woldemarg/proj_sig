@@ -128,8 +128,10 @@ def demo_df():
 
 @pytest.fixture(scope="session")
 def demo_csv(tmp_path_factory, demo_df):
+    """The demo as a CSV with the same bytes on every OS: the dataset id hashes the file, and pandas ends lines with
+    ``os.linesep`` by default, so CRLF on Windows would give other dataset and pattern ids than ``tests/golden/``."""
     path = tmp_path_factory.mktemp("data") / "retail_synthetic.csv"
-    demo_df.to_csv(path, index=False)
+    demo_df.to_csv(path, index=False, lineterminator="\n")
     return path
 
 
