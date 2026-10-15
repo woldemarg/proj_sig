@@ -299,7 +299,12 @@ class Engine:
             options["strict"] = False
         return [  # the table level leaves the point columns out
             self.submit(
-                path, geo=g, upload=(upload_id, level), geo_levels=selection if g else None, locator=None if g else locator.strip() or None, **options
+                path,
+                geo=g,
+                upload={"upload_id": upload_id, "level": level, "upload_levels": [lv for _, lv in levels]},
+                geo_levels=selection if g else None,
+                locator=None if g else locator.strip() or None,
+                **options,
             )
             for g, level in levels
         ]
@@ -316,7 +321,7 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
-        upload: tuple[str, str] | None = None,
+        upload: dict[str, Any] | None = None,
         strict: bool = True,
         geo_levels: dict[str, Any] | None = None,
         locator: str | None = None,
@@ -327,8 +332,8 @@ class Engine:
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
-        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is (``upload_id``, level) for a batch
-        of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
+        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level, upload_levels}`` for
+        a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``; ``locator`` the point
         columns a table level leaves out.
         """
@@ -343,7 +348,7 @@ class Engine:
             "bins": bins,
             "categories": categories,
             **({"geo": geo} if geo else {}),
-            **({"upload_id": upload[0], "level": upload[1]} if upload else {}),
+            **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"geo_levels": geo_levels} if geo_levels else {}),
             **({"locator": locator} if locator else {}),

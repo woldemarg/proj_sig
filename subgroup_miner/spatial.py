@@ -46,7 +46,7 @@ GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also beco
 GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
 GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
 COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset and of the others (the strongest relations)
-GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: share of the region's occupied cells the pattern covers
+GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: |P ∩ R| over the smaller of the pattern and the region's occupied cells
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 GEO_AUTO_RESOLUTIONS = range(10, 2, -1)  # the resolutions ``@auto`` weighs, finest first
 GEO_DENSE_SHARE_MIN = 0.3  # ``@auto``: the finest level needs this share of cells with at least min_cell_points points
@@ -488,7 +488,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
-    it covers at least ``GEO_REGION_MIN_SHARE`` of the region's occupied cells. Two patterns of one resolution, of any
+    their overlap reaches ``GEO_REGION_MIN_SHARE`` of the smaller of its cells and the region's occupied cells (a focus inside
+    a region scores 1, as does a pattern covering the region). Two patterns of one resolution, of any
     datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
@@ -522,7 +523,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                 regions, counts = np.unique(parents[lv][rows], return_counts=True)
                 for cell, n in zip(regions, counts, strict=True):
                     rid = region_node_id(lv, str(cell))
-                    share = float(n / occupied[lv][cell])
+                    share = float(n / min(len(rows), occupied[lv][cell]))
                     if share >= GEO_REGION_MIN_SHARE:  # the threshold reads the exact share, the edge stores it rounded
                         share = round(share, 4)
                         out.in_region.append((pid, rid, share))

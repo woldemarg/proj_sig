@@ -26,6 +26,7 @@ import numpy as np
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.vertical import upload_of
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
@@ -61,7 +62,7 @@ class Retrieved:
     path: list[PathStep]
     structural_distance: int | None = None  # lattice hops (incl. SIBLING) to nearest seed
     scope_overlap: float = 0.0  # max Jaccard of scope conditions with any seed
-    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed, not ``located``
+    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed, not ``located``, not a seed's upload
     located: str = ""  # adjacent | same_region: the last step is such a CO_LOCATED link and no condition is shared
 
 
@@ -170,6 +171,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
 
     closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth)
     seed_conds = [_conds(graph, s) for s in seed_ids]
+    seed_uploads = {upload_of(graph, s) for s in seed_ids} - {None}  # another level of a seed's upload is no other segment
     best: dict[str, Retrieved] = {}
     attractors: dict[str, Retrieved] = {}
     for (node, phase, _s, _l), (score, seed, path) in final.items():
@@ -197,7 +199,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         )
         if route != "seed" and overlap == 0.0:
             r.located = _located(graph, node, path)
-            r.transversal_only = route == "transversal" and not r.located
+            r.transversal_only = route == "transversal" and not r.located and upload_of(graph, node) not in seed_uploads
         if node not in best or r.score > best[node].score:
             best[node] = r
 
