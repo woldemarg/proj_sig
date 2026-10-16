@@ -42,6 +42,7 @@ from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import SNAPSHOT_VERSION, Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
+from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
@@ -760,6 +761,16 @@ class Engine:
             props, chain = graph.nodes[pid]["props"], scale_chain(graph, [pid])
             trust[pid] = {k: props.get(k) for k in ("credibility", "integrity")} | {"scale": chain[0].scale if chain else ""}
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
+
+    def export_geosparql(self) -> str:
+        """The committed graph as GeoSPARQL Turtle (``geosparql.build_turtle``), each geo insight with the H3 cells of its extent."""
+        graph, extents = self.graph(), {}
+        for d in self.geo_datasets():
+            cells = self.ws.load_geo(d["dataset_id"], ("cells",))["cells"]
+            for pid, rows in self.ws.load_covers(d["dataset_id"]).items():
+                if pid in graph.nodes:
+                    extents[pid] = [str(c) for c in cells[rows]]
+        return build_turtle(graph, extents)
 
     def _geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
         geo = self.ws.load_geo(dataset_id, keys) if self._geo_ready(dataset_id) else None
