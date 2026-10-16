@@ -36,7 +36,7 @@ from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
-from subgroup_miner.spatial import SpatialStructure
+from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -236,15 +236,30 @@ def co_occurrence_edges(activates: list[GraphEdge]) -> list[GraphEdge]:
     ]
 
 
+def _common(a: dict[int, frozenset[str]], b: dict[int, frozenset[str]]) -> tuple[frozenset[str], frozenset[str]]:
+    """Both places' cells at the finest resolution both have (nothing without one)."""
+    level = max(a.keys() & b.keys(), default=None)
+    return (a[level], b[level]) if level is not None else (frozenset(), frozenset())
+
+
 def credibility(
-    insights: list[Insight], batches: dict[str, dict[str, Any]], activates: list[GraphEdge], tampered: set[str], thresholds: PhenomenonThresholds
+    insights: list[Insight],
+    batches: dict[str, dict[str, Any]],
+    activates: list[GraphEdge],
+    tampered: set[str],
+    thresholds: PhenomenonThresholds,
+    spatial: SpatialStructure,
 ) -> dict[str, dict[str, Any]]:
-    """Each pattern's ``credibility`` and ``credibility_basis`` from independent confirmation, phase A (anchors;
-    docs/06_graph_and_storage.md §6.2). Another source is another declared ``source`` (compared casefolded) outside the
-    pattern's own upload; metrics compare by the ``indicators`` registry. 5: a pattern of another declared source shifts
-    a metric of the same indicator materially the opposite way in the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor
-    and shifts a metric of the same indicator the same way; 2: another dataset (declared or not, not of the same upload)
-    shifts a metric of the same name; 6: none. 5 wins over 1. A version and the one it ``supersedes`` are one source.
+    """Each pattern's ``credibility`` and ``credibility_basis`` from independent confirmation (docs/06_graph_and_storage.md
+    §6.2). Another source is another declared ``source`` (compared casefolded) outside the pattern's own upload; metrics
+    compare by the ``indicators`` registry, and by unit when both give one. Phase A (``rule: anchor``, a pattern without a
+    place): 5: a pattern of another declared source shifts a metric of the same indicator materially the opposite way in
+    the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor and shifts a metric of the
+    same indicator the same way; 2: another dataset (declared or not, not of the same upload) shifts a metric of the same
+    name; 6: none. Phase B (``rule: place``, a geo pattern), its cells against the other's at the finest resolution both
+    datasets have (``spatial.places``): only a pattern whose place overlaps by ``GEO_REGION_MIN_SHARE`` of the smaller counts; 5 needs that share of
+    the larger (a comparable place, in any subgroup), and 2 also comes from another dataset's events over that share of
+    the place. 5 wins over 1. A version and the one it ``supersedes`` are one source.
     Never read: p, stability, weight; a tampered pattern confirms nothing."""
     batch = {ins.id: batches.get(ins.batch_id, {}) for ins in insights}
     anchors: dict[str, set[str]] = defaultdict(set)
@@ -254,37 +269,59 @@ def credibility(
     of = {ins.id: ins for ins in insights}
     shifts = {ins.id: {s.metric: s for s in thresholds.phenomenon_shifts(ins)} for ins in insights}
     source = {pid: (batch[pid].get("source") or "").casefold() or None for pid in of}
-    indicator = {  # per phenomenon metric, compared casefolded like the source
-        pid: {m: i.casefold() for m in shifts[pid] if (i := (batch[pid].get("indicators") or {}).get(m, {}).get("indicator"))} for pid in of
+    indicator = {  # per phenomenon metric: (indicator, unit or None), compared casefolded like the source
+        pid: {
+            m: (e["indicator"].casefold(), (e.get("unit") or "").casefold() or None)
+            for m in shifts[pid]
+            if (e := (batch[pid].get("indicators") or {}).get(m, {})).get("indicator")
+        }
+        for pid in of
     }
     conditions = {pid: frozenset(c.expr for c in ins.conditions) for pid, ins in of.items()}
     own = {pid: {ins.dataset_id, batch[pid].get("upload_id")} - {None} for pid, ins in of.items()}  # what a supersedes names
+    place_at, occupied = spatial.places, spatial.occupied
+    dataset_batch = {b.get("dataset_id"): b for b in batches.values() if b.get("status") == "READY"}
     by_name, by_indicator = defaultdict(set), defaultdict(set)
     for pid in of:
         if pid not in tampered:
             for m in shifts[pid]:
                 by_name[m].add(pid)
-            for i in indicator[pid].values():
+            for i, _ in indicator[pid].values():
                 by_indicator[i].add(pid)
+
+    def independent(pid: str, other: dict[str, Any], dataset: str) -> bool:
+        """``dataset`` (batch record ``other``) is outside the pattern's dataset, upload, declared source and versions."""
+        upload, theirs = batch[pid].get("upload_id"), (other.get("source") or "").casefold() or None
+        return not (
+            dataset == of[pid].dataset_id
+            or (upload and other.get("upload_id") == upload)
+            or (source[pid] is not None and source[pid] == theirs)
+            or other.get("supersedes") in own[pid]
+            or batch[pid].get("supersedes") in {dataset, other.get("upload_id")} - {None}
+        )
+
+    def overlap(pid: str, q: str, over) -> bool:
+        a, b = _common(place_at[pid], place_at.get(q, {}))
+        return bool(a and b) and len(a & b) >= GEO_REGION_MIN_SHARE * over(len(a), len(b))
+
     out = {}
     # ponytail: every pair sharing a metric is compared (4000 such patterns: ~6 s a compile); index by condition past a few thousand
-    for pid, ins in of.items():
-        mine, upload = shifts[pid], batch[pid].get("upload_id")
+    for pid in of:
+        mine, geo = shifts[pid], pid in place_at
         found: dict[int, set[str]] = defaultdict(set)
-        for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i in indicator[pid].values())):
-            if of[q].dataset_id == ins.dataset_id or (upload and batch[q].get("upload_id") == upload):
-                continue
-            if (
-                (source[pid] is not None and source[pid] == source[q])
-                or batch[q].get("supersedes") in own[pid]
-                or batch[pid].get("supersedes") in own[q]
-            ):
-                continue  # one declared source in two datasets, or a version and the one it replaces: no independent view
+        for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i, _ in indicator[pid].values())):
+            if not independent(pid, batch[q], of[q].dataset_id) or (geo and not overlap(pid, q, min)):
+                continue  # one source in two datasets, a version and the one it replaces, or (with a place) elsewhere
             declared = source[pid] is not None and source[q] is not None
-            pairs = [(mine[m], shifts[q][n]) for m, i in indicator[pid].items() for n, j in indicator[q].items() if i == j]
+            pairs = [
+                (mine[m], shifts[q][n])
+                for m, (i, u) in indicator[pid].items()
+                for n, (j, v) in indicator[q].items()
+                if i == j and (u is None or v is None or u == v)
+            ]
             if (
                 declared
-                and (conditions[pid] <= conditions[q] or conditions[q] <= conditions[pid])
+                and (overlap(pid, q, max) if geo else conditions[pid] <= conditions[q] or conditions[q] <= conditions[pid])
                 and any(a.robust_z * b.robust_z < 0 and thresholds.material(a) and thresholds.material(b) for a, b in pairs)
             ):
                 found[5].add(q)
@@ -295,7 +332,14 @@ def credibility(
         level = next((lv for lv in (5, 1, 2) if found[lv]), 6)
         patterns = sorted(found.get(level, ()))
         names = {source[q] or of[q].dataset_id: batch[q].get("source") or of[q].dataset_id for q in reversed(patterns)}  # one per source
-        basis: dict[str, Any] = {"rule": "anchor", "patterns": patterns, "sources": sorted(names.values())}
+        if geo and level in (2, 6):  # another dataset's events over the place
+            for ds in sorted(occupied):
+                a, b = _common(place_at[pid], occupied[ds])
+                other = dataset_batch.get(ds, {})
+                if a and len(a & b) >= GEO_REGION_MIN_SHARE * len(a) and independent(pid, other, ds):
+                    level = 2
+                    names.setdefault((other.get("source") or "").casefold() or ds, other.get("source") or ds)
+        basis: dict[str, Any] = {"rule": "place" if geo else "anchor", "patterns": patterns, "sources": sorted(names.values())}
         basis |= {"comparability": c} if (c := {1: "indicator", 5: "indicator", 2: "nominal"}.get(level)) else {}
         if level == 5 and found[1]:
             basis["confirmed_by"] = sorted(found[1])
@@ -393,12 +437,13 @@ def build_snapshot(
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)
-    edges += structural + _spatial_plane(spatial or SpatialStructure(), nodes, structural)
+    spatial = spatial or SpatialStructure()
+    edges += structural + _spatial_plane(spatial, nodes, structural)
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
     tampered = {pid for pid in by_pid if nodes[pid].props["integrity"] == "mismatch"}
-    for pid, trust in credibility(insights, batches, activates, tampered, settings.thresholds).items():
+    for pid, trust in credibility(insights, batches, activates, tampered, settings.thresholds, spatial).items():
         nodes[pid].props.update(trust)
     intact = {aid: [m for m in mem if nodes[m[0]["id"]].props["integrity"] != "mismatch"] for aid, mem in members.items()}
     nodes.update(_attractor_nodes(ontology, intact, seq_to_batch, representation))  # a tampered member describes no anchor
