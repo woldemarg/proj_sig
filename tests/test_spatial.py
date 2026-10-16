@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import h3
 import numpy as np
@@ -18,7 +19,16 @@ from insight_graph_service.core.settings import PROJECT_ROOT
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
 from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset
-from subgroup_miner.spatial import SpatialError, build_cells, effective_n_factor, parse_geo, parse_points, select_levels, subgroup_moran
+from subgroup_miner.spatial import (
+    SpatialError,
+    build_cells,
+    effective_n_factor,
+    locate_points,
+    parse_geo,
+    parse_points,
+    select_levels,
+    subgroup_moran,
+)
 
 HOT = (48.5, 35.25)  # the planted cluster: many points, mostly at night, late in the period
 
@@ -57,6 +67,9 @@ def test_parse_geo_and_points():
     lat, lon = parse_points(pd.Series(['{"coordinates":[33.77,47.04],"type":"Point"}', "POINT (30.5 50.45)", "nowhere", None]))
     assert lat[:2].tolist() == [47.04, 50.45] and lon[:2].tolist() == [33.77, 30.5]
     assert np.isnan(lat[2:]).all()
+    frame = geo_frame()  # columns named longitude then latitude: the names give the roles, in range either way
+    swapped, ordered = locate_points(frame, "longitude,latitude"), locate_points(frame, "latitude,longitude")
+    assert np.array_equal(swapped[0], frame["latitude"]) and all(np.array_equal(a, b) for a, b in zip(swapped, ordered))
 
 
 def test_cell_table_roles_follow_dtypes():
@@ -352,6 +365,17 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     with TestClient(create_app(engine)) as client:
         listed = client.get("/api/batches", params={"upload_id": upload_id}).json()
         assert sorted(b["batch_id"] for b in listed) == sorted(r["batch_id"] for r in done)
+        with path.open("rb") as f:  # the same upload again: every level SKIPPED, and the 202 names each level's batch
+            data = {"geo": "auto@8,7", "bins": "points:4", "table": True}
+            accepted = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data=data).json()
+        assert list(accepted["levels"]) == ["8", "7", "table"] and accepted["batch_id"] == accepted["levels"]["8"]
+        for _ in range(600):  # one worker thread: the table level runs last
+            if client.get(f"/api/batches/{accepted['levels']['table']}").json()["status"] in ("SKIPPED", "READY", "FAILED"):
+                break
+            time.sleep(0.1)
+        again = client.get("/api/batches", params={"upload_id": upload_id}).json()
+        assert {b["batch_id"] for b in again} - {r["batch_id"] for r in done} == set(accepted["levels"].values())
+        assert all(b["status"] == "SKIPPED" for b in again if b["batch_id"] in accepted["levels"].values())
         client.delete(f"/api/datasets/{done[1]['dataset_id']}")
         assert engine.ws.ready_batch_for(done[0]["dataset_id"]) and Path(done[0]["source_path"]).is_file()  # the other levels stay
         assert client.delete(f"/api/uploads/{upload_id}").json()["datasets"] == sorted([done[0]["dataset_id"], table])
@@ -407,15 +431,24 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     assert finest[50_000] > finest[2_000]  # the denser file gets the finer level
     with pytest.raises(SpatialError, match="dense share"):  # many cells, none dense: the refusal names that
         select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
+    rng = np.random.default_rng(71)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
+    n, size = int(rng.integers(2000, 6000)), float(rng.uniform(0.6, 1.2))
+    lat0, lon0 = rng.uniform(-60, 60), rng.uniform(-170, 170)
+    lat, lon = lat0 + rng.random(n) * size, lon0 + rng.random(n) * size
+    picked = select_levels(lat, lon, levels, min_rows=50, min_cell_points=5)
+    for res, candidate in picked["candidates"].items():  # each count is the cell table build_cells makes at that level
+        assert candidate["cells"] == len({h3.latlng_to_cell(a, b, int(res)) for a, b in zip(lat, lon)})
+    assert 5 not in picked["chosen"] and picked["candidates"]["5"]["cells"] == 49
 
     path = tmp_path / "points.csv"
     geo_frame().to_csv(path, index=False)
     engine = make_engine(make_config(tmp_path / "ws"))
     with path.open("rb") as f:
         record, table = engine.upload("points.csv", f, geo="auto@auto", table=True)
+    assert record["profile"]["geo"]["levels"]["chosen"] == [7]  # where the selection stays, whatever the batch's end
     done = engine.process(record["batch_id"])
     assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7] and "geo_levels" not in done
-    assert table["level"] == "table" and "geo_levels" not in table  # the selection is the geo levels' alone
+    assert table["level"] == "table" and not table["profile"]  # the selection is the geo levels' alone
     assert done["dataset_id"] == load_dataset(path, engine.settings.miner, geo="auto@7").dataset_id
     pd.DataFrame({"lat": [48.5] * 60, "lon": [35.3] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:

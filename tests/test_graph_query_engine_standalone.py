@@ -274,6 +274,73 @@ def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
     assert "scale: scale-dependent" in found.payload().evidence_prompt
 
 
+def _upload_graph(patterns: list[tuple[str, str, int, float, float]], in_region: list[tuple[str, str, float]]):
+    """One upload's geo patterns, every one a member of A-1: ``patterns`` as (id, scope, resolution, z, alignment),
+    ``in_region`` as (pattern, region, share)."""
+    from graph_query_engine import DualGraph
+    from insight_contracts import SNAPSHOT_VERSION
+
+    levels = sorted({str(res) for _, _, res, _, _ in patterns}, key=lambda lv: -int(lv))
+    nodes = [{"id": "A-1", "kind": "Attractor", "label": "margin ↓", "props": {"n_patterns": len(patterns), "distinct_scopes": 2, "signature": []}}]
+    for pid, scope, res, z, _ in patterns:
+        nodes.append(node := pattern(pid, [scope], z=z, dataset=f"ds{res}"))
+        node["props"]["provenance"]["spatial"] = {"resolution": res, "cells": 40}
+    nodes += [
+        {
+            "id": f"DS:ds{lv}",
+            "kind": "Dataset",
+            "label": lv,
+            "props": {"dataset_id": f"ds{lv}", "upload_id": "up-1", "level": lv, "upload_levels": levels},
+        }
+        for lv in levels
+    ]
+    nodes += [
+        {"id": r, "kind": "Region", "label": r, "props": {"resolution": int(r.split(":")[1]), "h3": r[-1]}}
+        for r in sorted({r for _, r, _ in in_region})
+    ]
+    edges = [edge(pid, "A-1", "ACTIVATES", w) for pid, _, _, _, w in patterns] + [edge(p, r, "IN_REGION", s) for p, r, s in in_region]
+    return DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
+
+
+def test_a_step_takes_the_nearest_level_then_the_own_subgroup():
+    """Coarser patterns of one upload compete by level before alignment: a reversal at the next level is scale-dependent
+    even when a farther level corresponds more strongly, and the chain lists both levels in order; at one level a
+    pattern's own subgroup comes before another pattern of the same region that aligns more strongly."""
+    from graph_query_engine.vertical import scale_chain
+
+    def three_levels(z5: float, z3: float):  # P at 7; its level-5 pattern aligns weakly, its level-3 pattern strongly
+        patterns = [("P", "a=1", 7, -1.5, 0.9), ("Q5", "a=1", 5, z5, 0.4), ("Q3", "a=1", 3, z3, 0.95)]
+        return _upload_graph(patterns, [("P", "R:5:x", 0.8), ("P", "R:3:y", 0.9), ("Q5", "R:5:x", 1.0), ("Q5", "R:3:y", 1.0), ("Q3", "R:3:y", 1.0)])
+
+    (chain,) = scale_chain(three_levels(+1.0, -1.0), ["P"])
+    assert [(s.pattern_id, s.relation) for s in chain.up] == [("Q5", "contrasts"), ("Q3", "contrasts")] and chain.scale == "scale-dependent"
+    (chain,) = scale_chain(three_levels(-1.0, +1.0), ["P"])
+    assert [s.pattern_id for s in chain.up] == ["Q5", "Q3"] and chain.scale == "regional"
+
+    patterns = [
+        ("A", "lisa=hot", 7, -1.5, 0.9),
+        ("B", "ocean=bay", 7, -1.5, 0.85),
+        ("A5", "lisa=hot", 5, -1.2, 0.95),
+        ("B5", "ocean=bay", 5, -1.2, 0.5),
+    ]
+    graph = _upload_graph(patterns, [(p, "R:5:x", 0.9 if len(p) == 1 else 1.0) for p, *_ in patterns])
+    assert {c.pattern_id: [s.pattern_id for s in c.up] for c in scale_chain(graph, ["A", "B"])} == {"A": ["A5"], "B": ["B5"]}
+
+
+def test_the_vertical_budget_counts_distinct_patterns(monkeypatch):
+    """``VERTICAL_MAX_TOTAL`` caps the distinct vertical patterns of a question: one already in a chain costs nothing
+    again, a new one past the cap stays out of the chain, and the label still compares with it."""
+    import graph_query_engine.vertical as vertical
+
+    monkeypatch.setattr(vertical, "VERTICAL_MAX_TOTAL", 1)
+    patterns = [("A", "lisa=hot", 7, -1.5, 0.9), ("B", "lisa=hot", 7, -1.5, 0.8), ("C", "ocean=bay", 7, -1.5, 0.8)]
+    patterns += [("A5", "lisa=hot", 5, -1.2, 0.9), ("C5", "ocean=bay", 5, 1.2, 0.9)]
+    graph = _upload_graph(patterns, [(p, "R:5:x", 0.9 if len(p) == 1 else 1.0) for p, *_ in patterns])
+    chains = {c.pattern_id: c for c in vertical.scale_chain(graph, ["A", "B", "C"])}
+    assert [s.pattern_id for s in chains["A"].up] == [s.pattern_id for s in chains["B"].up] == ["A5"]
+    assert not chains["C"].up and chains["C"].scale == "scale-dependent"  # C5 would be a second pattern
+
+
 def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     """Only findings that shift an asked target the asked way count: one shifting it the other way, or not at all, is
     neither scored nor listed, even in a region shared with answering ones; the level is the coarsest where the geo
