@@ -454,6 +454,11 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     assert finest[50_000] > finest[2_000]  # the denser file gets the finer level
     with pytest.raises(SpatialError, match="dense share"):  # many cells, none dense: the refusal names that
         select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
+    big = np.random.default_rng(1)  # a large export: level 7 dense but 15,000 cells, level 5 only ~350
+    picked = select_levels(48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3, levels, min_rows=50, min_cell_points=5)
+    assert picked["chosen"] == [6] and "GEO_AUTO_MAX_CELLS" in picked["reasons"]["7"] and "GEO_AUTO_MIN_CELLS" in picked["reasons"]["5"]
+    world = select_levels(big.uniform(-80, 80, 250_000), big.uniform(-179, 179, 250_000), levels, min_rows=50, min_cell_points=5)
+    assert world["chosen"] == [3] and world["candidates"]["3"]["cells"] > 5_000  # every level over the cap: the coarsest that fits
     rng = np.random.default_rng(71)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
     n, size = int(rng.integers(2000, 6000)), float(rng.uniform(0.6, 1.2))
     lat0, lon0 = rng.uniform(-60, 60), rng.uniform(-170, 170)
