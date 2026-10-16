@@ -746,3 +746,20 @@ def test_a_coarser_level_with_nothing_to_mine_still_completes_a_new_version(tmp_
     assert [(r["status"], (r["error"] or {}).get("code")) for r in new] == [("READY", None), ("FAILED", "invalid_schema")]
     assert new[1]["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old) and "neo4j" not in new[1]["superseded"]
     assert {p["dataset_id"] for p in engine.ws.patterns()} == {new[0]["dataset_id"]}
+
+
+def test_a_new_version_leaves_an_old_one_still_queued(tmp_path):
+    """The commit of a new version whose target still has a queued batch commits, and the old version stays (busy)."""
+    from test_spatial import geo_frame
+
+    v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
+    geo_frame(3).to_csv(v1, index=False)
+    geo_frame(4).to_csv(v2, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with v1.open("rb") as f:
+        queued = engine.upload(v1.name, f, geo="auto@8,7")
+    old = engine.process(queued[0]["batch_id"])
+    with v2.open("rb") as f:
+        (new,) = [engine.process(r["batch_id"]) for r in engine.upload(v2.name, f, geo="auto@8", supersedes=old["upload_id"])]
+    assert new["status"] == "READY" and "superseded" not in new and any("still to run" in w for w in new["warnings"])
+    assert engine.ws.ready_batch_for(old["dataset_id"]) and engine.ws.load_batch(queued[1]["batch_id"])["status"] == "UPLOADED"

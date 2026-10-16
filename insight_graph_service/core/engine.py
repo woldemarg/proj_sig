@@ -814,7 +814,8 @@ class Engine:
         try:
             if replaced := self._superseded(record, outcome):
                 chosen = {b["batch_id"] for b in replaced[1]}
-                removed = self._delete(lambda b: b["batch_id"] in chosen, {"batch_id": record["batch_id"]}, "unknown_dataset")
+                # not a batch intent: recover rolls an unfinished removal back whatever the record's status
+                removed = self._delete(lambda b: b["batch_id"] in chosen, {"superseded_by": record["batch_id"]}, "unknown_dataset")
                 record["neo4j"], record["superseded"] = removed.pop("neo4j"), removed
         except Exception as exc:  # the batch's own outcome stands; the old version stays
             record["warnings"].append(f"supersedes {record['supersedes']} not applied: {type(exc).__name__}: {exc}")
