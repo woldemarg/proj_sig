@@ -32,7 +32,7 @@ from insight_contracts.text import (
 )
 
 EVIDENCE_MAX_PATTERNS = 10
-LINK_NOTE = {"CO_OCCURS": "shared members", "RELATED_TO": "centroid"}  # what joins two anchors, as the prompt says it
+LINK_NOTE = {"CO_OCCURS": "shared members", "RELATED_TO": "centroid"}  # what joins two anchors, in this order
 LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
     "same_region": " [reached by location only: same area, zones do not overlap]",
     "adjacent": " [reached by location only: zones touch or barely overlap]",
@@ -145,8 +145,14 @@ class Evidence:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
             for a in self.attractors:
-                rel = ", ".join(f"{r['id']} ({'; '.join(f'{LINK_NOTE[t]} {w:.2f}' for t, w in r['links'].items())})" for r in a["related"])
-                same = f" (same description as {a['same_as']}: read the two as one phenomenon; anchors are never merged)" if a.get("same_as") else ""
+                rel = ", ".join(f"{r['id']} ({self._links(r)})" for r in a["related"])
+                twin = next((r for r in a["related"] if r["id"] == a.get("same_as")), {})
+                same = (
+                    f" (same description as {a['same_as']}; "
+                    + (f"shares {_members(twin['shared'])} with it)" if twin.get("shared") else "a separate anchor with no shared members)")
+                    if a.get("same_as")
+                    else ""
+                )
                 lines.append(
                     f'- {a["id"]} "{a["description"]}"{same}: {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes;'
                     f" related: {rel or 'none'}"
@@ -201,6 +207,12 @@ class Evidence:
             lines.append("")
             lines.extend(f"NOTE: {n}" for n in self.notes)
         return "\n".join(lines)
+
+    @staticmethod
+    def _links(related: dict[str, Any]) -> str:
+        """``9 shared members, 1.00; centroid 0.90``: what joins an anchor to one neighbour."""
+        texts = {"CO_OCCURS": f"{_members(related.get('shared', 0), 'shared ')}, {{:.2f}}", "RELATED_TO": "centroid {:.2f}"}
+        return "; ".join(texts[t].format(related["links"][t]) for t in LINK_NOTE if t in related["links"])
 
     def _keys(self) -> dict[str, str]:
         return {it.pattern_id: it.key for it in self.items}
@@ -305,6 +317,10 @@ class Evidence:
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
+
+
+def _members(n: int, kind: str = "") -> str:
+    return f"{n} {kind}member{'' if n == 1 else 's'}"
 
 
 def _path_text(path: list[PathStep], role: str) -> str:
@@ -436,9 +452,12 @@ def build_evidence(
     attractors, described = [], {}
     for a in result.attractors:
         node = graph.nodes[a.node_id]
-        links: dict[str, dict[str, float]] = {}  # one entry per neighbour, with every edge that joins them
+        related: dict[str, dict[str, Any]] = {}  # one entry per neighbour, with every edge that joins them
         for e, other in graph.incident(a.node_id, LATENT):
-            links.setdefault(other, {})[e["type"]] = round(e["weight"], 3)
+            entry = related.setdefault(other, {"id": other, "links": {}})
+            entry["links"][e["type"]] = round(e["weight"], 3)
+            if e["type"] == "CO_OCCURS":
+                entry["shared"] = e["props"]["shared"]  # the weight is a capped sum: the count says how many
         description = describe_components(node["props"]["signature"]) or node["label"]
         attractors.append(
             {
@@ -447,10 +466,12 @@ def build_evidence(
                 "description": description,
                 "n_patterns": node["props"]["n_patterns"],
                 "distinct_scopes": node["props"]["distinct_scopes"],
-                "related": [{"id": o, "links": w} for o, w in sorted(links.items(), key=lambda x: (-max(x[1].values()), x[0]))],
+                # members shared first (most first), then centroid neighbours by cosine: two scales never compared
+                "related": sorted(related.values(), key=lambda r: (-r.get("shared", 0), -r["links"].get("RELATED_TO", 0.0), r["id"])),
                 "signature": node["props"]["signature"],
             }
-            | ({"same_as": described[description]} if description in described else {})  # anchors never merge (docs/05)
+            # existing anchors never merge with each other (docs/05_latent_anchors.md §5.8)
+            | ({"same_as": described[description]} if description in described else {})
         )
         described.setdefault(description, a.node_id)
 

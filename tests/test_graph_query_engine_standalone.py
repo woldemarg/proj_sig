@@ -371,7 +371,7 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
 
 def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_explained():
     """Anchors joined by both CO_OCCURS and RELATED_TO list each other once with both links; the second anchor of a
-    description already shown says it is the same phenomenon (anchors never merge)."""
+    description already shown names the first and how many members they share, or that it shares none."""
     from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
 
     snap = snapshot()
@@ -379,15 +379,19 @@ def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_exp
     snap["edges"] = [
         edge("P1", "A-1", "ACTIVATES", 0.9),
         edge("P2", "A-2", "ACTIVATES", 0.8),
-        edge("A-1", "A-2", "CO_OCCURS", 1.0, kind="co_occurrence", shared=1),
+        edge("A-1", "A-2", "CO_OCCURS", 1.0, kind="co_occurrence", shared=2),
         edge("A-1", "A-2", "RELATED_TO", 0.9, kind="mutual_knn"),
     ]
-    graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
-    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {}, {})), encoder, QueryConfig())
-    anchors = {a["id"]: a for a in found.evidence.attractors}
-    assert anchors["A-1"]["related"] == [{"id": "A-2", "links": {"CO_OCCURS": 1.0, "RELATED_TO": 0.9}}]
+
+    def anchors_and_prompt(edges):
+        found = search(QUESTION, CommittedState(DualGraph(snap | {"edges": edges}), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+        return {a["id"]: a for a in found.evidence.attractors}, found.payload().evidence_prompt
+
+    anchors, prompt = anchors_and_prompt(snap["edges"])
+    assert anchors["A-1"]["related"] == [{"id": "A-2", "links": {"CO_OCCURS": 1.0, "RELATED_TO": 0.9}, "shared": 2}]
     assert anchors["A-2"].get("same_as") == "A-1" and "same_as" not in anchors["A-1"]
-    prompt = found.payload().evidence_prompt
-    assert "related: A-2 (shared members 1.00; centroid 0.90)" in prompt
-    assert '"margin down" (same description as A-1: read the two as one phenomenon; anchors are never merged)' in prompt
+    assert "related: A-2 (2 shared members, 1.00; centroid 0.90)" in prompt
+    assert '"margin down" (same description as A-1; shares 2 members with it)' in prompt
+    _, prompt = anchors_and_prompt([e for e in snap["edges"] if e["type"] != "CO_OCCURS"])  # one description, no shared member
+    assert '"margin down" (same description as A-1; a separate anchor with no shared members)' in prompt
