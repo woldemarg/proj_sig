@@ -20,6 +20,8 @@ found = search("Why is margin lower for phones in the US?", state, encoder, Quer
 payload = found.payload()
 payload.evidence_prompt  # put it in the LLM prompt; cite the keys [P1], [P2], ...
 payload.citations  # check the keys the model cites
+
+search("", state, encoder, QueryConfig(), place_scores={"P-…": 1.0})  # a map zone: pattern id -> its overlap with the zone
 ```
 
 `tests/test_graph_query_engine_standalone.py` runs a search and the payload round trip; `tests/test_architecture.py` checks that the package imports only the kernel.

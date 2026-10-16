@@ -68,8 +68,8 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record |
 | status | `GET /api/batches[?upload_id=]`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
-| ask | `POST /api/chat/query` `{question, use_llm}` | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
-| evidence only | `POST /api/search` `{question}` | the `EvidencePayload` |
+| ask | `POST /api/chat/query` `{question, use_llm}`, a map zone optional (`cells`, `geometry`, `resolution`) | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
+| evidence only | `POST /api/search` `{question}`, the same zone fields | the `EvidencePayload` |
 | delete a dataset | `DELETE /api/datasets/<dataset id>` (or the batch id of an upload that failed before it had one); every level of one upload: `DELETE /api/uploads/<upload id>` | what was removed |
 | reset | `POST /api/reset` | the workspace deleted, the mirror cleared |
 

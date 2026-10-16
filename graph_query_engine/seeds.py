@@ -18,6 +18,7 @@ from insight_contracts.text import humanize
 SEED_TOP_K = 3
 SEED_MIN_SCORE = 0.25
 SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
+SEED_PLACE_WEIGHT = 0.35  # a map zone: the weight of a pattern's overlap with it (docs/07_question_answering.md §7.2)
 
 
 @dataclass
@@ -27,8 +28,12 @@ class SeedMatch:
     matched: dict[str, Any]
 
 
-def score_pattern(ins: Insight, query: ParsedQuery, qvec: np.ndarray, vec: np.ndarray | None, config: QueryConfig) -> SeedMatch:
-    """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight."""
+def score_pattern(
+    ins: Insight, query: ParsedQuery, qvec: np.ndarray, vec: np.ndarray | None, config: QueryConfig, place: float | None = None
+) -> SeedMatch:
+    """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight, plus
+    ``SEED_PLACE_WEIGHT`` × how much it and the asked map zone are one place (``place``; None: no zone); a zone without
+    text: weight + place, 0 outside the zone."""
     pair = set(ins.covariance.get("pair", []))
     wanted_targets = set(query.targets)
     material = [s.robust_z for t in query.targets for s in ins.shifts if s.metric == t and config.thresholds.material(s)]
@@ -58,6 +63,8 @@ def score_pattern(ins: Insight, query: ParsedQuery, qvec: np.ndarray, vec: np.nd
         score = 0.35 * target + 0.25 * scope + 0.15 * direction + 0.15 * semantic + 0.10 * ins.weight
     else:
         score = 0.7 * semantic + 0.3 * ins.weight
+    if place is not None:
+        score = (ins.weight + place if place else 0.0) if not query.text.strip() else score + SEED_PLACE_WEIGHT * place
     return SeedMatch(
         ins.id,
         float(score),
@@ -68,7 +75,8 @@ def score_pattern(ins: Insight, query: ParsedQuery, qvec: np.ndarray, vec: np.nd
             "semantic": round(semantic, 3),
             "weight": round(ins.weight, 3),
             "scope_conflicts": conflicts,
-        },
+        }
+        | ({"place": place} if place is not None else {}),
     )
 
 
@@ -78,14 +86,15 @@ def resolve_seeds(
     encoder: QueryEncoder,
     pattern_vectors: dict[str, np.ndarray],
     config: QueryConfig,
+    place_scores: dict[str, float] | None = None,
 ) -> list[SeedMatch]:
-    """Score every Pattern against the parsed query and pick diverse top seeds."""
+    """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap) and pick diverse top seeds."""
     scope_text = "; ".join(f"{a} = {v}" if a != "*" else v for a, v in query.conditions)
     target_text = "; ".join(humanize(t) for t in query.targets)
     qvec = encoder.encode_query(scope_text, target_text, query.components(), query.text)
     scored = sorted(
         (
-            score_pattern(ins, query, qvec, pattern_vectors.get(pid), config)
+            score_pattern(ins, query, qvec, pattern_vectors.get(pid), config, None if place_scores is None else place_scores.get(pid, 0.0))
             for pid, ins in graph.insights.items()
             if graph.nodes[pid]["props"].get("integrity") != "mismatch"  # a tampered pattern never starts a walk
         ),
@@ -99,7 +108,7 @@ def resolve_seeds(
         near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:
             seeds.append(cand)
-    if not seeds and scored:
+    if not seeds and scored and (place_scores is None or query.text.strip()):  # a zone alone that holds no pattern has no seed
         seeds = [max(scored, key=lambda s: s.matched["semantic"])]
         seeds[0].matched["fallback"] = "semantic"
     return seeds

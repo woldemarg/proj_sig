@@ -26,8 +26,11 @@ queries = logging.getLogger("evidence_narrator_service.queries")  # one JSON lin
 
 
 class QueryIn(BaseModel):
-    question: str
+    question: str = ""
     use_llm: bool = True
+    cells: list[str] | None = None  # a map zone, passed to POST /api/search as given
+    geometry: dict[str, Any] | None = None
+    resolution: int | None = None
 
 
 def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None = None) -> FastAPI:
@@ -44,14 +47,14 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
 
     @app.post("/api/chat/query", response_model=None)
     def query(body: QueryIn) -> dict[str, Any] | JSONResponse:
-        if not body.question.strip():
+        if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
         try:
-            resp = graph.post("/api/search", json={"question": body.question})
+            resp = graph.post("/api/search", json=body.model_dump(exclude={"use_llm"}, exclude_none=True))
         except httpx.HTTPError as exc:
             raise HTTPException(502, f"graph service unreachable: {type(exc).__name__}: {exc}") from exc
-        if resp.status_code == 409:  # a workspace that cannot answer (mismatch, degraded): its reason, as sent
-            return JSONResponse(resp.json(), status_code=409)
+        if resp.status_code in (400, 409, 422):  # a zone it refused, a workspace that cannot answer: the reason, as sent
+            return JSONResponse(resp.json(), status_code=resp.status_code)
         if resp.status_code != 200:
             raise HTTPException(502, f"graph service HTTP {resp.status_code}: {resp.text[:200]}")
         try:

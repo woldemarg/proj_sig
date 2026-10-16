@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
@@ -36,7 +36,10 @@ STATUS = {
 
 
 class SearchIn(BaseModel):
-    question: str
+    question: str = ""  # may be empty when a zone is given
+    cells: list[str] | None = None  # a map zone as H3 cells
+    geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
+    resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
 
 
 class DatasetMetadataIn(BaseModel):
@@ -160,9 +163,11 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
-        if not body.question.strip():
+        if body.cells is not None and body.geometry is not None:
+            raise HTTPException(400, "a zone is cells or geometry, not both")
+        if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
-        return engine.evidence(body.question).to_dict()
+        return engine.evidence(body.question, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:

@@ -88,6 +88,7 @@ class Evidence:
     notes: list[str] = field(default_factory=list)
     scale_chains: list[dict[str, Any]] = field(default_factory=list)  # ScaleChain as dicts, the items' keys added
     zones: list[dict[str, Any]] = field(default_factory=list)  # rank_zones: a question without scope over geo items
+    area: dict[str, float] | None = None  # an asked map zone: item key -> its overlap with the zone (place); None: no zone
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -95,7 +96,7 @@ class Evidence:
     def to_prompt(self) -> str:
         p = self.parsed
         plain = self.plain_language()
-        lines = [f"QUESTION: {self.query}"]
+        lines = [f"QUESTION: {self.query or '(no text: the map area below is the question)'}"]
         parsed_bits = []
         if p.get("targets"):
             parsed_bits.append("target=" + ",".join(p["targets"]))
@@ -104,6 +105,13 @@ class Evidence:
         if p.get("conditions"):
             parsed_bits.append("scope=" + ",".join(p["conditions"]))
         lines.append("PARSED: " + (" | ".join(parsed_bits) or "no explicit metric/scope recognised"))
+        if self.area is not None:
+            inside = ", ".join(f"{k} {v:.0%}" for k, v in self.area.items())
+            lines.append(
+                f"AREA: the question is about a map area; the findings in it, with how closely each one's map cells match it (100% = the same cells): {inside}; the others lie outside it."
+                if inside
+                else "AREA: the question is about a map area; none of the findings lies in it."
+            )
         lines.append(
             "UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset."
         )
@@ -281,6 +289,8 @@ class Evidence:
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         keys = self._keys()
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
+        if self.area is not None:
+            lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k in self.area) or 'жодного свідчення'}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
@@ -352,7 +362,9 @@ def _chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
     return asdict(chain) | {"regions": [{"id": r, **picture(graph, r)} for r in chain.regions]}
 
 
-def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig) -> Evidence:
+def build_evidence(
+    query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig, place_scores: dict[str, float] | None = None
+) -> Evidence:
     items: list[EvidenceItem] = []
     chosen, forged = [], []  # the first EVIDENCE_MAX_PATTERNS intact patterns; the tampered ones ranked among them
     for r in result.patterns:
@@ -489,4 +501,7 @@ def build_evidence(query: ParsedQuery, result: TraversalResult, graph: DualGraph
         notes=notes,
         scale_chains=chains,
         zones=_zones(query, items, graph, config),
+        area=None
+        if place_scores is None
+        else {it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores},
     )

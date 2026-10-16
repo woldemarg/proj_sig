@@ -27,12 +27,14 @@ def recorded(hashed_engine):
     return hashed_engine.evidence(QUESTION).to_dict()
 
 
-def graph_stub(answers: dict) -> FastAPI:
-    """The graph service as the narrator sees it: POST /api/search and GET /api/health."""
+def graph_stub(answers: dict, bodies: list | None = None) -> FastAPI:
+    """The graph service as the narrator sees it: POST /api/search (the requests it gets go to ``bodies``) and GET /api/health."""
     app = FastAPI()
 
     @app.post("/api/search")
     def search(body: dict):
+        if bodies is not None:
+            bodies.append(body)
         status, payload = answers[body["question"]]
         return JSONResponse(payload, status_code=status)
 
@@ -47,7 +49,9 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
     base, seen = llm_stub
     degraded = {"detail": "workspace was built with ltir-canon-0; reset the workspace (POST /api/reset)", "code": "workspace_degraded"}
     empty = empty_payload("empty?").to_dict()
-    stub = graph_stub({QUESTION: (200, recorded), "degraded?": (409, degraded), "empty?": (200, empty)})
+    bad_zone = {"detail": "'nope' is not an H3 cell", "code": "invalid_options"}
+    bodies: list = []
+    stub = graph_stub({QUESTION: (200, recorded), "degraded?": (409, degraded), "empty?": (200, empty), "": (400, bad_zone)}, bodies)
     with serve(stub) as graph_url:
         settings = NarratorSettings(insight_graph_url=graph_url, llm_base_url=base)
         with TestClient(create_app(settings)) as client, caplog.at_level(logging.INFO, logger="evidence_narrator_service.queries"):
@@ -71,6 +75,8 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
 
             assert client.post("/api/chat/query", json={"question": "empty?"}).json()["answer_mode"] == "empty"  # 200: an ordinary state
             assert client.post("/api/chat/query", json={"question": "  "}).status_code == 400
+            zone = client.post("/api/chat/query", json={"cells": ["nope"], "resolution": 7})  # a zone alone, passed on as given
+            assert zone.status_code == 400 and zone.json() == bad_zone and bodies[-1] == {"question": "", "cells": ["nope"], "resolution": 7}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
 

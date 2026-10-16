@@ -744,7 +744,7 @@ function renderThread() {
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   t.querySelectorAll(".chip-q").forEach((c) => c.addEventListener("click", () => ask(c.textContent)));
   t.querySelectorAll(".msg-bot[data-turn]").forEach((box) => {
@@ -769,15 +769,15 @@ function renderThread() {
   t.scrollTop = t.scrollHeight;
 }
 
-async function ask(question) {
-  question = (question || "").trim();
-  if (!question || S.busy) return;
+async function ask(question, zone = null) {
+  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty
+  if ((!question && !zone) || S.busy) return;
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();
-  const turn = { question, pending: true };
+  const turn = { question, zone: zone ? zone.cells.length : 0, pending: true };
   S.chat.push(turn); renderThread();
   try {
-    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, use_llm: $("use-llm").checked }) });
+    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, use_llm: $("use-llm").checked }) });
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);

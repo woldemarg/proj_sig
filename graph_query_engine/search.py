@@ -104,15 +104,18 @@ def compute_baselines(
     }
 
 
-def search(question: str, state: CommittedState, encoder: QueryEncoder, config: QueryConfig) -> SearchResult:
-    """The evidence for ``question`` over one committed state."""
+def search(
+    question: str, state: CommittedState, encoder: QueryEncoder, config: QueryConfig, place_scores: dict[str, float] | None = None
+) -> SearchResult:
+    """The evidence for ``question`` over one committed state; ``place_scores`` (pattern id -> its overlap with an asked
+    map zone) weigh the seeds, and the question may then be empty."""
     start = time.perf_counter()
     graph = state.graph
     if state.catalog is None and graph.insights:  # a caller that did not prepare one: build it now, kept on the state
         state.catalog = build_catalog(graph, encoder.embedder)
     parsed = parse_query(question, graph, config, state.catalog)
-    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config)
+    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores)
     result = traverse(graph, seeds, config)
     result.baselines = compute_baselines(graph, question, seeds, result, state.frame, encoder, config)
-    evidence = build_evidence(parsed, result, graph, config)
+    evidence = build_evidence(parsed, result, graph, config, place_scores)
     return SearchResult(question, parsed, seeds, result, evidence, time.perf_counter() - start)

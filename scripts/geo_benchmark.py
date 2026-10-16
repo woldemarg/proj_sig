@@ -29,6 +29,9 @@ Metrics, per encoder (the hashing double; the bundled model when present):
     scale        the scale label of each best geo pattern (scale_chain): reg(ional), dep(endent), nfc (not found coarser),
                  ins(ufficient)
     zone         whether the first of the ZONES for QUESTION is the planted region (scenarios that plant one)
+    place        each focus's cells as the asked map zone (one file of several foci): with QUESTION, how often the first
+                 seed is the focus's best pattern; with the next focus's signature question, how often the first seed
+                 still raises that signature (the zone weighs the seeds, the text keeps its meaning); printed in zone/kept/foci
     size         per batch the processing and graph-compile seconds; the snapshot's nodes and edges by type; the walk's
                  visited nodes per seed; the evidence prompt's length for one question
 
@@ -302,6 +305,18 @@ def _graph(engine: Engine, best: list[str]) -> dict[str, Any]:
     }
 
 
+def _place(engine: Engine, upload: Upload, found: dict[str, dict[str, Any]]) -> str:
+    """``in zone/text kept`` over the foci of one file (``place`` above)."""
+    graph, zone_hits, kept = engine.committed().graph, 0, 0
+    for i, (name, part) in enumerate(upload.parts.items()):
+        cells = sorted({h3.latlng_to_cell(a, b, FINE) for a, b in zip(upload.frame["lat"][part], upload.frame["lon"][part], strict=True)})
+        zone_hits += engine.search(QUESTION, cells=cells).seeds[0].pattern_id == found[name]["pattern"]
+        other = SIGNATURES[(i + 1) % 3]
+        first = graph.insight(engine.search(f"Where is {other} higher?", cells=cells).seeds[0].pattern_id)
+        kept += any(s.metric in (other, f"{other}_median") and s.robust_z > 0 for s in first.shifts)
+    return f"{zone_hits}/{kept}/{len(upload.parts)}"
+
+
 def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> dict[str, Any]:
     """Ingest the scenario's uploads (written to ``root``) into ``engine``'s empty workspace and score them."""
     files, best = [], []
@@ -334,13 +349,14 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
             )
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
+    result["place"] = _place(engine, scenario.uploads[0], files[0]["found"]) if len(foci) > 1 else None
     graph = _graph(engine, best)
     region = scenario.truth.get("region")
     return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
 
 
 def format_table(results: list[dict[str, Any]]) -> str:
-    head = ("encoder", "scenario", "found", "recall@k", "reached", "rank", "shared", "x-coloc", "scale", "zone", "visited", "prompt", "sec")
+    head = ("encoder", "scenario", "found", "recall@k", "reached", "rank", "shared", "x-coloc", "scale", "zone", "place", "visited", "prompt", "sec")
     short = {"regional": "reg", "scale-dependent": "dep", "not_found_coarser": "nfc", "insufficient": "ins"}
     lines = [" ".join(f"{h:>9}" for h in head)]
     for r in results:
@@ -355,6 +371,7 @@ def format_table(results: list[dict[str, Any]]) -> str:
             r["cross_coloc"],
             ",".join(f"{short[k]}{n}" for k, n in sorted(Counter(r["scale"].values()).items())) or None,
             {True: "first", False: "missed"}.get(r["zone_first"]),
+            r["place"],
             r["visited_per_seed"],
             r["prompt_chars"],
             round(sum(f["seconds"] for f in r["files"]), 1),
