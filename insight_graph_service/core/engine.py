@@ -37,7 +37,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from graph_query_engine.vertical import picture, regions_above, scale_chain
+from graph_query_engine.vertical import picture, regions_above, scale_label
 from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
@@ -755,10 +755,9 @@ class Engine:
         features = region_features(geo["cells"], sorted(regions_above(graph, pids)))
         for f in features:
             f["properties"].update(picture(graph, f["properties"]["id"]))
-        trust = {}
-        for pid in pids:
-            props, chain = graph.nodes[pid]["props"], scale_chain(graph, [pid])
-            trust[pid] = {k: props.get(k) for k in ("credibility", "integrity")} | {"scale": chain[0].scale if chain else ""}
+        trust = {
+            pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")} | {"scale": scale_label(graph, pid)} for pid in pids
+        }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
     @_healthy

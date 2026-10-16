@@ -213,7 +213,7 @@ def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
     """The coarser level that shifts the same way is folded into the finer item (``also at``), labelled regional, and the
     chain runs up through the shared anchor and region to the regions above; a reversal is scale-dependent and stays a fact;
     a planned coarser level with nothing there is not_found_coarser; no coarser level planned prints no scale."""
-    from graph_query_engine.vertical import picture, scale_chain
+    from graph_query_engine.vertical import picture, scale_chain, scale_label
 
     graph, found = _levels_search(_levels(-1.2, ("7", "5")))
     items = {it.pattern_id: it for it in found.evidence.items}
@@ -225,6 +225,7 @@ def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
     assert p7.key in found.payload().citations
     (chain,) = scale_chain(graph, ["P1"])  # what a zone from the map will call for the same pattern
     assert [s.pattern_id for s in chain.up] == ["P7"] and chain.regions == ["R:3:b", "R:1:c"]
+    assert [scale_label(graph, p) for p in ("P1", "P7")] == [scale_chain(graph, [p])[0].scale for p in ("P1", "P7")]  # the map's label alone
     assert picture(graph, "R:5:a") == {"patterns": 2, "datasets": 2, "themes": 1}
 
     _, found = _levels_search(_levels(+1.2, ("7", "5")))
@@ -257,6 +258,23 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
     graph, _ = _levels_search(_levels(-1.2, ("7", "5")))
     (chain,) = vertical.scale_chain(graph, ["P1"])
     assert not chain.up and chain.scale == "regional"  # no step spent, the label still searched
+
+
+def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
+    """``regions_above`` leaves out a pattern's finest region level, its own or, at resolution 8, level 7 (a handful of its
+    cells each: hundreds per dataset), and keeps the coarser levels and their ancestors."""
+    from graph_query_engine import DualGraph
+    from graph_query_engine.vertical import regions_above
+    from insight_contracts import SNAPSHOT_VERSION
+
+    node = pattern("P1", ["district=north"])
+    node["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
+    levels = {"R:7:a": 7, "R:7:b": 7, "R:5:c": 5, "R:3:d": 3}
+    regions = [{"id": r, "kind": "Region", "label": r, "props": {"resolution": lv, "h3": r[-1], "patterns": 1}} for r, lv in levels.items()]
+    edges = [edge("P1", r, "IN_REGION", 1.0) for r in ("R:7:a", "R:7:b", "R:5:c")]
+    edges += [edge("R:7:a", "R:5:c", "PARENT_OF"), edge("R:7:b", "R:5:c", "PARENT_OF"), edge("R:5:c", "R:3:d", "PARENT_OF")]
+    graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [node, *regions], "edges": edges})
+    assert regions_above(graph, ["P1"]) == {"R:5:c", "R:3:d"}
 
 
 def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
