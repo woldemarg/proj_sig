@@ -62,6 +62,10 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
     scope_attributes: dict[str, set[str]] = defaultdict(set)  # closed intents may use non-selected columns
     for ins in insights:
         scope_attributes[ins.dataset_id].update(c.attribute for c in ins.conditions)
+    levels: dict[str, set[str]] = defaultdict(set)  # an upload's levels: those its batch records stand for, of any status
+    for b in batches.values():
+        if b.get("upload_id"):
+            levels[b["upload_id"]].add(b["level"])
     for bid, b in batches.items():
         if b.get("status") != "READY":
             continue
@@ -78,7 +82,8 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                 "columns": profile.get("columns"),
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
-                **{k: b[k] for k in ("upload_id", "level", "upload_levels") if k in b},
+                **{k: b[k] for k in ("upload_id", "level") if k in b},
+                **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
             },
         )

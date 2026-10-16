@@ -366,6 +366,33 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
         assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
 
 
+def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
+    """The coarser levels a scale label compares with are the levels the upload's batches stand for now: one added later
+    by an upload of the same file counts, one deleted alone does not."""
+    from graph_query_engine.vertical import resolution, scale_chain
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+
+    def upload(geo: str) -> list[dict]:
+        with path.open("rb") as f:
+            return [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo=geo)]
+
+    def levels_and_scales() -> tuple[list[str], set[str]]:
+        graph = engine.graph()
+        fine = [p for p in graph.insights if resolution(graph, p) == 8]
+        return graph.nodes[f"DS:{fine_ds}"]["props"]["upload_levels"], {c.scale for c in scale_chain(graph, fine)}
+
+    fine_ds = upload("auto@8")[0]["dataset_id"]
+    skipped, coarse = upload("auto@8,7")  # the same file: level 8 is SKIPPED, level 7 joins its upload
+    assert (skipped["status"], coarse["status"]) == ("SKIPPED", "READY")
+    levels, scales = levels_and_scales()
+    assert levels == ["8", "7"] and "insufficient" not in scales
+    engine.delete_dataset(coarse["dataset_id"])
+    assert levels_and_scales() == (["8"], {"insufficient"})  # no coarser level left: nothing was "not found" there
+
+
 def test_auto_picks_the_levels_from_the_points(tmp_path):
     """``@auto``: the finest resolution with enough cells, enough of them dense, then the coarser region levels; the
     same file the same levels; a denser file a finer level; an upload with ``@auto`` is the upload of its levels."""

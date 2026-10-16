@@ -301,7 +301,7 @@ class Engine:
             self.submit(
                 path,
                 geo=g,
-                upload={"upload_id": upload_id, "level": level, "upload_levels": [lv for _, lv in levels]},
+                upload={"upload_id": upload_id, "level": level},
                 geo_levels=selection if g else None,
                 locator=None if g else locator.strip() or None,
                 **options,
@@ -332,7 +332,7 @@ class Engine:
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
-        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level, upload_levels}`` for
+        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``; ``locator`` the point
         columns a table level leaves out.
