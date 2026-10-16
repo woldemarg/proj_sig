@@ -595,14 +595,19 @@ def parse_zone(cells: list[str]) -> frozenset[str]:
 # ponytail: no size cap; a continent at resolution 10 takes minutes. Cap by the shape's area before exposing it beyond localhost
 def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[str]:
     """The cells at ``resolution`` whose centres lie in ``geometry``: a GeoJSON Polygon, MultiPolygon, Feature or
-    FeatureCollection, ``{"center": [lon, lat], "radius_m": r}`` or ``{"bbox": [west, south, east, north]}``. A shape that
-    holds no cell centre gives the cells under its vertices (a circle: the cell under its centre)."""
+    FeatureCollection (its own ``bbox`` member is metadata), ``{"center": [lon, lat], "radius_m": r}`` or
+    ``{"bbox": [west, south, east, north]}`` in degrees, west <= east (a box across 180° is a MultiPolygon of two). A shape that holds no
+    cell centre gives the cells under its vertices (a circle: the cell under its centre)."""
     try:
-        if "bbox" in geometry:
+        if "bbox" in geometry and "type" not in geometry:
             w, s, e, n = map(float, geometry["bbox"])
+            if not (-180 <= w <= e <= 180 and -90 <= s <= n <= 90):
+                raise SpatialError(f"bbox {[w, s, e, n]} is not [west, south, east, north] in degrees with west <= east, south <= north")
             geometry = {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
         if "center" in geometry:
             lon, lat = map(float, geometry["center"])
+            if not (abs(lon) <= 180 and abs(lat) <= 90):
+                raise SpatialError(f"center {[lon, lat]} is not [lon, lat] in degrees")
             radius, centre = float(geometry["radius_m"]), h3.latlng_to_cell(lat, lon, resolution)
             k = int(radius / (1.5 * h3.average_hexagon_edge_length(resolution, "m"))) + 2  # ring k lies at least 1.5·k edges away
             inside = {c for c in h3.grid_disk(centre, k) if h3.great_circle_distance(h3.cell_to_latlng(c), (lat, lon), "m") <= radius}
@@ -625,9 +630,10 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
 
 def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
     """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
-    and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts its parent,
-    a coarser one every dataset cell below it). A focus that is the zone scores 1, as does a pattern that is; a pattern far
-    larger or smaller than the zone scores little; one outside it scores 0."""
+    and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts the
+    dataset cell holding its centre, a coarser one every dataset cell whose centre it holds: the points were indexed by
+    location, and H3 children do not tile their parent). A focus that is the zone scores 1, as does a pattern that is; a
+    pattern far larger or smaller than the zone scores little; one outside it scores 0."""
     if not len(cells):
         return {}
     res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
@@ -637,9 +643,9 @@ def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozens
     inside = np.zeros(len(names), dtype=bool)
     for z, group in by_res.items():
         if z >= res:
-            inside |= np.isin(names, [h3.cell_to_parent(c, res) for c in group])
+            inside |= np.isin(names, [h3.latlng_to_cell(*h3.cell_to_latlng(c), res) for c in group])
         else:
-            inside |= np.isin([h3.cell_to_parent(c, z) for c in names], list(group))
+            inside |= np.isin([h3.latlng_to_cell(*h3.cell_to_latlng(c), z) for c in names], list(group))
     out, size = {}, int(inside.sum())
     for pid, rows in covers.items():
         rows = np.unique(np.asarray(rows, dtype=np.int64))

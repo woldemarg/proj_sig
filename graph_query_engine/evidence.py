@@ -605,6 +605,8 @@ def build_evidence(
             f"{', '.join(unconfirmed)} were not found at the coarser level of their upload: that is missing evidence at that level,"
             " not proof the effect is local."
         )
+    if place_scores == {}:  # a zone, but no geo dataset of its levels to weigh: it places no finding in or out
+        notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
     notes += [
         f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability and indicators are ignored"
@@ -626,8 +628,6 @@ def build_evidence(
         provenance=[{"key": it.key, **it.provenance} for it in items],
         notes=notes,
         scale_chains=chains,
-        zones=_zones(query, items, graph, config),
-        area=None
-        if place_scores is None
-        else {it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores},
+        zones=[] if place_scores else _zones(query, items, graph, config),  # an asked area is the question's place: no second one
+        area={it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores} if place_scores else None,
     )

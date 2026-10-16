@@ -436,6 +436,28 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
     assert "outside it" not in next(line for line in unweighed.splitlines() if line.startswith("AREA:"))
 
 
+def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():
+    """A lattice neighbour of a chosen seed is no duplicate when more of it lies in the asked zone; without a zone the
+    diversity rule still skips it, and the walk reaches it as structural."""
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    snap = snapshot()
+    snap["nodes"][:2] = [
+        pattern("O", ["zone=north"], w=0.95),
+        pattern("I", ["zone=north", "shift=night"], w=0.3),
+        pattern("Y", ["zone=south"], w=0.5),
+    ]
+    snap["edges"] = [edge("I", "O", "SPECIALIZES"), *(edge(p, "A-1", "ACTIVATES", 0.9) for p in "OIY")]
+    state = CommittedState(DualGraph(snap), LatentFrame({p: np.array([1.0, 0.0, 0.0]) for p in "OIY"}, {}, {}))
+
+    def roles(place_scores):
+        found = search(QUESTION, state, ShapeOnlyEncoder(), QueryConfig(), place_scores=place_scores)
+        return [s.pattern_id for s in found.seeds], {it.pattern_id: it.role for it in found.evidence.items}["I"]
+
+    assert roles(None) == (["O", "Y"], "structural")
+    assert roles({"I": 0.1, "O": 0.0, "Y": 0.0}) == (["O", "I", "Y"], "seed")
+
+
 def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_explained():
     """Anchors joined by both CO_OCCURS and RELATED_TO list each other once with both links; the second anchor of a
     description already shown names the first and how many members they share, or that it shares none."""
