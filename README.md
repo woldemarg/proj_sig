@@ -144,6 +144,7 @@ curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is mar
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
 curl -X POST -H "Content-Type: application/json" -d "{\"geometry\": {\"center\": [-122.27, 37.8], \"radius_m\": 20000}}" http://127.0.0.1:8765/api/search   # a map zone as the question
 curl -X POST http://127.0.0.1:8765/api/patterns/<pattern id>/verify               # an insight recomputed from its stored upload
+curl -o sig.ttl http://127.0.0.1:8765/api/export/geosparql.ttl                     # the graph as GeoSPARQL Turtle
 curl -X DELETE http://127.0.0.1:8765/api/datasets/<dataset id>
 curl -X POST http://127.0.0.1:8765/api/reset                                       # delete the workspace (and clear the mirror)
 ```

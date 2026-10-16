@@ -387,7 +387,7 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
     engine = make_engine(cfg)
     assert "ltir-canon-0" in engine.problem and not engine.graph().insights
-    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x")):
+    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), engine.export_geosparql):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()
         assert refused.value.code == "workspace_degraded"

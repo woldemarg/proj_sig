@@ -6,3 +6,5 @@
 pytest==9.1.1
 ruff==0.16.9
 playwright==1.63.0     # optional: the browser smoke test (uses an installed Chromium)
+rdflib==7.6.0          # the GeoSPARQL export test (tests/test_spatial.py)
+pyshacl==0.40.1        # its SHACL validation against tests/vendor/geosparql_validator.ttl

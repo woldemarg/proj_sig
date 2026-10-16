@@ -67,6 +67,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | attractor id | integer `k` from lac; graph node `A-k` | `A-1` | [5.2](05_latent_anchors.md#52-one-batch-through-the-ontology) |
 | schema node ids | `D:<dataset>:<column>`, `M:<dataset>:<column>`, `DS:<dataset>`, `B:<batch>` | `M:ds-6e53eb7fb0f9:discount` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | edge id | `<TYPE>:<source>-><target>` | `ACTIVATES:P-bc4657a04746->A-1` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
+| RDF IRI | `urn:sig:<node id>`; a geometry `urn:sig:<node id>:geometry`; the vocabulary `urn:sig:vocab#` | `urn:sig:P-bc4657a04746` | [6.9](06_graph_and_storage.md#69-rdf-export) |
 | journal row id | position of the vector in `journal/embeddings.mmap` | `1` | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
 | representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` | [4.6](04_representation.md#46-representation-identity-and-versions) |
 | citation key | `P` + 1-based rank in the evidence | `[P1]`, grouped `[P4, P7]` | [7.4](07_question_answering.md#74-the-evidence-object) |
