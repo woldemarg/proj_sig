@@ -474,3 +474,44 @@ def test_the_evidence_carries_each_pattern_credibility():
     found = search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
     p1 = next(it for it in found.evidence.items if it.pattern_id == "P1")
     assert (p1.credibility, p1.credibility_basis["patterns"]) == (1, ["P9"]) and "credibility" not in found.payload().evidence_prompt
+
+
+def test_the_evidence_shows_trust_once_the_graph_has_a_declared_source():
+    """One undeclared dataset keeps the evidence as it was; a declared source adds to every item a trust line (reliability,
+    credibility with its basis by key, integrity), the header phrase, the summary's tag and a zone's weakest level."""
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+    from graph_query_engine.evidence import _credibility_text
+
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
+
+    def found(dataset_props):
+        snap = snapshot()
+        snap["nodes"][0]["props"] |= {"credibility": 1, "credibility_basis": {"rule": "place", "patterns": ["P2", "P9"], "sources": ["b"]}}
+        snap["nodes"][0]["props"]["integrity"] = "ok"
+        snap["nodes"][1]["props"] |= {"credibility": 6, "credibility_basis": {"rule": "place", "patterns": [], "sources": []}}
+        snap["nodes"].append({"id": "DS:ds1", "kind": "Dataset", "label": "ds1", "props": {"dataset_id": "ds1", **dataset_props}})
+        return search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+
+    plain = found({"reliability": "F"})
+    assert all(not it.trust for it in plain.evidence.items) and "trust" not in plain.payload().evidence_prompt
+    result = found({"source": "a", "reliability": "E"})
+    items = {it.pattern_id: it for it in result.evidence.items}
+    key = items["P2"].key
+    assert items["P1"].trust == (
+        f'source E (unreliable) | credibility 1 (confirmed by another source at the same place: "b"; [{key}], 1 finding not in this evidence)'
+        " | integrity ok"
+    )
+    assert items["P2"].trust == "source E (unreliable) | credibility 6 (no independent source covers this) | integrity unverified"
+    prompt, summary = result.payload().evidence_prompt, result.payload().evidence_summary
+    assert "trust is given per item;" in prompt and f"     trust: {items['P1'].trust}" in prompt
+    assert "(джерело E, підтверджено іншим джерелом)" in summary and "(джерело E, є лише одне джерело)" in summary
+    assert result.evidence._weakest({"holds": ["P1", "P2"]}) == "; weakest credibility 6"
+    contra = {"rule": "anchor", "patterns": ["X"], "sources": ["b"], "confirmed_by": ["P1"]}
+    assert (
+        _credibility_text(5, contra, {"P1": "P1"})
+        == 'credibility 5 (contradicted by another source: "b"; 1 finding not in this evidence; confirmed by [P1])'
+    )
+    assert (
+        _credibility_text(2, {"rule": "anchor", "patterns": [], "sources": ["c"]}, {})
+        == 'credibility 2 (not confirmed; another source has the same metric: "c")'
+    )
