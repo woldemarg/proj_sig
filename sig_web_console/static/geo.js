@@ -1,9 +1,9 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map and its tour (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set() };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set(), overlay: null, level: null, regionMarks: [], zoneMarks: [] };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
-const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26" };
+const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
@@ -25,6 +25,7 @@ const GeoMap = {
     const filter = $("dataset-filter").value;
     const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.ds) || G.datasets[0];
     if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
+    else await loadOverlay(G.ds);  // a commit (another source, say) changes the graph over the same cells
     if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
   },
 
@@ -65,6 +66,7 @@ const GeoMap = {
         G.hl.push(...rows);
       }
       G.map.setPaintProperty("cells-fill", "fill-opacity", G.evidence.length ? 0.14 : 0.55);
+      paintZones(qa.view.evidence.zones || []);
       renderTourBar();
       if (G.evidence.length) GeoMap.focusPattern(G.evidence[0].pattern_id);
     };
@@ -76,6 +78,7 @@ const GeoMap = {
     if (!G.map || !G.map.getSource("cells")) return;
     setStates(G.hl, "hl", 0); setStates(G.focus, "focus", false); G.hl = []; G.focus = []; G.evidence = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
+    paintZones([]);
     G.map.getSource("pts").setData(empty());
     $("map-card").hidden = true; renderTourBar();
   },
@@ -138,6 +141,7 @@ function ensureMap() {
     m.addSource("grid", { type: "geojson", data: graticule() });
     m.addSource("cells", { type: "geojson", data: empty() });
     m.addSource("pts", { type: "geojson", data: empty() });
+    m.addSource("regions", { type: "geojson", data: empty() });
     const layer = (id, type, source, paint, filter, extra = {}) => m.addLayer({ id, type, source, paint, ...(filter ? { filter } : {}), ...extra });
     layer("land", "fill", "base", { "fill-color": ["case", ["get", "ukr"], "#0c121b", "#080c12"] }, ["==", ["get", "layer"], "country"]);
     layer("grid", "line", "grid", { "line-color": C.grid, "line-width": ["case", ["get", "major"], 1, 0.5] });
@@ -156,6 +160,8 @@ function ensureMap() {
     layer("hl-glow", "line", "cells", { "line-color": hlColor, "line-width": ["case", ["boolean", ["feature-state", "focus"], false], 8, 0], "line-blur": 6, "line-opacity": 0.6 });
     layer("hl-line", "line", "cells", { "line-color": hlColor, "line-width": ["case", ["!=", hl, 0], 1.6, 0] });
     layer("focus-line", "line", "cells", { "line-color": C.amber, "line-width": ["case", ["boolean", ["feature-state", "focus"], false], 2.6, 0], "line-opacity": 1 });
+    layer("regions-line", "line", "regions", { "line-color": C.region, "line-width": 1.4, "line-opacity": 0.75, "line-dasharray": [4, 2] }, ["==", ["get", "resolution"], -1]);
+    layer("zones-line", "line", "regions", { "line-color": C.region, "line-width": 3.2, "line-opacity": 0.95 }, ["in", ["get", "id"], ["literal", []]]);
     layer("zone-line", "line", "cells", { "line-color": "#eef3ff", "line-width": ["case", ["boolean", ["feature-state", "zone"], false], 2, 0], "line-dasharray": [2, 1] });
     layer("pts-halo", "circle", "pts", { "circle-color": "#ff4d6d", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 8], "circle-blur": 1, "circle-opacity": 0.45 });
     layer("pts-core", "circle", "pts", { "circle-color": "#ffe0e6", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4] });
@@ -169,7 +175,7 @@ function ensureMap() {
       m.getCanvas().style.cursor = f ? "pointer" : "";
     });
     m.on("click", "cells-fill", (e) => (e.originalEvent.shiftKey ? GeoMap.toggleZone(e.features[0].properties.h3) : cellPopup(e.features[0], e.lngLat)));
-    m.on("zoom", placeDensity);
+    m.on("zoom", () => { placeDensity(); paintRegions(); });
     wireHud();
   });
   return G.ready;
@@ -201,6 +207,7 @@ async function loadDataset(ds) {
   G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
   G.map.getSource("cells").setData(data);
   G.map.getSource("pts").setData(empty());
+  await loadOverlay(ds);
   const info = G.datasets.find((d) => d.dataset_id === ds) || {};
   const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
   if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
@@ -212,6 +219,49 @@ async function loadDataset(ds) {
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
   $("map-card").hidden = true; renderTourBar(); paintZone();
+}
+
+async function loadOverlay(ds) {
+  /* the graph's regions, trust and scale over the map: they change with every commit, the cells never */
+  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch(() => null);
+  G.map.getSource("regions").setData(G.overlay || empty());
+  G.level = undefined;
+  paintRegions();
+}
+
+function paintZones(zones) {
+  /* the answer's ZONES outlined, Z1 first, whatever the drawn level */
+  G.zoneMarks.forEach((m) => m.remove());
+  const ids = zones.map((z) => z.id), byId = Object.fromEntries((G.overlay ? G.overlay.features : []).map((f) => [f.properties.id, f]));
+  G.map.setFilter("zones-line", ["in", ["get", "id"], ["literal", ids]]);
+  G.zoneMarks = ids.filter((id) => byId[id]).map((id) => {  // a zone at the cells' own level is not in the overlay
+    const el = document.createElement("div");
+    el.className = "region-n zone-n"; el.textContent = `Z${ids.indexOf(id) + 1}`;
+    return new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(centre(byId[id])).addTo(G.map);
+  });
+}
+
+const centre = (f) => { const r = f.geometry.coordinates[0].slice(1); return [r.reduce((a, c) => a + c[0], 0) / r.length, r.reduce((a, c) => a + c[1], 0) / r.length]; };
+
+function regionLevel() {
+  /* the region level that fits the zoom; ponytail: zoom − 3 ≈ H3 resolution, tune if regions read too big or small */
+  const levels = [...new Set((G.overlay ? G.overlay.features : []).map((f) => f.properties.resolution))], want = G.map.getZoom() - 3;
+  return levels.length ? levels.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)) : null;
+}
+
+function paintRegions() {
+  /* the regions of one level outlined, each with its insight count; the level follows the zoom */
+  if (!G.map || !G.map.getLayer("regions-line")) return;
+  const on = $("lyr-regions").checked, level = on ? regionLevel() : null;
+  if (level === G.level) return;
+  G.level = level;
+  G.map.setFilter("regions-line", ["==", ["get", "resolution"], level ?? -1]);  // -1: no region
+  G.regionMarks.forEach((m) => m.remove());
+  G.regionMarks = level === null ? [] : G.overlay.features.filter((f) => f.properties.resolution === level).map((f) => {
+    const el = document.createElement("div");
+    el.className = "region-n"; el.textContent = f.properties.patterns; el.title = f.properties.id;
+    return new maplibregl.Marker({ element: el }).setLngLat(centre(f)).addTo(G.map);
+  });
 }
 
 function paintZone() {
@@ -243,6 +293,7 @@ function wireHud() {
   $("lyr-pts").addEventListener("change", (e) => vis(["pts-halo", "pts-core"], e.target.checked));
   $("lyr-borders").addEventListener("change", (e) => vis(["border", "border-glow", "admin1", "river", "lake"], e.target.checked));
   $("lyr-labels").addEventListener("change", placeDensity);
+  $("lyr-regions").addEventListener("change", () => { G.level = undefined; paintRegions(); });
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
   $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
   $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
@@ -287,15 +338,27 @@ function startTour() {
 }
 function stopTour() { if (G.tour) { clearInterval(G.tour); G.tour = null; renderTourBar(); } }
 
+function trustTags(pid) {
+  /* an insight's credibility and scale label, as the graph holds them */
+  const t = G.overlay && G.overlay.patterns[pid];
+  if (!t) return "";
+  const [cls, words] = cred(t.credibility);
+  return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
+    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "") +
+    (t.integrity === "mismatch" ? `<i class="pp-tag bad">integrity mismatch</i>` : "");
+}
+
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row;
   const skip = new Set(["row", "h3"]);
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span></div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${trustTags(pid)}</div>`; }).join("");
+  const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
+  const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
+    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
     `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   const popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);

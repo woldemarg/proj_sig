@@ -1,7 +1,7 @@
 /* SIG UI — datasets, graph / sphere / table views, details drawer, AI chat with grounded citations (docs/08_interface.md). */
 "use strict";
 
-const S = { cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
+const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGE_TEXT = {
   UPLOADED: "Queued", VALIDATING: "Reading the file", PROFILING: "Profiling columns", DISCOVERING: "Searching subgroups",
   VALIDATING_INSIGHTS: "Validating insights", EMBEDDING: "Embedding insights", UPDATING_ONTOLOGY: "Learning themes",
@@ -45,7 +45,22 @@ const MARKS = {
   lattice: 'edge[type="SPECIALIZES"]', contrast: 'edge[type="CONTRASTS"]', sibling: 'edge[type="SIBLING"]', colocated: 'edge[type="CO_LOCATED"]',
   latent: 'edge[type="RELATED_TO"], edge[type="CO_OCCURS"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
+  region: 'node[kind="Region"], edge[type="IN_REGION"], edge[type="PARENT_OF"]',
 };
+const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot draw
+// trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4) in the console's words
+const RELIABILITY = { A: "completely reliable", B: "usually reliable", C: "fairly reliable", D: "not usually reliable", E: "unreliable", F: "reliability cannot be judged" };
+const CREDIBILITY = {  // level -> chip class, words
+  1: ["ok", "confirmed by another source"], 2: ["warn", "not confirmed by another source"],
+  5: ["bad", "contradicted by another source"], 6: ["", "no independent source covers this"],
+};
+const INTEGRITY = { ok: ["ok", "its statistics match their digest"], mismatch: ["bad", "its statistics no longer match their digest"], unverified: ["warn", "recorded before digests"] };
+const SCALE = {
+  regional: "regional — holds at a coarser level", "scale-dependent": "scale-dependent — reverses at a coarser level",
+  not_found_coarser: "not found at the coarser level", insufficient: "no coarser level analysed",
+};
+const cred = (level) => CREDIBILITY[level] || ["warn", "not rated"];
+const RELATION = { overlaps: "zones overlap", adjacent: "zones touch", same_region: "same region, zones apart" };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +69,8 @@ const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const human = (s) => String(s || "").replace(/_/g, " ");
+const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
+const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
 
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
@@ -126,8 +143,17 @@ function datasetCard(b) {
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
     `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${chip}</div>` +
     `<div class="ds-sub">${esc(when)}</div>` +
-    (b.source || b.reliability ? `<div class="ds-src"><span class="chip" title="Source and its reliability (Admiralty code)">${esc(b.source || "source")} · ${esc(b.reliability || "F")}</span></div>` : "") +
+    datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
     `${body}${del}</div>`;
+}
+
+function datasetTrust(t) {
+  /* a dataset card's trust chips, from its Dataset node */
+  if (!t) return "";
+  if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "metadata failed its check", "The batch record no longer matches its metadata digest: its source, reliability and indicators are ignored")}</div>`;
+  const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "source"} · ${t.reliability}`, `Source and its reliability (Admiralty code): ${RELIABILITY[t.reliability] || ""}`) : "") +
+    (t.integrity === "unverified" ? chip("warn", "metadata unverified", "Recorded before metadata digests: its source and rating are not checked") : "");
+  return chips ? `<div class="ds-src">${chips}</div>` : "";
 }
 
 async function deleteDataset(id, name) {
@@ -149,11 +175,6 @@ async function refreshBatches() {
     if (!kept || (b.status === "READY" && kept.status !== "READY")) byDataset.set(key, b);
   }
   const cards = [...byDataset.values()];
-  $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;
-  $("batches").querySelectorAll(".ds.clickable").forEach((el) => el.addEventListener("click", () => {
-    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; setFilter();
-  }));
-  $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
   const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b])).values()];
   const sel = $("dataset-filter"), cur = sel.value;
   sel.innerHTML = `<option value="">All datasets</option>` +
@@ -162,6 +183,11 @@ async function refreshBatches() {
   if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets that are there
   const readyKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",");
   if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); GeoMap.refresh(); }
+  $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
+  $("batches").querySelectorAll(".ds.clickable").forEach((el) => el.addEventListener("click", () => {
+    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; setFilter();
+  }));
+  $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
   clearTimeout(S.poll);
   if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
 }
@@ -185,7 +211,7 @@ async function upload() {
 function graphStyle() {
   const ink = cssVar("--graph-ink") || "#3a4050", edge = cssVar("--graph-edge") || "#c8cdd8";
   const up = cssVar("--up"), down = cssVar("--down"), cov = cssVar("--cov"), anchor = cssVar("--anchor"), path = cssVar("--path"), bad = cssVar("--bad");
-  const surface = cssVar("--surface") || "#fff", muted = cssVar("--muted");
+  const surface = cssVar("--surface") || "#fff", muted = cssVar("--muted"), region = cssVar("--region");
   return [
     { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
@@ -194,6 +220,7 @@ function graphStyle() {
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
     { selector: 'node[kind="Metric"]', style: { shape: "tag", width: 48, height: 18, "background-color": cov, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
+    { selector: 'node[kind="Region"]', style: { shape: "diamond", width: "mapData(patterns, 1, 12, 18, 34)", height: "mapData(patterns, 1, 12, 18, 34)", "background-color": region, "font-size": 9 } },
     { selector: 'node[kind="Dataset"], node[kind="Batch"]', style: { display: "none" } },
     { selector: 'node[kind="PlaneLabel"]', style: { label: "data(label)", "background-opacity": 0, "font-size": 13, "font-weight": 700, color: muted, "text-valign": "center", "text-halign": "right", events: "no", "text-outline-width": 0 } },
     { selector: "edge", style: { width: 1, "line-color": edge, "curve-style": "bezier", opacity: 0.75 } },
@@ -201,6 +228,8 @@ function graphStyle() {
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
     { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
+    { selector: 'edge[type="IN_REGION"]', style: { "line-style": "dashed", "line-color": region, width: "mapData(weight, 0, 1, 0.5, 2)", opacity: 0.55 } },
+    { selector: 'edge[type="PARENT_OF"]', style: { "line-color": region, "target-arrow-shape": "triangle", "target-arrow-color": region, "arrow-scale": 0.6, opacity: 0.6 } },
     { selector: 'edge[type="ACTIVATES"]', style: { "line-color": anchor, width: "mapData(weight, 0, 1, 0.4, 2)", opacity: 0.22 } },
     { selector: 'edge[type="ACTIVATES"][?weak]', style: { "line-style": "dashed" } },
     { selector: 'edge[type="RELATED_TO"]', style: { "curve-style": "unbundled-bezier", "control-point-distances": "data(cpd)", "control-point-weights": 0.5, "line-color": anchor, width: "mapData(weight, 0, 1, 1, 6)", opacity: 0.75, label: "data(weight)", "font-size": 8.5, color: anchor, "text-background-color": surface, "text-background-opacity": 0.9, "text-background-padding": 2 } },
@@ -258,9 +287,20 @@ function dualPlanePositions(cy) {
     });
     x += width + 50;
   }
+  let y = maxY + 150;
+  const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
+  for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
+    const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
+      const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter((n) => pos[n.id()]);
+      return [r, below.length ? below.reduce((a, n) => a + pos[n.id()].x, 0) / below.length : 0];
+    }).sort((a, b) => a[1] - b[1]);
+    let last = -Infinity;
+    for (const [r, at] of row) { last = Math.max(at, last + 70); pos[r.id()] = { x: last, y }; }
+    y += 90;
+  }
   const bottom = cy.nodes('[kind="Dimension"], [kind="Metric"]');
   const span = Math.max(x - 50, 400);
-  bottom.forEach((n, i) => { pos[n.id()] = { x: (i + 0.5) * span / Math.max(bottom.length, 1), y: maxY + 170 }; });
+  bottom.forEach((n, i) => { pos[n.id()] = { x: (i + 0.5) * span / Math.max(bottom.length, 1), y: regions.length ? y + 60 : maxY + 170 }; });
   pos.__lbl_latent = { x: -150, y: 0 };
   pos.__lbl_struct = { x: -150, y: top };
   return pos;
@@ -410,6 +450,7 @@ async function loadGraph() {
   let g;
   S.sphere = null;  // the graph changed (or is unknown): project again
   try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
+  S.datasets = g.datasets || {};
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
@@ -446,8 +487,11 @@ function setView(view) {
   document.querySelector(".canvas-body").classList.toggle("map-mode", view === "map");
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
   $("fit-btn").hidden = view === "table" || view === "map";
-  const columns = document.querySelector('.toggle[data-key="schema"]');  // column nodes have no vectors: graph only
-  columns.disabled = view === "sphere"; columns.title = view === "sphere" ? "Columns are not drawn in 3D (they have no vectors)" : "Dimension and metric columns (graph only)";
+  for (const key of NO_VECTORS) {  // column and region nodes have no vectors: graph only
+    const t = document.querySelector(`.toggle[data-key="${key}"]`);
+    t.dataset.title = t.dataset.title || t.title;
+    t.disabled = view === "sphere"; t.title = view === "sphere" ? "Not drawn in 3D (no vectors)" : t.dataset.title;
+  }
   $("empty-hint").hidden = view === "table" || view === "map" || S.nodes.length > 0;
   if (view === "sphere") renderSphere();
   if (view === "map") GeoMap.show();
@@ -584,11 +628,38 @@ async function verifyPattern(id) {
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
+const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
+const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
+
+function trustRows(p, ds, labels) {
+  /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
+  const [ccls, cwords] = cred(p.credibility);
+  const basis = p.credibility_basis || {}, [icls, iwords] = INTEGRITY[p.integrity] || INTEGRITY.unverified;
+  const source = ds.integrity === "mismatch" ? `${chip("bad", "unknown")} its dataset's metadata failed its integrity check`
+    : `${chip("", ds.reliability || "F")} ${esc(ds.source || "source not declared")} — ${esc(RELIABILITY[ds.reliability || "F"])}${ds.integrity === "unverified" ? " (metadata unverified)" : ""}`;
+  const by = basis.rule === "place" ? "compared by place" : basis.rule === "anchor" ? "compared by theme and metric" : "";
+  const others = [...(basis.confirmed_by || []), ...(basis.patterns || []).filter((x) => !(basis.confirmed_by || []).includes(x))];
+  return kv([
+    ["Source", source],
+    ["Credibility", `${chip(ccls, String(p.credibility ?? "–"))} ${esc(cwords)}${(basis.sources || []).length ? ` · ${esc(basis.sources.join(", "))}` : ""}${by ? ` <span class="muted">(${by})</span>` : ""}`],
+    ["Integrity", `${chip(icls, p.integrity || "unverified")} ${esc(iwords)}`],
+  ]) + (others.length ? `<details class="nb-group"><summary>Basis <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "confirms" : "")).join("")}</details>` : "");
+}
+
+function scaleRows(c, labels) {
+  /* the scale chain the graph already holds: ↑ coarser and ↓ finer levels of one phenomenon, then the regions above it */
+  const step = (st, arrow) => nbRow(st.pattern_id, `${arrow} ${nodeLabel(st.pattern_id, labels)}`, st.relation === "corresponds" ? "same shift" : "opposite shift");
+  return `<h4>Scale</h4><p class="lead">${esc(SCALE[c.scale] || "a single level")}</p>` +
+    c.up.map((st) => step(st, "↑")).join("") + c.down.map((st) => step(st, "↓")).join("") +
+    c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
+}
+
 async function inspect(id) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
-  const kinds = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch" };
+  const kinds = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
   $("drawer-kind").textContent = kinds[n.kind] || n.kind;
   let html = "";
   if (n.kind === "Pattern") {
@@ -609,6 +680,8 @@ async function inspect(id) {
       ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
       ["Also known as", esc((p.aliases || []).join("; "))],
     ]);
+    html += `<h4>Trust</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
+    if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
     html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
@@ -626,6 +699,11 @@ async function inspect(id) {
       ["Mass", num(p.mass, 0)], ["Evidence mass", num(p.evidence_mass)], ["Dispersion", num(p.dispersion, 3)],
       ["Last updated", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
+  } else if (n.kind === "Region") {
+    const pic = d.picture || {};
+    $("drawer-title").textContent = `res ${p.resolution} · ${p.h3}`;
+    html += `<p class="lead">An H3 cell at resolution ${num(p.resolution, 0)} that holds ${esc(picture(pic))}.</p>`;
+    html += kv([["Cells covered", num(p.cells_covered, 0)], ["Region id", `<span class="mono">${esc(n.id)}</span>`]]);
   } else {
     $("drawer-title").textContent = n.label;
     html += kv(Object.entries(p).map(([k, v]) => [human(k), esc(typeof v === "object" ? JSON.stringify(v) : v)]));
@@ -633,11 +711,11 @@ async function inspect(id) {
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
     const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
-      "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions",
+      "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions", "IN_REGION (in)": "Insights in this region", "PARENT_OF": "Parent region", "PARENT_OF (in)": "Sub-regions",
       "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
       `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
-      items.map((it) => `<div class="nb" data-id="${esc(it.id)}"><span>${esc(it.label)}</span><span class="muted">${num(Number(it.weight))}</span></div>`).join("") + `</details>`).join("");
+      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;
   $("inspector").querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => { focusNodes([el.dataset.id]); inspect(el.dataset.id); }));
@@ -679,13 +757,36 @@ function renderChain(item) {
   return `<div class="chain">${html}</div>`;
 }
 
+function itemTrust(it) {
+  /* an evidence item's trust badges; the tooltip is the trust line the model saw */
+  if (!it.trust) return "";
+  const integrity = (it.trust.match(/integrity (\w+)$/) || [])[1] || "unverified";
+  const [ccls] = cred(it.credibility);
+  return `<div class="ev-trust" title="${esc(it.trust)}">` + (it.reliability ? chip("", `source ${it.reliability}`) : chip("bad", "source unknown")) +
+    (it.credibility != null ? chip(ccls, `credibility ${it.credibility}`) : "") + chip((INTEGRITY[integrity] || INTEGRITY.unverified)[0], `integrity ${integrity}`) + `</div>`;
+}
+
+function chainLine(chain, items) {
+  /* res 7: P1 +1.60 sd → res 5: P7 +1.10 sd → region R:3:…, finest first, on the host's target */
+  const by = Object.fromEntries(items.map((i) => [i.pattern_id, i])), host = by[chain.pattern_id];
+  const steps = [...chain.down].reverse().map((s) => by[s.pattern_id]).concat([host], chain.up.map((s) => by[s.pattern_id])).filter(Boolean);
+  const level = (it) => { const sp = it.provenance.spatial; return sp ? `res ${sp.resolution}` : "table"; };
+  const parts = steps.map((it) => { const x = it.statistics.shifts.find((sh) => sh.metric === host.target); return `<span class="n">${esc(level(it))}: ${esc(it.key)}${x ? ` ${signed(x.robust_z)} sd` : ""}</span>`; });
+  if (chain.regions[0]) parts.push(`<span class="n">region ${esc(chain.regions[0].id)}</span>`);
+  return `<div class="chain" title="The same phenomenon at finer and coarser levels"><span class="e">scale</span>${parts.join('<span class="e">→</span>')}</div>`;
+}
+
 function botCard(turn) {
   const qa = turn.qa;
-  const items = (qa.view.evidence && qa.view.evidence.items) || [];
+  const ev = qa.view.evidence || {};
+  const items = ev.items || [];
   const keyTo = Object.fromEntries(items.map((i) => [i.key, i.pattern_id]));
-  const area = (qa.view.evidence && qa.view.evidence.area) || null;  // an asked map zone: item key -> place, 0 outside
+  const area = ev.area || null;  // an asked map zone: item key -> place, 0 outside
+  const chains = Object.fromEntries((ev.scale_chains || []).filter((c) => c.up.length || c.down.length).map((c) => [c.pattern_id, c]));
+  const forged = (ev.datasets || []).filter((d) => d.integrity === "mismatch").map((d) => d.dataset_id);
   const llm = qa.llm || {};
   const answer = qa.answer || "";
+  const forgedNote = forged.length ? `<div class="notice bad">The metadata of ${esc(forged.join(", "))} failed its integrity check: its source, reliability and indicators are ignored.</div>` : "";
   const notice = qa.answer_mode !== "fallback" ? ""
     : llm.error === "disabled" ? "Showing the evidence only (explanation turned off)."
     : "The language model is unavailable — showing the evidence only.";
@@ -710,17 +811,21 @@ function botCard(turn) {
     return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") +
-      (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") + `</div>` +
+      (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") +
+      (it.scale && it.scale !== "insufficient" && SCALE[it.scale] ? `<span class="role" title="${esc(SCALE[it.scale])}">${esc(human(it.scale))}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
-      `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${renderChain(it)}</div>`;
+      `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
   const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.naive_nearest || []).length ? `${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.` : ""}</div>` : "";
+  const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
+  const zones = (ev.zones || []).length ? `<div class="hypo"><b>Zones</b>${ev.zones.map((z, n) => `<div>Z${n + 1} · res ${z.resolution} · ${z.holds.map((p) => keyOf[p]).join(", ")} — ${picture(z)}</div>`).join("")}</div>` : "";
+  const notes = (ev.notes || []).length ? `<div class="hypo"><b>Notes</b>${ev.notes.map((n) => `<div>${esc(n)}</div>`).join("")}</div>` : "";
   const panes = [
-    items.length ? ["Evidence & how it was found", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Click an item to isolate its path in the graph or on the sphere.</p>${hypo}${evid}`] : null,
+    items.length ? ["Evidence & how it was found", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Click an item to isolate its path in the graph or on the sphere.</p>${hypo}${zones}${notes}${evid}`] : null,
     ["Sources", "", `<div class="muted" style="font-size:12.5px">${esc(qa.provenance_footer || "")}</div>`],
     qa.prompt ? ["Prompt", "", `<p class="ev-prefix">The exact evidence the model was shown.</p><pre class="canon">${esc(qa.prompt)}</pre>`] : null,
   ].filter(Boolean);
-  return `<div class="bot-card">${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
+  return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>${understood}` +
     `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="false">${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" hidden>${body}</div>`).join("") +
@@ -883,7 +988,10 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-  document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); highlight(S.hl); }));
+  document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
+    b.classList.toggle("on"); applyVisibility(); highlight(S.hl);
+    if (b.dataset.key === "region") runLayout();
+  }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", setFilter);
   $("fit-btn").addEventListener("click", () => {

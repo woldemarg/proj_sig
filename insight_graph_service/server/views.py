@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from html import escape
 from typing import Any
 
@@ -9,11 +10,15 @@ import numpy as np
 from fastapi import HTTPException
 
 from graph_query_engine import CommittedState, DualGraph
-from insight_contracts import Insight, attractor_id_of
+from graph_query_engine.evidence import chain_dict
+from graph_query_engine.vertical import picture, regions_above, scale_chain
+from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
 
-def _short_label(graph: DualGraph, node: dict[str, Any]) -> str:
+def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> str:
+    if node["kind"] == "Region":
+        return f"res {node['props']['resolution']}\n{members} insight{'' if members == 1 else 's'}"
     if node["kind"] != "Pattern":
         return node["label"]
     ins = graph.insight(node["id"])
@@ -32,16 +37,19 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
 def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str, Any]:
     keep: set[str] = set()
     nodes = []
+    pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
+    members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view
+    regions = {r for r in regions_above(graph, list(pids)) if members[r]}
     for n in graph.nodes.values():
         p = n["props"]
-        if n["kind"] == "Region":  # the map regions stay in the snapshot and in Neo4j, not in the graph view
+        if n["kind"] == "Region" and n["id"] not in regions:
             continue
         if dataset and n["kind"] in {"Pattern", "Dimension", "Metric", "Dataset"} and p.get("dataset_id") != dataset:
             continue
         if dataset and n["kind"] == "Attractor" and dataset not in p.get("datasets", []):
             continue
         keep.add(n["id"])
-        data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n), "full_label": n["label"]}
+        data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n, members[n["id"]]), "full_label": n["label"]}
         if n["kind"] == "Pattern":
             ins = graph.insight(n["id"])
             anchor = primary_anchor(graph, n["id"])
@@ -59,6 +67,8 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
             )
         elif n["kind"] == "Attractor":
             data.update(mass=p["mass"], n_patterns=p["n_patterns"])
+        elif n["kind"] == "Region":
+            data.update(resolution=p["resolution"], patterns=members[n["id"]])
         nodes.append({"data": data})
     edges = [
         {
@@ -75,7 +85,11 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
         for e in graph.edges
         if e["source"] in keep and e["target"] in keep
     ]
-    return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {})}
+    trust = {
+        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
+        for n in graph.of_kind("Dataset")
+    }  # every dataset's trust, whatever the filter
+    return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {}), "datasets": trust}
 
 
 def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
@@ -91,7 +105,18 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
         )
     for items in neighbors.values():
         items.sort(key=lambda x: -float(x["weight"]))
-    return {"node": node, "neighbors": neighbors}
+    out: dict[str, Any] = {"node": node, "neighbors": neighbors}
+    if node["kind"] == "Pattern":  # its dataset's trust and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
+        out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        chain = scale_chain(graph, [node_id])
+        out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
+        basis = node["props"].get("credibility_basis", {})
+        linked = [*basis.get("patterns", []), *basis.get("confirmed_by", [])]
+        linked += [s.pattern_id for s in (chain[0].up + chain[0].down if chain else [])]
+        out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
+    elif node["kind"] == "Region":
+        out["picture"] = picture(graph, node_id)
+    return out
 
 
 # --- the latent sphere: pattern vectors and attractor centroids in the unit ball; the console draws them (§8.4)

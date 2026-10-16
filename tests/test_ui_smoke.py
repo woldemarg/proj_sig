@@ -87,6 +87,18 @@ def test_upload_process_render_query(client, demo_csv):
     assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
     assert len(client.get(f"/api/geo/{geo_ds}/cells").json()["features"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
+    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # the regions above its insights, their trust and scale
+    assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
+    assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
+    assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
+    assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
+    view = client.get(f"/api/graph?dataset={geo_ds}").json()
+    regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
+    assert regions and all(r["resolution"] < 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
+    geo_pid = next(iter(overlay["patterns"]))
+    detail = client.get(f"/api/nodes/{geo_pid}").json()
+    assert detail["dataset"]["dataset_id"] == geo_ds and "regions" in detail["scale_chain"] and "labels" in detail
+    assert client.get(f"/api/nodes/{regions[0]['id']}").json()["picture"]["patterns"] > 0
     assert client.delete(f"/api/datasets/{geo_ds}").json()["patterns_removed"] == geo_batch["metrics"]["validated_insights"]
     assert client.get("/api/geo").json() == [] and client.get(f"/api/geo/{geo_ds}/cells").status_code == 404  # the file went with the dataset
     # delete through the API: the dataset, its graph and its record go; the mirror of the UI is the backend
@@ -174,6 +186,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
         assert "Reproduced" in page.inner_text("#verify-out")
+        assert "Credibility" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
+        assert page.evaluate("document.querySelectorAll('.ev .ev-trust').length") > 0  # two uploads: every card shows its trust
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
         assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
@@ -190,7 +204,7 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.screenshot(path=str(tmp_path / "sphere.png"))  # for a look by eye: the drawing is the console's now
         visible = f"(name) => {sphere}.data.filter(t => t.name === name).map(t => t.visible !== false)"
         assert page.evaluate(f"({visible})('Memberships')") == [True] and page.evaluate(f"({visible})('Hierarchy')") == [True]
-        assert page.evaluate("document.querySelector('.toggle[data-key=\"schema\"]').disabled")  # columns have no 3D meaning
+        assert page.evaluate("['schema', 'region'].every((k) => document.querySelector(`.toggle[data-key=\"${k}\"]`).disabled)")  # no vectors
         page.click("#legend .toggle[data-key='activates']")
         page.click("#legend .toggle[data-key='lattice']")
         assert page.evaluate(f"({visible})('Memberships')") == [False] and page.evaluate(f"({visible})('Hierarchy')") == [False]
@@ -207,6 +221,9 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate("S.cy.nodes('.hl-evidence').length") == 1
         page.click("#legend .toggle[data-key='contrast']")
         assert page.evaluate("S.cy.nodes('.hl-evidence').length") == 1
+        page.click("#legend .toggle[data-key='region']")  # the map regions, off by default
+        assert page.evaluate("S.cy.nodes('[kind=\"Region\"]').not('.hidden').length") == int(page.inner_text("[data-n='region']")) > 0
+        page.click("#legend .toggle[data-key='region']")
         # the column borders can be dragged
         handle = page.locator(".rail .col-resize").bounding_box()
         before = page.evaluate("document.querySelector('.rail').getBoundingClientRect().width")
@@ -229,6 +246,7 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.keyboard.down("Shift")
             page.mouse.click(box["x"] + cell["x"], box["y"] + cell["y"])
             page.keyboard.up("Shift")
+        assert page.evaluate("G.regionMarks.length") > 0 and page.evaluate("G.overlay.features.some((f) => f.properties.resolution === G.level)")
         assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")
@@ -244,6 +262,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
+        page.evaluate("ask('Де median_house_value вищий?')")  # a question without scope: its ZONES outlined on the map
+        page.wait_for_function("G.zoneMarks.length > 0 && G.zoneMarks[0].getElement().textContent === 'Z1'", timeout=30000)
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}

@@ -190,6 +190,10 @@ def create_app(engine: Engine) -> FastAPI:
     def geo_cells(dataset_id: str) -> FileResponse:
         return FileResponse(engine.geo_cells_file(dataset_id), media_type="application/geo+json")
 
+    @app.get("/api/geo/{dataset_id}/overlay")
+    def geo_overlay(dataset_id: str) -> dict[str, Any]:
+        return engine.geo_overlay(dataset_id)
+
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
         return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)

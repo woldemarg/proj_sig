@@ -53,6 +53,17 @@ def _regions(graph: DualGraph, pid: str) -> dict[str, float]:
     return {e["target"]: e["weight"] for e in graph.out.get(pid, []) if e["type"] == "IN_REGION"}
 
 
+def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
+    """The regions coarser than each pattern that it lies in, with their ancestors that hold a pattern: what the console
+    draws (a region at a pattern's own level is one of its cells)."""
+    found = {r for pid in pattern_ids for r in _regions(graph, pid) if graph.nodes[r]["props"]["resolution"] < (resolution(graph, pid) or 0)}
+    frontier = set(found)
+    while frontier:
+        frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
+        found |= frontier
+    return {r for r in found if graph.nodes[r]["props"]["patterns"]}  # an ancestor no pattern reaches holds nothing
+
+
 def _finest(graph: DualGraph, pid: str) -> set[str]:
     """The pattern's regions at its finest level (its own resolution when that is a region level): a broad pattern has many."""
     levels = {r: graph.nodes[r]["props"]["resolution"] for r in _regions(graph, pid)}

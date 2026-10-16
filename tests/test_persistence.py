@@ -468,6 +468,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
 
     from insight_graph_service.core.engine import PipelineError
     from insight_graph_service.core.snapshot import metadata_digest
+    from insight_graph_service.server.views import cytoscape_elements
 
     cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
@@ -486,6 +487,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
     props = engine.graph().nodes[f"DS:{ds}"]["props"]
     assert props["integrity"] == "mismatch" and "source" not in props and props["reliability"] == "F"
     assert "indicator" not in engine.graph().nodes[f"M:{ds}:margin"]["props"]  # the registry is ignored too
+    assert cytoscape_elements(engine.graph())["datasets"][ds] == {"reliability": "F", "integrity": "mismatch"}  # what the rail's card shows
     found = engine.search("Why is margin lower for phones in the US?")
     assert all(it.trust.startswith("source unknown (its dataset's metadata failed the integrity check)") for it in found.evidence.items)
     assert any(ds in n and "its metadata no longer matches its digest" in n for n in found.evidence.notes)

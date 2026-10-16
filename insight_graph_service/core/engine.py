@@ -37,6 +37,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
+from graph_query_engine.vertical import picture, regions_above, scale_chain
 from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import SNAPSHOT_VERSION, Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
@@ -56,6 +57,7 @@ from subgroup_miner.spatial import (
     geometry_to_cells,
     parse_geo_levels,
     parse_zone,
+    region_features,
     sac_summary,
     zone_overlap,
 )
@@ -745,8 +747,22 @@ class Engine:
             "points": np.round(points.astype(float), 5).tolist(),
         }
 
-    def _geo(self, dataset_id: str) -> dict[str, Any]:
-        geo = self.ws.load_geo(dataset_id) if self._geo_ready(dataset_id) else None
+    def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
+        """What the graph says about a geo dataset's map: the regions above its patterns (``regions_above``) as GeoJSON,
+        each with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale."""
+        geo, graph = self._geo(dataset_id, ("cells",)), self.graph()
+        pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id]
+        features = region_features(geo["cells"], sorted(regions_above(graph, pids)))
+        for f in features:
+            f["properties"].update(picture(graph, f["properties"]["id"]))
+        trust = {}
+        for pid in pids:
+            props, chain = graph.nodes[pid]["props"], scale_chain(graph, [pid])
+            trust[pid] = {k: props.get(k) for k in ("credibility", "integrity")} | {"scale": chain[0].scale if chain else ""}
+        return {"type": "FeatureCollection", "features": features, "patterns": trust}
+
+    def _geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
+        geo = self.ws.load_geo(dataset_id, keys) if self._geo_ready(dataset_id) else None
         if geo is None:
             raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
         return geo
