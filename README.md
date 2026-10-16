@@ -6,7 +6,7 @@ The hypothesis it makes testable:
 
 > Structurally different subgroups that exhibit related statistical behaviour can be connected through latent attractor concepts. This enables *transversal* retrieval that purely structural graph traversal or naive nearest-neighbour text retrieval does not reliably achieve.
 
-**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
+**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. A thirteenth covers [trust and integrity](docs/13_trust.md): the source, credibility and statistics of every finding, and the checks on the records. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
 
 ---
 
