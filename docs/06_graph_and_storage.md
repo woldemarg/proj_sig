@@ -107,7 +107,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
 | `state/sig_state.json` | JSON | the next batch sequence | `Workspace.commit_batch_seq` |
 | `state/ontology_metrics.csv` | CSV | lac `BatchMetrics` rows | `MetricsRecorder` |
-| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 7) | `save_graph`, atomically |
+| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 9) | `save_graph`, atomically |
 | `graph/literals.npz` | npz: `texts`, `vectors` float32 `(N, 384)`, `fingerprint` | the embeddings of the literal catalog ([7.1.1](07_question_answering.md#711-literal-grounding)) by text — a cache: the catalog itself is rebuilt from the graph, a text it lacks (or a file of another fingerprint) is embedded again; outside `state/`, so no rollback restores it | `Workspace.save_literals`, by a writer's commit (or start) that changed the literals (`Engine._committed_state`) |
 | `pending.json` + `checkpoint/` | `{batch_id` or `dataset_id, checkpoint}`; copies of `state/`, the snapshot and, for a deletion, `journal/` and the moved-aside files | the unfinished transaction ([6.4](#64-commit-rollback-and-recovery)) | `Workspace.transaction`; both removed at its end |
 
