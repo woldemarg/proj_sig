@@ -46,6 +46,7 @@ class DatasetMetadataIn(BaseModel):
     source: str | None = None  # None: unchanged; "": undeclared
     reliability: str | None = None
     indicators: str | None = None
+    supersedes: str | None = None  # a dataset or upload id this dataset replaces: deleted now
 
 
 def _log_failure(future: Future) -> None:
@@ -123,6 +124,7 @@ def create_app(engine: Engine) -> FastAPI:
         reliability: str = Form(""),
         indicators: str = Form(""),
         table: bool = Form(False),
+        supersedes: str = Form(""),
     ) -> JSONResponse:
         cap = engine.settings.max_upload_mb * 1024 * 1024
         if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
@@ -139,6 +141,7 @@ def create_app(engine: Engine) -> FastAPI:
             reliability=reliability,
             indicators=indicators,
             table=table,
+            supersedes=supersedes,
         )
 
     @app.post("/api/demo")
@@ -187,7 +190,9 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
-        return engine.update_dataset_metadata(dataset_id, source=body.source, reliability=body.reliability, indicators=body.indicators)
+        return engine.update_dataset_metadata(
+            dataset_id, source=body.source, reliability=body.reliability, indicators=body.indicators, supersedes=body.supersedes
+        )
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:

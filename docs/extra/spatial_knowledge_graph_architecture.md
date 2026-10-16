@@ -469,7 +469,7 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 | автоматичний вертикальний зум, мітка `scale`, згортання, `SCALE CHAIN`, `picture` | #31 | реалізовано (`graph_query_engine/vertical.py`) |
 | зона/контур як запит, `place_scores`, `resolution` | #16 | реалізовано (`geometry_to_cells`, `zone_overlap`, `Engine.place_scores`, `SEED_PLACE_WEIGHT` 0.35, виділення на карті) |
 | `ZONES` | #14 | реалізовано (`vertical.rank_zones`) |
-| `supersedes` | #27 | план |
+| `supersedes` | #27 | реалізовано (опція upload і `PATCH`, видалення старої версії в коміті нової, `Engine._remove`) |
 | реєстр індикаторів | #34 | реалізовано як метадані (опція `indicators`, `PATCH`, props `Metric`, рядок `METRIC BASELINES`); правило рівня 1 — у #15 |
 | достовірність фаза A / фаза B, рядок `trust:`, правило 9 | #7, #15, #8 | план |
 | спайк золотих патернів другого джерела | #35 | план |
