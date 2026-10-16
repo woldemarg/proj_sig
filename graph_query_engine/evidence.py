@@ -47,7 +47,7 @@ TRUST_WORDS = {  # the credibility level in the evidence-only summary
     1: "підтверджено іншим джерелом",
     2: "не підтверджено",
     5: "суперечить іншому джерелу",
-    6: "є лише одне джерело",
+    6: "немає іншого джерела для перевірки",
 }
 WEAKEST_FIRST = (5, 6, 2, 1)
 SCALE_WORDS = {  # the same labels in the evidence-only summary
@@ -236,7 +236,9 @@ class Evidence:
     def _weakest(self, zone: dict[str, Any]) -> str:
         """``; weakest credibility 6``: the least confirmed finding of a zone, with the trust lines."""
         levels = [it.credibility for it in self.items if it.pattern_id in zone["holds"] and it.trust and it.credibility is not None]
-        return f"; weakest credibility {min(levels, key=WEAKEST_FIRST.index)}" if levels else ""
+        if not levels:
+            return ""
+        return f"; weakest credibility {min(levels, key=lambda lv: WEAKEST_FIRST.index(lv) if lv in WEAKEST_FIRST else -1)}"  # unknown first
 
     def _keys(self) -> dict[str, str]:
         return {it.pattern_id: it.key for it in self.items}
@@ -350,7 +352,7 @@ def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -
     place = basis.get("rule") == "place"
     words = {
         1: "confirmed by another source" + (" at the same place" if place else ""),
-        2: "not confirmed; another source has " + ("events at this place" if place else "the same metric"),
+        2: "not confirmed; another dataset has " + ("events at this place" if place else "the same metric"),
         5: "contradicted by another source" + (" at the same place" if place else ""),
         6: "no independent source covers this",
     }.get(level, "unrecognised level")
@@ -372,10 +374,11 @@ def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -
 
 
 def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
-    """Each item's trust line (source reliability | credibility | integrity) once the graph has a declared source or two
-    datasets; otherwise the evidence stays as it was without sources."""
-    datasets = graph.of_kind("Dataset")
-    if not (len(datasets) >= 2 or any(d["props"].get("source") for d in datasets)):
+    """Each item's trust line (source reliability | credibility | integrity) once the graph has a declared source or
+    reliability, or two uploads (the levels of one upload are one); otherwise the evidence stays as it was without sources."""
+    datasets = [d["props"] for d in graph.of_kind("Dataset")]
+    uploads = {d.get("upload_id") or d["dataset_id"] for d in datasets}
+    if not (len(uploads) >= 2 or any(d.get("source") or d.get("reliability", "F") != "F" for d in datasets)):
         return
     keys = {it.pattern_id: it.key for it in items}
     for it in items:
@@ -388,6 +391,7 @@ def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
             parts.append(_credibility_text(it.credibility, it.credibility_basis, keys))
         parts.append(f"integrity {graph.nodes[it.pattern_id]['props'].get('integrity', 'unverified')}")
         it.trust = " | ".join(parts)
+        it.validation = it.validation.removesuffix("; integrity unverified")  # the trust line says it
 
 
 def _members(n: int, kind: str = "") -> str:
