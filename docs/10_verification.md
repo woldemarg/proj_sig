@@ -211,8 +211,8 @@ Measured on 2026-10-16 with `google/gemma-4-26b-a4b-it` behind the broker, seed 
 | S-poison, the spot of the source rated E: with trust lines / without / rule 11 alone | 5/5 · 0/5 · 0/5 | 2/5 · 0/5 · 0/5 |
 | S-two-sources, the contradicted focus: with / without / rule 11 alone | 5/5 · 0/5 · 0/5 | 5/5 · 0/5 · 1/5 |
 
-- **The signal is the trust line, not the instruction.** With it 17 of 20 answers qualify the finding; without either 0 of 20, not even where the evidence itself holds the two sources' opposite shifts; rule 11 alone 1 of 20 (an answer that calls the two shifts contradictory). The instruction without a label in the data adds next to nothing.
-- **Open questions about the unreliable spot are the weak case** (2/5): the model describes the spot among the other findings and leaves its trust out. At five questions a cell, the gaps between cells are not measured: the first run of the same setup gave 12 of 20 with the trust lines (open questions on S-poison 1/5, on S-two-sources 3/5), 0 of 20 without.
+- **The signal is the trust line, not the instruction.** With it 17 of 20 answers qualify the finding; without either 0 of 20, though the evidence itself holds the two sources' opposite shifts; rule 11 alone 1 of 20 (an answer that calls the two shifts contradictory). The instruction without a label in the data adds next to nothing.
+- **Open questions about the unreliable spot are the weak case** (2/5): the model describes the spot among the other findings and leaves its trust out. A first run of the same setup, scored with the same words, gave 16 of 20 with the trust lines (open questions on S-poison 1/5) and 1 of 20 without (an open answer that calls the two shifts contradictory); at five questions a cell, a difference of one answer is not measured.
 - **No answer qualifies it every time it cites it** (0/60): the trust is one remark, the observations restate the finding plainly. One answer reads reliability `F` as low, where `F` means it cannot be judged.
 
 ## 10.4 Measurement scripts
