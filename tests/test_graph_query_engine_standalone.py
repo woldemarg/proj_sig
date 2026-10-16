@@ -395,3 +395,15 @@ def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_exp
     assert '"margin down" (same description as A-1; shares 2 members with it)' in prompt
     _, prompt = anchors_and_prompt([e for e in snap["edges"] if e["type"] != "CO_OCCURS"])  # one description, no shared member
     assert '"margin down" (same description as A-1; a separate anchor with no shared members)' in prompt
+
+
+def test_the_evidence_carries_each_pattern_credibility():
+    """An evidence item copies the credibility and its basis from its Pattern node (the view; the prompt does not show it)."""
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+
+    snap = snapshot()
+    snap["nodes"][0]["props"] |= {"credibility": 1, "credibility_basis": {"rule": "anchor", "patterns": ["P9"], "sources": ["b"]}}
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
+    found = search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+    p1 = next(it for it in found.evidence.items if it.pattern_id == "P1")
+    assert (p1.credibility, p1.credibility_basis["patterns"]) == (1, ["P9"]) and "credibility" not in found.payload().evidence_prompt

@@ -244,47 +244,47 @@ def credibility(
     pattern's own upload; metrics compare by the ``indicators`` registry. 5: a pattern of another declared source shifts
     a metric of the same indicator materially the opposite way in the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor
     and shifts a metric of the same indicator the same way; 2: another dataset (declared or not, not of the same upload)
-    shifts a metric of the same name; 6: none. 5 wins over 1. Never read: p, stability, weight; a tampered pattern
-    confirms nothing."""
+    shifts a metric of the same name; 6: none. 5 wins over 1. A version and the one it ``supersedes`` are one source.
+    Never read: p, stability, weight; a tampered pattern confirms nothing."""
     batch = {ins.id: batches.get(ins.batch_id, {}) for ins in insights}
     anchors: dict[str, set[str]] = defaultdict(set)
     for e in activates:
         if not e.props["weak"]:
             anchors[e.source].add(e.target)
-    shifts = {ins.id: {s.metric: s for s in thresholds.phenomenon_shifts(ins)} for ins in insights}
-
-    def source(pid: str) -> str | None:
-        return (batch[pid].get("source") or "").casefold() or None
-
-    def indicator(pid: str, metric: str) -> str | None:
-        return (batch[pid].get("indicators") or {}).get(metric, {}).get("indicator")
-
-    by_name, by_indicator = defaultdict(set), defaultdict(set)
-    for ins in insights:
-        if ins.id in tampered:
-            continue
-        for m in shifts[ins.id]:
-            by_name[m].add(ins.id)
-            if ind := indicator(ins.id, m):
-                by_indicator[ind].add(ins.id)
     of = {ins.id: ins for ins in insights}
+    shifts = {ins.id: {s.metric: s for s in thresholds.phenomenon_shifts(ins)} for ins in insights}
+    source = {pid: (batch[pid].get("source") or "").casefold() or None for pid in of}
+    indicator = {  # per phenomenon metric, compared casefolded like the source
+        pid: {m: i.casefold() for m in shifts[pid] if (i := (batch[pid].get("indicators") or {}).get(m, {}).get("indicator"))} for pid in of
+    }
+    conditions = {pid: frozenset(c.expr for c in ins.conditions) for pid, ins in of.items()}
+    own = {pid: {ins.dataset_id, batch[pid].get("upload_id")} - {None} for pid, ins in of.items()}  # what a supersedes names
+    by_name, by_indicator = defaultdict(set), defaultdict(set)
+    for pid in of:
+        if pid not in tampered:
+            for m in shifts[pid]:
+                by_name[m].add(pid)
+            for i in indicator[pid].values():
+                by_indicator[i].add(pid)
     out = {}
-    for ins in insights:
-        pid, mine, upload = ins.id, shifts[ins.id], batch[ins.id].get("upload_id")
-        conditions = {c.expr for c in ins.conditions}
+    # ponytail: every pair sharing a metric is compared (4000 such patterns: ~6 s a compile); index by condition past a few thousand
+    for pid, ins in of.items():
+        mine, upload = shifts[pid], batch[pid].get("upload_id")
         found: dict[int, set[str]] = defaultdict(set)
-        candidates = set().union(*(by_name[m] for m in mine), *(by_indicator[i] for m in mine if (i := indicator(pid, m))))
-        for q in candidates:
-            other = of[q]
-            if other.dataset_id == ins.dataset_id or (upload and batch[q].get("upload_id") == upload):
+        for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i in indicator[pid].values())):
+            if of[q].dataset_id == ins.dataset_id or (upload and batch[q].get("upload_id") == upload):
                 continue
-            if source(pid) is not None and source(pid) == source(q):
-                continue  # one declared source, two datasets: no independent view
-            declared = source(pid) is not None and source(q) is not None
-            pairs = [(mine[m], s) for m in mine for s in shifts[q].values() if (i := indicator(pid, m)) and i == indicator(q, s.metric)]
+            if (
+                (source[pid] is not None and source[pid] == source[q])
+                or batch[q].get("supersedes") in own[pid]
+                or batch[pid].get("supersedes") in own[q]
+            ):
+                continue  # one declared source in two datasets, or a version and the one it replaces: no independent view
+            declared = source[pid] is not None and source[q] is not None
+            pairs = [(mine[m], shifts[q][n]) for m, i in indicator[pid].items() for n, j in indicator[q].items() if i == j]
             if (
                 declared
-                and (conditions <= (theirs := {c.expr for c in other.conditions}) or theirs <= conditions)
+                and (conditions[pid] <= conditions[q] or conditions[q] <= conditions[pid])
                 and any(a.robust_z * b.robust_z < 0 and thresholds.material(a) and thresholds.material(b) for a, b in pairs)
             ):
                 found[5].add(q)
@@ -293,12 +293,10 @@ def credibility(
             elif set(mine) & set(shifts[q]):
                 found[2].add(q)
         level = next((lv for lv in (5, 1, 2) if found[lv]), 6)
-        basis: dict[str, Any] = {"rule": "anchor", "patterns": sorted(found.get(level, ()))}
-        basis["sources"] = sorted({batch[q].get("source") or of[q].dataset_id for q in basis["patterns"]})
-        if level in (1, 5):
-            basis["comparability"] = "indicator"
-        elif level == 2:
-            basis["comparability"] = "nominal"
+        patterns = sorted(found.get(level, ()))
+        names = {source[q] or of[q].dataset_id: batch[q].get("source") or of[q].dataset_id for q in reversed(patterns)}  # one per source
+        basis: dict[str, Any] = {"rule": "anchor", "patterns": patterns, "sources": sorted(names.values())}
+        basis |= {"comparability": c} if (c := {1: "indicator", 5: "indicator", 2: "nominal"}.get(level)) else {}
         if level == 5 and found[1]:
             basis["confirmed_by"] = sorted(found[1])
         out[pid] = {"credibility": level, "credibility_basis": basis}

@@ -827,5 +827,11 @@ def test_credibility_from_independent_sources_phase_a():
     lv, out = levels([a, ins("N", "n", -1.2)], [member("A", "A-1"), member("N", "A-1")])
     assert lv == {"A": 2, "N": 2} and out["A"]["credibility_basis"]["comparability"] == "nominal"  # no registry: no 1
     assert levels([ins("L7", "l7", -1.5), ins("L5", "l5", -1.2)], [member("L7", "A-1"), member("L5", "A-1")])[0] == {"L7": 6, "L5": 6}  # one upload
+    batches |= {"b-g": {"source": "INSURER", "indicators": {"margin": {"indicator": "Gross Margin"}}}}  # another case of b's source and indicator
+    lv, out = levels([a, b, ins("G", "g", -1.1)], [member("A", "A-1"), member("B", "A-1"), member("G", "A-1")])
+    assert lv["A"] == 1 and out["A"]["credibility_basis"]["sources"] == ["Insurer"]  # one source listed once
+    assert levels([a, ins("G", "g", -1.1)], [member("A", "A-1"), member("G", "A-1")])[0]["A"] == 1  # Gross Margin = gross margin
+    batches |= {"b-v2": {"source": "Revised", "indicators": registry, "supersedes": "a"}}  # a new version of dataset a
+    assert levels([a, ins("V", "v2", -1.4)], [member("A", "A-1"), member("V", "A-1")])[0] == {"A": 6, "V": 6}  # not independent
     stronger = replace(a, p_value=0.04, p_adjusted=0.049, stability=0.51, weight=0.21)
     assert levels([stronger, b], [member("A", "A-1"), member("B", "A-1")])[0] == {"A": 1, "B": 1}  # p, stability, weight: unread

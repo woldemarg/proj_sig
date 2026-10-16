@@ -73,7 +73,9 @@ class EvidenceItem:
     scale: str = ""  # regional | scale-dependent | not_found_coarser | insufficient (ScaleChain.scale)
     folded_into: str = ""  # the key of the item this one restates at another level of the same upload
     also: list[str] = field(default_factory=list)  # the keys of the levels of the same upload that restate this item
-    credibility: int | None = None  # 1 | 2 | 5 | 6 from independent sources (docs/06_graph_and_storage.md §6.2); None: an older snapshot
+    credibility: int | None = (
+        None  # 1 | 2 | 5 | 6 from independent sources (docs/06_graph_and_storage.md §6.2); None: a hand-written snapshot without it
+    )
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
 
 

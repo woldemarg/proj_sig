@@ -407,7 +407,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     result["place"] = _place(engine, scenario.uploads[0], files[0]["found"]) if len(foci) > 1 else None
     result["supersede"] = _supersede(engine, scenario, root, before, new) if new else None
-    result["credibility"] = f"{alone} -> {_credibility(engine, [f['pattern'] for f in files[0]['found'].values()])}" if alone else None
+    result["credibility"] = f"{alone} -> {_credibility(engine, [f['pattern'] for f in files[0]['found'].values()])}" if alone is not None else None
     graph = _graph(engine, [p for p in best if p in engine.committed().graph.insights])  # a superseded part's are gone
     region = scenario.truth.get("region")
     return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
