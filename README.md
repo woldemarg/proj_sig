@@ -197,14 +197,14 @@ The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIV
 - **Lattice vs anchor.** The lattice reaches them only through 2–4 hops among many other patterns. The anchor `discount ↑ · margin ↓` connects them in two hops.
 - **The prompt** is plain ASCII. It defines "sd" once and states every shift as a phrase plus a signed number ([7.4](docs/07_question_answering.md#74-the-evidence-object)).
 
-**Hypothesis benchmark** (`python scripts/experiment.py --k 3`). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
+**Hypothesis benchmark** (`python scripts/experiment.py --k 3`; measured on the CPU, as on CUDA: on Apple silicon set `EMBEDDING_DEVICE=cpu` to reproduce it, [4.4](docs/04_representation.md#44-the-embedding-model)). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
 
 | method | recall@3 | MRR | recall@5 |
 |---|---|---|---|
 | transversal (this system) | **0.500** | **0.581** | **0.701** |
 | structural-only BFS | 0.000 | 0.078 | 0.000 |
-| naive text-NN (canonical documents) | 0.167 | 0.243 | 0.361 |
-| insight-vector kNN (no attractor graph) | 0.028 | 0.229 | 0.507 |
+| naive text-NN (canonical documents) | 0.028 | 0.199 | 0.375 |
+| insight-vector kNN (no attractor graph) | 0.028 | 0.232 | 0.590 |
 
 Labels come from the planted ground truth (scope containment), not from the measured shifts. See [10.3](docs/10_verification.md#103-hypothesis-benchmark) for the reading and the caveats.
 

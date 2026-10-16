@@ -92,19 +92,19 @@ Four rankers are compared:
 recall@k = hits / |analogues|        precision@k = hits / min(k, |analogues|)        MRR = 1 / rank of the first analogue (0 if none)
 ```
 
-Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwen3 → 384; 28 patterns):
+Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwen3 → 384; 28 patterns; re-measured on 2026-10-16 on the CPU, which reads as CUDA does; on Apple silicon's MPS the same code gives transversal 0.333 / 0.361 / 0.567 at k = 3, [4.4](04_representation.md#44-the-embedding-model)):
 
 | Method | recall@3 | precision@3 | MRR | recall@5 |
 |---|---|---|---|---|
 | transversal | **0.500** | **0.528** | **0.581** | **0.701** |
 | structural | 0.000 | 0.000 | 0.078 | 0.000 |
-| text_nn | 0.167 | 0.167 | 0.243 | 0.361 |
-| vector_nn | 0.028 | 0.028 | 0.229 | 0.507 |
+| text_nn | 0.028 | 0.028 | 0.199 | 0.375 |
+| vector_nn | 0.028 | 0.028 | 0.232 | 0.590 |
 
 Reading:
 - **Structural traversal** never reaches scope-disjoint analogues within its first ranks: they sit 2–4 lattice hops away, mixed with everything else.
 - **Text-NN and raw vector kNN** rank the seed's own refinements first.
-- **The anchor layer** puts the analogues at the top (MRR 0.58 vs ≤ 0.24) and reaches most of them by `k = 5` (0.70 vs 0.51).
+- **The anchor layer** puts the analogues at the top (MRR 0.58 vs ≤ 0.23) and reaches most of them by `k = 5` (0.70 vs 0.59).
 
 This is an apparatus, not proof: one synthetic dataset, two mechanisms with analogues. `test_hypothesis_apparatus` guards the ordering as a regression.
 
@@ -130,7 +130,7 @@ Values are recall@5 / MRR, re-measured on 2026-10-12 after the kernel changes (m
 correlations; the pre-registered read of 2026-10-11 under the earlier kernel gave the same picture: −0.011 against
 k-means, +0.066 over the previous band on 455 cases). Under the previous band the lifecycle's groups were larger and
 mixed mechanisms, and the walk over k-means won by −0.031 [−0.059, −0.005]. The precision band fixes that: the walk
-over the tuned attractors is level with the walk over k-means at the same count (−0.009 [−0.032, +0.013]), +0.037
+over the tuned attractors is level with the walk over k-means at the same count (−0.009 [−0.032, +0.013]; re-measured on 2026-10-16 on the CPU after M4, −0.018 [−0.041, +0.005], Holm p 0.136, the same as on the code before the SKG epic), +0.037
 [+0.005, +0.077] over the previous band on the same cases, +0.21 over vector neighbours; random groups collapse it to
 0.08, so the grouping carries the value. The lifecycle chooses its group count
 itself, incrementally; k-means was handed it. These are planted data under one embedder: the result speaks to the
@@ -168,7 +168,7 @@ from a found focus counts an unfound one as a miss.
 | S-parts-v2 | S-parts, then the middle part exported again (another seed, the same area) with `supersedes` = its first upload | 4/4 parts found (the old middle part before it went); the same pattern ids as a workspace that got the new part at once, and both anchors the new part activates existed before it (`supersede` `yes 2/2`, both encoders) |
 | S-two-sources | source a: two foci in one resolution-5 cell and a third in the neighbouring cell farthest from them; source b, over the same area but for that cell, repeats focus 0 the same way and focus 1 with `load` lowered (both sources register their metrics as the same indicators) | credibility of a's best patterns `6,6,6` alone, `1,5,6` with b, and of b's `1,5` (both encoders): focus 0 confirmed, focus 1 contradicted at its place, focus 2 at 6 as b has no events there (phase A would give it 1 through focus 0 of b) |
 | S-poison | source a (rated B) has one focus; source b (rated E) repeats it and adds a second, planted in b only, where a has its ordinary events | a's focus `6` alone, `1` with b; b's `1,2` (both encoders): the planted spot is never 1, as no pattern of a lies there; a broad pattern of a's ordinary cells holding the spot shifts `load` the other way but is no contradiction, its place far wider than the spot |
-| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 348 CO_LOCATED (230 between datasets), 215 SIBLING; 1.9–2.2 s per batch, of which 0.5–1.0 s compiles the graph; 364 (372) nodes visited per seed walk; 12,363 (12,561) prompt characters, 10 % for the SCALE CHAIN and the ZONES |
+| S-size | three datasets of about 9,500 cells at 8, ten foci each | 12 of 30 foci found; 90 patterns, 348 CO_LOCATED (230 between datasets), 215 SIBLING; 1.9–2.2 s per batch, of which 0.5–1.0 s compiles the graph; 364 (372) nodes visited per seed walk; 14,819 (15,042) prompt characters with the trust lines of its three sources (12,363 / 12,561 without them), 10 % for the SCALE CHAIN and the ZONES |
 
 Measured on 2026-10-15, seed 1, k 5 (`place`, S-parts-v2, S-two-sources, S-poison and the S-size times and prompt on 2026-10-16; the other columns unchanged). Three readings bound what the spatial issues can show:
 - **The horizontal walk is saturated.** The foci of S-regional and of S-control are reached alike, through the anchors:
@@ -211,7 +211,7 @@ Measured on 2026-10-16 with `google/gemma-4-26b-a4b-it` behind the broker, seed 
 | S-poison, the spot of the source rated E: with trust lines / without / rule 11 alone | 5/5 · 0/5 · 0/5 | 2/5 · 0/5 · 0/5 |
 | S-two-sources, the contradicted focus: with / without / rule 11 alone | 5/5 · 0/5 · 0/5 | 5/5 · 0/5 · 1/5 |
 
-- **The signal is the trust line, not the instruction.** With it 17 of 20 answers qualify the finding; without either 0 of 20, though the evidence itself holds the two sources' opposite shifts; rule 11 alone 1 of 20 (an answer that calls the two shifts contradictory). The instruction without a label in the data adds next to nothing.
+- **The signal is the trust line, not the instruction.** With it 17 of 20 answers qualify the finding; without either 0 of 20, though the evidence itself holds the two sources' opposite shifts; rule 11 alone 1 of 20 (an answer that calls the two shifts contradictory). The instruction without a label in the data adds next to nothing. A third run (2026-10-16, after #71) gave 18, 2 and 4 of 20: rule 11 alone helped only where the disagreement is in the data (S-two-sources, open questions 3/5), never where the unreliability is a label (S-poison 0/10).
 - **Open questions about the unreliable spot are the weak case** (2/5): the model describes the spot among the other findings and leaves its trust out. A first run of the same setup, scored with the same words, gave 16 of 20 with the trust lines (open questions on S-poison 1/5) and 1 of 20 without (an open answer that calls the two shifts contradictory); at five questions a cell, a difference of one answer is not measured.
 - **No answer qualifies it every time it cites it** (0/60): the trust is one remark, the observations restate the finding plainly. One answer reads reliability `F` as low, where `F` means it cannot be judged.
 

@@ -288,7 +288,7 @@ The five evidence prompts hold 4,750–6,282 characters, none of them outside AS
 
 | B1 English | B2 code-switched | B3 translated | B4 inflections / typos | FPGR |
 |---|---|---|---|---|
-| 1.00 / 1.00 | 1.00 / 1.00 | 0.77 / 0.69, direction 1.00, evidence overlap 0.83 | 0.98 / 0.97, evidence 1.00; symbol accuracy 1.00 (*маржа* → `margin` passes at 0.31 on the Ukrainian-value copy) | 0 |
+| 1.00 / 1.00 | 0.98 / 0.97, evidence 1.00 | 0.77 / 0.69, direction 1.00, evidence overlap 0.83 | 1.00 / 1.00, evidence 1.00; symbol accuracy 1.00 (*маржа* → `margin` passes at 0.31 on the Ukrainian-value copy) | 0 |
 
 Cells are Recall@3 / Jaccard. The B3 misses all contain *маржа*, *частка повернень* or *роздріб* (above). Retrieval time per question with the model on a GPU: 70–90 ms for English and code-switched questions, 130–200 ms for a translated one (one embedding pass over its 2–4 unresolved spans).
 
