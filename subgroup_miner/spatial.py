@@ -668,7 +668,7 @@ def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any
         _, res, cell = rid.split(":")
         lv = int(res)
         if lv not in parents:
-            parents[lv] = np.array([c if h3.get_resolution(c) == lv else h3.cell_to_parent(c, lv) for c in map(str, cells)])
+            parents[lv] = np.array([h3.cell_to_parent(c, lv) for c in map(str, cells)])
         rows = np.flatnonzero(parents[lv] == cell).tolist()
         out.append(
             {

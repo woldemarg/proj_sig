@@ -750,7 +750,9 @@ class Engine:
     def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
         """What the graph says about a geo dataset's map: the regions above its patterns (``regions_above``) as GeoJSON,
         each with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale."""
-        geo, graph = self._geo(dataset_id), self.graph()
+        if not self._geo_ready(dataset_id) or (geo := self.ws.load_geo(dataset_id, ("cells",))) is None:
+            raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+        graph = self.graph()
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id]
         features = region_features(geo["cells"], sorted(regions_above(graph, pids)))
         for f in features:
@@ -758,7 +760,7 @@ class Engine:
         trust = {}
         for pid in pids:
             props, chain = graph.nodes[pid]["props"], scale_chain(graph, [pid])
-            trust[pid] = {k: props.get(k) for k in ("credibility", "credibility_basis", "integrity")} | {"scale": chain[0].scale if chain else ""}
+            trust[pid] = {k: props.get(k) for k in ("credibility", "integrity")} | {"scale": chain[0].scale if chain else ""}
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
     def _geo(self, dataset_id: str) -> dict[str, Any]:

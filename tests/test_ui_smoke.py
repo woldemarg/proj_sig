@@ -94,10 +94,10 @@ def test_upload_process_render_query(client, demo_csv):
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
     view = client.get(f"/api/graph?dataset={geo_ds}").json()
     regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
-    assert regions and all(r["resolution"] < 5 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
+    assert regions and all(r["resolution"] < 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
     geo_pid = next(iter(overlay["patterns"]))
     detail = client.get(f"/api/nodes/{geo_pid}").json()
-    assert detail["dataset"]["dataset_id"] == geo_ds and "regions" in detail["scale_chain"]
+    assert detail["dataset"]["dataset_id"] == geo_ds and "regions" in detail["scale_chain"] and "labels" in detail
     assert client.get(f"/api/nodes/{regions[0]['id']}").json()["picture"]["patterns"] > 0
     assert client.delete(f"/api/datasets/{geo_ds}").json()["patterns_removed"] == geo_batch["metrics"]["validated_insights"]
     assert client.get("/api/geo").json() == [] and client.get(f"/api/geo/{geo_ds}/cells").status_code == 404  # the file went with the dataset
@@ -262,6 +262,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
+        page.evaluate("ask('Де median_house_value вищий?')")  # a question without scope: its ZONES outlined on the map
+        page.wait_for_function("G.zoneMarks.length > 0 && G.zoneMarks[0].getElement().textContent === 'Z1'", timeout=30000)
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}

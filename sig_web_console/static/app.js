@@ -59,6 +59,7 @@ const SCALE = {
   regional: "regional — holds at a coarser level", "scale-dependent": "scale-dependent — reverses at a coarser level",
   not_found_coarser: "not found at the coarser level", insufficient: "no coarser level analysed",
 };
+const cred = (level) => CREDIBILITY[level] || ["warn", "not rated"];
 const RELATION = { overlaps: "zones overlap", adjacent: "zones touch", same_region: "same region, zones apart" };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
@@ -147,11 +148,11 @@ function datasetCard(b) {
 }
 
 function datasetTrust(t) {
-  /* what the graph trusts of a dataset (its Dataset node), never the batch record: a record changed behind the API fails its check */
+  /* a dataset card's trust chips, from its Dataset node */
   if (!t) return "";
-  if (t.integrity === "mismatch") return `<div class="ds-src"><span class="chip bad" title="The batch record no longer matches its metadata digest: its source, reliability and indicators are ignored">metadata failed its check</span></div>`;
-  const chips = (t.source || t.reliability !== "F" ? `<span class="chip" title="Source and its reliability (Admiralty code): ${esc(RELIABILITY[t.reliability] || "")}">${esc(t.source || "source")} · ${esc(t.reliability)}</span>` : "") +
-    (t.integrity === "unverified" ? `<span class="chip warn" title="Recorded before metadata digests: its source and rating are not checked">metadata unverified</span>` : "");
+  if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "metadata failed its check", "The batch record no longer matches its metadata digest: its source, reliability and indicators are ignored")}</div>`;
+  const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "source"} · ${t.reliability}`, `Source and its reliability (Admiralty code): ${RELIABILITY[t.reliability] || ""}`) : "") +
+    (t.integrity === "unverified" ? chip("warn", "metadata unverified", "Recorded before metadata digests: its source and rating are not checked") : "");
   return chips ? `<div class="ds-src">${chips}</div>` : "";
 }
 
@@ -287,7 +288,7 @@ function dualPlanePositions(cy) {
     x += width + 50;
   }
   let y = maxY + 150;
-  const regions = cy.nodes('[kind="Region"]');
+  const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
   for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
     const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
       const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter((n) => pos[n.id()]);
@@ -628,12 +629,12 @@ async function verifyPattern(id) {
 }
 
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
-const nodeLabel = (id) => (S.nodes.find((d) => d.id === id) || {}).full_label || id;
+const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
 const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 
-function trustRows(p, ds) {
+function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
-  const [ccls, cwords] = CREDIBILITY[p.credibility] || ["warn", "not rated"];
+  const [ccls, cwords] = cred(p.credibility);
   const basis = p.credibility_basis || {}, [icls, iwords] = INTEGRITY[p.integrity] || INTEGRITY.unverified;
   const source = ds.integrity === "mismatch" ? `${chip("bad", "unknown")} its dataset's metadata failed its integrity check`
     : `${chip("", ds.reliability || "F")} ${esc(ds.source || "source not declared")} — ${esc(RELIABILITY[ds.reliability || "F"])}${ds.integrity === "unverified" ? " (metadata unverified)" : ""}`;
@@ -643,12 +644,12 @@ function trustRows(p, ds) {
     ["Source", source],
     ["Credibility", `${chip(ccls, String(p.credibility ?? "–"))} ${esc(cwords)}${(basis.sources || []).length ? ` · ${esc(basis.sources.join(", "))}` : ""}${by ? ` <span class="muted">(${by})</span>` : ""}`],
     ["Integrity", `${chip(icls, p.integrity || "unverified")} ${esc(iwords)}`],
-  ]) + (others.length ? `<details class="nb-group"><summary>Basis <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x), (basis.confirmed_by || []).includes(x) ? "confirms" : "")).join("")}</details>` : "");
+  ]) + (others.length ? `<details class="nb-group"><summary>Basis <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "confirms" : "")).join("")}</details>` : "");
 }
 
-function scaleRows(c) {
+function scaleRows(c, labels) {
   /* the scale chain the graph already holds: ↑ coarser and ↓ finer levels of one phenomenon, then the regions above it */
-  const step = (st, arrow) => nbRow(st.pattern_id, `${arrow} ${nodeLabel(st.pattern_id)}`, st.relation === "corresponds" ? "same shift" : "opposite shift");
+  const step = (st, arrow) => nbRow(st.pattern_id, `${arrow} ${nodeLabel(st.pattern_id, labels)}`, st.relation === "corresponds" ? "same shift" : "opposite shift");
   return `<h4>Scale</h4><p class="lead">${esc(SCALE[c.scale] || "a single level")}</p>` +
     c.up.map((st) => step(st, "↑")).join("") + c.down.map((st) => step(st, "↓")).join("") +
     c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
@@ -679,8 +680,8 @@ async function inspect(id) {
       ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
       ["Also known as", esc((p.aliases || []).join("; "))],
     ]);
-    html += `<h4>Trust</h4>${trustRows(p, d.dataset || {})}`;
-    if (d.scale_chain) html += scaleRows(d.scale_chain);
+    html += `<h4>Trust</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
+    if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
     html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
@@ -760,7 +761,7 @@ function itemTrust(it) {
   /* an evidence item's trust badges; the tooltip is the trust line the model saw */
   if (!it.trust) return "";
   const integrity = (it.trust.match(/integrity (\w+)$/) || [])[1] || "unverified";
-  const [ccls] = CREDIBILITY[it.credibility] || ["warn"];
+  const [ccls] = cred(it.credibility);
   return `<div class="ev-trust" title="${esc(it.trust)}">` + (it.reliability ? chip("", `source ${it.reliability}`) : chip("bad", "source unknown")) +
     (it.credibility != null ? chip(ccls, `credibility ${it.credibility}`) : "") + chip((INTEGRITY[integrity] || INTEGRITY.unverified)[0], `integrity ${integrity}`) + `</div>`;
 }
@@ -777,10 +778,10 @@ function chainLine(chain, items) {
 
 function botCard(turn) {
   const qa = turn.qa;
-  const items = (qa.view.evidence && qa.view.evidence.items) || [];
-  const keyTo = Object.fromEntries(items.map((i) => [i.key, i.pattern_id]));
-  const area = (qa.view.evidence && qa.view.evidence.area) || null;  // an asked map zone: item key -> place, 0 outside
   const ev = qa.view.evidence || {};
+  const items = ev.items || [];
+  const keyTo = Object.fromEntries(items.map((i) => [i.key, i.pattern_id]));
+  const area = ev.area || null;  // an asked map zone: item key -> place, 0 outside
   const chains = Object.fromEntries((ev.scale_chains || []).filter((c) => c.up.length || c.down.length).map((c) => [c.pattern_id, c]));
   const forged = (ev.datasets || []).filter((d) => d.integrity === "mismatch").map((d) => d.dataset_id);
   const llm = qa.llm || {};
@@ -987,7 +988,10 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-  document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => { b.classList.toggle("on"); applyVisibility(); highlight(S.hl); }));
+  document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
+    b.classList.toggle("on"); applyVisibility(); highlight(S.hl);
+    if (b.dataset.key === "region") runLayout();
+  }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", setFilter);
   $("fit-btn").addEventListener("click", () => {

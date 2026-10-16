@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from html import escape
 from typing import Any
 
@@ -15,9 +16,9 @@ from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
 
-def _short_label(graph: DualGraph, node: dict[str, Any]) -> str:
+def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> str:
     if node["kind"] == "Region":
-        return f"res {node['props']['resolution']}\n{node['props']['patterns']} insights"
+        return f"res {node['props']['resolution']}\n{members} insight{'' if members == 1 else 's'}"
     if node["kind"] != "Pattern":
         return node["label"]
     ins = graph.insight(node["id"])
@@ -36,7 +37,9 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
 def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str, Any]:
     keep: set[str] = set()
     nodes = []
-    regions = regions_above(graph, [n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset])
+    pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
+    regions = regions_above(graph, list(pids))
+    members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and n["id"] not in regions:
@@ -46,7 +49,7 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
         if dataset and n["kind"] == "Attractor" and dataset not in p.get("datasets", []):
             continue
         keep.add(n["id"])
-        data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n), "full_label": n["label"]}
+        data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n, members[n["id"]]), "full_label": n["label"]}
         if n["kind"] == "Pattern":
             ins = graph.insight(n["id"])
             anchor = primary_anchor(graph, n["id"])
@@ -65,7 +68,7 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
         elif n["kind"] == "Attractor":
             data.update(mass=p["mass"], n_patterns=p["n_patterns"])
         elif n["kind"] == "Region":
-            data.update(resolution=p["resolution"], patterns=p["patterns"])
+            data.update(resolution=p["resolution"], patterns=members[n["id"]])
         nodes.append({"data": data})
     edges = [
         {
@@ -85,7 +88,7 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
     trust = {
         n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
         for n in graph.of_kind("Dataset")
-    }  # every dataset, whatever the filter: the rail's cards read what the graph trusts of each
+    }  # every dataset's trust, whatever the filter
     return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {}), "datasets": trust}
 
 
@@ -107,6 +110,10 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         chain = scale_chain(graph, [node_id])
         out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
+        basis = node["props"].get("credibility_basis", {})
+        linked = [*basis.get("patterns", []), *basis.get("confirmed_by", [])]
+        linked += [s.pattern_id for s in (chain[0].up + chain[0].down if chain else [])]
+        out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)
     return out

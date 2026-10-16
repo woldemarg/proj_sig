@@ -319,6 +319,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .pp-zone { width: calc(100% - 20px); margin: 6px 10px 0; padding: 5px; background: none; color: #eef3ff; border: 1px dashed #5c6a85; border-radius: 3px; font: 11px var(--mono); cursor: pointer; }
 .pp-ask { width: calc(100% - 20px); margin: 6px 10px 10px; padding: 6px; background: #ffb000; color: #05080d; border: 0; border-radius: 3px; font: 700 11px var(--mono); letter-spacing: .06em; cursor: pointer; }
 .region-n { pointer-events: none; font: 700 10.5px var(--mono); color: #4cc9c0; text-shadow: 0 0 3px #000, 0 0 6px #000; }
+.zone-n { font-size: 12px; color: #eef3ff; background: rgba(8, 12, 19, .85); border: 1px solid #4cc9c0; border-radius: 2px; padding: 0 4px; }
 .pp-reg { padding: 4px 6px; color: #eef3ff; } .pp-reg span { display: block; color: #8592ab; font-size: 10.5px; font-family: var(--font); }
 .pp-tag { display: inline-block; font-style: normal; margin: 2px 4px 0 0; padding: 0 5px; border-radius: 2px; font: 10px var(--mono); color: #05080d; background: #5c6a85; } .pp-tag.ok { background: #3ccb92; } .pp-tag.warn { background: #f0b340; } .pp-tag.bad { background: #ff6b6b; }
 .maplibregl-ctrl-scale { background: rgba(8, 12, 19, .7); color: #8592ab; border-color: #5c6a85; font: 10px var(--mono); }
