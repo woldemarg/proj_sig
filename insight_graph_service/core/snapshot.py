@@ -82,7 +82,7 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                 "columns": profile.get("columns"),
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
-                **{k: b[k] for k in ("upload_id", "level") if k in b},
+                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
             },

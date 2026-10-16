@@ -71,6 +71,7 @@ class PipelineError(RuntimeError):
 
 
 SOURCE_MAX_CHARS = 120
+EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 
 
 def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
@@ -317,11 +318,14 @@ class Engine:
         reliability: str | None = None,
         indicators: str | None = None,
         table: bool = False,
+        supersedes: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
-        levels from the points (``select_levels``). Processing is a separate call."""
+        levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
+        READY (``_superseded``). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
+        supersedes = self._check_supersedes(supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
         levels = [] if auto else resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
@@ -342,7 +346,19 @@ class Engine:
             levels = resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
-        options = {"filename": name, "bins": bins, "categories": categories, "source": source, "reliability": reliability, "indicators": indicators}
+        if supersedes == upload_id:
+            if not any(b.get("source_path") == str(path) for b in self.ws.list_batches()):
+                path.unlink(missing_ok=True)
+            raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
+        options = {
+            "filename": name,
+            "bins": bins,
+            "categories": categories,
+            "source": source,
+            "reliability": reliability,
+            "indicators": indicators,
+            "supersedes": supersedes,
+        }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
         return [  # the table level leaves the point columns out
@@ -373,6 +389,7 @@ class Engine:
         strict: bool = True,
         geo_levels: dict[str, Any] | None = None,
         locator: str | None = None,
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -383,9 +400,10 @@ class Engine:
         (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``; ``locator`` the point
-        columns a table level leaves out.
+        columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
+        supersedes = self._check_supersedes(supersedes)
         path = Path(path)
         created = utc_now()
         record = {
@@ -400,6 +418,7 @@ class Engine:
             **({} if strict else {"strict": False}),
             **({"geo_levels": geo_levels} if geo_levels else {}),
             **({"locator": locator} if locator else {}),
+            **({"supersedes": supersedes} if supersedes else {}),
             **trust,
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
@@ -481,7 +500,8 @@ class Engine:
                     enc, spec = self._encode(canon)
                     self.ws.check_representation(spec)  # validate only; recorded at commit
 
-                with self.ws.transaction({"batch_id": batch_id}):
+                replaced = self._superseded(record, ("READY", None))
+                with self.ws.transaction({"batch_id": batch_id}, journal=bool(replaced)) as cp:
                     with self._stage(record, "UPDATING_ONTOLOGY", timings, "ontology_s"):
                         seq = record["batch_seq"] = self.ws.next_batch_seq()
                         ontology = self.ontology()
@@ -514,6 +534,8 @@ class Engine:
                                 },
                             )
                             atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, loaded))
+                        if replaced:  # after the new version joined its anchors: those it shares keep their ids
+                            record["superseded"] = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed")
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
@@ -661,6 +683,7 @@ class Engine:
             record["warnings"].append(
                 f"a re-upload does not change the source, reliability or indicators: PATCH /api/datasets/{record['dataset_id']}"
             )
+        self._supersede_alone(record, ("SKIPPED", None))  # the last level of the new version may be one already ingested
         self.ws.save_batch(record)
         return record
 
@@ -692,6 +715,8 @@ class Engine:
         if code == "internal_error":
             record["error"]["trace"] = traceback.format_exc(limit=6)
         record["metrics"]["processing_duration_s"] = time.perf_counter() - t0
+        if not self.ws.pending_path.exists():  # a coarser level with nothing to mine still completes a new version
+            self._supersede_alone(record, ("FAILED", code))
         self.ws.save_batch(record)
         log.warning("[%s] FAILED %s: %s", record["batch_id"], code, exc)
         return record
@@ -704,33 +729,97 @@ class Engine:
 
     @_healthy
     def update_dataset_metadata(
-        self, dataset_id: str, *, source: str | None = None, reliability: str | None = None, indicators: str | None = None
+        self,
+        dataset_id: str,
+        *,
+        source: str | None = None,
+        reliability: str | None = None,
+        indicators: str | None = None,
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
-        """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` (None: unchanged, "": undeclared) on its
-        batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
-        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused."""
+        """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` / ``supersedes`` (None: unchanged, "":
+        undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
+        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused; a dataset or
+        upload it now supersedes is deleted in the same transaction (docs/06_graph_and_storage.md §6.8)."""
         changes = resolve_dataset_metadata(source, reliability, indicators)
+        if supersedes is not None:
+            changes["supersedes"] = self._check_supersedes(supersedes) or None
         with self._lock:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
+            if changes.get("supersedes") and changes["supersedes"] in (dataset_id, record.get("upload_id")):
+                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself")
             unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
             if unknown:
                 raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
+            replaced = self._targets(record, set()) if changes.get("supersedes") else None
+            ontology = self.ontology()
             # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
-            with self.ws.transaction({"dataset_id": dataset_id}):
-                snapshot, state = self._derive(self.ontology(), pending=record)
+            with self.ws.transaction({"dataset_id": dataset_id}, journal=bool(replaced)) as cp:
+                superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
+                ontology.save()
+                snapshot, state = self._derive(ontology, pending=record)
                 self.ws.save_batch(record)
             return {
                 "dataset_id": dataset_id,
                 "source": record.get("source"),
                 "reliability": record.get("reliability", "F"),
                 "indicators": record.get("indicators", {}),
+                "supersedes": record.get("supersedes"),
+                **({"superseded": superseded} if superseded else {}),
                 "neo4j": self._publish(state, snapshot),
             }
+
+    def _check_supersedes(self, target: str | None) -> str | None:
+        """``target`` stripped (None when empty), refused unless it names a READY dataset or an upload with batches."""
+        target = (target or "").strip() or None
+        if target and not any(
+            target in (b.get("dataset_id"), b.get("upload_id")) and b["status"] in ("READY", "SKIPPED") for b in self.ws.list_batches()
+        ):
+            raise PipelineError("invalid_options", f"supersedes {target}: no READY dataset or upload has this id")
+        return target
+
+    def _superseded(self, record: dict[str, Any], outcome: tuple[str, str | None]) -> tuple[set[str], list[dict[str, Any]]] | None:
+        """What ``record``'s batch replaces now (``_targets``), its own ``outcome`` (status, error code) given: its
+        ``supersedes`` once every level of the same upload call (one stored file) is done, one holds insights and none
+        failed but for having nothing to mine (``EMPTY_LEVEL``), so the last level applies it; otherwise the old version
+        stays, with a warning."""
+        if not record.get("supersedes"):
+            return None
+        levels = [b for b in self.ws.list_batches() if b["batch_id"] != record["batch_id"] and b.get("source_path") == record["source_path"]]
+        if any(b["status"] not in TERMINAL for b in levels):
+            return None
+        done = [outcome, *((b["status"], (b.get("error") or {}).get("code")) for b in levels)]
+        if any(status == "FAILED" and code not in EMPTY_LEVEL for status, code in done) or all(status == "FAILED" for status, _ in done):
+            record["warnings"].append(
+                f"supersedes {record['supersedes']} not applied: a level of this upload failed or none holds insights; the old version stays"
+            )
+            return None
+        return self._targets(record, {b.get("dataset_id") for b in levels})
+
+    def _supersede_alone(self, record: dict[str, Any], outcome: tuple[str, str | None]) -> None:
+        """``supersedes`` applied by a last level that commits nothing (SKIPPED, or no insight): a deletion of its own."""
+        try:
+            if replaced := self._superseded(record, outcome):
+                record["superseded"] = self._delete(lambda b: b.get("dataset_id") in replaced[0], {"batch_id": record["batch_id"]}, "unknown_dataset")
+        except Exception as exc:  # the batch's own outcome stands; the old version stays
+            record["warnings"].append(f"supersedes {record['supersedes']} not applied: {type(exc).__name__}: {exc}")
+
+    def _targets(self, record: dict[str, Any], own: set[str | None]) -> tuple[set[str], list[dict[str, Any]]] | None:
+        """The datasets named by ``record['supersedes']`` (a dataset id, or every dataset of an upload id) and all their
+        batches, never ``record``'s own dataset nor those in ``own``; None, with a warning, when none is left."""
+        target = record["supersedes"]
+        every = [b for b in self.ws.list_batches() if b["batch_id"] != record["batch_id"]]
+        ids = {b["dataset_id"] for b in every if target in (b.get("dataset_id"), b.get("upload_id")) and b.get("dataset_id")}
+        ids -= own | {record.get("dataset_id")}
+        if not ids:
+            record["warnings"].append(f"supersedes {target}: nothing left to replace")
+            return None
+        return ids, [b for b in every if b.get("dataset_id") in ids or b.get("upload_id") == target]
 
     @_healthy
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
@@ -767,26 +856,31 @@ class Engine:
             if any(b["status"] not in TERMINAL for b in batches):
                 raise PipelineError("busy", f"{key} has a batch in progress")
             ontology = self.ontology()
-            records, vectors = self.ws.patterns(), self.ws.vectors()
-            kept = [r for r in records if r["dataset_id"] not in ids]
-            row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
-            all_acts = self.ws.activations()
-            acts = [{**a, "row_id": row_of[a["row_id"]]} for a in all_acts if a["row_id"] in row_of]
-            lost = {int(a["attractor_id"]) for a in all_acts if a["row_id"] not in row_of}  # the anchors the deletion touches
             with self.ws.transaction(intent, journal=True) as cp:  # commit point: the marker goes
-                self.ws.remove_datasets(ids, batches, Path(cp["dir"]) / "removed")  # first: the snapshot must not see them
-                kept_vectors = vectors[[r["row_id"] for r in kept]]
-                dropped = ontology.forget(acts, kept_vectors, lost)
-                self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], kept_vectors, acts)
+                removed = self._remove(ids, batches, ontology, Path(cp["dir"]) / "removed")
                 ontology.save()
                 snapshot, state = self._derive(ontology)
-            return {
-                "datasets": sorted(ids),
-                "batches": [b["batch_id"] for b in batches],
-                "patterns_removed": len(records) - len(kept),
-                "anchors_removed": dropped,
-                "neo4j": self._publish(state, snapshot),
-            }
+            return {**removed, "neo4j": self._publish(state, snapshot)}
+
+    def _remove(self, ids: set[str], batches: list[dict[str, Any]], ontology: LatentOntology, trash: Path) -> dict[str, Any]:
+        """Inside a journal transaction: move the datasets' artefacts to ``trash``, drop their journal rows (renumbered) and
+        let ``ontology`` forget their memberships (orphan anchors go); the caller saves the ontology and derives."""
+        records, vectors = self.ws.patterns(), self.ws.vectors()
+        kept = [r for r in records if r["dataset_id"] not in ids]
+        row_of = {r["row_id"]: i for i, r in enumerate(kept)}  # journal order, renumbered
+        all_acts = self.ws.activations()
+        acts = [{**a, "row_id": row_of[a["row_id"]]} for a in all_acts if a["row_id"] in row_of]
+        lost = {int(a["attractor_id"]) for a in all_acts if a["row_id"] not in row_of}  # the anchors the deletion touches
+        self.ws.remove_datasets(ids, batches, trash)  # first: the snapshot must not see them
+        kept_vectors = vectors[[r["row_id"] for r in kept]]
+        dropped = ontology.forget(acts, kept_vectors, lost)
+        self.ws.rewrite_journal([{**r, "row_id": row_of[r["row_id"]]} for r in kept], kept_vectors, acts)
+        return {
+            "datasets": sorted(ids),
+            "batches": [b["batch_id"] for b in batches],
+            "patterns_removed": len(records) - len(kept),
+            "anchors_removed": dropped,
+        }
 
     def reset(self) -> dict[str, Any]:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning). Refused with

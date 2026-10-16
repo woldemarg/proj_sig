@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 
 import pytest
 from conftest import make_config, make_engine
@@ -644,3 +645,95 @@ def test_co_occurrence_edges_from_memberships():
 def test_cypher_walks_the_latent_edge_set():
     query = load_cypher("queries/transversal")
     assert "[rel:RELATED_TO|CO_OCCURS]" in query and all(e.value in query for e in LATENT_EDGES)
+
+
+def _upload(engine, path, **options):
+    """``Engine.upload`` of ``path`` at levels 8 and 7, every level processed in turn as the service's worker does."""
+    with path.open("rb") as f:
+        return [engine.process(r["batch_id"]) for r in engine.upload(path.name, f, geo="auto@8,7", **options)]
+
+
+def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(tmp_path, monkeypatch):
+    """``supersedes=<upload_id>``: the last level of the new version to be READY removes every level of the old in its own
+    commit, and a commit that fails rolls the removal back with it. The pattern ids are those of the new version loaded
+    alone, and the anchors the new version joins keep their ids."""
+    from test_spatial import geo_frame
+
+    v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
+    geo_frame(3).to_csv(v1, index=False)
+    geo_frame(4).to_csv(v2, index=False)
+    alone = make_engine(make_config(tmp_path / "alone"))
+    assert [r["status"] for r in _upload(alone, v2)] == ["READY", "READY"]
+    engine = make_engine(make_config(tmp_path / "ws"))
+    old = _upload(engine, v1)
+    old_ids, old_upload = {r["dataset_id"] for r in old}, old[0]["upload_id"]
+    anchors = {a["attractor_id"] for a in engine.ws.activations()}
+    journal = [p["id"] for p in engine.ws.patterns()]
+
+    remove = engine._remove
+
+    def crash(*args):
+        remove(*args)
+        raise RuntimeError("crash after the removal, before the commit point")
+
+    monkeypatch.setattr(engine, "_remove", crash)
+    failed = _upload(engine, v2, supersedes=old_upload)
+    assert [r["status"] for r in failed] == ["READY", "FAILED"] and "superseded" not in failed[0]  # level 8 waits for 7
+    assert all(engine.ws.ready_batch_for(ds) for ds in old_ids) and Path(old[0]["source_path"]).is_file()  # rolled back
+    assert [p["id"] for p in engine.ws.patterns() if p["dataset_id"] in old_ids] == journal
+    monkeypatch.undo()
+    engine.delete_upload(failed[0]["upload_id"])
+
+    new = _upload(engine, v2, supersedes=old_upload)
+    assert [r["status"] for r in new] == ["READY", "READY"] and new[1]["superseded"]["datasets"] == sorted(old_ids)
+    assert {p["id"] for p in engine.ws.patterns()} == {p["id"] for p in alone.ws.patterns()}  # as if v2 came alone
+    assert not any(engine.ws.load_batch(r["batch_id"]) for r in old) and not Path(old[0]["source_path"]).exists()
+    assert {a["attractor_id"] for a in engine.ws.activations()} & anchors  # the shared anchors kept their ids
+    assert {n["props"].get("supersedes") for n in engine.graph().of_kind("Dataset")} == {old_upload}
+    rows = engine.ws.patterns()  # journal, frame and ontology agree, and the snapshot equals a fresh rebuild
+    assert [r["row_id"] for r in rows] == list(range(len(rows))) == list(range(len(engine.ws.vectors())))
+    assert engine.ontology().store.next_chunk_id == len(rows) and all(a["row_id"] < len(rows) for a in engine.ws.activations())
+    rebuilt = DualGraph(engine._derive(engine.ontology())[0])
+    assert {(n["id"], n["kind"]) for n in rebuilt.nodes.values()} == {(n["id"], n["kind"]) for n in engine.graph().nodes.values()}
+
+
+def test_patch_supersedes_deletes_the_old_version_without_mining(tmp_path):
+    """``PATCH supersedes`` on a READY dataset removes what it names at once: no new batch, the same pattern ids; a
+    dataset cannot replace itself or its own upload, an unknown id or the very file it replaces is refused."""
+    from fastapi.testclient import TestClient
+    from test_spatial import geo_frame
+
+    from insight_graph_service.server.app import create_app
+
+    v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
+    geo_frame(3).to_csv(v1, index=False)
+    geo_frame(4).to_csv(v2, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    old, new = _upload(engine, v1), _upload(engine, v2)
+    ds, mine = new[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] in {r["dataset_id"] for r in new}}
+    with TestClient(create_app(engine)) as client:
+        for bad in (ds, new[0]["upload_id"], "ds-nope"):
+            refused = client.patch(f"/api/datasets/{ds}", json={"supersedes": bad})
+            assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        with v1.open("rb") as f:  # the same bytes as the version it would replace
+            same = client.post("/api/upload", files={"file": ("points_v1.csv", f, "text/csv")}, data={"supersedes": old[0]["upload_id"]})
+        assert same.status_code == 400 and len(list(engine.ws.uploads_dir.iterdir())) == 2  # not kept
+        done = client.patch(f"/api/datasets/{ds}", json={"supersedes": old[0]["upload_id"]}).json()
+    assert done["supersedes"] == old[0]["upload_id"] and done["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old)
+    assert {p["id"] for p in engine.ws.patterns()} == mine and len(engine.ws.list_batches()) == 2  # no mining, no new batch
+
+
+def test_a_coarser_level_with_nothing_to_mine_still_completes_a_new_version(tmp_path):
+    """A last level that fails for its data (here too few cells at resolution 5) applies ``supersedes`` on its own."""
+    from test_spatial import geo_frame
+
+    v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
+    geo_frame(3).to_csv(v1, index=False)
+    geo_frame(4).to_csv(v2, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    old = _upload(engine, v1)
+    with v2.open("rb") as f:
+        new = [engine.process(r["batch_id"]) for r in engine.upload(v2.name, f, geo="auto@8,5", supersedes=old[0]["upload_id"])]
+    assert [(r["status"], (r["error"] or {}).get("code")) for r in new] == [("READY", None), ("FAILED", "invalid_schema")]
+    assert new[1]["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old)
+    assert {p["dataset_id"] for p in engine.ws.patterns()} == {new[0]["dataset_id"]}

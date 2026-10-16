@@ -17,6 +17,7 @@ shift of one of its planted metrics that draw at least half their events from it
     S-levels    a broad zone (the eastern half of a large area) in one file, uploaded at 7 and 5 with its table level
     S-parts     the large area as three files split by longitude, the split lines cutting region cells; the zone its
                 northern half, across both splits
+    S-parts-v2  S-parts, then the middle part exported again (other events, the same area) with supersedes=<its first upload>
     S-size      about 10⁴ fine cells in three datasets of ten foci each
 
 Metrics, per encoder (the hashing double; the bundled model when present):
@@ -28,6 +29,8 @@ Metrics, per encoder (the hashing double; the bundled model when present):
     cross_coloc  CO_LOCATED edges between datasets (derive_spatial links patterns of one resolution from any datasets)
     scale        the scale label of each best geo pattern (scale_chain): reg(ional), dep(endent), nfc (not found coarser),
                  ins(ufficient)
+    supersede    S-parts-v2: whether the pattern ids equal those of a workspace that got the new version at once, and how many
+                 of the anchors the new version activates existed before it (kept ids), as yes|no kept/anchors
     zone         whether the first of the ZONES for QUESTION is the planted region (scenarios that plant one)
     place        each focus's cells as the asked map zone (one file of several foci): with QUESTION, how often the first
                  seed is the focus's best pattern; with the next focus's signature question, how often the first seed
@@ -66,7 +69,7 @@ LIFT = 4.0  # load is N(10, 2) everywhere, +LIFT on the planted events
 CENTRE = (48.45, 35.3)  # lat, lon of the focus scenarios' region cell
 BROAD = (47.0, 33.0, 2.4, 3.4)  # lat0, lon0, dlat, dlon of S-levels and S-parts: about 270 cells at resolution 5
 SIZE_BOX = (48.0, 34.6, 0.8, 1.2)  # about 10⁴ cells at FINE
-SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-size")
+SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-parts-v2", "S-size")
 QUESTION = "Where is load higher?"
 FOUND = 0.5  # share of a part's events its patterns must hold for the part to count as found
 SIGNATURES = ("wait", "cost", "size")  # focus i also raises SIGNATURES[i % 3]: its own phenomenon
@@ -80,6 +83,7 @@ class Upload:
     parts: dict[str, np.ndarray]  # planted part (a focus or "zone") -> mask over the frame's rows
     targets: dict[str, set[str]] = field(default_factory=dict)  # part -> its planted metrics besides load
     table: bool = False  # the table level too (its point columns left out)
+    supersedes: int | None = None  # the index of the scenario's upload this one replaces
 
 
 @dataclass
@@ -196,6 +200,10 @@ def generate(name: str, seed: int) -> Scenario:
     if name == "S-local":
         centres = _fits(region, area)[:1]
         return Scenario(name, [replace(_foci_upload(rng, "s_local.csv", centres, area, 8000), geo=f"lat,lon@{FINE},7")])
+    if name == "S-parts-v2":
+        again = replace(generate("S-parts", seed + 1).uploads[1], name="s_parts_1_v2.csv", supersedes=1)
+        base = generate("S-parts", seed)
+        return Scenario(name, [*base.uploads, again], base.truth)
     if name in ("S-levels", "S-parts"):
         lat, lon = _uniform(rng, 80000, BROAD)
         lat0, lon0, dlat, dlon = BROAD
@@ -317,16 +325,38 @@ def _place(engine: Engine, upload: Upload, found: dict[str, dict[str, Any]]) -> 
     return f"{zone_hits}/{kept}/{len(upload.parts)}"
 
 
+def _supersede(engine: Engine, scenario: Scenario, root: Path, before: set[int], new: set[str]) -> str:
+    """``supersede`` above: a reference workspace ingests the uploads that were not replaced, ``new`` the datasets of the new
+    version, ``before`` the anchors before it came."""
+    replaced = {u.supersedes for u in scenario.uploads}
+    ref = Engine(replace(engine.settings, workspace_dir=root / "reference"), embedder=engine.encoder.embedder)
+    for i, upload in enumerate(scenario.uploads):
+        if i not in replaced:
+            with (root / upload.name).open("rb") as stream:
+                for level in ref.upload(upload.name, stream, geo=upload.geo, table=upload.table):
+                    ref.process(level["batch_id"])
+    same = {p["id"] for p in engine.ws.patterns()} == {p["id"] for p in ref.ws.patterns()}
+    rows = {p["row_id"] for p in engine.ws.patterns() if p["dataset_id"] in new}
+    anchors = {a["attractor_id"] for a in engine.ws.activations() if a["row_id"] in rows and not a.get("weak")}
+    return f"{'yes' if same else 'no'} {len(anchors & before)}/{len(anchors)}"
+
+
 def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> dict[str, Any]:
     """Ingest the scenario's uploads (written to ``root``) into ``engine``'s empty workspace and score them."""
-    files, best = [], []
+    files, best, upload_ids, before, new = [], [], [], set(), set()
     for upload in scenario.uploads:
         path = root / upload.name
         upload.frame.to_csv(path, index=False)
+        if upload.supersedes is not None:
+            before = {a["attractor_id"] for a in engine.ws.activations()}
         with path.open("rb") as stream:
-            levels = engine.upload(upload.name, stream, geo=upload.geo, table=upload.table)
+            supersedes = None if upload.supersedes is None else upload_ids[upload.supersedes]
+            levels = engine.upload(upload.name, stream, geo=upload.geo, table=upload.table, supersedes=supersedes)
+        upload_ids.append(levels[0]["upload_id"])
         for level in levels:
             record = engine.process(level["batch_id"])
+            if upload.supersedes is not None:
+                new.add(record["dataset_id"])
             if record["status"] == "FAILED" and record["error"]["code"] == "no_viable_insights" and level is not levels[0]:
                 files.append({"file": upload.name, "level": record["level"], "found": {}, "seconds": 0.0, "status": "no_viable_insights"})
                 continue  # a coarser level mined and found nothing: a level, not a failure of the run
@@ -350,13 +380,30 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
     result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     result["place"] = _place(engine, scenario.uploads[0], files[0]["found"]) if len(foci) > 1 else None
-    graph = _graph(engine, best)
+    result["supersede"] = _supersede(engine, scenario, root, before, new) if new else None
+    graph = _graph(engine, [p for p in best if p in engine.committed().graph.insights])  # a superseded part's are gone
     region = scenario.truth.get("region")
     return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
 
 
 def format_table(results: list[dict[str, Any]]) -> str:
-    head = ("encoder", "scenario", "found", "recall@k", "reached", "rank", "shared", "x-coloc", "scale", "zone", "place", "visited", "prompt", "sec")
+    head = (
+        "encoder",
+        "scenario",
+        "found",
+        "recall@k",
+        "reached",
+        "rank",
+        "shared",
+        "x-coloc",
+        "scale",
+        "zone",
+        "place",
+        "supersede",
+        "visited",
+        "prompt",
+        "sec",
+    )
     short = {"regional": "reg", "scale-dependent": "dep", "not_found_coarser": "nfc", "insufficient": "ins"}
     lines = [" ".join(f"{h:>9}" for h in head)]
     for r in results:
@@ -372,6 +419,7 @@ def format_table(results: list[dict[str, Any]]) -> str:
             ",".join(f"{short[k]}{n}" for k, n in sorted(Counter(r["scale"].values()).items())) or None,
             {True: "first", False: "missed"}.get(r["zone_first"]),
             r["place"],
+            r["supersede"],
             r["visited_per_seed"],
             r["prompt_chars"],
             round(sum(f["seconds"] for f in r["files"]), 1),

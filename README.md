@@ -137,6 +137,7 @@ curl -X POST http://127.0.0.1:8765/api/demo/geo                                 
 curl -F file=@data\housing.csv -F bins=median_income:4,housing_median_age:4 http://127.0.0.1:8765/api/upload
 curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_income_median:4 http://127.0.0.1:8765/api/upload   # points -> H3 cells
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true http://127.0.0.1:8765/api/upload   # one dataset per level
+curl -F file=@<new version>.csv -F geo=auto@7,5 -F supersedes=<upload id of the old> http://127.0.0.1:8765/api/upload   # a new version replaces the old
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
