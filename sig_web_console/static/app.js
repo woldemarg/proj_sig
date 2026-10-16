@@ -683,6 +683,7 @@ function botCard(turn) {
   const qa = turn.qa;
   const items = (qa.view.evidence && qa.view.evidence.items) || [];
   const keyTo = Object.fromEntries(items.map((i) => [i.key, i.pattern_id]));
+  const area = (qa.view.evidence && qa.view.evidence.area) || null;  // an asked map zone: item key -> place, 0 outside
   const llm = qa.llm || {};
   const answer = qa.answer || "";
   const notice = qa.answer_mode !== "fallback" ? ""
@@ -708,7 +709,8 @@ function botCard(turn) {
       : s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
     return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
-      (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") + `</div>` +
+      (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") +
+      (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${renderChain(it)}</div>`;
   }).join("");
@@ -800,6 +802,7 @@ function renderThread() {
 
 async function ask(question, zone = null) {
   question = (question || "").trim();  // with a map zone ({cells}) the text may be empty
+  if (!zone && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
   if ((!question && !zone) || S.busy) return;
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();

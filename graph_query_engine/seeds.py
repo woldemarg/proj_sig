@@ -105,10 +105,11 @@ def resolve_seeds(
     )
     seeds: list[SeedMatch] = []
     floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * scored[0].score) if scored else 1.0
-    for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds
+    for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds, unless more of it lies in the zone
         if len(seeds) >= SEED_TOP_K or cand.score < floor:
             break
-        near = {o for s in seeds for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
+        place = cand.matched.get("place", 0.0)
+        near = {o for s in seeds if place <= s.matched.get("place", 0.0) for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:
             seeds.append(cand)
     pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
