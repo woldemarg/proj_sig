@@ -154,7 +154,7 @@ evidence_mass    = Σ_i strength_i          dispersion = 1 − mean_i alignment_
 | `centroid` | `{dim, norm, representation_version, fingerprint}` — the vector contract, not the vector | |
 | `description` (prompt only) | `graph_query_engine.graph.describe_components(signature)` over `insight_contracts.text.describe_component`: the two strongest entries as ASCII prose (`<label> up` / `down`, `correlation between a and b strengthens` / `weakens`) joined by ` and `; falls back to the label | `discount up and margin down` |
 
-The prompt line reads `- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.19, shared members), A-0 (0.61)`; the UI drawer says `A recurring pattern learned from 9 insights across 9 different subgroups.` followed by the signature. An anchor's name can change when new members arrive; its id `A-k` and its centroid identity do not, so labels are never used as keys.
+The prompt line reads `- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-0 (shared members 0.19; centroid 0.61), A-2 (centroid 0.31)` — one entry per neighbour with every link that joins them (CO_OCCURS: shared members, RELATED_TO: centroid neighbours), strongest first. Anchors never merge, so two can carry one description; the second visited one then reads `(same description as A-1: read the two as one phenomenon; anchors are never merged)` (`same_as` on its evidence entry). The UI drawer says `A recurring pattern learned from 9 insights across 9 different subgroups.` followed by the signature. An anchor's name can change when new members arrive; its id `A-k` and its centroid identity do not, so labels are never used as keys.
 
 ## 5.9 Activation records and batch metrics
 

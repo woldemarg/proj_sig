@@ -12,9 +12,9 @@ METRIC BASELINES (whole dataset):
 - return rate: median 0.0555, MAD 0.0101
 
 LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
-- A-7 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-5 (1.00, shared members), A-4 (0.38), A-5 (0.90)
-- A-5 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-7 (1.00, shared members), A-6 (0.41), A-7 (0.90), A-0 (0.57)
-- A-0 "delivery days up and return rate up": 9 patterns over 9 distinct scopes; related: A-1 (1.00, shared members), A-5 (0.57), A-6 (0.69), A-1 (0.76)
+- A-7 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-5 (shared members 1.00; centroid 0.90), A-4 (centroid 0.38)
+- A-5 "discount up and margin down" (same description as A-7: read the two as one phenomenon; anchors are never merged): 9 patterns over 9 distinct scopes; related: A-7 (shared members 1.00; centroid 0.90), A-0 (centroid 0.57), A-6 (centroid 0.41)
+- A-0 "delivery days up and return rate up": 9 patterns over 9 distinct scopes; related: A-1 (shared members 1.00; centroid 0.76), A-6 (centroid 0.69), A-5 (centroid 0.57)
 
 EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 [P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)

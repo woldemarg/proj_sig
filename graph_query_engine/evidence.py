@@ -32,7 +32,7 @@ from insight_contracts.text import (
 )
 
 EVIDENCE_MAX_PATTERNS = 10
-LINK_NOTE = {"CO_OCCURS": ", shared members"}  # how the prompt tells a co-occurrence link from a centroid neighbour
+LINK_NOTE = {"CO_OCCURS": "shared members", "RELATED_TO": "centroid"}  # what joins two anchors, as the prompt says it
 LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
     "same_region": " [reached by location only: same area, zones do not overlap]",
     "adjacent": " [reached by location only: zones touch or barely overlap]",
@@ -145,9 +145,11 @@ class Evidence:
             lines.append("")
             lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
             for a in self.attractors:
-                rel = ", ".join(f"{r['id']} ({r['weight']:.2f}{LINK_NOTE.get(r['type'], '')})" for r in a["related"]) or "none"
+                rel = ", ".join(f"{r['id']} ({'; '.join(f'{LINK_NOTE[t]} {w:.2f}' for t, w in r['links'].items())})" for r in a["related"])
+                same = f" (same description as {a['same_as']}: read the two as one phenomenon; anchors are never merged)" if a.get("same_as") else ""
                 lines.append(
-                    f'- {a["id"]} "{a["description"]}": {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes; related: {rel}'
+                    f'- {a["id"]} "{a["description"]}"{same}: {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes;'
+                    f" related: {rel or 'none'}"
                 )
         lines.append("")
         lines.append("EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):")
@@ -431,21 +433,26 @@ def build_evidence(
         items.append(item(f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located))
     chains = _add_vertical(items, graph, item)
 
-    attractors = []
+    attractors, described = [], {}
     for a in result.attractors:
         node = graph.nodes[a.node_id]
-        related = [{"id": other, "weight": round(e["weight"], 3), "type": e["type"]} for e, other in graph.incident(a.node_id, LATENT)]
+        links: dict[str, dict[str, float]] = {}  # one entry per neighbour, with every edge that joins them
+        for e, other in graph.incident(a.node_id, LATENT):
+            links.setdefault(other, {})[e["type"]] = round(e["weight"], 3)
+        description = describe_components(node["props"]["signature"]) or node["label"]
         attractors.append(
             {
                 "id": a.node_id,
                 "label": node["label"],
-                "description": describe_components(node["props"]["signature"]) or node["label"],
+                "description": description,
                 "n_patterns": node["props"]["n_patterns"],
                 "distinct_scopes": node["props"]["distinct_scopes"],
-                "related": related,
+                "related": [{"id": o, "links": w} for o, w in sorted(links.items(), key=lambda x: (-max(x[1].values()), x[0]))],
                 "signature": node["props"]["signature"],
             }
+            | ({"same_as": described[description]} if description in described else {})  # anchors never merge (docs/05)
         )
+        described.setdefault(description, a.node_id)
 
     ds_ids = sorted({it.provenance["dataset_id"] for it in items})
     datasets = []
