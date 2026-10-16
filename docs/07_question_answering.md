@@ -139,6 +139,7 @@ Evidence(
         path_text="P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882",
         attractors=[{attractor, alignment, label}], transversal_only=True, located="",   # located: as on Retrieved
         scale="", folded_into="", also=[],   # the vertical zoom, below
+        credibility=6, credibility_basis={rule, sources, patterns, ...},   # the node's, docs/06 §6.2; not in the prompt
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, links {CO_OCCURS?, RELATED_TO?}, shared?}], signature, same_as?}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],

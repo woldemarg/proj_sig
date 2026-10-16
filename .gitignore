@@ -12,7 +12,7 @@ workspace.deleting-*/
 .pytest_tmp/
 .pytest_cache/
 .ruff_cache/
-.scratch/
+.scratch*/
 
 # keep directories, drop local artifacts
 models/**

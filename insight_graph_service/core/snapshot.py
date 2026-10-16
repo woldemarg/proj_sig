@@ -23,6 +23,7 @@ from insight_contracts import (
     GraphEdge,
     GraphNode,
     Insight,
+    PhenomenonThresholds,
     attractor_id_of,
     attractor_node_id,
     batch_node_id,
@@ -235,6 +236,73 @@ def co_occurrence_edges(activates: list[GraphEdge]) -> list[GraphEdge]:
     ]
 
 
+def credibility(
+    insights: list[Insight], batches: dict[str, dict[str, Any]], activates: list[GraphEdge], tampered: set[str], thresholds: PhenomenonThresholds
+) -> dict[str, dict[str, Any]]:
+    """Each pattern's ``credibility`` and ``credibility_basis`` from independent confirmation, phase A (anchors;
+    docs/06_graph_and_storage.md §6.2). Another source is another declared ``source`` (compared casefolded) outside the
+    pattern's own upload; metrics compare by the ``indicators`` registry. 5: a pattern of another declared source shifts
+    a metric of the same indicator materially the opposite way in the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor
+    and shifts a metric of the same indicator the same way; 2: another dataset (declared or not, not of the same upload)
+    shifts a metric of the same name; 6: none. 5 wins over 1. A version and the one it ``supersedes`` are one source.
+    Never read: p, stability, weight; a tampered pattern confirms nothing."""
+    batch = {ins.id: batches.get(ins.batch_id, {}) for ins in insights}
+    anchors: dict[str, set[str]] = defaultdict(set)
+    for e in activates:
+        if not e.props["weak"]:
+            anchors[e.source].add(e.target)
+    of = {ins.id: ins for ins in insights}
+    shifts = {ins.id: {s.metric: s for s in thresholds.phenomenon_shifts(ins)} for ins in insights}
+    source = {pid: (batch[pid].get("source") or "").casefold() or None for pid in of}
+    indicator = {  # per phenomenon metric, compared casefolded like the source
+        pid: {m: i.casefold() for m in shifts[pid] if (i := (batch[pid].get("indicators") or {}).get(m, {}).get("indicator"))} for pid in of
+    }
+    conditions = {pid: frozenset(c.expr for c in ins.conditions) for pid, ins in of.items()}
+    own = {pid: {ins.dataset_id, batch[pid].get("upload_id")} - {None} for pid, ins in of.items()}  # what a supersedes names
+    by_name, by_indicator = defaultdict(set), defaultdict(set)
+    for pid in of:
+        if pid not in tampered:
+            for m in shifts[pid]:
+                by_name[m].add(pid)
+            for i in indicator[pid].values():
+                by_indicator[i].add(pid)
+    out = {}
+    # ponytail: every pair sharing a metric is compared (4000 such patterns: ~6 s a compile); index by condition past a few thousand
+    for pid, ins in of.items():
+        mine, upload = shifts[pid], batch[pid].get("upload_id")
+        found: dict[int, set[str]] = defaultdict(set)
+        for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i in indicator[pid].values())):
+            if of[q].dataset_id == ins.dataset_id or (upload and batch[q].get("upload_id") == upload):
+                continue
+            if (
+                (source[pid] is not None and source[pid] == source[q])
+                or batch[q].get("supersedes") in own[pid]
+                or batch[pid].get("supersedes") in own[q]
+            ):
+                continue  # one declared source in two datasets, or a version and the one it replaces: no independent view
+            declared = source[pid] is not None and source[q] is not None
+            pairs = [(mine[m], shifts[q][n]) for m, i in indicator[pid].items() for n, j in indicator[q].items() if i == j]
+            if (
+                declared
+                and (conditions[pid] <= conditions[q] or conditions[q] <= conditions[pid])
+                and any(a.robust_z * b.robust_z < 0 and thresholds.material(a) and thresholds.material(b) for a, b in pairs)
+            ):
+                found[5].add(q)
+            elif declared and anchors[pid] & anchors[q] and any(a.robust_z * b.robust_z > 0 for a, b in pairs):
+                found[1].add(q)
+            elif set(mine) & set(shifts[q]):
+                found[2].add(q)
+        level = next((lv for lv in (5, 1, 2) if found[lv]), 6)
+        patterns = sorted(found.get(level, ()))
+        names = {source[q] or of[q].dataset_id: batch[q].get("source") or of[q].dataset_id for q in reversed(patterns)}  # one per source
+        basis: dict[str, Any] = {"rule": "anchor", "patterns": patterns, "sources": sorted(names.values())}
+        basis |= {"comparability": c} if (c := {1: "indicator", 5: "indicator", 2: "nominal"}.get(level)) else {}
+        if level == 5 and found[1]:
+            basis["confirmed_by"] = sorted(found[1])
+        out[pid] = {"credibility": level, "credibility_basis": basis}
+    return out
+
+
 def _attractor_nodes(
     ontology: LatentOntology, members: dict[int, list[Member]], seq_to_batch: dict[Any, str], rep: dict[str, Any]
 ) -> dict[str, GraphNode]:
@@ -329,6 +397,9 @@ def build_snapshot(
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
+    tampered = {pid for pid in by_pid if nodes[pid].props["integrity"] == "mismatch"}
+    for pid, trust in credibility(insights, batches, activates, tampered, settings.thresholds).items():
+        nodes[pid].props.update(trust)
     intact = {aid: [m for m in mem if nodes[m[0]["id"]].props["integrity"] != "mismatch"] for aid, mem in members.items()}
     nodes.update(_attractor_nodes(ontology, intact, seq_to_batch, representation))  # a tampered member describes no anchor
     for rel in ontology.topology():

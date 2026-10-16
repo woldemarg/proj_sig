@@ -1,5 +1,5 @@
 {
- "version": 6,
+ "version": 7,
  "nodes": {
   "Attractor": 8,
   "Batch": 1,
@@ -56,6 +56,8 @@
    "canonical": 28,
    "conditions": 28,
    "covariance": 28,
+   "credibility": 28,
+   "credibility_basis": 28,
    "dataset_id": 28,
    "drivers": 28,
    "effect_size": 28,
