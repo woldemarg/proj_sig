@@ -762,14 +762,16 @@ class Engine:
             trust[pid] = {k: props.get(k) for k in ("credibility", "integrity")} | {"scale": chain[0].scale if chain else ""}
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
+    @_healthy
     def export_geosparql(self) -> str:
         """The committed graph as GeoSPARQL Turtle (``geosparql.build_turtle``), each geo insight with the H3 cells of its extent."""
         graph, extents = self.graph(), {}
         for d in self.geo_datasets():
-            cells = self.ws.load_geo(d["dataset_id"], ("cells",))["cells"]
+            if (geo := self.ws.load_geo(d["dataset_id"], ("cells",))) is None:  # a deletion moving its files aside
+                continue
             for pid, rows in self.ws.load_covers(d["dataset_id"]).items():
                 if pid in graph.nodes:
-                    extents[pid] = [str(c) for c in cells[rows]]
+                    extents[pid] = [str(c) for c in geo["cells"][rows]]
         return build_turtle(graph, extents)
 
     def _geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any]:

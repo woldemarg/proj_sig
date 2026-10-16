@@ -581,8 +581,6 @@ def test_the_graph_exports_as_geosparql(tmp_path):
     """``GET /api/export/geosparql.ttl``: Turtle that rdflib parses and the GeoSPARQL 1.1 validator accepts; a SPARQL
     query for the insights inside a region returns its IN_REGION members; CO_LOCATED keeps its relation; the trust axes
     and the provenance chain are there."""
-    from pathlib import Path
-
     import rdflib
     from fastapi.testclient import TestClient
     from pyshacl import validate
@@ -598,7 +596,7 @@ def test_the_graph_exports_as_geosparql(tmp_path):
     response = TestClient(create_app(engine=engine)).get("/api/export/geosparql.ttl")
     assert response.status_code == 200 and response.headers["content-type"].startswith("text/turtle")
     data = rdflib.Graph().parse(data=response.text, format="turtle")
-    shapes = rdflib.Graph().parse(Path(__file__).parent / "vendor" / "geosparql_validator.ttl", format="turtle")
+    shapes = rdflib.Graph().parse(PROJECT_ROOT / "tests" / "vendor" / "geosparql_validator.ttl", format="turtle")
     conforms, _, report = validate(data, shacl_graph=shapes)
     assert conforms, report
 

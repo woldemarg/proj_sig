@@ -203,14 +203,14 @@ Tests (`test_persistence.py::test_an_interrupted_deletion_is_undone`: an error a
 
 ## 6.9 RDF export
 
-`GET /api/export/geosparql.ttl` (`Engine.export_geosparql`, `geosparql.build_turtle`) writes the committed graph as RDF Turtle, for a triple store or any GeoSPARQL tool; Neo4j stays the mirror ([6.6](#66-neo4j-mirror)). It is computed from the snapshot and the stored extents on every request, and adds no runtime dependency: the Turtle is written as text.
+`GET /api/export/geosparql.ttl` (`Engine.export_geosparql`, `geosparql.build_turtle`) writes the committed graph as RDF Turtle, for a triple store or any GeoSPARQL tool; Neo4j stays the mirror ([6.6](#66-neo4j-mirror)). It is computed from the snapshot and the stored extents on every request (no cache), and adds no runtime dependency: the Turtle is written as text. A degraded workspace refuses it with 409 `workspace_degraded`, as `/api/search`: an empty file would read as an empty graph to a store synchronising from it.
 
 | Graph | RDF |
 |---|---|
 | a node | the IRI `urn:sig:<node id>` (`urn:sig:P-…`, `urn:sig:DS:ds-…`, `urn:sig:R:5:…`, `urn:sig:A-3`), the same in every export of one graph |
-| Dataset | `sig:Dataset` (a `prov:Entity`): `rdfs:label` the file, `sig:sourceReliability`, `sig:source` when declared, `sig:integrity`, `prov:wasDerivedFrom` its upload (`urn:sig:up-…`, a `prov:Entity`) |
+| Dataset | `sig:Dataset` (a `prov:Entity`): `rdfs:label` the file, `sig:sourceReliability`, `sig:source` when declared, `sig:integrity`, `prov:wasDerivedFrom` its upload (`urn:sig:up-…`, a `prov:Entity`; the upload id is the first 12 hex of the file's SHA-256, the full hash is not exported) |
 | Pattern | `sig:Insight` (a `prov:Entity`): `rdfs:label` the headline, `sig:target`, `sig:effectSize`, `sig:support`, `sig:weight`, `sig:pAdjusted` (not on a covariance insight), `sig:credibility`, `sig:integrity`, `prov:wasDerivedFrom` its dataset; non-weak ACTIVATES as `sig:activates`, IN_REGION as `sig:inRegion` |
-| a geo pattern | also a `geo:Feature`: `geo:hasGeometry` a `geo:Geometry` whose `geo:asWKT` is the `MULTIPOLYGON` its cells cover (`spatial.cells_to_wkt`, longitude latitude in CRS84, holes kept), and one `sig:h3Cell` per cell (the DGGS literal of GeoSPARQL 1.1 is still a placeholder) |
+| a geo pattern | also a `geo:Feature`: `geo:hasGeometry` a `geo:Geometry` whose `geo:asWKT` is the `MULTIPOLYGON` its cells cover (`spatial.cells_to_wkt`, longitude latitude in CRS84, holes kept; an area across the antimeridian is not split and reads wrong), and one `sig:h3Cell` per cell (the DGGS literal of GeoSPARQL 1.1 is still a placeholder) |
 | Region | `sig:Region` and `geo:Feature`: `sig:resolution`, `sig:h3Cell`, its cell as `geo:asWKT`, and `sig:parentRegion` for PARENT_OF |
 | Attractor | `skos:Concept` in the scheme `urn:sig:anchors`: `skos:prefLabel` its label, RELATED_TO as `skos:related` |
 | CO_LOCATED | `sig:extentsOverlap`, `sig:extentsTouch` or `sig:sameRegion` by its `relation` ([6.1](#61-the-structural-plane)), each a sub-property of `sig:coLocated` |

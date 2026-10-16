@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from graph_query_engine import DualGraph
@@ -12,17 +13,15 @@ from subgroup_miner.spatial import cells_to_wkt
 PREFIXES = {
     "geo": "http://www.opengis.net/ont/geosparql#",
     "prov": "http://www.w3.org/ns/prov#",
-    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
     "sig": "urn:sig:vocab#",
     "skos": "http://www.w3.org/2004/02/skos/core#",
     "xsd": "http://www.w3.org/2001/XMLSchema#",
 }
 CO_LOCATED = {"overlaps": "sig:extentsOverlap", "adjacent": "sig:extentsTouch", "same_region": "sig:sameRegion"}
-VOCABULARY = [  # what a reader needs to know of the sig: terms; their meaning is in docs/06 §6.9
+VOCABULARY = [  # the sig: terms' relations; their meaning is in docs/06_graph_and_storage.md §6.9
     "sig:Insight rdfs:subClassOf prov:Entity",
     "sig:Dataset rdfs:subClassOf prov:Entity",
-    "sig:Region rdfs:subClassOf geo:Feature",
     *(f"{p} rdfs:subPropertyOf sig:coLocated" for p in CO_LOCATED.values()),
 ]
 
@@ -33,13 +32,12 @@ def iri(node_id: str) -> str:
 
 
 def literal(value: Any) -> str:
-    """A Turtle literal: a JSON string is a valid Turtle string; floats are typed ``xsd:double``."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
+    """A Turtle literal: a JSON string is a valid Turtle string; floats are typed ``xsd:double`` (``NaN``, ``INF`` as xsd spells them)."""
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        return f'"{value!r}"^^xsd:double'
+        text = repr(value) if math.isfinite(value) else "NaN" if math.isnan(value) else "INF" if value > 0 else "-INF"
+        return f'"{text}"^^xsd:double'
     return json.dumps(str(value), ensure_ascii=False)
 
 
@@ -70,21 +68,20 @@ def build_turtle(graph: DualGraph, extents: dict[str, list[str]]) -> str:
         props += [("sig:pAdjusted", literal(float(ins.p_adjusted)))] if ins.p_adjusted is not None else []
         props += [("sig:credibility", literal(p["credibility"]))] if p.get("credibility") is not None else []
         props += [("sig:integrity", literal(p["integrity"])), ("prov:wasDerivedFrom", iri(dataset_node_id(ins.dataset_id)))]
-        types = ["sig:Insight"]
+        types, geometry = ["sig:Insight"], None
         if n["id"] in extents:
             types.append("geo:Feature")
             props.append(("geo:hasGeometry", iri(f"{n['id']}:geometry")))
             props += [("sig:h3Cell", literal(c)) for c in extents[n["id"]]]
+            geometry = literal(cells_to_wkt(extents[n["id"]])) + "^^geo:wktLiteral"
         for e in graph.out.get(n["id"], []):
             if e["type"] == "IN_REGION":
                 props.append(("sig:inRegion", iri(e["target"])))
             elif e["type"] == "ACTIVATES" and not e["props"].get("weak"):
                 props.append(("sig:activates", iri(e["target"])))
         _subject(lines, iri(n["id"]), types, props)
-        if n["id"] in extents:
-            _subject(
-                lines, iri(f"{n['id']}:geometry"), ["geo:Geometry"], [("geo:asWKT", literal(cells_to_wkt(extents[n["id"]])) + "^^geo:wktLiteral")]
-            )
+        if geometry:
+            _subject(lines, iri(f"{n['id']}:geometry"), ["geo:Geometry"], [("geo:asWKT", geometry)])
     for r in graph.of_kind("Region"):
         p = r["props"]
         props = [("sig:resolution", literal(int(p["resolution"]))), ("sig:h3Cell", literal(p["h3"])), ("geo:hasGeometry", iri(f"{r['id']}:geometry"))]
