@@ -421,3 +421,92 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
         engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
     assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
+
+
+def test_a_geometry_becomes_the_cells_of_a_zone():
+    """A polygon equal to a set of cells is that set, as a Feature or a FeatureCollection too; a circle and a box take the
+    cells whose centres they hold, a shape smaller than a cell the cell under it; anything else is refused."""
+    from subgroup_miner.spatial import geometry_to_cells, parse_zone, zone_overlap
+
+    centre = h3.latlng_to_cell(*HOT, 7)
+    disk = set(h3.grid_disk(centre, 2))
+    shape = h3.h3shape_to_geo(h3.cells_to_h3shape(list(disk)))
+    feature = {"type": "Feature", "properties": {}, "geometry": shape}
+    assert (
+        geometry_to_cells(shape, 7)
+        == geometry_to_cells(feature, 7)
+        == geometry_to_cells({"type": "FeatureCollection", "features": [feature]}, 7)
+        == disk
+    )
+    lat, lon = h3.cell_to_latlng(centre)
+    edge = h3.average_hexagon_edge_length(7, "m")
+    assert geometry_to_cells({"center": [lon, lat], "radius_m": 2 * edge}, 7) == set(h3.grid_disk(centre, 1))  # neighbours' centres √3 edges away
+    assert geometry_to_cells({"center": [lon, lat], "radius_m": 1.0}, 7) == {centre}
+    assert geometry_to_cells({"bbox": [lon - 1e-4, lat - 1e-4, lon + 1e-4, lat + 1e-4]}, 7) == {centre}
+    for bad in (
+        {"type": "Point", "coordinates": [lon, lat]},
+        {"center": [lon]},
+        {"center": [lon, lat], "radius_m": float("inf")},
+        {"bbox": "x"},
+        [lon, lat],
+    ):
+        with pytest.raises(SpatialError):
+            geometry_to_cells(bad, 7)
+    for bad in ([], ["nope"], [centre, 7]):
+        with pytest.raises(SpatialError):
+            parse_zone(bad)
+
+    cells = np.array(sorted(h3.grid_disk(centre, 3)))
+    inner = np.flatnonzero(np.isin(cells, list(h3.grid_disk(centre, 1))))
+    covers = {"A": inner, "B": np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, 3))))}
+    assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
+    assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
+    parent = h3.cell_to_parent(centre, 6)
+    below = {str(c) for c in cells if h3.cell_to_parent(str(c), 6) == parent}  # a coarser cell: every cell below it
+    hit = len(below & set(h3.grid_disk(centre, 1)))
+    assert zone_overlap(cells, covers, frozenset([parent]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
+
+
+def test_a_zone_from_the_map_is_the_same_question(tmp_path):
+    """A zone weighs the seeds of the ordinary search: the question's seed stays first and gets the same scale chain, a
+    zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
+    from fastapi.testclient import TestClient
+
+    from graph_query_engine.vertical import resolution
+    from insight_graph_service.server.app import create_app
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        assert [engine.process(r["batch_id"])["status"] for r in engine.upload("points.csv", f, geo="auto@8,7")] == ["READY", "READY"]
+    question = "Where is load higher?"
+    text = engine.search(question)
+    seed = text.seeds[0].pattern_id
+    ds = engine.graph().insight(seed).dataset_id
+    zone = [str(c) for c in engine.ws.load_geo(ds)["cells"][engine.ws.load_covers(ds)[seed]]]
+
+    zoned = engine.search(question, cells=zone)
+    assert zoned.seeds[0].pattern_id == seed and zoned.seeds[0].matched["place"] == 1.0 and "place" not in text.seeds[0].matched
+    chains = [[c for c in found.evidence.scale_chains if c["pattern_id"] == seed] for found in (text, zoned)]
+    assert chains[0] and chains[0] == chains[1]  # the same SCALE CHAIN as the text question
+    assert "AREA:" in zoned.payload().evidence_prompt and "AREA:" not in text.payload().evidence_prompt
+
+    place = engine.place_scores(engine.committed(), cells=zone)
+    alone = engine.search("", cells=zone)
+    assert alone.seeds and all(place.get(s.pattern_id, 0) > 0 for s in alone.seeds)
+    assert alone.payload().evidence_prompt.startswith("QUESTION: (no text")
+    polygon = engine.search("", geometry=h3.h3shape_to_geo(h3.cells_to_h3shape(zone)))
+    assert [(s.pattern_id, s.score) for s in polygon.seeds] == [(s.pattern_id, s.score) for s in alone.seeds]
+    graph = engine.graph()
+    coarse = engine.place_scores(engine.committed(), cells=zone, resolution=7)
+    assert coarse and {resolution(graph, p) for p in coarse} == {7} and {resolution(graph, p) for p in place} == {7, 8}
+    area = engine.search(question, cells=zone, resolution=7).evidence
+    assert {it.key for it in area.items if resolution(graph, it.pattern_id) == 7} == set(area.area)  # level 8: neither in nor out
+
+    with TestClient(create_app(engine)) as client:
+        assert client.post("/api/search", json={"cells": zone}).json()["evidence_prompt"] == alone.payload().evidence_prompt
+        refused = client.post("/api/search", json={"cells": ["nope"]})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
+        assert client.post("/api/search", json={"question": " "}).status_code == 400

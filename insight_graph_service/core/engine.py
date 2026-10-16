@@ -36,6 +36,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
+from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
@@ -45,7 +46,18 @@ from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatc
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import GeoDataset, SpatialError, cell_boundary, compactness, derive_spatial, parse_geo_levels, sac_summary
+from subgroup_miner.spatial import (
+    GeoDataset,
+    SpatialError,
+    cell_boundary,
+    compactness,
+    derive_spatial,
+    geometry_to_cells,
+    parse_geo_levels,
+    parse_zone,
+    sac_summary,
+    zone_overlap,
+)
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +140,7 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
+        self._zone_scores = functools.lru_cache(maxsize=64)(self._read_zone_scores)
         self._open()
 
     def committed(self) -> CommittedState:
@@ -205,23 +218,54 @@ class Engine:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
 
     @_healthy
-    def search(self, question: str) -> SearchResult:
-        """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md §7.1–7.4)."""
-        return self._search(question, self.committed())
+    def search(self, question: str, **zone: Any) -> SearchResult:
+        """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md
+        §7.1–7.4); ``zone``: the ``cells``, ``geometry`` and ``resolution`` of ``place_scores``."""
+        return self._search(question, self.committed(), **zone)
 
     @_healthy
-    def evidence(self, question: str) -> EvidencePayload:
-        """The evidence for ``question`` as the narrator receives it (``POST /api/search``); an empty graph is an
-        ordinary answer, not an error."""
+    def evidence(self, question: str, **zone: Any) -> EvidencePayload:
+        """The evidence for ``question`` (and a map zone, as ``search``) as the narrator receives it (``POST /api/search``);
+        an empty graph is an ordinary answer, not an error."""
         state = self.committed()
-        return self._search(question, state).payload() if state.graph.insights else empty_payload(question)
+        return self._search(question, state, **zone).payload() if state.graph.insights else empty_payload(question)
 
-    def _search(self, question: str, state: CommittedState) -> SearchResult:
+    def _search(self, question: str, state: CommittedState, **zone: Any) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        found = search(question, state, self.encoder, self.settings.query)
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone))
         found.seconds = time.perf_counter() - start
         return found
+
+    def place_scores(
+        self, state: CommittedState, cells: list[str] | None = None, geometry: dict[str, Any] | None = None, resolution: int | None = None
+    ) -> dict[str, float] | None:
+        """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
+        datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone."""
+        if cells is None and geometry is None:
+            return None
+        graph = state.graph
+        levels = sorted(
+            {
+                (graph.insight(pid).dataset_id, r)
+                for pid in graph.insights
+                if (r := pattern_resolution(graph, pid)) is not None and (resolution is None or r <= resolution)
+            }
+        )
+        try:
+            zone = parse_zone(cells) if cells is not None else geometry_to_cells(geometry or {}, max((r for _, r in levels), default=0))
+        except SpatialError as exc:
+            raise PipelineError("invalid_options", str(exc)) from exc
+        return self._zone_scores(zone, tuple(levels)) if levels else {}
+
+    def _read_zone_scores(self, zone: frozenset[str], levels: tuple[tuple[str, int], ...]) -> dict[str, float]:
+        """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cached on its arguments, since a
+        dataset id fixes its files."""
+        out: dict[str, float] = {}
+        for dataset_id, _ in levels:
+            if (geo := self.ws.load_geo(dataset_id, ("cells",))) is not None:
+                out.update(zone_overlap(geo["cells"], self.ws.load_covers(dataset_id), zone))
+        return out
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
         return LatentFrame(
@@ -239,7 +283,11 @@ class Engine:
         records, vectors = self.ws.patterns(), self.ws.vectors()
         geo = []  # every READY geo dataset's stored cells and extents: the spatial plane is derived, never journaled
         for b in batches.values():
-            stored = self.ws.load_geo(b["dataset_id"]) if b.get("status") == "READY" and (b.get("profile") or {}).get("geo") else None
+            stored = (
+                self.ws.load_geo(b["dataset_id"], ("cells", "nbr_ptr", "nbr_idx"))
+                if b.get("status") == "READY" and (b.get("profile") or {}).get("geo")
+                else None
+            )
             if stored is not None:
                 geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
         snapshot = build_snapshot(

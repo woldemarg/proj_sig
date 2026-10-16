@@ -68,8 +68,8 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record |
 | status | `GET /api/batches[?upload_id=]`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
-| ask | `POST /api/chat/query` `{question, use_llm}` | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
-| evidence only | `POST /api/search` `{question}` | the `EvidencePayload` |
+| ask | `POST /api/chat/query` `{question, use_llm}`, a map zone optional (`cells`, `geometry`, `resolution`) | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |
+| evidence only | `POST /api/search` `{question}`, the same zone fields | the `EvidencePayload` |
 | delete a dataset | `DELETE /api/datasets/<dataset id>` (or the batch id of an upload that failed before it had one); every level of one upload: `DELETE /api/uploads/<upload id>` | what was removed |
 | reset | `POST /api/reset` | the workspace deleted, the mirror cleared |
 
@@ -110,7 +110,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 
 | Code | Meaning | Stage |
 |---|---|---|
-| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400) | VALIDATING |
+| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400); `invalid_options` also refuses a question's map zone that cannot be read (`cells`, `geometry`; HTTP 400, no batch) | VALIDATING |
 | `invalid_schema` | too few rows or columns; no categorical dimension after profiling | VALIDATING / PROFILING |
 | `no_numeric_targets` | no numeric column | VALIDATING / PROFILING |
 | `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING) | PROFILING / DISCOVERING |

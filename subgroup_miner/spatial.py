@@ -574,6 +574,71 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     return out
 
 
+def parse_zone(cells: list[str]) -> frozenset[str]:
+    """A map zone given as H3 cells, of any resolutions; ``SpatialError`` names the first that is not a cell."""
+    if not cells:
+        raise SpatialError("the zone holds no cell")
+    if bad := next((c for c in cells if not (isinstance(c, str) and h3.is_valid_cell(c))), None):
+        raise SpatialError(f"'{bad}' is not an H3 cell")
+    return frozenset(cells)
+
+
+# ponytail: no size cap; a continent at resolution 10 takes minutes. Cap by the shape's area before exposing it beyond localhost
+def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[str]:
+    """The cells at ``resolution`` whose centres lie in ``geometry``: a GeoJSON Polygon, MultiPolygon, Feature or
+    FeatureCollection, ``{"center": [lon, lat], "radius_m": r}`` or ``{"bbox": [west, south, east, north]}``. A shape that
+    holds no cell centre gives the cells under its vertices (a circle: the cell under its centre)."""
+    try:
+        if "bbox" in geometry:
+            w, s, e, n = map(float, geometry["bbox"])
+            geometry = {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
+        if "center" in geometry:
+            lon, lat = map(float, geometry["center"])
+            radius, centre = float(geometry["radius_m"]), h3.latlng_to_cell(lat, lon, resolution)
+            k = int(radius / (1.5 * h3.average_hexagon_edge_length(resolution, "m"))) + 2  # ring k lies at least 1.5·k edges away
+            inside = {c for c in h3.grid_disk(centre, k) if h3.great_circle_distance(h3.cell_to_latlng(c), (lat, lon), "m") <= radius}
+            return frozenset(inside or {centre})
+        kind = geometry.get("type")
+        if kind == "FeatureCollection":
+            return frozenset().union(*(geometry_to_cells(f, resolution) for f in geometry["features"]))
+        if kind == "Feature":
+            return geometry_to_cells(geometry["geometry"], resolution)
+        if kind not in ("Polygon", "MultiPolygon"):
+            raise SpatialError(f"geometry type {kind!r} is not a Polygon, MultiPolygon, Feature, FeatureCollection, center or bbox")
+        cells = set(h3.geo_to_cells(geometry, resolution))
+        if not cells:
+            rings = geometry["coordinates"] if kind == "Polygon" else [r for poly in geometry["coordinates"] for r in poly]
+            cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
+        return frozenset(cells)
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError
+        raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
+
+
+def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
+    """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
+    and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts its parent,
+    a coarser one every dataset cell below it). A focus that is the zone scores 1, as does a pattern that is; a pattern far
+    larger or smaller than the zone scores little; one outside it scores 0."""
+    if not len(cells):
+        return {}
+    res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
+    by_res: defaultdict[int, set[str]] = defaultdict(set)
+    for c in zone:
+        by_res[h3.get_resolution(c)].add(c)
+    inside = np.zeros(len(names), dtype=bool)
+    for z, group in by_res.items():
+        if z >= res:
+            inside |= np.isin(names, [h3.cell_to_parent(c, res) for c in group])
+        else:
+            inside |= np.isin([h3.cell_to_parent(c, z) for c in names], list(group))
+    out, size = {}, int(inside.sum())
+    for pid, rows in covers.items():
+        rows = np.unique(np.asarray(rows, dtype=np.int64))
+        hit = int(inside[rows].sum())
+        out[pid] = round(hit / float(np.sqrt(len(rows) * size)), 4) if hit else 0.0
+    return out
+
+
 def cell_boundary(cell: str) -> list[list[float]]:
     """Closed GeoJSON ring ([lon, lat] pairs) of one cell."""
     ring = [[round(lng, 6), round(lat, 6)] for lat, lng in h3.cell_to_boundary(cell)]

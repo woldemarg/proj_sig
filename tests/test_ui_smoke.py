@@ -206,6 +206,20 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.mouse.move(handle["x"] + 84, handle["y"] + 300, steps=5)
         page.mouse.up()
         assert abs(page.evaluate("document.querySelector('.rail').getBoundingClientRect().width") - before - 80) < 4
+        # the map: cells selected as a zone ask a question without text
+        page.evaluate("document.querySelector('#drawer-close').click()")
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.data && G.map && G.map.getSource('cells')", timeout=30000)
+        cells = page.evaluate("G.data.features.slice(0, 3).map((f) => f.properties.h3)")
+        page.evaluate(f"{cells}.forEach((h) => GeoMap.toggleZone(h))")
+        assert page.inner_text("#map-zone-n") == "ZONE · 3 cells"
+        answers = page.evaluate("document.querySelectorAll('.answer-box').length")
+        page.click("#map-zone-ask")
+        page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
+        assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
+        page.click("#map-zone-clear")
+        assert page.is_hidden("#map-zone")
+        page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
         page.screenshot(path=str(tmp_path / "ui.png"))

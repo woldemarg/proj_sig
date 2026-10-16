@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map and its tour (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [] };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set() };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26" };
 
@@ -9,6 +9,14 @@ const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
   datasetOf: (pid) => (G.patterns[pid] ? G.ds : null),
   current: () => G.ds,  // the geo dataset the map holds (its questions are suggestions())
+  zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
+
+  toggleZone(h3) {
+    if (G.zone.has(h3)) G.zone.delete(h3); else G.zone.add(h3);
+    paintZone();
+  },
+
+  clearZone() { G.zone.clear(); paintZone(); },
 
   async refresh() {
     try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
@@ -148,6 +156,7 @@ function ensureMap() {
     layer("hl-glow", "line", "cells", { "line-color": hlColor, "line-width": ["case", ["boolean", ["feature-state", "focus"], false], 8, 0], "line-blur": 6, "line-opacity": 0.6 });
     layer("hl-line", "line", "cells", { "line-color": hlColor, "line-width": ["case", ["!=", hl, 0], 1.6, 0] });
     layer("focus-line", "line", "cells", { "line-color": C.amber, "line-width": ["case", ["boolean", ["feature-state", "focus"], false], 2.6, 0], "line-opacity": 1 });
+    layer("zone-line", "line", "cells", { "line-color": "#eef3ff", "line-width": ["case", ["boolean", ["feature-state", "zone"], false], 2, 0], "line-dasharray": [2, 1] });
     layer("pts-halo", "circle", "pts", { "circle-color": "#ff4d6d", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 8], "circle-blur": 1, "circle-opacity": 0.45 });
     layer("pts-core", "circle", "pts", { "circle-color": "#ffe0e6", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4] });
     let t = 0;
@@ -159,7 +168,7 @@ function ensureMap() {
       $("map-cursor").textContent = `${e.lngLat.lat.toFixed(4)}°N ${e.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${num(f.properties.points, 0)} pts` : "");
       m.getCanvas().style.cursor = f ? "pointer" : "";
     });
-    m.on("click", "cells-fill", (e) => cellPopup(e.features[0], e.lngLat));
+    m.on("click", "cells-fill", (e) => (e.originalEvent.shiftKey ? GeoMap.toggleZone(e.features[0].properties.h3) : cellPopup(e.features[0], e.lngLat)));
     m.on("zoom", placeDensity);
     wireHud();
   });
@@ -202,7 +211,14 @@ async function loadDataset(ds) {
   $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
-  $("map-card").hidden = true; renderTourBar();
+  $("map-card").hidden = true; renderTourBar(); paintZone();
+}
+
+function paintZone() {
+  /* the selected cells outlined (H3 ids are global: the zone survives a switch of dataset), and the zone bar */
+  if (G.map && G.map.getSource("cells") && G.data) G.data.features.forEach((f) => G.map.setFeatureState({ source: "cells", id: f.properties.row }, { zone: G.zone.has(f.properties.h3) }));
+  $("map-zone").hidden = !G.zone.size;
+  $("map-zone-n").textContent = `ZONE · ${G.zone.size} cell${G.zone.size === 1 ? "" : "s"}`;
 }
 
 function colorBy(metric) {
@@ -226,6 +242,8 @@ function wireHud() {
   $("lyr-borders").addEventListener("change", (e) => vis(["border", "border-glow", "admin1", "river", "lake"], e.target.checked));
   $("lyr-labels").addEventListener("change", placeDensity);
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
+  $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
+  $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
 }
 
 function shiftText(p, item) {
@@ -276,13 +294,13 @@ function cellPopup(f, lngLat) {
   const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span></div>`; }).join("");
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
     `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
+    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   const popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
   const el = popup.getElement();
   el.querySelectorAll(".pp-ins").forEach((x) => x.addEventListener("click", () => GeoMap.focusPattern(x.dataset.pid)));
-  el.querySelector(".pp-ask").addEventListener("click", () => {
-    const top = pids[0] && G.patterns[pids[0]];
-    const q = top ? `Що відбувається там, де ${top.scope.map((s) => s.replace(" = ", " ")).join(" і ")}?` : `Що характерно для зон ${p.lisa_points}?`;
-    popup.remove(); ask(q);
+  el.querySelector(".pp-zone").addEventListener("click", () => { popup.remove(); GeoMap.toggleZone(p.h3); });
+  el.querySelector(".pp-ask").addEventListener("click", () => {  // the selected zone if it holds this cell, else the cell; the typed text, if any
+    popup.remove(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
   });
 }
