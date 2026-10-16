@@ -353,12 +353,13 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
     state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, {}))
     found = search("", state, encoder, QueryConfig(), place_scores={"P2": 0.01, "P1": 0.0})
     assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", "place")]
-    assert not found.traversal.baselines["naive_nearest"]  # nothing to embed
+    assert not found.traversal.baselines["naive_nearest"] and not found.traversal.baselines["not_in_naive_topk"]  # nothing to embed
     keys = {it.pattern_id: it.key for it in found.evidence.items}
     assert (
         f"in it, with how closely each one's map cells match it (100% = the same cells): {keys['P2']} 1%; outside it: {keys['P1']}."
         in found.payload().evidence_prompt
     )
     assert not search("", state, encoder, QueryConfig(), place_scores={"P1": 0.0}).seeds
-    unweighed = search("", state, encoder, QueryConfig(), place_scores={"P2": 0.01}).payload().evidence_prompt  # P1 not weighed
+    unweighed = search("", state, encoder, QueryConfig(), place_scores={"P2": 0.004}).payload().evidence_prompt  # P1 not weighed
+    assert f"{keys['P2']} <1%" in unweighed  # in the zone, however little
     assert "outside it" not in next(line for line in unweighed.splitlines() if line.startswith("AREA:"))

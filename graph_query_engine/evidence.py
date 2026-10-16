@@ -106,7 +106,7 @@ class Evidence:
             parsed_bits.append("scope=" + ",".join(p["conditions"]))
         lines.append("PARSED: " + (" | ".join(parsed_bits) or "no explicit metric/scope recognised"))
         if self.area is not None:  # findings of the levels the zone weighed; it says nothing of the others
-            inside = ", ".join(f"{k} {v:.0%}" for k, v in self.area.items() if v)
+            inside = ", ".join(f"{k} {v:.0%}" if v >= 0.005 else f"{k} <1%" for k, v in self.area.items() if v)
             outside = ", ".join(k for k, v in self.area.items() if not v)
             lines.append(
                 "AREA: the question is about a map area; "

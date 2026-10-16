@@ -99,7 +99,7 @@ def compute_baselines(
         "structural_only": sorted(closure),
         "naive_nearest": [{"pattern_id": p, "cosine": round(c, 3)} for p, c in naive],
         "transversal_only": [r.node_id for r in result.patterns if r.transversal_only],
-        "not_in_naive_topk": sorted(retrieved - {p for p, _ in naive}),
+        "not_in_naive_topk": sorted(retrieved - {p for p, _ in naive}) if naive else [],  # no text search to compare with
         "not_structurally_reachable": sorted(retrieved - set(closure)),
     }
 
