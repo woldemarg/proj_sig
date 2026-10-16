@@ -356,6 +356,8 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
         for g, b, loc in (("auto@8", "points:4", None), ("auto", "points:4", None), (None, "", "auto"))
     ]
     assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
+    first = {r["dataset_id"]: next(p["id"] for p in engine.ws.patterns() if p["dataset_id"] == r["dataset_id"]) for r in done}
+    assert all(engine.verify_pattern(pid)["status"] == "reproduced" for pid in first.values())  # each level from the shared file
     assert done[2]["dataset_id"] != load_dataset(path, engine.settings.miner, bins="").dataset_id  # not a plain upload
     assert not {"latitude", "longitude"} & set(done[2]["profile"]["numerics"])  # its point columns left out
     patterns = engine.graph().of_kind("Pattern")  # a mixed snapshot: every level carries the rule that gave it; one upload, one source

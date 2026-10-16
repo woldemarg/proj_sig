@@ -441,6 +441,55 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
     return insights
 
 
+def recompute_statistics(
+    frame: pd.DataFrame, rows: np.ndarray, metrics: list[str], spatial: SpatialContext | None, n_tests: int | None
+) -> dict[str, Any]:
+    """One insight's numbers again from its table and covered ``rows``, as ``build_insights`` computes them: support,
+    each of ``metrics``' shift (the first is the primary), the primary's median test with the same effective n, the
+    adjusted p over the recorded family ``n_tests`` and, for a geo dataset, the spatial provenance. Not recomputed:
+    the bootstrap stability and the scores and weight that read it."""
+    profile = eda.step1_profile_data(frame)
+    data = profile["data_safe"]
+    cohort = data.iloc[rows]
+    shifts = []
+    for metric in metrics:
+        column = data[metric].dropna()
+        gm, gd = float(np.median(column)), float(eda.calculate_mad(column))
+        local = float(np.median(cohort[metric].dropna()))
+        sign = np.sign(local - gm) or 1.0
+        shifts.append(
+            {
+                "metric": metric,
+                "robust_z": float(sign * eda.robust_z_score(local, gm, gd)),
+                "local_median": local,
+                "global_median": gm,
+                "global_mad": gd,
+            }
+        )
+    primary = shifts[0]
+    values = cohort[primary["metric"]].to_numpy(dtype=float)
+    rho = subgroup_moran(values, rows, spatial) if spatial else 0.0
+    factor = effective_n_factor(rho)
+    p_value = _median_test(values, primary["global_median"], primary["global_mad"], factor)
+    out: dict[str, Any] = {
+        "support": len(rows),
+        "support_fraction": len(rows) / max(int(profile["total_rows"]), 1),
+        "shifts": shifts,
+        "p_value": p_value,
+    }
+    if n_tests:
+        out["p_adjusted"] = min(1.0, p_value * n_tests)
+    if spatial:
+        p_iid = _median_test(values, primary["global_median"], primary["global_mad"])
+        out["spatial"] = {
+            "cells": len(rows),
+            "moran_i": round(rho, 4),
+            "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
+            **({"p_adjusted_iid": min(1.0, p_iid * n_tests)} if n_tests else {}),
+        }
+    return out
+
+
 def covers_of(result: DiscoveryResult) -> dict[str, np.ndarray]:
     """Expression -> covered row positions, for redundancy checks and provenance."""
     return {c.expression: c.row_indices for c in result.candidates}

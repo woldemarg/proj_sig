@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import math
 import threading
 import time
 import traceback
@@ -43,8 +44,8 @@ from insight_graph_service.core.batch import admit_insights, batch_metrics, patt
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
-from subgroup_miner.discovery import build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset, parse_indicators
+from subgroup_miner.discovery import build_insights, covers_of, recompute_statistics, run_discovery
+from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import (
     GeoDataset,
@@ -72,6 +73,33 @@ class PipelineError(RuntimeError):
 
 SOURCE_MAX_CHARS = 120
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
+NOT_RECOMPUTED = ("stability", "sd_score", "sd_raw_score", "emm_score", "volume_utility", "weight", "drivers", "covariance")  # read the bootstrap
+
+
+def verify_diff(record: dict[str, Any], fresh: dict[str, Any]) -> list[dict[str, Any]]:
+    """The journal's numbers that the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
+    journal, recomputed}``; floats agree within a relative 1e-9 (the same code over the same bytes). A covariance
+    insight has no median test, so no p-value to compare, and its target is the stronger metric of its pair."""
+    primary = next(s for s in fresh["shifts"] if s["metric"] == record["target"])
+    pairs = [
+        ("support", record["support"], fresh["support"]),
+        ("support_fraction", record["support_fraction"], fresh["support_fraction"]),
+        ("baseline", record["baseline"], primary["global_median"]),
+        ("local", record["local"], primary["local_median"]),
+        ("effect_size", record["effect_size"], primary["robust_z"]),
+    ]
+    if record["p_value"] is not None:
+        pairs.append(("p_value", record["p_value"], fresh["p_value"]))
+        pairs += [("p_adjusted", record["p_adjusted"], fresh["p_adjusted"])] if "p_adjusted" in fresh else []
+    for stored, again in zip(record["shifts"], fresh["shifts"], strict=True):
+        pairs += [(f"shifts.{stored['metric']}.{k}", stored[k], again[k]) for k in ("robust_z", "local_median", "global_median", "global_mad")]
+    spatial = record.get("provenance", {}).get("spatial") or {}
+    pairs += [(f"spatial.{k}", spatial[k], v) for k, v in fresh.get("spatial", {}).items() if k in spatial]
+    return [
+        {"field": name, "journal": a, "recomputed": b}
+        for name, a, b in pairs
+        if not (a == b or (isinstance(a, int | float) and isinstance(b, int | float) and math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)))
+    ]
 
 
 def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
@@ -444,16 +472,7 @@ class Engine:
             timings: dict[str, float] = {}
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
-                    loaded = load_dataset(
-                        Path(record["source_path"]),
-                        self.settings.miner,
-                        filename=record["filename"],
-                        bins=record.get("bins"),
-                        categories=record.get("categories"),
-                        geo=record.get("geo"),
-                        strict=record.get("strict", True),
-                        locator=record.get("locator"),
-                    )
+                    loaded = self._load(record)
                     ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(ds)
@@ -633,6 +652,48 @@ class Engine:
             "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
             "patterns": patterns,
         }
+
+    def _load(self, record: dict[str, Any]) -> LoadedDataset:
+        """The batch's stored file read with its own options, as its processing read it."""
+        return load_dataset(
+            Path(record["source_path"]),
+            self.settings.miner,
+            filename=record["filename"],
+            bins=record.get("bins"),
+            categories=record.get("categories"),
+            geo=record.get("geo"),
+            strict=record.get("strict", True),
+            locator=record.get("locator"),
+        )
+
+    @_healthy
+    def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
+        """``pattern_id``'s statistics recomputed from its stored upload (docs/08_interface.md §8.1): ``reproduced`` when
+        every recomputed number matches the journal, ``differs`` with those that do not, ``source_changed`` when the file
+        read with its options no longer gives the dataset id, ``source_missing`` when it is gone. Reads only."""
+        record = next((r for r in self.ws.patterns() if r["id"] == pattern_id), None)
+        if record is None:
+            raise PipelineError("unknown_pattern", pattern_id)
+        ds = record["dataset_id"]
+        batch = self.ws.ready_batch_for(ds)
+        out = {"pattern_id": pattern_id, "dataset_id": ds, "diff": [], "not_checked": list(NOT_RECOMPUTED)}
+        if batch is None or not Path(batch["source_path"]).is_file():
+            return out | {"status": "source_missing"}
+        try:
+            loaded = self._load(batch)
+        except IngestionError as exc:  # the file no longer reads as it did
+            return out | {"status": "source_changed", "detail": str(exc)}
+        if loaded.dataset_id != ds:
+            return out | {"status": "source_changed", "detail": f"the file now gives {loaded.dataset_id}"}
+        fresh = recompute_statistics(
+            loaded.frame,
+            self.ws.load_covers(ds)[pattern_id],
+            [s["metric"] for s in record["shifts"]],
+            loaded.spatial,
+            record.get("provenance", {}).get("multiple_testing_family"),
+        )
+        diff = verify_diff(record, fresh)
+        return out | {"status": "differs" if diff else "reproduced", "diff": diff}
 
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
         """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""

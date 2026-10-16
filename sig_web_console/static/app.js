@@ -564,6 +564,25 @@ function shiftRows(shifts) {
   }).join("");
 }
 
+const VERIFIED = {  // POST /api/patterns/{id}/verify: status -> chip class, words
+  reproduced: ["ok", "Reproduced", "every recomputed number matches the journal"],
+  differs: ["bad", "Differs", "the journal does not match the stored data"],
+  source_changed: ["bad", "Source changed", "the stored upload no longer gives this dataset"],
+  source_missing: ["warn", "Source missing", "the upload is no longer stored"],
+};
+
+async function verifyPattern(id) {
+  const out = $("verify-out");
+  $("verify-btn").disabled = true; out.textContent = "Recomputing…";
+  try {
+    const r = await api(`/api/patterns/${encodeURIComponent(id)}/verify`, { method: "POST" });
+    const [cls, label, words] = VERIFIED[r.status] || ["warn", r.status, ""];
+    const rows = (r.diff || []).map((d) => `<div class="shift-row"><span class="mono">${esc(d.field)}</span><span class="muted">${esc(String(d.journal))} → ${esc(String(d.recomputed))}</span></div>`).join("");
+    out.innerHTML = `<span class="chip ${cls}">${esc(label)}</span> ${esc(words)}${rows}<div class="muted">Not recomputed: ${esc(r.not_checked.join(", "))}</div>`;
+  } catch (e) { out.textContent = `Re-check failed: ${e.message}`; }
+  $("verify-btn").disabled = false;
+}
+
 async function inspect(id) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
@@ -589,6 +608,7 @@ async function inspect(id) {
       ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
       ["Also known as", esc((p.aliases || []).join("; "))],
     ]);
+    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" data-id="${esc(n.id)}" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
     html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
     html += `<details class="nb-group"><summary>Provenance</summary>` + kv([
@@ -620,6 +640,7 @@ async function inspect(id) {
   }
   $("inspector").innerHTML = html;
   $("inspector").querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => { focusNodes([el.dataset.id]); inspect(el.dataset.id); }));
+  if ($("verify-btn")) $("verify-btn").addEventListener("click", () => verifyPattern($("verify-btn").dataset.id));
   $("drawer").hidden = false;
   if (S.cy) { S.cy.$(":selected").unselect(); S.cy.getElementById(id).select(); }
 }

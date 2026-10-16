@@ -6,7 +6,7 @@ context) or with ``attractor_topology``. Depends only on ``insight_contracts`` a
 
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.describe import describe
-from subgroup_miner.discovery import DiscoveryError, DiscoveryResult, build_insights, covers_of, run_discovery
+from subgroup_miner.discovery import DiscoveryError, DiscoveryResult, build_insights, covers_of, recompute_statistics, run_discovery
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, load_dataset
 from subgroup_miner.lattice import structural_edges
 from subgroup_miner.selection import SelectionResult, select_insights
@@ -22,6 +22,7 @@ __all__ = [
     "covers_of",
     "describe",
     "load_dataset",
+    "recompute_statistics",
     "run_discovery",
     "select_insights",
     "structural_edges",

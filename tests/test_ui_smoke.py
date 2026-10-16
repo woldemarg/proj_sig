@@ -64,6 +64,10 @@ def test_upload_process_render_query(client, demo_csv):
     node_ids = {n["data"]["id"] for n in g["nodes"]}
     assert all(e["data"]["source"] in node_ids and e["data"]["target"] in node_ids for e in g["edges"])
 
+    pattern = next(n["data"]["id"] for n in g["nodes"] if n["data"]["kind"] == "Pattern")
+    checked = client.post(f"/api/patterns/{pattern}/verify").json()  # recomputed from the stored upload
+    assert checked["status"] == "reproduced" and checked["diff"] == [] and "stability" in checked["not_checked"]
+    assert client.post("/api/patterns/P-nope/verify").status_code == 404
     attractor = next(n["data"]["id"] for n in g["nodes"] if n["data"]["kind"] == "Attractor")
     detail = client.get(f"/api/nodes/{attractor}").json()
     assert detail["node"]["kind"] == "Attractor" and "ACTIVATES (in)" in detail["neighbors"]
@@ -167,6 +171,9 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.click(".answer-box a.cite >> nth=0")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert "insight" in page.inner_text("#drawer-kind").lower()
+        page.click("#verify-btn")  # the insight recomputed from the stored upload
+        page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
+        assert "Reproduced" in page.inner_text("#verify-out")
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
         assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]

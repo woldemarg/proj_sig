@@ -23,7 +23,7 @@
 | `sd_score`, `sd_raw_score` | EDA bootstrap-penalised `final_sd_score`, pass-1 `sd_aggregate_score` |
 | `emm_score`, `volume_utility` | per-pair RMS correlation change, EDA volume utility |
 | `stability` | `sd_score / sd_raw_score` ∈ `[0.1, 1]` (0 when `sd_raw_score` is 0); `None` for a covariance insight |
-| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted; `None` for a covariance insight |
+| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted; `None` for a covariance insight; recomputable from the stored upload with the shifts and support (`recompute_statistics`, [6.7](06_graph_and_storage.md#67-configuration-and-guarantees)) |
 | `drivers` | EDA confounder strings |
 | `row_hash` | 16 hex of `sha1` over the sorted covered row positions — the identity of the row set |
 | `phenomenon_type` | `"shift"` or `"covariance"` |

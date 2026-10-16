@@ -31,6 +31,7 @@ STATUS = {
     "file_too_large": 413,
     "unknown_dataset": 404,
     "unknown_upload": 404,
+    "unknown_pattern": 404,
     "invalid_options": 400,
 }  # every other refusal is 409: busy, degraded, mismatch, rollback
 
@@ -172,6 +173,10 @@ def create_app(engine: Engine) -> FastAPI:
         if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
         return engine.evidence(body.question, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+
+    @app.post("/api/patterns/{pattern_id}/verify")
+    def verify_pattern(pattern_id: str) -> dict[str, Any]:
+        return engine.verify_pattern(pattern_id)
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:

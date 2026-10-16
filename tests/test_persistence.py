@@ -399,6 +399,42 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
+def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
+    """``verify_pattern`` (docs/08_interface.md §8.1): every demo pattern recomputes as journaled; a p-value forged with
+    its digest recomputed passes the integrity check but differs, field by field; a changed upload is ``source_changed``,
+    a removed one ``source_missing``; an unknown id is refused."""
+    import shutil
+
+    from insight_graph_service.core.engine import PipelineError
+
+    own = tmp_path / "demo.csv"  # ingest_file keeps the path it is given: this test changes and removes the file
+    shutil.copy(demo_csv, own)
+    cfg = make_config(tmp_path / "ws")
+    engine = make_engine(cfg)
+    ds = engine.ingest_file(own)["dataset_id"]
+    rows = engine.ws.patterns()
+    assert {engine.verify_pattern(r["id"])["status"] for r in rows} == {"reproduced"}  # covariance insights included
+    forged = next(r for r in rows if r["p_value"] is not None)
+    forged["p_value"], forged["p_adjusted"] = 0.0123, 0.0123 * forged["provenance"]["multiple_testing_family"]  # a demo p may be 0.0
+    forged["record_digest"] = record_digest(forged)  # a writer who recomputes the digest
+    engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    engine = make_engine(cfg)
+    assert engine.graph().nodes[forged["id"]]["props"]["integrity"] == "ok"
+    checked = engine.verify_pattern(forged["id"])
+    assert checked["status"] == "differs" and {d["field"] for d in checked["diff"]} == {"p_value", "p_adjusted"}
+    assert next(d for d in checked["diff"] if d["field"] == "p_value")["journal"] == forged["p_value"]
+    other = next(r["id"] for r in rows if r["id"] != forged["id"])
+    source = Path(engine.ws.ready_batch_for(ds)["source_path"])
+    source.write_bytes(source.read_bytes() + b"\n")  # one byte more
+    assert engine.verify_pattern(other)["status"] == "source_changed"
+    source.unlink()
+    assert engine.verify_pattern(other)["status"] == "source_missing"
+    with pytest.raises(PipelineError) as refused:
+        engine.verify_pattern("P-nope")
+    assert refused.value.code == "unknown_pattern"
+
+
 def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, demo_csv):
     """The READY record signs what the graph reads of its dataset, as stored, and a PATCH signs it again (``ok``); a rating
     edited in the record is ``mismatch`` after the rebuild: its source, rating and registry are ignored, the evidence says
