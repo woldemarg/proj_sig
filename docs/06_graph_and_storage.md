@@ -40,12 +40,23 @@ Because conditions are closed intents ([2.3](02_discovery.md#23-deduplication-be
 
 | Node | Id | Label | Key properties |
 |---|---|---|---|
-| Pattern | `P-<hash>` | the headline ([8.5](08_interface.md#85-text-shown-to-people)) | the journal record unchanged: `Insight` fields + `row_id`, `canonical`, `embedding`, `record_digest`; plus `integrity`, computed at every compile: `ok` when the record's statistics match its digest, `mismatch` when they do not, `unverified` for a record journaled without one |
+| Pattern | `P-<hash>` | the headline ([8.5](08_interface.md#85-text-shown-to-people)) | the journal record unchanged: `Insight` fields + `row_id`, `canonical`, `embedding`, `record_digest`; plus `integrity`, computed at every compile: `ok` when the record's statistics match its digest, `mismatch` when they do not, `unverified` for a record journaled without one; `credibility` and `credibility_basis`, computed at every compile from the other sources (below) |
 | Attractor | `A-<k>` | the anchor label | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
 | Dimension | `D:<dataset>:<column>` | raw column name | `name, cardinality, entropy` — the EDA-selected dimensions plus every attribute a closed intent uses |
 | Metric | `M:<dataset>:<column>` | `humanize(name)` | `name, global_median, global_mad`; `indicator` and `unit` when the dataset's indicator registry names the metric ([2.1](02_discovery.md#21-ingestion)) |
 | Dataset | `DS:<dataset_id>` | file name | `filename, rows, columns`, `reliability` (`A`–`F` from the batch record, `F` when undeclared), `source` when declared ([2.1](02_discovery.md#21-ingestion)), `upload_id`, `level` and `upload_levels` (the levels of every batch record of that `upload_id`, of any status) for an HTTP upload ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)), `supersedes` when it names the version it replaced ([6.8](#68-deleting-a-dataset)). `Engine.update_dataset_metadata` (`PATCH /api/datasets/{id}`) rewrites them, and the indicator registry, on the READY batch record and recompiles the snapshot: no new batch, no mining, the same pattern ids |
 | Batch | `B:<batch_id>` | batch id | `batch_seq, created_at, status` |
+
+**Credibility, phase A** (`snapshot.credibility`; the Admiralty information-credibility scale operationalised, not defined). Every pattern gets `credibility ∈ {1, 2, 5, 6}` and `credibility_basis {rule: "anchor", sources, patterns, comparability?, confirmed_by?}` from the other datasets of the graph, never from its own p, stability or weight. Another *source* is another declared `source` (compared casefolded, so «Field reports» and «field reports» are one) outside the pattern's own dataset and upload: the levels of one upload are one source, and so are a version and the one it `supersedes` ([6.8](#68-deleting-a-dataset)) while both are in the graph. Indicators compare casefolded too; `sources` lists each source once. Metrics compare through the indicator registry (`indicators`, [2.1](02_discovery.md#21-ingestion)); a phenomenon shift is one the prompt shows (`phenomenon_shifts`).
+
+| Level | When | `comparability` |
+|---|---|---|
+| 5 | a pattern of another declared source shifts a metric of the same indicator materially the opposite way in the same subgroup (one pattern's conditions contain the other's); wins over 1, whose patterns then stand in `confirmed_by` | `indicator` |
+| 1 | a pattern of another declared source shares a non-weak anchor and shifts a metric of the same indicator the same way | `indicator` |
+| 2 | another dataset, declared or not (not of the same upload or source), shifts a metric of the same name | `nominal` |
+| 6 | none of these | — |
+
+So two undeclared datasets, or two without a registry, never give 1 or 5, and a tampered pattern (`integrity: mismatch`) confirms nothing. The level changes when another dataset arrives or goes; `credibility_basis` says why, and no history is kept. Phase A sees no place: a phenomenon that recurs in another source anywhere confirms (on S-two-sources the focus the second source does not have gets 1 through another focus, [10.3](10_verification.md#103-hypothesis-benchmark)); for geo patterns the place rule replaces it. A contradiction needs the same metric the other way in the same subgroup, not an opposite phenomenon vector: across a real pair of sources the phenomenon-block cosine spans −0.99 to 0.98 ([10.3](10_verification.md#103-hypothesis-benchmark), the second-source spike). The prompt does not show the level yet. Limits: a covariance insight has no phenomenon shift, so it is always 6; conditions compare as written (`attribute=value`) across datasets, while metrics compare through the registry, so a quantile band such as `q4` of two datasets may cover different ranges; a tampered pattern gets a level of its own but confirms nothing and never reaches the evidence.
 
 | Edge | From → to | Plane | Weight and properties |
 |---|---|---|---|
@@ -85,7 +96,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `state/representation.json` | JSON | `EmbeddingSpec` + fingerprint | `record_representation`, at the first commit |
 | `state/sig_state.json` | JSON | the next batch sequence | `Workspace.commit_batch_seq` |
 | `state/ontology_metrics.csv` | CSV | lac `BatchMetrics` rows | `MetricsRecorder` |
-| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 5) | `save_graph`, atomically |
+| `graph/snapshot.json` | `{version, created_at, representation, nodes[{id, kind, label, props}], edges[{id, source, target, type, plane, weight, props}], stats}` | the derived dual graph (`SNAPSHOT_VERSION` 7) | `save_graph`, atomically |
 | `graph/literals.npz` | npz: `texts`, `vectors` float32 `(N, 384)`, `fingerprint` | the embeddings of the literal catalog ([7.1.1](07_question_answering.md#711-literal-grounding)) by text — a cache: the catalog itself is rebuilt from the graph, a text it lacks (or a file of another fingerprint) is embedded again; outside `state/`, so no rollback restores it | `Workspace.save_literals`, by a writer's commit (or start) that changed the literals (`Engine._committed_state`) |
 | `pending.json` + `checkpoint/` | `{batch_id` or `dataset_id, checkpoint}`; copies of `state/`, the snapshot and, for a deletion, `journal/` and the moved-aside files | the unfinished transaction ([6.4](#64-commit-rollback-and-recovery)) | `Workspace.transaction`; both removed at its end |
 
