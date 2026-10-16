@@ -208,7 +208,7 @@ Retrieval and the answer run in two services. In the graph service, `Engine.sear
 - an unreachable graph service, any other status or a payload that breaks the contract is a 502;
 - otherwise it answers with `narration.answer(payload, llm)`, where `llm` is `None` when `use_llm` is false.
 
-The answer reads only the payload: the model or the evidence-only summary, the citation check against the manifest, the footer; `view` goes to the console untouched. Every answer on a non-empty graph is logged as one JSON line on the logger `evidence_narrator_service.queries`: `at`, `question`, `mode`, `metrics`, `evidence` (the pattern ids of the manifest) and `citations`. `GET /api/chat/health` always answers 200 with the LLM status (`health()`, below) and whether the graph service's `GET /api/health` answers within 2 s. The narrator reaches the graph service at `INSIGHT_GRAPH_URL` with `INSIGHT_GRAPH_TIMEOUT_S` (300 s) and a 5 s connect timeout.
+The answer reads only the payload: the model or the evidence-only summary, the citation check against the manifest, the footer; `view` goes to the console untouched. Every answer on a non-empty graph is logged as one JSON line on the logger `evidence_narrator_service.queries`: `at`, `question`, `mode`, `metrics`, `evidence` (the pattern ids of the manifest) and `citations`. `GET /api/chat/health` always answers 200 with the LLM status (`health()`, below) and whether the graph service's `GET /api/health` answers within 2 s. The narrator reaches the graph service at `INSIGHT_GRAPH_URL` with `INSIGHT_GRAPH_TIMEOUT_S` (600 s) and a 5 s connect timeout.
 
 **System prompt** (`narration.SYSTEM_PROMPT`, verbatim):
 
@@ -304,7 +304,7 @@ No LLM reads the canonical documents: only the naive baseline and the `text_nn` 
 | `STRUCTURAL_HOPS`, `STRUCTURAL_EDGE_DECAY`, `LATTICE_EDGES` | 1, 0.85, SPECIALIZES (both ways), CONTRASTS, CO_LOCATED (constants of `traversal.py`) |
 | `MAX_RETRIEVED`; `EVIDENCE_MAX_PATTERNS` | 12; 10 (a constant of `evidence.py`) |
 | `VERTICAL_MAX_PER_PATTERN`, `VERTICAL_MAX_TOTAL`, `VERTICAL_MIN_SHARE`, `ZONES_MAX` | 3 steps each way, 10 distinct vertical patterns per question, 0.5 (also what a zone holds), 5 zones (constants of `vertical.py`) |
-| `INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S` | `http://127.0.0.1:8765` (the host composite of `scripts/dev.py`; compose sets `http://insight-graph:8000`), 300 |
+| `INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S` | `http://127.0.0.1:8765` (the host composite of `scripts/dev.py`; compose sets `http://insight-graph:8000`), 600 |
 | `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` (the broker) |
 | `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` | 120, 0.1, 1200 |
 | the upstream model, its key and the provider order | the broker's `GEMMA_*` settings ([12.4](12_architecture.md#124-services-and-contracts)) |
