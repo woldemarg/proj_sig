@@ -60,7 +60,7 @@ services:
       interval: 30s
       start_interval: 2s
       start_period: 60s
-      timeout: 10s
+      timeout: 30s
       retries: 5
     stop_grace_period: 30s
     restart: unless-stopped
