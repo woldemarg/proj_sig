@@ -51,6 +51,7 @@ class DualGraph:
         for e in self.edges:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
+        self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]

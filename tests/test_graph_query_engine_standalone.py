@@ -213,7 +213,7 @@ def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
     """The coarser level that shifts the same way is folded into the finer item (``also at``), labelled regional, and the
     chain runs up through the shared anchor and region to the regions above; a reversal is scale-dependent and stays a fact;
     a planned coarser level with nothing there is not_found_coarser; no coarser level planned prints no scale."""
-    from graph_query_engine.vertical import picture, scale_chain, scale_label
+    from graph_query_engine.vertical import _facts, picture, scale_chain, scale_label
 
     graph, found = _levels_search(_levels(-1.2, ("7", "5")))
     items = {it.pattern_id: it for it in found.evidence.items}
@@ -226,6 +226,7 @@ def test_two_levels_of_one_upload_are_one_fact_with_a_scale():
     (chain,) = scale_chain(graph, ["P1"])  # what a zone from the map will call for the same pattern
     assert [s.pattern_id for s in chain.up] == ["P7"] and chain.regions == ["R:3:b", "R:1:c"]
     assert [scale_label(graph, p) for p in ("P1", "P7")] == [scale_chain(graph, [p])[0].scale for p in ("P1", "P7")]  # the map's label alone
+    assert _facts(graph, "P7") is _facts(graph, "P7") and graph.memo  # what a step reads of a pattern: derived once per graph
     assert picture(graph, "R:5:a") == {"patterns": 2, "datasets": 2, "themes": 1}
 
     _, found = _levels_search(_levels(+1.2, ("7", "5")))
