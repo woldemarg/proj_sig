@@ -38,8 +38,8 @@ def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str
     keep: set[str] = set()
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
-    regions = regions_above(graph, list(pids))
     members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view
+    regions = {r for r in regions_above(graph, list(pids)) if members[r]}
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and n["id"] not in regions:

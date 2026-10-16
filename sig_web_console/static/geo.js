@@ -207,7 +207,6 @@ async function loadDataset(ds) {
   G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
   G.map.getSource("cells").setData(data);
   G.map.getSource("pts").setData(empty());
-  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch(() => null);  // regions, trust and scale from the graph
   await loadOverlay(ds);
   const info = G.datasets.find((d) => d.dataset_id === ds) || {};
   const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
