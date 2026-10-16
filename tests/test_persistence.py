@@ -399,6 +399,66 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
+def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
+    """``verify_pattern`` (docs/06_graph_and_storage.md §6.7): every demo pattern recomputes as journaled; forged with
+    their digests recomputed, so that they pass the integrity check, a p-value, a test family, a dropped p, a selector and a
+    target each differ, field by field, and a missing covers.npz changes nothing (the conditions decide the rows); a
+    dropped shift is not caught (the metrics are not re-mined: ``not_checked``); a changed upload is ``source_changed``, a
+    removed one ``source_missing``; an unknown id is refused."""
+    import shutil
+
+    from insight_graph_service.core.engine import PipelineError
+
+    own = tmp_path / "demo.csv"  # ingest_file keeps the path it is given: this test changes and removes the file
+    shutil.copy(demo_csv, own)
+    cfg = make_config(tmp_path / "ws")
+    engine = make_engine(cfg)
+    ds = engine.ingest_file(own)["dataset_id"]
+    rows = engine.ws.patterns()
+    assert {engine.verify_pattern(r["id"])["status"] for r in rows} == {"reproduced"}  # covariance insights included
+    tested = [r for r in rows if r["p_value"] is not None and len(r["shifts"]) > 1]
+    relabelled = next(r for r in rows if r["phenomenon_type"] == "covariance")
+    relabelled["target"] = next(m for m in relabelled["covariance"]["pair"] if m != relabelled["target"])  # the weaker of its pair
+    relabelled["record_digest"] = record_digest(relabelled)
+    forged, family, dropped, selector, target, shift = tested[:6]
+    forged["p_value"], forged["p_adjusted"] = 0.0123, 0.0123 * forged["provenance"]["multiple_testing_family"]  # a demo p may be 0.0
+    family["provenance"]["multiple_testing_family"] //= 100
+    family["p_adjusted"] = min(1.0, family["p_value"] * family["provenance"]["multiple_testing_family"])
+    dropped["p_value"] = dropped["p_adjusted"] = None  # the console would say "not tested"
+    selector["expression"] = "region=='MOON'"
+    target["target"] = "no_such_metric"
+    shift["shifts"] = shift["shifts"][:1]
+    for r in (forged, family, dropped, selector, target, shift):
+        r["record_digest"] = record_digest(r)  # a writer who recomputes the digest
+    engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    engine = make_engine(cfg)
+    assert engine.graph().nodes[forged["id"]]["props"]["integrity"] == "ok"
+    checked = engine.verify_pattern(forged["id"])
+    assert checked["status"] == "differs" and {d["field"] for d in checked["diff"]} == {"p_value", "p_adjusted"}
+    assert next(d for d in checked["diff"] if d["field"] == "p_value")["journal"] == forged["p_value"]
+    caught = {r["id"]: {d["field"] for d in engine.verify_pattern(r["id"])["diff"]} for r in (family, dropped, selector, target)}
+    assert caught == {
+        family["id"]: {"multiple_testing_family"},
+        dropped["id"]: {"p_value"},
+        selector["id"]: {"expression"},
+        target["id"]: {"target"},
+    }
+    assert engine.verify_pattern(shift["id"])["status"] == "reproduced" and "the metrics shifted (mining is not re-run)" in checked["not_checked"]
+    assert "target" in {d["field"] for d in engine.verify_pattern(relabelled["id"])["diff"]}  # selection picks the stronger metric
+    (engine.ws.datasets_dir / ds / "covers.npz").unlink()
+    assert engine.verify_pattern(next(r["id"] for r in rows if r not in [*tested[:6], relabelled]))["status"] == "reproduced"
+    other = next(r["id"] for r in rows if r["id"] != forged["id"])
+    source = Path(engine.ws.ready_batch_for(ds)["source_path"])
+    source.write_bytes(source.read_bytes() + b"\n")  # one byte more
+    assert engine.verify_pattern(other)["status"] == "source_changed"
+    source.unlink()
+    assert engine.verify_pattern(other)["status"] == "source_missing"
+    with pytest.raises(PipelineError) as refused:
+        engine.verify_pattern("P-nope")
+    assert refused.value.code == "unknown_pattern"
+
+
 def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, demo_csv):
     """The READY record signs what the graph reads of its dataset, as stored, and a PATCH signs it again (``ok``); a rating
     edited in the record is ``mismatch`` after the rebuild: its source, rating and registry are ignored, the evidence says

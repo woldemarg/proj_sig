@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import math
 import threading
 import time
 import traceback
@@ -37,14 +38,14 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from graph_query_engine.vertical import resolution as pattern_resolution
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
+from insight_contracts import SNAPSHOT_VERSION, Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
-from subgroup_miner.discovery import build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset, parse_indicators
+from subgroup_miner.discovery import NOT_RECOMPUTED, build_insights, covers_of, recompute_statistics, run_discovery
+from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import (
     GeoDataset,
@@ -72,6 +73,58 @@ class PipelineError(RuntimeError):
 
 SOURCE_MAX_CHARS = 120
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
+
+
+def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarray | None, family: int) -> list[dict[str, Any]]:
+    """What of the journal record the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
+    journal, recomputed}``: its id and selector against its conditions, the rows against ``covers.npz`` and the record's
+    row hash, its target among its shifts (on a covariance insight, the stronger of its pair), a missing p only on a
+    covariance insight, its test family against its dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
+    rows = fresh["rows"]
+    out = []
+
+    def differs(field: str, journal: Any, recomputed: Any) -> None:
+        out.append({"field": field, "journal": journal, "recomputed": recomputed})
+
+    if record["id"] != pattern_id(record["dataset_id"], tuple(Condition(c["attribute"], c["value"]) for c in record["conditions"])):
+        differs("id", record["id"], "another id for these conditions")
+    if fresh["expression_rows"] is None or not np.array_equal(fresh["expression_rows"], rows):
+        differs("expression", record["expression"], "selects other rows than the conditions")
+    if covers is not None and not np.array_equal(np.sort(covers), rows):
+        differs("rows", f"{len(covers)} rows in covers.npz", f"{len(rows)} rows by the conditions")
+    if record.get("row_hash") != hashlib.sha1(rows.astype(np.int64).tobytes()).hexdigest()[:16]:
+        differs("row_hash", record.get("row_hash"), hashlib.sha1(rows.astype(np.int64).tobytes()).hexdigest()[:16])
+    if record["provenance"].get("multiple_testing_family") != family:
+        differs("multiple_testing_family", record["provenance"].get("multiple_testing_family"), f"{family} for its dataset")
+    covariance = record.get("phenomenon_type") == "covariance" and bool((record.get("covariance") or {}).get("pair"))
+    if record["p_value"] is None and not covariance:
+        differs("p_value", None, fresh.get("p_value"))
+    if "shifts" not in fresh:
+        return out + [{"field": "support", "journal": record["support"], "recomputed": 0}]
+    primary = next((s for s in fresh["shifts"] if s["metric"] == record["target"]), None)
+    if primary is None:
+        differs("target", record["target"], "not among its shifts")
+        primary = fresh["shifts"][0]
+    pair = [s for s in fresh["shifts"] if s["metric"] in (record.get("covariance") or {}).get("pair", [])]
+    if covariance and pair and record["target"] != (chosen := min(pair, key=lambda s: (-abs(s["robust_z"]), s["metric"]))["metric"]):
+        differs("target", record["target"], f"{chosen} (the stronger metric of its pair)")
+    pairs = [
+        ("support", record["support"], fresh["support"]),
+        ("support_fraction", record["support_fraction"], fresh["support_fraction"]),
+        ("baseline", record["baseline"], primary["global_median"]),
+        ("local", record["local"], primary["local_median"]),
+        ("effect_size", record["effect_size"], primary["robust_z"]),
+    ]
+    if record["p_value"] is not None:
+        pairs += [("p_value", record["p_value"], fresh["p_value"]), ("p_adjusted", record["p_adjusted"], fresh["p_adjusted"])]
+    for stored, again in zip(record["shifts"], fresh["shifts"], strict=True):
+        pairs += [(f"shifts.{stored['metric']}.{k}", stored[k], again[k]) for k in ("robust_z", "local_median", "global_median", "global_mad")]
+    spatial = record["provenance"].get("spatial") or {}
+    pairs += [(f"spatial.{k}", spatial[k], v) for k, v in fresh.get("spatial", {}).items() if k in spatial]
+    for name, a, b in pairs:
+        if not (a == b or (isinstance(a, int | float) and isinstance(b, int | float) and math.isclose(a, b, rel_tol=1e-9))):
+            differs(name, a, b)
+    return out
 
 
 def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
@@ -444,16 +497,7 @@ class Engine:
             timings: dict[str, float] = {}
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
-                    loaded = load_dataset(
-                        Path(record["source_path"]),
-                        self.settings.miner,
-                        filename=record["filename"],
-                        bins=record.get("bins"),
-                        categories=record.get("categories"),
-                        geo=record.get("geo"),
-                        strict=record.get("strict", True),
-                        locator=record.get("locator"),
-                    )
+                    loaded = self._load(record)
                     ds = record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(ds)
@@ -633,6 +677,56 @@ class Engine:
             "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
             "patterns": patterns,
         }
+
+    def _load(self, record: dict[str, Any]) -> LoadedDataset:
+        """The batch's stored file read with its own options, as its processing read it."""
+        return load_dataset(
+            Path(record["source_path"]),
+            self.settings.miner,
+            filename=record["filename"],
+            bins=record.get("bins"),
+            categories=record.get("categories"),
+            geo=record.get("geo"),
+            strict=record.get("strict", True),
+            locator=record.get("locator"),
+        )
+
+    @_healthy
+    def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
+        """``pattern_id`` recomputed from its stored upload (docs/06_graph_and_storage.md §6.7): ``reproduced`` when its rows
+        and every recomputed number match the journal, ``differs`` with what does not, ``source_changed`` when the file
+        read with its options (under the current miner settings) no longer gives the dataset id, ``source_missing`` when
+        it is gone. Reads only, without the writer lock: a file removed meanwhile is ``source_missing``."""
+        records = self.ws.patterns()
+        record = next((r for r in records if r["id"] == pattern_id), None)
+        if record is None:
+            raise PipelineError("unknown_pattern", pattern_id)
+        ds = record["dataset_id"]
+        batch = self.ws.ready_batch_for(ds)
+        out = {"pattern_id": pattern_id, "dataset_id": ds, "diff": [], "not_checked": list(NOT_RECOMPUTED)}
+        try:
+            loaded = self._load(batch) if batch else None
+        except IngestionError as exc:  # unreadable now, or refused by the current settings
+            return out | {"status": "source_missing" if exc.code == "unsupported_file" else "source_changed", "detail": str(exc)}
+        if loaded is None:
+            return out | {"status": "source_missing"}
+        if loaded.dataset_id != ds:
+            return out | {"status": "source_changed", "detail": f"the file read with its options now gives {loaded.dataset_id}"}
+        family = Counter(r["provenance"].get("multiple_testing_family") for r in records if r["dataset_id"] == ds).most_common(1)[0][0]
+        fresh = recompute_statistics(
+            loaded.frame,
+            [(c["attribute"], c["value"]) for c in record["conditions"]],
+            record["expression"],
+            [s["metric"] for s in record["shifts"]],
+            loaded.spatial,
+            family,
+        )
+        try:
+            covers = self.ws.load_covers(ds).get(pattern_id)
+        except (OSError, ValueError):  # rewritten meanwhile: the conditions decide the rows
+            covers = None
+        diff = verify_diff(record, fresh, covers, family)
+        return out | {"status": "differs" if diff else "reproduced", "diff": diff}
 
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
         """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""
