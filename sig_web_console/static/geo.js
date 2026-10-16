@@ -223,7 +223,10 @@ async function loadDataset(ds) {
 
 async function loadOverlay(ds) {
   /* the graph's regions, trust and scale over the map: they change with every commit, the cells never */
-  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch(() => null);
+  let failed = "";
+  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
+  $("map-overlay-error").textContent = failed && `Regions and trust unavailable: ${failed}`;
   G.map.getSource("regions").setData(G.overlay || empty());
   G.level = undefined;
   paintRegions();
@@ -241,7 +244,10 @@ function paintZones(zones) {
   });
 }
 
-const centre = (f) => { const r = f.geometry.coordinates[0].slice(1); return [r.reduce((a, c) => a + c[0], 0) / r.length, r.reduce((a, c) => a + c[1], 0) / r.length]; };
+const centre = (f) => {  // the mean of a ring's vertices, longitudes taken around its first one: a cell across ±180° stays whole
+  const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = x0 + r.reduce((a, c) => a + ((c[0] - x0 + 540) % 360) - 180, 0) / r.length;
+  return [((lon + 540) % 360) - 180, r.reduce((a, c) => a + c[1], 0) / r.length];
+};
 
 function regionLevel() {
   /* the region level that fits the zoom; ponytail: zoom − 3 ≈ H3 resolution, tune if regions read too big or small */

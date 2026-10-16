@@ -263,7 +263,8 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
 
 def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
     """``regions_above`` leaves out a pattern's finest region level, its own or, at resolution 8, level 7 (a handful of its
-    cells each: hundreds per dataset), and keeps the coarser levels and their ancestors."""
+    cells each: hundreds per dataset), and keeps the coarser levels and their ancestors; a region holding tampered
+    patterns only is none."""
     from graph_query_engine import DualGraph
     from graph_query_engine.vertical import regions_above
     from insight_contracts import SNAPSHOT_VERSION
@@ -276,6 +277,18 @@ def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
     edges += [edge("R:7:a", "R:5:c", "PARENT_OF"), edge("R:7:b", "R:5:c", "PARENT_OF"), edge("R:5:c", "R:3:d", "PARENT_OF")]
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [node, *regions], "edges": edges})
     assert regions_above(graph, ["P1"]) == {"R:5:c", "R:3:d"}
+    forged = pattern("P2", ["district=south"])
+    forged["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
+    forged["props"]["integrity"] = "mismatch"
+    regions = [*regions, {"id": "R:5:e", "kind": "Region", "label": "R:5:e", "props": {"resolution": 5, "h3": "e", "patterns": 1}}]
+    tampered = DualGraph(
+        {
+            "version": SNAPSHOT_VERSION,
+            "nodes": [node, forged, *regions],
+            "edges": [*edges, edge("P2", "R:7:b", "IN_REGION", 1.0), edge("P2", "R:5:e", "IN_REGION", 1.0)],
+        }
+    )
+    assert regions_above(tampered, ["P1", "P2"]) == {"R:5:c", "R:3:d"}  # R:5:e holds the tampered P2 alone
 
 
 def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
