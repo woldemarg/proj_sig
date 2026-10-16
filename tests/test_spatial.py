@@ -295,7 +295,13 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
     assert region in spatial.occupied["coarse"][5] and spatial.occupied["one"][8].isdisjoint(spatial.occupied["dot"][8])
-    assert spatial.places["P-z"] == {7: frozenset(coarse), **{lv: frozenset(h3.cell_to_parent(k, lv) for k in coarse) for lv in (5, 3, 1)}}
+    centre = {lv: frozenset(h3.latlng_to_cell(*h3.cell_to_latlng(k), lv) for k in coarse) for lv in (5, 3, 1)}  # where each cell lies
+    assert spatial.places["P-z"] == {7: frozenset(coarse), **centre}
+    fine = "871e4985bffffff"  # its centre lies in another resolution-5 cell than its H3 parent
+    holder = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5)
+    assert holder != h3.cell_to_parent(fine, 5)
+    edge = derive_spatial([_geo_dataset("fine", [fine], {"P-fine": [fine]}), _geo_dataset("coarse", [holder], {"P-holder": [holder]})], (7, 5, 3, 1))
+    assert edge.places["P-fine"][5] == edge.places["P-holder"][5] == edge.occupied["fine"][5] == {holder}  # one place for credibility
     assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
     from subgroup_miner.spatial import region_features
 

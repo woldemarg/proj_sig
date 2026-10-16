@@ -319,11 +319,11 @@ def credibility(
             if not independent(pid, batch[q], of[q].dataset_id) or (geo and not overlap(pid, q, min)):
                 continue  # one source in two datasets, a version and the one it replaces, or (with a place) elsewhere
             declared = source[pid] is not None and source[q] is not None
-            pairs = [
+            pairs = [  # read by 1 and 5 only, which need both sources declared
                 (mine[m], shifts[q][n])
                 for m, (i, u) in indicator[pid].items()
                 for n, (j, v) in indicator[q].items()
-                if i == j and (u is None or v is None or u == v)
+                if declared and i == j and (u is None or v is None or u == v)
             ]
             if (
                 declared

@@ -168,8 +168,13 @@ def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
 
 
 def picture(graph: DualGraph, region: str) -> dict[str, int]:
-    """What a region holds: its IN_REGION patterns over every dataset, and how many datasets and anchors (themes) they span."""
-    members = [e["source"] for e in graph.inc.get(region, []) if e["type"] == "IN_REGION"]
+    """What a region holds: its intact IN_REGION patterns over every dataset (a tampered one counts for nothing), and how
+    many datasets and anchors (themes) they span."""
+    members = [
+        e["source"]
+        for e in graph.inc.get(region, [])
+        if e["type"] == "IN_REGION" and graph.nodes[e["source"]]["props"].get("integrity") != "mismatch"
+    ]
     return {
         "patterns": len(members),
         "datasets": len({graph.insight(p).dataset_id for p in members}),

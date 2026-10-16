@@ -481,9 +481,8 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
         assert metadata_digest({**engine.ws.ready_batch_for(ds), field: value}) != engine.ws.ready_batch_for(ds)["metadata_digest"], field
 
     forged = engine.ws.ready_batch_for(ds)
-    engine.ws.save_batch({**forged, "reliability": "A"})  # by hand, past the API
-    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})  # rebuilt at the next start
-    engine = make_engine(cfg)
+    engine.ws.save_batch({**forged, "reliability": "A"})  # by hand, past the API; the snapshot on disk still says ok
+    engine = make_engine(cfg)  # an ordinary restart rebuilds the snapshot
     props = engine.graph().nodes[f"DS:{ds}"]["props"]
     assert props["integrity"] == "mismatch" and "source" not in props and props["reliability"] == "F"
     assert "indicator" not in engine.graph().nodes[f"M:{ds}:margin"]["props"]  # the registry is ignored too
@@ -492,6 +491,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
     assert all(it.trust.startswith("source unknown (its dataset's metadata failed the integrity check)") for it in found.evidence.items)
     assert any(ds in n and "its metadata no longer matches its digest" in n for n in found.evidence.notes)
     assert "(джерело невідоме," in found.payload().evidence_summary
+    assert f"- метадані датасету {ds} не пройшли перевірку цілісності" in found.payload().evidence_summary  # as the NOTE says
     with pytest.raises(PipelineError) as refused:
         engine.update_dataset_metadata(ds, indicators="")  # any PATCH would sign the forged rating as genuine
     assert refused.value.code == "metadata_mismatch"
@@ -531,7 +531,11 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
         if r["id"] == old:
             del r["record_digest"]
     first.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-    first.ws.save_graph({**first.ws.load_graph(), "version": 3})  # a snapshot of the previous version: rebuilt at start
+    snapshot = first.ws.load_graph()  # its trust edited too: a start serves the journal's, never the file's
+    for node in snapshot["nodes"]:
+        if node["id"] == forged:
+            node["props"] |= {"integrity": "ok", "credibility": 1}
+    first.ws.save_graph(snapshot)
 
     engine = make_engine(cfg)
     assert engine.problem is None
@@ -541,6 +545,9 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     evidence = found.evidence
     assert forged not in {it.pattern_id for it in evidence.items} | {s.pattern_id for s in found.seeds}
     assert any(n.startswith(f"{forged} excluded: integrity check failed") for n in evidence.notes)
+    assert forged in evidence.excluded and forged not in {r.node_id for r in found.traversal.patterns}  # no slot of the budget
+    assert f"виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): {forged}" in found.payload().evidence_summary
+    assert engine.graph().nodes[forged]["props"]["credibility"] == first.graph().nodes[forged]["props"]["credibility"]  # recomputed
     graph = engine.graph()
     for anchor in {e["target"] for e in graph.edges if e["type"] == "ACTIVATES" and e["source"] == forged}:
         members = {e["source"] for e in graph.edges if e["type"] == "ACTIVATES" and e["target"] == anchor}
@@ -567,14 +574,14 @@ def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_
     assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_an_unreadable_snapshot_starts_degraded(tmp_path, demo_csv):
+def test_an_unreadable_snapshot_is_rebuilt_at_start(tmp_path, demo_csv):
+    """The snapshot is derived: a start rebuilds it from the journals whatever the file holds."""
     cfg = make_config(tmp_path / "ws")
-    assert make_engine(cfg).ingest_file(demo_csv)["status"] == "READY"
+    first = make_engine(cfg)
+    assert first.ingest_file(demo_csv)["status"] == "READY"
     (cfg.workspace_dir / "graph" / "snapshot.json").write_text("{not json", encoding="utf-8")
     engine = make_engine(cfg)
-    assert engine.problem and not engine.graph().insights  # started: the reset stays reachable
-    engine.reset()
-    assert engine.problem is None and not list((tmp_path).glob("ws.deleting-*"))  # renamed aside, then deleted
+    assert engine.problem is None and set(engine.graph().insights) == set(first.graph().insights) and engine.ws.load_graph()["nodes"]
 
 
 def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):

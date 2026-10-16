@@ -101,6 +101,7 @@ class Evidence:
     scale_chains: list[dict[str, Any]] = field(default_factory=list)  # ScaleChain as dicts, the items' keys added
     zones: list[dict[str, Any]] = field(default_factory=list)  # rank_zones: a question without scope over geo items
     area: dict[str, float] | None = None  # an asked map zone: item key -> place (0 outside) for the levels it weighed; None: no zone
+    excluded: list[str] = field(default_factory=list)  # tampered patterns the walk ranked within its budget, left out
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -342,6 +343,13 @@ class Evidence:
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
         if self.area is not None:
             lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v) or 'жодного свідчення'}")
+        if self.excluded:  # what the NOTEs say of integrity, for the answer without the model
+            lines.append(f"- виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): {', '.join(self.excluded)}")
+        lines += [
+            f"- метадані датасету {d['dataset_id']} не пройшли перевірку цілісності: його джерело, надійність і показники проігноровано"
+            for d in self.datasets
+            if d.get("integrity") == "mismatch"
+        ]
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
@@ -474,11 +482,7 @@ def build_evidence(
     query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig, place_scores: dict[str, float] | None = None
 ) -> Evidence:
     items: list[EvidenceItem] = []
-    chosen, forged = [], []  # the first EVIDENCE_MAX_PATTERNS intact patterns; the tampered ones ranked among them
-    for r in result.patterns:
-        if len(chosen) == EVIDENCE_MAX_PATTERNS:
-            break
-        (forged if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch" else chosen).append(r)
+    chosen, forged = result.patterns[:EVIDENCE_MAX_PATTERNS], result.excluded  # the walk ranks intact patterns only
 
     def item(key: str, pid: str, role: str, path: list[PathStep], path_text: str, transversal_only: bool = False, located: str = "") -> EvidenceItem:
         node = graph.nodes[pid]
@@ -631,4 +635,5 @@ def build_evidence(
         scale_chains=chains,
         zones=[] if place_scores else _zones(query, items, graph, config),  # an asked area is the question's place: no second one
         area={it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores} if place_scores else None,
+        excluded=[r.node_id for r in forged],
     )

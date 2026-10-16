@@ -495,7 +495,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
     their overlap reaches ``GEO_REGION_MIN_SHARE`` of the smaller of its cells and the region's occupied cells (a focus inside
     a region scores 1, as does a pattern covering the region). ``places`` and ``occupied`` give each pattern's and each
-    dataset's cells at its own resolution and their parents at every listed level coarser. Two patterns of one resolution, of any
+    dataset's cells at its own resolution and, at every listed level coarser, the cells holding their centres (where a
+    coarser dataset indexed the same points; the regions follow the H3 hierarchy). Two patterns of one resolution, of any
     datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
@@ -510,9 +511,12 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
             continue
         res = h3.get_resolution(str(d.cells[0]))
         own = [lv for lv in levels if lv <= res]
-        parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in map(str, d.cells)]) for lv in own}
+        names = list(map(str, d.cells))
+        parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in names]) for lv in own}
         occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
-        grid = {res: np.array(list(map(str, d.cells)))} | parents
+        # the places credibility compares across resolutions: each cell where its centre lies, as the points were indexed
+        # (H3 children do not tile their parent, so about 6 % of cells have another parent)
+        grid = {res: np.array(names)} | {lv: np.array([h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in own if lv < res}
         out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
         extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
         union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)

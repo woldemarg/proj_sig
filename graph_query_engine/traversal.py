@@ -76,6 +76,7 @@ class TraversalResult:
     visited_count: int
     max_depth: int
     baselines: dict[str, Any] = field(default_factory=dict)
+    excluded: list[Retrieved] = field(default_factory=list)  # tampered patterns ranked within the budget: given no place in it
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -204,7 +205,9 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             best[node] = r
 
     ordered = sorted(best.values(), key=lambda r: (r.route != "seed", -r.score))
-    patterns = ordered[: len(seed_ids) + config.max_retrieved]
+    budget = len(seed_ids) + config.max_retrieved
+    tampered = {r.node_id for r in ordered if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch"}  # seeds never are
+    patterns = [r for r in ordered if r.node_id not in tampered][:budget]  # a tampered pattern takes no slot an intact one could
     used: dict[str, None] = {}
     nodes: dict[str, None] = {}
     for r in patterns:
@@ -223,6 +226,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         traversed_nodes=list(nodes),
         visited_count=len(final),
         max_depth=max((len(r.path) for r in patterns), default=0),
+        excluded=[r for r in ordered[:budget] if r.node_id in tampered],
     )
 
 
