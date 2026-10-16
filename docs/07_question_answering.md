@@ -140,7 +140,7 @@ Evidence(
         attractors=[{attractor, alignment, label}], transversal_only=True, located="",   # located: as on Retrieved
         scale="", folded_into="", also=[],   # the vertical zoom, below
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
-    attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, weight, type}], signature}],
+    attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, links {CO_OCCURS?, RELATED_TO?}, shared?}], signature, same_as?}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],
     datasets=[{dataset_id, filename, rows, batch_id}], provenance=[{key, ...}], notes=[...])
 ```
@@ -164,8 +164,8 @@ METRIC BASELINES (whole dataset):
 - return rate: median 0.0555, MAD 0.0101
 
 LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
-- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-2 (0.31), A-0 (0.19, shared members), A-0 (0.61)
-- A-0 "delivery days up and return rate up": 11 patterns over 11 distinct scopes; related: A-1 (0.19, shared members), A-2 (0.55), A-1 (0.61)
+- A-1 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-0 (1 shared member, 0.19; centroid 0.59), A-2 (centroid 0.34)
+- A-0 "delivery days up and return rate up": 11 patterns over 11 distinct scopes; related: A-1 (1 shared member, 0.19; centroid 0.59), A-2 (centroid 0.61)
 
 EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
 [P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)
