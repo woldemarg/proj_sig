@@ -281,6 +281,8 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert {"P-x", "P-y", "P-z"} <= members  # one region for datasets of resolution 8 and 7
     assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
+    assert shared in spatial.occupied["coarse"] and spatial.occupied["one"].isdisjoint(spatial.occupied["dot"])  # where each has cells
+    assert spatial.occupied["two"] <= {r for _, r, _ in spatial.in_region}  # only regions some pattern is in
 
 
 def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
@@ -343,7 +345,12 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     assert done[2]["dataset_id"] != load_dataset(path, engine.settings.miner, bins="").dataset_id  # not a plain upload
     assert not {"latitude", "longitude"} & set(done[2]["profile"]["numerics"])  # its point columns left out
     patterns = engine.graph().of_kind("Pattern")  # a mixed snapshot: every level carries the rule that gave it; one upload, one source
-    assert patterns and {(n["props"]["credibility"], n["props"]["credibility_basis"]["rule"]) for n in patterns} == {(6, "anchor")}
+    rule = {n["props"]["dataset_id"]: n["props"]["credibility_basis"]["rule"] for n in patterns}
+    assert {n["props"]["credibility"] for n in patterns} == {6} and rule == {
+        done[0]["dataset_id"]: "place",
+        done[1]["dataset_id"]: "place",
+        done[2]["dataset_id"]: "anchor",
+    }
     assert any("points" in w for w in done[2]["warnings"]) and any("left out of the table level" in w for w in done[2]["warnings"])
     with pytest.raises(IngestionError, match="pointz"):  # a name in neither the file nor the cells fails the geo levels
         load_dataset(path, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)

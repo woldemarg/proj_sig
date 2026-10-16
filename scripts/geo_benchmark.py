@@ -18,8 +18,11 @@ shift of one of its planted metrics that draw at least half their events from it
     S-parts     the large area as three files split by longitude, the split lines cutting region cells; the zone its
                 northern half, across both splits
     S-parts-v2  S-parts, then the middle part exported again (other events, the same area) with supersedes=<its first upload>
-    S-two-sources  three foci in source a; source b, over the same area, repeats focus 0 the same way and focus 1 with
-                load lowered, and has no focus 2 (every metric declared the same indicator in both)
+    S-two-sources  source a: two foci in the region cell and a third in the next region cell farthest from them; source b,
+                over the same area but for that cell, repeats focus 0 the same way and focus 1 with load lowered (every
+                metric declared the same indicator in both)
+    S-poison    source a has one focus; source b repeats it and adds a second, planted in b only, where a has its ordinary
+                events
     S-size      about 10⁴ fine cells in three datasets of ten foci each
 
 Metrics, per encoder (the hashing double; the bundled model when present):
@@ -33,7 +36,8 @@ Metrics, per encoder (the hashing double; the bundled model when present):
                  ins(ufficient)
     supersede    S-parts-v2: whether the pattern ids equal those of a workspace that got the new version at once, and how many
                  of the anchors the new version activates existed before it (kept ids), as yes|no kept/anchors
-    credibility  S-two-sources: the credibility of a's best pattern of each focus with a alone, then with b too (phase A)
+    credibility  S-two-sources, S-poison: the credibility of a's best pattern of each focus with a alone, then with b too,
+                 and of b's (a -> a / b)
     zone         whether the first of the ZONES for QUESTION is the planted region (scenarios that plant one)
     place        each focus's cells as the asked map zone (one file of several foci): with QUESTION, how often the first
                  seed is the focus's best pattern; with the next focus's signature question, how often the first seed
@@ -72,7 +76,7 @@ LIFT = 4.0  # load is N(10, 2) everywhere, +LIFT on the planted events
 CENTRE = (48.45, 35.3)  # lat, lon of the focus scenarios' region cell
 BROAD = (47.0, 33.0, 2.4, 3.4)  # lat0, lon0, dlat, dlon of S-levels and S-parts: about 270 cells at resolution 5
 SIZE_BOX = (48.0, 34.6, 0.8, 1.2)  # about 10⁴ cells at FINE
-SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-parts-v2", "S-two-sources", "S-size")
+SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-parts-v2", "S-two-sources", "S-poison", "S-size")
 QUESTION = "Where is load higher?"
 FOUND = 0.5  # share of a part's events its patterns must hold for the part to count as found
 SIGNATURES = ("wait", "cost", "size")  # focus i also raises SIGNATURES[i % 3]: its own phenomenon
@@ -202,13 +206,21 @@ def generate(name: str, seed: int) -> Scenario:
         centres = _spread(_fits(region, area), 3)
         return Scenario(name, [_foci_upload(rng, "s_regional.csv", centres, area, 8000)], {"region": region})
     if name == "S-two-sources":
-        centres = _spread(_fits(region, area), 3)
+        pair = _spread(_fits(region, area), 2)
+        far = max(h3.grid_ring(region, 1), key=lambda r: min(h3.grid_distance(h3.cell_to_center_child(r, FINE), c) for c in pair))
+        centres = [*pair, _fits(far, area)[0]]  # focus 2 in the next region cell farthest from the other two
         registry = ",".join(f"{m}_median:{m}" for m in ("load", *SIGNATURES))
         a = replace(_foci_upload(rng, "s_two_a.csv", centres, area, 8000), source="a", indicators=registry)
-        b = replace(
-            _foci_upload(np.random.default_rng(seed + 1), "s_two_b.csv", centres[:2], area, 8000, signs=(1, -1)), source="b", indicators=registry
-        )
-        return Scenario(name, [a, b], {"expected": "6,6,6 -> 1,5,1 (phase A is place-blind: focus 2 confirmed by focus 0 of b)"})
+        b = _foci_upload(np.random.default_rng(seed + 1), "s_two_b.csv", pair, area, 8000, signs=(1, -1))
+        keep = np.array([h3.latlng_to_cell(x, y, REGION) != far for x, y in zip(b.frame["lat"], b.frame["lon"], strict=True)])
+        b = replace(b, frame=b.frame[keep].reset_index(drop=True), parts={k: v[keep] for k, v in b.parts.items()}, source="b", indicators=registry)
+        return Scenario(name, [a, b], {"expected": "6,6,6 -> 1,5,6 / 1,5"})
+    if name == "S-poison":
+        centres = _spread(_fits(region, area), 2)
+        registry = ",".join(f"{m}_median:{m}" for m in ("load", *SIGNATURES))
+        a = replace(_foci_upload(rng, "s_poison_a.csv", centres[:1], area, 8000), source="a", indicators=registry)
+        b = replace(_foci_upload(np.random.default_rng(seed + 1), "s_poison_b.csv", centres, area, 8000), source="b", indicators=registry)
+        return Scenario(name, [a, b], {"expected": "6 -> 1 / 1,2 (b's focus 1 is planted in b only, where a has events)"})
     if name == "S-control":
         others = h3.grid_ring(region, 1)[::2]  # three region cells, no two adjacent
         centres = [_fits(r, area)[0] for r in others]
@@ -404,10 +416,18 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
                 }
             )
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
-    result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
+    result = {
+        "scenario": scenario.name,
+        "truth": scenario.truth,
+        "files": files,
+        "recall": _recall(engine, foci, k) if len(foci) > 1 else None,
+        "credibility": None,
+    }
     result["place"] = _place(engine, scenario.uploads[0], files[0]["found"]) if len(foci) > 1 else None
     result["supersede"] = _supersede(engine, scenario, root, before, new) if new else None
-    result["credibility"] = f"{alone} -> {_credibility(engine, [f['pattern'] for f in files[0]['found'].values()])}" if alone is not None else None
+    if alone is not None:
+        a, b = (_credibility(engine, [f["pattern"] for f in file["found"].values()]) for file in (files[0], files[-1]))
+        result["credibility"] = f"{alone} -> {a} / {b}"
     graph = _graph(engine, [p for p in best if p in engine.committed().graph.insights])  # a superseded part's are gone
     region = scenario.truth.get("region")
     return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
