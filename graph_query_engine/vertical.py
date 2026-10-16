@@ -54,9 +54,10 @@ def _regions(graph: DualGraph, pid: str) -> dict[str, float]:
 
 
 def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
-    """The regions coarser than each pattern that it lies in, with their ancestors that hold a pattern: what the console
-    draws (a region at a pattern's own level is one of its cells)."""
-    found = {r for pid in pattern_ids for r in _regions(graph, pid) if graph.nodes[r]["props"]["resolution"] < (resolution(graph, pid) or 0)}
+    """The regions coarser than each pattern's finest region level that it lies in, with their ancestors that hold a
+    pattern: what the console draws (a region at that level, the pattern's own or the next coarser, is one of its cells or
+    a handful of them, hundreds per dataset)."""
+    found = {r for pid in pattern_ids for r in _regions(graph, pid).keys() - _finest(graph, pid)}
     frontier = set(found)
     while frontier:
         frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
@@ -165,6 +166,13 @@ def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
     planned = graph.nodes[dataset_node_id(graph.insight(pid).dataset_id)]["props"].get("upload_levels", [])
     coarser = [lv for lv in planned if lv.isdigit() and int(lv) < resolution(graph, pid)]  # mined, even if it found nothing
     return "not_found_coarser" if coarser else "insufficient"
+
+
+def scale_label(graph: DualGraph, pid: str) -> str:
+    """The ``scale`` that ``scale_chain`` gives one pattern, from its first step up alone (the map labels every pattern)."""
+    if resolution(graph, pid) is None or not _regions(graph, pid):
+        return ""
+    return _scale(graph, pid, _step(graph, pid, "up", {pid}))
 
 
 def picture(graph: DualGraph, region: str) -> dict[str, int]:
