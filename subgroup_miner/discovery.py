@@ -443,6 +443,7 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
 
 NOT_RECOMPUTED = (
     "the metrics shifted (mining is not re-run)",
+    "phenomenon_type (it reads the bootstrap)",
     "stability",
     "sd_score",
     "sd_raw_score",
@@ -463,9 +464,10 @@ def cohort_rows(data: pd.DataFrame, conditions: list[tuple[str, str]]) -> np.nda
 
 
 def selector_conditions(expression: str) -> list[tuple[str, str]] | None:
-    """``a=='x' AND b=='y'`` (an EDA selector) as conditions; None when it does not read so."""
-    found = [re.fullmatch(r"(.+?)=='(.*)'", part) for part in expression.split(" AND ")]
-    return [m.groups() for m in found] if all(found) else None
+    """``a=='x' AND b=='y'`` (an EDA selector) as conditions, a value holding `` AND `` included; None when the
+    conditions found do not make up the whole expression."""
+    found = list(re.finditer(r"(.+?)=='(.*?)'(?: AND |$)", expression))
+    return [m.groups() for m in found] if found and "".join(m.group(0) for m in found) == expression else None
 
 
 def _global_stats(column: pd.Series) -> tuple[float, float]:

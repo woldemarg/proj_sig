@@ -417,6 +417,9 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     rows = engine.ws.patterns()
     assert {engine.verify_pattern(r["id"])["status"] for r in rows} == {"reproduced"}  # covariance insights included
     tested = [r for r in rows if r["p_value"] is not None and len(r["shifts"]) > 1]
+    relabelled = next(r for r in rows if r["phenomenon_type"] == "covariance")
+    relabelled["target"] = next(m for m in relabelled["covariance"]["pair"] if m != relabelled["target"])  # the weaker of its pair
+    relabelled["record_digest"] = record_digest(relabelled)
     forged, family, dropped, selector, target, shift = tested[:6]
     forged["p_value"], forged["p_adjusted"] = 0.0123, 0.0123 * forged["provenance"]["multiple_testing_family"]  # a demo p may be 0.0
     family["provenance"]["multiple_testing_family"] //= 100
@@ -442,8 +445,9 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
         target["id"]: {"target"},
     }
     assert engine.verify_pattern(shift["id"])["status"] == "reproduced" and "the metrics shifted (mining is not re-run)" in checked["not_checked"]
+    assert "target" in {d["field"] for d in engine.verify_pattern(relabelled["id"])["diff"]}  # selection picks the stronger metric
     (engine.ws.datasets_dir / ds / "covers.npz").unlink()
-    assert engine.verify_pattern(next(r["id"] for r in rows if r not in tested[:6]))["status"] == "reproduced"
+    assert engine.verify_pattern(next(r["id"] for r in rows if r not in [*tested[:6], relabelled]))["status"] == "reproduced"
     other = next(r["id"] for r in rows if r["id"] != forged["id"])
     source = Path(engine.ws.ready_batch_for(ds)["source_path"])
     source.write_bytes(source.read_bytes() + b"\n")  # one byte more

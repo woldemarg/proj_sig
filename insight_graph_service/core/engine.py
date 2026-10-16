@@ -78,8 +78,8 @@ EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates"
 def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarray | None, family: int) -> list[dict[str, Any]]:
     """What of the journal record the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
     journal, recomputed}``: its id and selector against its conditions, the rows against ``covers.npz`` and the record's
-    row hash, its target among its shifts, a missing p only on a covariance insight, its test family against its
-    dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
+    row hash, its target among its shifts (on a covariance insight, the stronger of its pair), a missing p only on a
+    covariance insight, its test family against its dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
     rows = fresh["rows"]
     out = []
 
@@ -105,6 +105,9 @@ def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarra
     if primary is None:
         differs("target", record["target"], "not among its shifts")
         primary = fresh["shifts"][0]
+    pair = [s for s in fresh["shifts"] if s["metric"] in (record.get("covariance") or {}).get("pair", [])]
+    if covariance and pair and record["target"] != (chosen := min(pair, key=lambda s: (-abs(s["robust_z"]), s["metric"]))["metric"]):
+        differs("target", record["target"], f"{chosen} (the stronger metric of its pair)")
     pairs = [
         ("support", record["support"], fresh["support"]),
         ("support_fraction", record["support_fraction"], fresh["support_fraction"]),
