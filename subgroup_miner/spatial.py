@@ -660,6 +660,26 @@ def cell_boundary(cell: str) -> list[list[float]]:
     return ring + ring[:1]
 
 
+def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any]]:
+    """GeoJSON features of regions (``R:<res>:<h3>``), each with the rows of ``cells`` (one dataset's cells) inside it."""
+    parents: dict[int, np.ndarray] = {}
+    out = []
+    for rid in regions:
+        _, res, cell = rid.split(":")
+        lv = int(res)
+        if lv not in parents:
+            parents[lv] = np.array([c if h3.get_resolution(c) == lv else h3.cell_to_parent(c, lv) for c in map(str, cells)])
+        rows = np.flatnonzero(parents[lv] == cell).tolist()
+        out.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [cell_boundary(cell)]},
+                "properties": {"id": rid, "resolution": lv, "rows": rows},
+            }
+        )
+    return out
+
+
 def effective_n_factor(rho: float) -> float:
     """n_eff / n for a sample with spatial autocorrelation ``rho`` (Clifford, Richardson & Hémon 1989, one-parameter
     approximation n_eff = n (1 - rho) / (1 + rho)); no correction for rho <= 0. ``rho`` is the subgroup's own

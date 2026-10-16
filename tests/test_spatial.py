@@ -297,6 +297,11 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert region in spatial.occupied["coarse"][5] and spatial.occupied["one"][8].isdisjoint(spatial.occupied["dot"][8])
     assert spatial.places["P-z"] == {7: frozenset(coarse), **{lv: frozenset(h3.cell_to_parent(k, lv) for k in coarse) for lv in (5, 3, 1)}}
     assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
+    from subgroup_miner.spatial import region_features
+
+    drawn = region_features(np.array(near + far), [shared, f"R:8:{x}"])  # the console's region outlines, with the cell rows inside
+    assert [f["properties"]["rows"] for f in drawn] == [list(range(len(near + far))), [near.index(x)]]
+    assert drawn[0]["geometry"]["coordinates"][0][0] == drawn[0]["geometry"]["coordinates"][0][-1]
 
 
 def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):

@@ -443,7 +443,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
                         host.scale = "regional"
                     if step.pattern_id not in hosts and other.role != "seed":
                         other.folded_into = other.folded_into or host.key
-        chains.append(_chain_dict(chain, graph))
+        chains.append(chain_dict(chain, graph))
     return chains
 
 
@@ -465,7 +465,8 @@ def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, conf
     return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
-def _chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
+def chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
+    """A scale chain as the view carries it: each region above it with its ``picture``."""
     return asdict(chain) | {"regions": [{"id": r, **picture(graph, r)} for r in chain.regions]}
 
 
