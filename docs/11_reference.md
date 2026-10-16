@@ -43,6 +43,8 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | indicator, unit | *What the metrics measure* | — | what a metric measures and in which unit, declared per dataset (`indicators`), so that metrics of two datasets compare by meaning, not by column name ([2.1](02_discovery.md#21-ingestion)) |
 | source, reliability | *Source*, *Source reliability* | — | where a dataset comes from and how far it is trusted: the Admiralty source-reliability code `A` (completely reliable) … `E` (unreliable), `F` (cannot be judged, the default); metadata of the dataset, not of its findings ([2.1](02_discovery.md#21-ingestion)) |
 | credibility (`credibility_basis`) | — | — | how far other independent sources confirm a finding: 1 confirmed, 2 another source has the metric (for a geo finding, also events at its place), 5 contradicted, 6 cannot be judged; computed from the graph, never from the statistics ([6.2](06_graph_and_storage.md#62-the-graph-schema)) |
+| integrity | *integrity* badge | — | whether a record still matches its digest: a finding's statistics (`record_digest`) or what the graph reads of its dataset (`metadata_digest`); `ok`, `mismatch` (excluded, or its declarations ignored), `unverified` (written before digests, or with its digest removed) ([13.4](13_trust.md#134-integrity)) |
+| trust line (`trust:`) | trust badges | — | an evidence item's source reliability, credibility and integrity, kept apart, once the graph has a declared source, a reliability other than `F`, a dataset whose metadata failed its check, or two uploads ([7.4](07_question_answering.md#74-the-evidence-object), [13](13_trust.md)) |
 | workspace | — | — | the folder that holds one knowledge base (`WORKSPACE_DIR`) ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 | degraded start | — | — | a start on a workspace the engine cannot serve: writes and questions refused with `workspace_degraded` until a reset ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)) |
 | bounded context | — | — | a package that owns one part of the model and imports only what [12.2](12_architecture.md#122-dependency-direction) allows ([12.1](12_architecture.md#121-bounded-contexts)) |
@@ -65,6 +67,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | attractor id | integer `k` from lac; graph node `A-k` | `A-1` | [5.2](05_latent_anchors.md#52-one-batch-through-the-ontology) |
 | schema node ids | `D:<dataset>:<column>`, `M:<dataset>:<column>`, `DS:<dataset>`, `B:<batch>` | `M:ds-6e53eb7fb0f9:discount` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | edge id | `<TYPE>:<source>-><target>` | `ACTIVATES:P-bc4657a04746->A-1` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
+| RDF IRI | `urn:sig:<node id>`; a geometry `urn:sig:<node id>:geometry`; the vocabulary `urn:sig:vocab#` | `urn:sig:P-bc4657a04746` | [6.9](06_graph_and_storage.md#69-rdf-export) |
 | journal row id | position of the vector in `journal/embeddings.mmap` | `1` | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
 | representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` | [4.6](04_representation.md#46-representation-identity-and-versions) |
 | citation key | `P` + 1-based rank in the evidence | `[P1]`, grouped `[P4, P7]` | [7.4](07_question_answering.md#74-the-evidence-object) |
@@ -141,6 +144,7 @@ Every quantity the system computes, where it is explained and which code compute
 | path score, node rank, scope overlap | [7.3](07_question_answering.md#73-transversal-traversal) | `graph_query_engine/traversal.py::traverse` |
 | structural closure, naive text top-k | [7.6](07_question_answering.md#76-baselines) | `graph_query_engine/search.py::compute_baselines`, `traversal.py`: `structural_closure`, `naive_nearest` |
 | citation check, provenance footer | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) | `evidence_narrator_service/narration.py`: `check_citations`, `answer` |
+| credibility (phases A and B), record and metadata digests, recomputation from the upload | [6.2](06_graph_and_storage.md#62-the-graph-schema), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees), [13](13_trust.md) | `insight_graph_service/core/snapshot.py`: `credibility`, `compute_integrity`, `metadata_digest`; `insight_contracts/insight.py::record_digest`; `subgroup_miner/discovery.py::recompute_statistics`, `insight_graph_service/core/engine.py::verify_diff` |
 | sphere projection | [8.4](08_interface.md#84-the-latent-sphere) | `insight_graph_service/server/views.py::project_to_sphere` |
 | recall@k, precision@k, MRR | [10.3](10_verification.md#103-hypothesis-benchmark) | `scripts/experiment.py`: `run_experiment`, `_score` |
 

@@ -680,6 +680,17 @@ def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any
     return out
 
 
+def cells_to_wkt(cells: list[str]) -> str:
+    """WKT ``MULTIPOLYGON`` (longitude latitude, as GeoSPARQL's default CRS84 reads it) of the area the cells cover."""
+    if not cells:
+        return "MULTIPOLYGON EMPTY"
+    # ponytail: no antimeridian split; an area across ±180° reads as a band around the globe, split it when data goes there
+    shape = h3.cells_to_h3shape(cells).__geo_interface__
+    polygons = [shape["coordinates"]] if shape["type"] == "Polygon" else shape["coordinates"]
+    rings = ["(" + ", ".join("(" + ", ".join(f"{x:.6f} {y:.6f}" for x, y in r) + ")" for r in p) + ")" for p in polygons]
+    return "MULTIPOLYGON (" + ", ".join(rings) + ")"
+
+
 def effective_n_factor(rho: float) -> float:
     """n_eff / n for a sample with spatial autocorrelation ``rho`` (Clifford, Richardson & Hémon 1989, one-parameter
     approximation n_eff = n (1 - rho) / (1 + rho)); no correction for rho <= 0. ``rho`` is the subgroup's own

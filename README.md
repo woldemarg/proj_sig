@@ -6,7 +6,7 @@ The hypothesis it makes testable:
 
 > Structurally different subgroups that exhibit related statistical behaviour can be connected through latent attractor concepts. This enables *transversal* retrieval that purely structural graph traversal or naive nearest-neighbour text retrieval does not reliably achieve.
 
-**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
+**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. A thirteenth covers [trust and integrity](docs/13_trust.md): the source, credibility and statistics of every finding, and the checks on the records. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -144,6 +144,7 @@ curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is mar
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
 curl -X POST -H "Content-Type: application/json" -d "{\"geometry\": {\"center\": [-122.27, 37.8], \"radius_m\": 20000}}" http://127.0.0.1:8765/api/search   # a map zone as the question
 curl -X POST http://127.0.0.1:8765/api/patterns/<pattern id>/verify               # an insight recomputed from its stored upload
+curl -o sig.ttl http://127.0.0.1:8765/api/export/geosparql.ttl                     # the graph as GeoSPARQL Turtle
 curl -X DELETE http://127.0.0.1:8765/api/datasets/<dataset id>
 curl -X POST http://127.0.0.1:8765/api/reset                                       # delete the workspace (and clear the mirror)
 ```
@@ -253,7 +254,7 @@ sig/
   compose.yaml, constraints.txt, .dockerignore   the service suite in start order; the images' pinned versions
   requirements-dev.txt        host development: every service's runtime + the test tools
   tests/                      contract / integration / E2E / UI tests (doubles.py: the deterministic test embedder)
-  docs/                       eleven chapters in pipeline order and the architecture chapter; init_concepts/ (the theory)
+  docs/                       eleven chapters in pipeline order, the architecture and the trust chapters; init_concepts/ (the theory)
   scripts/                    check.py (the gate), compose_check.py (the Docker check), dev.py (host composite),
                               multilingual_benchmark.py, eval_answers.py, experiment.py (measurements), scratch.py (their helpers)
   models/, data/              local, git-ignored: the embedding model; housing.csv

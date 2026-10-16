@@ -39,8 +39,8 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
 | `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js`, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
 | `compose.yaml`, `.dockerignore`, `constraints.txt` | the service suite in start order (`docs/12_architecture.md` §12.5); the exact package versions every image installs with |
-| `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder); markers `model`, `browser` |
-| `docs/` | the specification: eleven chapters read in pipeline order and the architecture chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
+| `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
+| `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
 | `scripts/check.py` | the quality gate (Rule 0) |
 | `scripts/compose_check.py` | the Docker check: builds and starts the suite on its own volumes and ports, runs the workflow through the console (`--tests`: the gate inside the image; `--fresh`: clean room) |
@@ -143,6 +143,7 @@ Code surface → doc owner:
 | `sig_web_console/`, `insight_graph_service/server/` | `08_interface.md` |
 | `core/engine.py`, `core/settings.py`, `core/model_store.py` | `09_operations.md` (+ `11_reference.md` §11.3 for fields) |
 | `core/demo.py`, `scripts/`, `tests/` | `10_verification.md` |
+| the trust model as a whole: the three axes, the integrity checks, the poisoning audit (the rules themselves stay in 06 and 07) | `13_trust.md` |
 
 ## 7) Data, secrets and the user's state
 

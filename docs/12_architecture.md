@@ -18,7 +18,7 @@
 >
 > Compose starts them in dependency order, and a test enforces every allowed import.
 
-**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md)
+**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md) · **Next** [13. Trust and integrity](13_trust.md)
 
 ---
 
@@ -64,7 +64,7 @@ The libraries are folders, not pip packages. Another project copies a folder, or
 
 | Service | Routes |
 |---|---|
-| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `POST /api/demo/geo`, `GET /api/graph`, `GET /api/nodes/{id}`, `POST /api/patterns/{id}/verify` (an insight recomputed from its stored upload), `GET /api/sphere` (projected points and edges, JSON), `GET /api/geo`, `GET /api/geo/{dataset}/cells|overlay|patterns/{pattern}` (the map's cells, the graph's regions, trust and scale over them, an insight's points), `PATCH /api/datasets/{id}` (source, reliability, indicators, supersedes), `DELETE /api/datasets/{id}`, `DELETE /api/uploads/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question, optionally a map zone) |
+| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `POST /api/demo/geo`, `GET /api/graph`, `GET /api/nodes/{id}`, `POST /api/patterns/{id}/verify` (an insight recomputed from its stored upload), `GET /api/sphere` (projected points and edges, JSON), `GET /api/geo`, `GET /api/geo/{dataset}/cells|overlay|patterns/{pattern}` (the map's cells, the graph's regions, trust and scale over them, an insight's points), `PATCH /api/datasets/{id}` (source, reliability, indicators, supersedes), `DELETE /api/datasets/{id}`, `DELETE /api/uploads/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question, optionally a map zone), `GET /api/export/geosparql.ttl` (the graph as GeoSPARQL Turtle) |
 | narrator (`python -m evidence_narrator_service`) | `POST /api/chat/query` (`{question, use_llm}` and an optional map zone → the answer), `GET /api/chat/health` (always 200: the LLM and the graph service) |
 | broker (`python -m llm_model_broker`) | `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` |
 
