@@ -29,6 +29,7 @@ from insight_contracts import (
     batch_node_id,
     dataset_node_id,
     dimension_node_id,
+    metadata_digest,
     metric_node_id,
     record_digest,
 )
@@ -56,8 +57,11 @@ def attractor_signature(members: list[tuple[dict[str, Any], float]]) -> list[tup
     return sorted(((k, v / total) for k, v in agg.items()), key=lambda kv: -abs(kv[1]))
 
 
-def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], settings: Settings) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
-    """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them."""
+def _schema_plane(
+    batches: dict[str, dict[str, Any]], insights: list[Insight], settings: Settings, integrity: dict[str, str]
+) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
+    """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them; ``integrity``: batch id ->
+    its metadata's check."""
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
     scope_attributes: dict[str, set[str]] = defaultdict(set)  # closed intents may use non-selected columns
@@ -83,6 +87,7 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                 "columns": profile.get("columns"),
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
+                "integrity": integrity[bid],
                 **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
@@ -412,6 +417,22 @@ def compute_integrity(record: dict[str, Any]) -> str:
     return "ok" if record["record_digest"] == record_digest(record) else "mismatch"
 
 
+def compute_metadata_integrity(batch: dict[str, Any]) -> str:
+    """``ok`` / ``mismatch`` / ``unverified`` for a batch record's ``metadata_digest``, as ``compute_integrity`` for a pattern."""
+    if "metadata_digest" not in batch:
+        return "unverified"
+    return "ok" if batch["metadata_digest"] == metadata_digest(batch) else "mismatch"
+
+
+def _distrust(batch: dict[str, Any]) -> dict[str, Any]:
+    """A batch record whose metadata failed its check, without what it declares: source, rating, registry, glossary."""
+    out = {k: v for k, v in batch.items() if k not in ("source", "reliability", "indicators")}
+    geo = out.get("profile", {}).get("geo", {})
+    if "glossary" in geo:
+        out["profile"] = {**out["profile"], "geo": {k: v for k, v in geo.items() if k != "glossary"}}
+    return out
+
+
 def build_snapshot(
     *,
     records: list[dict[str, Any]],
@@ -434,7 +455,9 @@ def build_snapshot(
     nodes = {
         ins.id: GraphNode(ins.id, "Pattern", headline(ins), {**by_pid[ins.id], "integrity": compute_integrity(by_pid[ins.id])}) for ins in insights
     }
-    schema_nodes, edges = _schema_plane(batches, insights, settings)
+    integrity = {bid: compute_metadata_integrity(b) for bid, b in batches.items() if b.get("status") == "READY"}
+    batches = {bid: _distrust(b) if integrity.get(bid) == "mismatch" else b for bid, b in batches.items()}  # declares nothing
+    schema_nodes, edges = _schema_plane(batches, insights, settings, integrity)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)
     spatial = spatial or SpatialStructure()

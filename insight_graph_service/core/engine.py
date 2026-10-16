@@ -37,7 +37,7 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from graph_query_engine.vertical import resolution as pattern_resolution
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight, metadata_digest
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
@@ -536,6 +536,7 @@ class Engine:
                         ontology.save()
                         self.ws.record_representation(spec)
                         self.ws.commit_batch_seq(seq)
+                        record["metadata_digest"] = metadata_digest(record)  # what the graph reads of the dataset, signed
                         snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
                         if state.catalog is None:
                             record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
@@ -764,6 +765,7 @@ class Engine:
                 superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
                 if replaced:
                     ontology.save()
+                record["metadata_digest"] = metadata_digest(record)  # a PATCH signs the record again
                 snapshot, state = self._derive(ontology, pending=record)
                 self.ws.save_batch(record)
             return {

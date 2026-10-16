@@ -378,7 +378,8 @@ def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
     reliability, or two uploads (the levels of one upload are one); otherwise the evidence stays as it was without sources."""
     datasets = [d["props"] for d in graph.of_kind("Dataset")]
     uploads = {d.get("upload_id") or d["dataset_id"] for d in datasets}
-    if not (len(uploads) >= 2 or any(d.get("source") or d.get("reliability", "F") != "F" for d in datasets)):
+    declared = any(d.get("source") or d.get("reliability", "F") != "F" or d.get("integrity") == "mismatch" for d in datasets)
+    if not (len(uploads) >= 2 or declared):
         return
     keys = {it.pattern_id: it.key for it in items}
     for it in items:
@@ -387,6 +388,8 @@ def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
         parts = [
             f"source {it.reliability} ({RELIABILITY.get(it.reliability, 'unrecognised code')})" + ("" if props.get("source") else ", undeclared")
         ]
+        if props.get("integrity") == "mismatch":
+            parts = ["source unknown (its dataset's metadata failed the integrity check)"]
         if it.credibility is not None:
             parts.append(_credibility_text(it.credibility, it.credibility_basis, keys))
         parts.append(f"integrity {graph.nodes[it.pattern_id]['props'].get('integrity', 'unverified')}")
@@ -601,6 +604,12 @@ def build_evidence(
             " not proof the effect is local."
         )
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
+    notes += [
+        f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability and indicators are ignored"
+        " and its baselines are unchecked."
+        for d in datasets
+        if graph.nodes.get(dataset_node_id(d["dataset_id"]), {"props": {}})["props"].get("integrity") == "mismatch"
+    ]
     if not items and not forged:
         notes.append("No pattern in the graph matched the question.")
     return Evidence(

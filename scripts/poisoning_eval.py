@@ -9,8 +9,8 @@ Deterministic (no LLM; ``check`` and ``tamper`` are what tests/test_e2e.py runs)
                 the trust: line they carry in the evidence of a question about the spot's map cells
     integrity   S-poison: the spot's p-value edited in the journal; after the rebuild the pattern reads mismatch and
                 leaves the evidence with a NOTE
-    metadata    S-poison: b's reliability edited in its batch record; after the rebuild the trust line says A and
-                nothing flags it (dataset metadata is outside the record digest: an open gap)
+    metadata    S-poison: b's reliability edited in its batch record; after the rebuild b's dataset reads mismatch, its
+                source and rating are ignored, and the trust line and a NOTE say so
 With --llm (paid: 2 scenarios x 10 questions x 3 variants = 60 calls to LLM_BASE_URL, configured in .env): five directed
 and five open questions about the spot, each asked of one evidence in three variants (``VARIANTS``): with the trust lines
 and rule 11, without either (the evidence before #8), and rule 11 alone. An answer mentions a flagged finding when a
@@ -109,7 +109,11 @@ def tamper(engine: Engine, case: dict[str, Any], source_file: str) -> dict[str, 
     engine.ws.save_batch({**batch, "reliability": "A"})
     engine = _reopen(engine)
     payload = engine.evidence(DIRECTED[0], cells=case["spot"])
-    metadata = {"trust": _trust_of(payload, pid), "integrity": engine.graph().nodes[pid]["props"]["integrity"]}
+    metadata = {
+        "trust": _trust_of(payload, pid),
+        "dataset": engine.graph().nodes[f"DS:{batch['dataset_id']}"]["props"]["integrity"],
+        "note": any(batch["dataset_id"] in line and "metadata no longer matches" in line for line in payload.evidence_prompt.splitlines()),
+    }
     rows = engine.ws.patterns()
     for r in rows:
         if r["id"] == pid:
