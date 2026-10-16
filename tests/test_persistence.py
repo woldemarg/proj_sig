@@ -767,8 +767,8 @@ def test_a_new_version_leaves_an_old_one_still_queued(tmp_path):
 
 
 def test_credibility_by_place_phase_b():
-    """Phase B (docs/06_graph_and_storage.md §6.2), for a pattern with a place, compared at the finest region level both
-    have: another declared source confirms (1) where one place lies mostly inside the other and contradicts (5, in any
+    """Phase B (docs/06_graph_and_storage.md §6.2), for a pattern with a place, its cells compared at the finest resolution
+    both datasets have: another declared source confirms (1) where one place lies mostly inside the other and contradicts (5, in any
     subgroup) only over a comparable place; elsewhere it confirms nothing, and the place is 2 when another dataset holds
     events over at least GEO_REGION_MIN_SHARE of it, else 6. The levels of one upload are one source; no registry is
     nominal 2; units, when both give one, must agree."""
@@ -793,8 +793,14 @@ def test_credibility_by_place_phase_b():
     batches |= {"b-n": {"dataset_id": "n", "status": "READY", "source": "n"}, "b-usd": batch("usd", "usd", "USD")}
     here = [f"R:7:h{i}" for i in range(6)] + ["R:5:H"]
 
+    def at(ids):  # "R:<res>:<cell>" ids -> {res: cells}
+        out = {}
+        for i in ids:
+            out.setdefault(int(i.split(":")[1]), set()).add(i)
+        return {res: frozenset(cells) for res, cells in out.items()}
+
     def levels(insights, places, occupied, edges=None):
-        spatial = SpatialStructure(in_region=[(p, r, 1.0) for p, rs in places.items() for r in rs], occupied=occupied)
+        spatial = SpatialStructure(places={p: at(ids) for p, ids in places.items()}, occupied={d: at(ids) for d, ids in occupied.items()})
         out = credibility(insights, batches, edges or [member(i.id) for i in insights], set(), PhenomenonThresholds(), spatial)
         return {pid: t["credibility"] for pid, t in out.items()}, out
 
@@ -807,6 +813,9 @@ def test_credibility_by_place_phase_b():
     assert levels([a, b], {"A": here, "B": ["R:7:far", "R:5:H"]}, {"b": {"R:7:far"}})[0]["A"] == 6  # phase A would say 1
     assert levels([a, b], {"A": here, "B": ["R:7:far", "R:5:H"]}, {"b": {"R:7:h0"}})[0]["A"] == 6  # 1 of 6 cells: not covered
     assert levels([a, b], {"A": here, "B": ["R:5:H"]}, {"b": {"R:5:H"}})[0]["A"] == 1  # b is coarser: compared at level 5
+    spot = [f"R:8:f{i}" for i in range(7)] + ["R:7:X"]
+    sparse = ["R:8:f0", *(f"R:8:s{i}" for i in range(48)), "R:7:X", *(f"R:7:y{i}" for i in range(48))]  # one cell of the spot
+    assert levels([a, b], {"A": spot, "B": sparse}, {"b": set(sparse)})[0]["A"] == 6  # one shared region at 7 is not the same place
     lv, _ = levels([a, ins("C", "c", +1.4, scope=(("mode", "y"),))], {"A": here, "C": here}, {"c": set(here)}, [member("A"), member("C", "A-2")])
     assert lv == {"A": 5, "C": 5}  # the same place the other way, another subgroup: a contradiction
     wide = here + [f"R:7:w{i}" for i in range(30)]
@@ -838,6 +847,7 @@ def test_credibility_from_independent_sources_phase_a():
 
     from insight_contracts import PhenomenonThresholds, Shift
     from insight_graph_service.core.snapshot import credibility
+    from subgroup_miner.spatial import SpatialStructure
 
     def ins(pid, ds, z, scope=(("zone", "north"),), metric="margin"):
         return toy_insight(list(scope), [Shift(metric, z, 10.0, 12.0, 1.0)], id=pid, dataset_id=ds, batch_id=f"b-{ds}")
@@ -858,7 +868,7 @@ def test_credibility_from_independent_sources_phase_a():
     thresholds = PhenomenonThresholds()
 
     def levels(insights, edges, tampered=frozenset()):
-        out = credibility(insights, batches, edges, set(tampered), thresholds)
+        out = credibility(insights, batches, edges, set(tampered), thresholds, SpatialStructure())
         return {pid: t["credibility"] for pid, t in out.items()}, out
 
     a, b = ins("A", "a", -1.5), ins("B", "b", -1.2, scope=(("zone", "south"),))

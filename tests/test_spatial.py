@@ -294,8 +294,9 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert {"P-x", "P-y", "P-z"} <= members  # one region for datasets of resolution 8 and 7
     assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
-    assert shared in spatial.occupied["coarse"] and spatial.occupied["one"].isdisjoint(spatial.occupied["dot"])  # where each has cells
-    assert spatial.occupied["two"] <= {r for _, r, _ in spatial.in_region}  # only regions some pattern is in
+    assert region in spatial.occupied["coarse"][5] and spatial.occupied["one"][8].isdisjoint(spatial.occupied["dot"][8])
+    assert spatial.places["P-z"] == {7: frozenset(coarse), **{lv: frozenset(h3.cell_to_parent(k, lv) for k in coarse) for lv in (5, 3, 1)}}
+    assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
 
 
 def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):

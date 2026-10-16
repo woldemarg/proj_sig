@@ -236,17 +236,10 @@ def co_occurrence_edges(activates: list[GraphEdge]) -> list[GraphEdge]:
     ]
 
 
-def _by_level(regions: set[str]) -> dict[int, set[str]]:
-    out: dict[int, set[str]] = defaultdict(set)
-    for rid in regions:
-        out[int(rid.split(":")[1])].add(rid)
-    return out
-
-
-def _common(a: dict[int, set[str]], b: dict[int, set[str]]) -> tuple[set[str], set[str]]:
-    """Both places' regions at their finest common level (nothing without one)."""
+def _common(a: dict[int, frozenset[str]], b: dict[int, frozenset[str]]) -> tuple[frozenset[str], frozenset[str]]:
+    """Both places' cells at the finest resolution both have (nothing without one)."""
     level = max(a.keys() & b.keys(), default=None)
-    return (a[level], b[level]) if level is not None else (set(), set())
+    return (a[level], b[level]) if level is not None else (frozenset(), frozenset())
 
 
 def credibility(
@@ -255,7 +248,7 @@ def credibility(
     activates: list[GraphEdge],
     tampered: set[str],
     thresholds: PhenomenonThresholds,
-    spatial: SpatialStructure | None = None,
+    spatial: SpatialStructure,
 ) -> dict[str, dict[str, Any]]:
     """Each pattern's ``credibility`` and ``credibility_basis`` from independent confirmation (docs/06_graph_and_storage.md
     §6.2). Another source is another declared ``source`` (compared casefolded) outside the pattern's own upload; metrics
@@ -263,12 +256,11 @@ def credibility(
     place): 5: a pattern of another declared source shifts a metric of the same indicator materially the opposite way in
     the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor and shifts a metric of the
     same indicator the same way; 2: another dataset (declared or not, not of the same upload) shifts a metric of the same
-    name; 6: none. Phase B (``rule: place``, a geo pattern), its IN_REGION regions against the other's at the finest level
-    both have: only a pattern whose place overlaps by ``GEO_REGION_MIN_SHARE`` of the smaller counts; 5 needs that share of
+    name; 6: none. Phase B (``rule: place``, a geo pattern), its cells against the other's at the finest resolution both
+    datasets have (``spatial.places``): only a pattern whose place overlaps by ``GEO_REGION_MIN_SHARE`` of the smaller counts; 5 needs that share of
     the larger (a comparable place, in any subgroup), and 2 also comes from another dataset's events over that share of
     the place. 5 wins over 1. A version and the one it ``supersedes`` are one source.
     Never read: p, stability, weight; a tampered pattern confirms nothing."""
-    spatial = spatial or SpatialStructure()
     batch = {ins.id: batches.get(ins.batch_id, {}) for ins in insights}
     anchors: dict[str, set[str]] = defaultdict(set)
     for e in activates:
@@ -287,11 +279,7 @@ def credibility(
     }
     conditions = {pid: frozenset(c.expr for c in ins.conditions) for pid, ins in of.items()}
     own = {pid: {ins.dataset_id, batch[pid].get("upload_id")} - {None} for pid, ins in of.items()}  # what a supersedes names
-    place: dict[str, set[str]] = defaultdict(set)
-    for pid, rid, _ in spatial.in_region:
-        place[pid].add(rid)
-    place_at = {pid: _by_level(rids) for pid, rids in place.items()}
-    occupied = {ds: _by_level(rids) for ds, rids in spatial.occupied.items()}
+    place_at, occupied = spatial.places, spatial.occupied
     dataset_batch = {b.get("dataset_id"): b for b in batches.values() if b.get("status") == "READY"}
     by_name, by_indicator = defaultdict(set), defaultdict(set)
     for pid in of:
@@ -319,7 +307,7 @@ def credibility(
     out = {}
     # ponytail: every pair sharing a metric is compared (4000 such patterns: ~6 s a compile); index by condition past a few thousand
     for pid in of:
-        mine, geo = shifts[pid], pid in place
+        mine, geo = shifts[pid], pid in place_at
         found: dict[int, set[str]] = defaultdict(set)
         for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i, _ in indicator[pid].values())):
             if not independent(pid, batch[q], of[q].dataset_id) or (geo and not overlap(pid, q, min)):
@@ -344,7 +332,7 @@ def credibility(
         level = next((lv for lv in (5, 1, 2) if found[lv]), 6)
         patterns = sorted(found.get(level, ()))
         names = {source[q] or of[q].dataset_id: batch[q].get("source") or of[q].dataset_id for q in reversed(patterns)}  # one per source
-        if geo and level in (2, 6):  # another dataset's points over the place
+        if geo and level in (2, 6):  # another dataset's events over the place
             for ds in sorted(occupied):
                 a, b = _common(place_at[pid], occupied[ds])
                 other = dataset_batch.get(ds, {})
@@ -449,7 +437,8 @@ def build_snapshot(
     schema_nodes, edges = _schema_plane(batches, insights, settings)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)
-    edges += structural + _spatial_plane(spatial or SpatialStructure(), nodes, structural)
+    spatial = spatial or SpatialStructure()
+    edges += structural + _spatial_plane(spatial, nodes, structural)
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)

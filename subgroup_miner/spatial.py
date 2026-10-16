@@ -482,7 +482,8 @@ class SpatialStructure:
     parent_of: list[tuple[str, str]] = field(default_factory=list)  # (region, its parent at the next coarser listed level)
     co_located: list[tuple[str, str, str, float]] = field(default_factory=list)  # (a, b, relation, weight), a < b
     compactness: dict[str, float] = field(default_factory=dict)
-    occupied: dict[str, set[str]] = field(default_factory=dict)  # dataset -> the regions above that hold its cells
+    places: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # pattern -> resolution -> its cells or their parents
+    occupied: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # dataset -> resolution -> the same, of all its cells
 
 
 RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
@@ -493,8 +494,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
 
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
     their overlap reaches ``GEO_REGION_MIN_SHARE`` of the smaller of its cells and the region's occupied cells (a focus inside
-    a region scores 1, as does a pattern covering the region); ``occupied`` keeps, per dataset, those of these regions
-    that hold its cells. Two patterns of one resolution, of any
+    a region scores 1, as does a pattern covering the region). ``places`` and ``occupied`` give each pattern's and each
+    dataset's cells at its own resolution and their parents at every listed level coarser. Two patterns of one resolution, of any
     datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
@@ -511,7 +512,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         own = [lv for lv in levels if lv <= res]
         parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in map(str, d.cells)]) for lv in own}
         occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
-        out.occupied[d.dataset_id] = {region_node_id(lv, str(c)) for lv in own for c in occupied[lv]}
+        grid = {res: np.array(list(map(str, d.cells)))} | parents
+        out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
         extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
         union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
         for lv in own:  # each dataset's cells inside a region that some pattern covers
@@ -520,6 +522,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
         for pid, rows in d.covers.items():
             rows = np.unique(np.asarray(rows, dtype=np.int64))
             res_of[pid], dataset_of[pid] = res, d.dataset_id
+            out.places[pid] = {lv: frozenset(cells[rows].tolist()) for lv, cells in grid.items()}
             raw[pid] = {str(c) for c in d.cells[rows]}
             near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
             grown[pid] = {str(c) for c in d.cells[near]}
@@ -538,7 +541,6 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                             up_cell = str(cell) if up == lv else h3.cell_to_parent(str(cell), up)
                             out.regions.setdefault(region_node_id(up, up_cell), {"resolution": up, "h3": up_cell})
     members = Counter(rid for _, rid, _ in out.in_region)
-    out.occupied = {ds: rids & members.keys() for ds, rids in out.occupied.items()}
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])
         coarser = [x for x in levels if x < props["resolution"]]

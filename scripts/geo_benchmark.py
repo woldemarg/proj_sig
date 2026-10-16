@@ -416,18 +416,11 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
                 }
             )
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
-    result = {
-        "scenario": scenario.name,
-        "truth": scenario.truth,
-        "files": files,
-        "recall": _recall(engine, foci, k) if len(foci) > 1 else None,
-        "credibility": None,
-    }
+    result = {"scenario": scenario.name, "truth": scenario.truth, "files": files, "recall": _recall(engine, foci, k) if len(foci) > 1 else None}
     result["place"] = _place(engine, scenario.uploads[0], files[0]["found"]) if len(foci) > 1 else None
     result["supersede"] = _supersede(engine, scenario, root, before, new) if new else None
-    if alone is not None:
-        a, b = (_credibility(engine, [f["pattern"] for f in file["found"].values()]) for file in (files[0], files[-1]))
-        result["credibility"] = f"{alone} -> {a} / {b}"
+    pair = [_credibility(engine, [f["pattern"] for f in file["found"].values()]) for file in (files[0], files[-1])]
+    result["credibility"] = f"{alone} -> {pair[0]} / {pair[1]}" if alone is not None else None
     graph = _graph(engine, [p for p in best if p in engine.committed().graph.insights])  # a superseded part's are gone
     region = scenario.truth.get("region")
     return result | graph | {"zone_first": None if region is None else graph["zones"][:1] == [f"R:{REGION}:{region}"]}  # no zones: a miss
