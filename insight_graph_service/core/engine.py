@@ -398,7 +398,7 @@ class Engine:
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
         (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
-        ``geo_levels`` is the ``@auto`` selection, moved into ``profile.geo.levels`` by ``process``; ``locator`` the point
+        ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
@@ -415,7 +415,6 @@ class Engine:
             **({"geo": geo} if geo else {}),
             **(upload or {}),
             **({} if strict else {"strict": False}),
-            **({"geo_levels": geo_levels} if geo_levels else {}),
             **({"locator": locator} if locator else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
@@ -423,7 +422,7 @@ class Engine:
             "stage_times": {"UPLOADED": created},
             "created_at": created,
             "metrics": {},
-            "profile": {},
+            "profile": {"geo": {"levels": geo_levels}} if geo_levels else {},
             "warnings": [],
             "error": None,
         }
@@ -463,6 +462,7 @@ class Engine:
 
                 with self._stage(record, "PROFILING", timings, "discover_s"):
                     result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s), spatial=loaded.spatial)
+                    selection = record["profile"].get("geo", {}).get("levels")  # @auto's, from the upload
                     record["profile"] = {
                         **result.profile.to_dict(),
                         "derived_columns": loaded.derived_columns,
@@ -470,9 +470,7 @@ class Engine:
                         "categorical_overrides": loaded.categories,
                     }
                     if loaded.spatial:
-                        record["profile"]["geo"] = self._geo_profile(loaded) | (
-                            {"levels": record.pop("geo_levels")} if "geo_levels" in record else {}
-                        )
+                        record["profile"]["geo"] = self._geo_profile(loaded) | ({"levels": selection} if selection else {})
                     if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
                         record["warnings"].append(
                             f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"

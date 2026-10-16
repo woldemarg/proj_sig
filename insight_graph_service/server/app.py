@@ -83,7 +83,8 @@ def create_app(engine: Engine) -> FastAPI:
         records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
         for record in records:  # one worker thread: the levels run in turn
             run(engine.process, record["batch_id"])
-        return JSONResponse(records[0], status_code=202)  # the finest level; GET /api/batches?upload_id= lists them all
+        levels = {record["level"]: record["batch_id"] for record in records}
+        return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
 
     run(engine.startup_sync)  # on the batch thread: Neo4j writes stay sequential
 
