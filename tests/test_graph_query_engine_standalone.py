@@ -458,6 +458,26 @@ def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():
     assert roles({"I": 0.1, "O": 0.0, "Y": 0.0}) == (["O", "I", "Y"], "seed")
 
 
+def test_a_tampered_pattern_takes_no_place_in_the_walk_or_a_region():
+    """A tampered pattern the walk reaches takes no slot of its budget: the intact one below it is retrieved instead, the
+    tampered one is named in a NOTE and in the evidence-only summary, and a region's picture does not count it."""
+    from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
+    from graph_query_engine.vertical import picture
+
+    snap = snapshot()
+    snap["nodes"].append(pattern("P3", ["region=EU", "category=laptops"], w=0.3))
+    snap["nodes"].append({"id": "R:5:a", "kind": "Region", "label": "R:5:a", "props": {"resolution": 5, "h3": "a"}})
+    snap["nodes"][1]["props"]["integrity"] = "mismatch"  # P2 (weight 0.8) ranks above P3 (0.3)
+    snap["edges"] += [edge("P3", "A-1", "ACTIVATES", 0.8), edge("P2", "R:5:a", "IN_REGION", 0.9), edge("P3", "R:5:a", "IN_REGION", 0.9)]
+    graph = DualGraph(snap)
+    vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0]), "P3": np.array([0.8, 0.6, 0.0])}
+    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig(max_retrieved=1))
+    assert [r.node_id for r in found.traversal.patterns] == ["P1", "P3"] and [r.node_id for r in found.traversal.excluded] == ["P2"]
+    assert found.evidence.excluded == ["P2"] and any(n.startswith("P2 excluded: integrity check failed") for n in found.evidence.notes)
+    assert "виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): P2" in found.payload().evidence_summary
+    assert picture(graph, "R:5:a")["patterns"] == 1
+
+
 def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_explained():
     """Anchors joined by both CO_OCCURS and RELATED_TO list each other once with both links; the second anchor of a
     description already shown names the first and how many members they share, or that it shares none."""

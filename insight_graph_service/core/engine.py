@@ -39,7 +39,7 @@ from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from graph_query_engine.vertical import picture, regions_above, scale_chain
 from graph_query_engine.vertical import resolution as pattern_resolution
-from insight_contracts import SNAPSHOT_VERSION, Condition, EvidencePayload, Insight, pattern_id
+from insight_contracts import Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
@@ -214,8 +214,8 @@ class Engine:
     def _open(self) -> None:
         """Recover the workspace (a writer) and load its committed state. A workspace this code cannot serve — a
         recovery that failed, journals of another canonical / representation version — leaves the empty state and
-        ``problem`` (why); every guarded call is refused until ``reset()``. So is a snapshot or state file that cannot
-        be read: the service starts, and its reset stays reachable."""
+        ``problem`` (why); every guarded call is refused until ``reset()``. So is a state file that cannot be read (the
+        snapshot is rebuilt, whatever its file holds): the service starts, and its reset stays reachable."""
         problem: str | None = None
         try:
             if self._writer:
@@ -231,13 +231,12 @@ class Engine:
         self.problem, self._state = problem, state  # together, after the work: readers never see a half-open engine
 
     def _load_state(self) -> CommittedState:
-        """The read state of the saved snapshot; a snapshot of another version is rebuilt (derived data: the journals
-        stay the source of truth)."""
-        snapshot = self.ws.load_graph()
-        if snapshot and snapshot.get("version") != SNAPSHOT_VERSION:
-            return self._derive(self.ontology())[1]
-        graph = DualGraph(snapshot) if snapshot else DualGraph.empty()
-        return self._committed_state(graph, self._load_frame(self.ws.patterns(), self.ws.vectors(), self.ontology()))
+        """The read state, its snapshot rebuilt from the journals (derived data: the journals stay the source of truth).
+        Integrity and credibility are computed at compile, never read back from the file, so a snapshot edited or left
+        stale since the last commit is never served."""
+        if not self.ws.patterns():  # nothing journaled, nothing to compile: no snapshot file is written
+            return self._committed_state(DualGraph.empty(), self._load_frame([], self.ws.vectors(), self.ontology()))
+        return self._derive(self.ontology())[1]
 
     @staticmethod
     def _empty_state() -> CommittedState:
