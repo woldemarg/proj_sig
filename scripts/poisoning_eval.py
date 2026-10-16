@@ -11,10 +11,11 @@ Deterministic (no LLM; ``check`` and ``tamper`` are what tests/test_e2e.py runs)
                 leaves the evidence with a NOTE
     metadata    S-poison: b's reliability edited in its batch record; after the rebuild the trust line says A and
                 nothing flags it (dataset metadata is outside the record digest: an open gap)
-With --llm (paid: 2 scenarios x 10 questions x 2 variants = 40 calls to LLM_BASE_URL, configured in .env): five directed
-and five open questions about the spot, with the trust lines and rule 11 and without them (the evidence before #8). An
-answer mentions a flagged finding when a sentence cites its key; it qualifies it when every such sentence (``all``) or
-one of them (``any``) uses a trust word.
+With --llm (paid: 2 scenarios x 10 questions x 3 variants = 60 calls to LLM_BASE_URL, configured in .env): five directed
+and five open questions about the spot, each asked of one evidence in three variants (``VARIANTS``): with the trust lines
+and rule 11, without either (the evidence before #8), and rule 11 alone. An answer mentions a flagged finding when a
+sentence cites its key; it qualifies it when every such sentence (``all``) or one of them (``any``) uses a trust word. A
+failed call is counted, never scored.
 
 The result goes to ``.scratch/results/poisoning_eval_<label>.json``, a table to stdout.
 """
@@ -54,7 +55,7 @@ OPEN = (
     "Що варто знати про цю зону?",
 )
 TRUST_WORDS = re.compile(
-    r"не підтвердж|не перевір|суперечить|суперечн|розбіжн|розходя|немає іншого джерела|одного джерела|одне джерело|ненадійн|надійн",
+    r"не підтвердж|не перевір|супереч|розбіжн|розходя|немає іншого джерела|одного джерела|одне джерело|ненадійн|низьк\w* надійн",
     re.IGNORECASE,
 )
 BEFORE_8 = re.sub(r"\n11\. TRUST:.*?(?=\nBe concise)", "", narration.SYSTEM_PROMPT, flags=re.S)  # the rules without rule 11
@@ -70,6 +71,8 @@ def ingest(name: str, seed: int, root: Path, engine: Engine) -> tuple[Scenario, 
     scenario = generate(name, seed)
     result = run_scenario(scenario, root, engine, k=5)
     a, b = result["files"][0]["found"], result["files"][-1]["found"]
+    if missed := [f"{f} of {who}" for who, found in (("a", a), ("b", b)) for f in ("focus0", "focus1") if f in found and not found[f]["pattern"]]:
+        raise SystemExit(f"{name} seed {seed}: {', '.join(missed)} not found; the checks need it")
     if name == "S-poison":
         flagged, confirmed, spot = [b["focus1"]["pattern"]], b["focus0"]["pattern"], _cells(scenario, -1, "focus1")
     else:
@@ -82,14 +85,15 @@ def _trust_of(payload: EvidencePayload, pid: str) -> str | None:
 
 
 def check(engine: Engine, case: dict[str, Any]) -> dict[str, Any]:
-    """The flagged findings' and the confirmed one's credibility, and their trust lines in the evidence for the spot."""
+    """The flagged findings' and the confirmed one's credibility, and their trust lines in the evidence of each question
+    about the spot: ``trust`` the distinct lines, ``questions`` how many of the ten evidences hold the finding."""
     nodes = engine.committed().graph.nodes
-    payload = engine.evidence(DIRECTED[0], cells=case["spot"])
-    return {
-        pid: {"credibility": nodes[pid]["props"]["credibility"], "trust": _trust_of(payload, pid)}
-        for pid in [*case["flagged"], case["confirmed"]]
-        if pid
-    }
+    payloads = [engine.evidence(q, cells=case["spot"]) for q in (*DIRECTED, *OPEN)]
+    out = {}
+    for pid in [*case["flagged"], case["confirmed"]]:
+        lines = [line for p in payloads if (line := _trust_of(p, pid)) is not None]
+        out[pid] = {"credibility": nodes[pid]["props"]["credibility"], "trust": sorted(set(lines)), "questions": len(lines)}
+    return out
 
 
 def _reopen(engine: Engine) -> Engine:
@@ -122,13 +126,9 @@ def tamper(engine: Engine, case: dict[str, Any], source_file: str) -> dict[str, 
 
 
 def without_trust(payload: EvidencePayload) -> EvidencePayload:
-    """The payload as before #8: no trust lines, header phrase, zone level or summary tag."""
+    """The evidence prompt as before #8: no trust lines, header phrase or zone level."""
     prompt = re.sub(r"\n     trust: [^\n]*", "", payload.evidence_prompt).replace(" trust is given per item;", "")
-    return replace(
-        payload,
-        evidence_prompt=re.sub(r"; weakest credibility \S+", "", prompt),
-        evidence_summary=re.sub(r" \(джерело [A-F], [^)]*\)", "", payload.evidence_summary),
-    )
+    return replace(payload, evidence_prompt=re.sub(r"; weakest credibility \S+", "", prompt))
 
 
 def score(answer: str, payload: EvidencePayload, flagged: list[str]) -> dict[str, bool]:
@@ -140,23 +140,31 @@ def score(answer: str, payload: EvidencePayload, flagged: list[str]) -> dict[str
     return {"mentioned": bool(citing), "all": bool(citing) and all(hits), "any": any(hits)}
 
 
-def ask(engine: Engine, llm: Any, question: str, case: dict[str, Any], trust: bool) -> dict[str, Any]:
-    payload = engine.evidence(question, cells=case["spot"])
-    rules = narration.SYSTEM_PROMPT
-    if not trust:
-        payload, narration.SYSTEM_PROMPT = without_trust(payload), BEFORE_8
-    try:
-        qa = narration.answer(payload, llm)
-    finally:
-        narration.SYSTEM_PROMPT = rules
-    return {"question": question, "trust": trust, "mode": qa.answer_mode, **score(qa.answer, payload, case["flagged"]), "answer": qa.answer}
+VARIANTS = {  # name -> (strip the trust lines, the system prompt)
+    "with trust": (False, narration.SYSTEM_PROMPT),
+    "without": (True, BEFORE_8),
+    "rule 11 only": (True, narration.SYSTEM_PROMPT),
+}
+
+
+def ask(engine: Engine, llm: Any, question: str, case: dict[str, Any]) -> list[dict[str, Any]]:
+    """One question, one evidence, every variant; a failed call is ``mode: failed`` and not scored."""
+    full = engine.evidence(question, cells=case["spot"])
+    rows = []
+    for variant, (strip, rules) in VARIANTS.items():
+        payload = without_trust(full) if strip else full
+        resp = llm.generate(rules, payload.evidence_prompt)
+        scored = score(resp.text, payload, case["flagged"]) if resp.ok else {"mentioned": False, "all": False, "any": False}
+        rows.append(
+            {"question": question, "variant": variant, "mode": "llm" if resp.ok else "failed", "error": resp.error, **scored, "answer": resp.text}
+        )
+    return rows
 
 
 def summarise(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     out: dict[str, dict[str, int]] = {}
     for r in rows:
-        key = f"{r['kind']} {'with' if r['trust'] else 'without'} trust"
-        cell = out.setdefault(key, {"n": 0, "llm": 0, "mentioned": 0, "all": 0, "any": 0})
+        cell = out.setdefault(f"{r['kind']}, {r['variant']}", {"n": 0, "llm": 0, "mentioned": 0, "all": 0, "any": 0})
         cell["n"] += 1
         cell["llm"] += r["mode"] == "llm"
         for k in ("mentioned", "all", "any"):
@@ -177,7 +185,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--encoder", choices=("hashing", "model"), default="model")
-    parser.add_argument("--llm", action="store_true", help="the paid part: 40 calls to the LLM behind LLM_BASE_URL")
+    parser.add_argument("--llm", action="store_true", help="the paid part: 60 calls to the LLM behind LLM_BASE_URL")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
     if args.encoder == "model" and problems(model_folder(load_settings().topology.model_dir), hashes=False):
@@ -199,10 +207,10 @@ def main() -> int:
         }
         if llm:
             rows = [
-                {"kind": kind, **ask(engine, llm, q, case, trust)}
+                {"kind": kind, **row}
                 for kind, questions in (("directed", DIRECTED), ("open", OPEN))
                 for q in questions
-                for trust in (True, False)
+                for row in ask(engine, llm, q, case)
             ]
             entry |= {"answers": rows, "summary": summarise(rows)}
         if name == "S-poison":
@@ -210,12 +218,14 @@ def main() -> int:
         result[name] = entry
         print(f"\n{name}")
         for pid, c in entry["check"].items():
-            print(f"  {pid} {'flagged' if pid in case['flagged'] else 'confirmed'}: credibility {c['credibility']} | trust: {c['trust']}")
+            print(
+                f"  {pid} {'flagged' if pid in case['flagged'] else 'confirmed'}: credibility {c['credibility']} in {c['questions']}/10 | {c['trust']}"
+            )
         for key in ("metadata", "integrity"):
             if key in entry:
                 print(f"  {key}: {entry[key]}")
         for key, cell in entry.get("summary", {}).items():
-            print(f"  {key:>24}: n {cell['n']} llm {cell['llm']} mentioned {cell['mentioned']} qualified all {cell['all']} any {cell['any']}")
+            print(f"  {key:>26}: n {cell['n']} llm {cell['llm']} mentioned {cell['mentioned']} qualified all {cell['all']} any {cell['any']}")
     print(save_result("poisoning_eval", args.label, result))
     return 0
 
