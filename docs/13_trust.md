@@ -8,33 +8,31 @@
 
 ## 13.1 The decision
 
-**Context.** A knowledge graph that an LLM reads is a target in itself. Oracle Poisoning (Kereopa-Yorke et al., arXiv 2605.09822) corrupts the graph an agent queries, not its instructions. On a production code graph, every tested model trusted the poisoned data in 100 % of the trials once the attacker reached a moderate level of sophistication (L2): 269 of 270 valid trials under directed queries. Under open-ended prompts trust fell to 3–55 %, so the query framing is a confound and both are reported. Of the defences the paper measures:
+**Context.** A knowledge graph that an LLM reads is a target in itself. Oracle Poisoning (Kereopa-Yorke et al., arXiv 2605.09822) corrupts the graph an agent queries, not its instructions. On a production code graph, every tested model trusted the poisoned data in ≈100 % of the trials (269 of 270 valid ones) under directed queries, once the attacker reached a moderate level of sophistication (L2). Under open-ended prompts trust fell to 3–55 %, so the query framing is a confound and both are reported. Of the defences the paper measures:
 - an instruction in the system prompt to verify or distrust the tool's answers had no measurable effect;
 - cross-verification against another source lowered blind trust from 100 % to 0–25 % (N = 10, three models);
 - a before-snapshot of the graph caught created nodes but not modified properties (trust stayed at 96.6–100 %);
 - read-only access removes the direct write path (argued, not measured).
 
-SIG's evidence used to be introduced as *verified statistical observations*: the framing under which trust is total. A finding's statistics say nothing about where its data came from — p < 0.001 on planted data is still p < 0.001.
+A finding's statistics say nothing about where its data came from: p < 0.001 on planted data is still p < 0.001. Evidence framed as *verified* observations is the framing under which trust is total.
 
 **Decision.**
 1. **Three axes, kept apart.** Source reliability is a property of the dataset, set by the uploader. Credibility is a property of the finding, computed from the other sources in the graph. The statistics come from chapters 2–3. There is no combined trust score: one would let strong statistics buy credibility, which is exactly what a poisoned table offers. Credibility never reads p, stability or weight.
-2. **Independence is declared, not proven.** Another source is another declared `source` outside the finding's own upload and its `supersedes` chain. Two undeclared datasets, or metrics without an indicator registry, never give 1 or 5. The declaration is the uploader's claim; SIG cannot check that two sources do not share an origin.
-3. **The Admiralty scale is operationalised, not defined.** STANAG 2511 rates information credibility 1 *confirmed by other sources*, 2 *probably true*, 3 *possibly true*, 4 *doubtful*, 5 *improbable*, 6 *truth cannot be judged*. SIG computes four of these levels by explicit rules ([13.3](#133-credibility-levels)). Its 2 means *not confirmed, though another dataset covers the finding*, not *probably true*. Levels 3 and 4 are reserved for a human rating or an input profile (#21). Level 4 (*doubtful*) is never computed.
+2. **Independence is declared, not proven.** Another source is another declared `source` outside the finding's own upload and the version it `supersedes` (or that supersedes it). Two undeclared datasets, or metrics without an indicator registry, never give 1 or 5. The declaration is the uploader's claim; SIG cannot check that two sources do not share an origin.
+3. **The Admiralty scale is operationalised, not defined.** STANAG 2511 rates information credibility 1 *confirmed by other sources*, 2 *probably true*, 3 *possibly true*, 4 *doubtful*, 5 *improbable*, 6 *truth cannot be judged*. SIG computes four of these levels by explicit rules ([13.3](#133-credibility-levels)). Its 2 means *not confirmed, though another dataset covers the finding*, not *probably true*. Levels 3 and 4 (*doubtful*) are reserved for a human rating or an input profile ([#21](https://github.com/woldemarg/proj_sig/issues/21)) and never computed.
 4. **Credibility changes as datasets arrive and go.** This is by design: confirmation is a relation between sources, so it is recompiled with every commit. `credibility_basis` says which sources and findings set the level. No history is kept.
 5. **Integrity is checked three times** ([13.4](#134-integrity)): a digest of each finding's statistics, a digest of each dataset's metadata, and a recomputation from the stored upload. The digests are unkeyed. They catch an edit that does not also recompute the digest. The recomputation catches the rest of the numbers, against the raw file.
 6. **The signal goes into the data, not only into the instruction.** Each evidence item carries a `trust:` line. The section header says the findings are computed and that trust is given per item. Rule 11 of the system prompt asks the model to keep the three axes apart. The red team measures which of the two moves the answer ([13.7](#137-measured-behaviour)).
 
 **Rejected.**
 - **One trust score.** It mixes what the uploader claims, what other sources show and what the test measured, and hides which of them is weak.
-- **Credibility from the statistics.** Strong statistics are what a planted cluster has.
 - **Prompt hardening alone.** Measured at zero by the paper and at next to nothing here.
-- **Keyed signatures** (an HMAC over the records). A local single-user workspace has no place to keep the key apart from the data it signs. Before any deployment beyond localhost, write access comes first (#10).
+- **Keyed signatures** (an HMAC over the records). A local single-user workspace has no place to keep the key apart from the data it signs. Before any deployment beyond localhost, write access comes first ([#10](https://github.com/woldemarg/proj_sig/issues/10)).
 - **Graph history snapshots.** They miss modified properties, the attack that matters.
 
 **Consequences and limits.**
 - A finding from a single source is credibility 6 and says so; a workspace with one upload and no declared source keeps the evidence exactly as before (the golden prompt).
 - A forged record is visible, not repaired: its finding leaves the evidence; its dataset's declarations are ignored.
-- Independence rests on declarations.
 - A finding can lose its 1 when the confirming dataset is deleted.
 
 **Facts the plan relied on, stated precisely.**
@@ -59,7 +57,7 @@ The rules, in brief; §6.2 holds them in full, with their limits.
 |---|---|---|
 | 1 | another declared source shares a non-weak anchor and shifts a metric of the same indicator the same way | as phase A, where the shared cells reach `GEO_REGION_MIN_SHARE` (0.2) of the smaller place |
 | 2 | another dataset, declared or not, shifts a metric of the same name | another dataset has a pattern there with a metric of the same name, or events over that share of the place |
-| 5 | another declared source shifts a metric of the same indicator materially the other way in the same subgroup; wins over 1 | as phase A, over a comparable place: the share of the larger place |
+| 5 | another declared source shifts a metric of the same indicator materially the other way in the same subgroup; wins over 1 | the same shift the other way, in any subgroup, over a comparable place: the shared cells reach that share of the larger place |
 | 6 | none of these | no other source has events there |
 | 3, 4 | reserved for a human rating or an input profile; never computed | — |
 
@@ -69,11 +67,11 @@ Places compare at the finest resolution both datasets have. Metrics compare thro
 
 | Check | Signs or recomputes | Catches | Does not catch | Specified in |
 |---|---|---|---|---|
-| record digest (`record_digest`, `integrity` on the Pattern) | SHA-256 over every field of a finding's journal record but its provenance (and `row_id`), plus the ingest fields of its spatial provenance | a number or a field edited in `journal/patterns.jsonl`: the finding is `mismatch`, never a seed or evidence item, with a `NOTE` | an edit with the digest recomputed; a deleted or inserted record | [3.1](03_insights.md#31-the-insight-record), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
-| metadata digest (`metadata_digest`, `integrity` on the Dataset) | SHA-256 over what the graph reads of a batch record (`BATCH_DIGEST_FIELDS`) | a source, rating, registry or profile edited in the record: its declarations are ignored, the trust lines and a `NOTE` say so, a `PATCH` is refused (`metadata_mismatch`) | an edit with the digest recomputed; the baselines it covers are still shown | [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
-| recomputation (`Engine.verify_pattern`) | support, every shift, the median test with the same effective n, the adjusted p and the spatial provenance, from the stored upload read with the batch's options | a forged number or structure whose digest was recomputed (`differs`); a changed upload (`source_changed`); a missing one (`source_missing`) | which metrics shift (mining is not re-run), the bootstrap stability and what derives from it (`NOT_RECOMPUTED`) | [6.7](06_graph_and_storage.md#67-configuration-and-guarantees), [8.1](08_interface.md#81-http-api) |
+| record digest (`record_digest`, `integrity` on the Pattern) | SHA-256 over every field of a finding's journal record but its provenance (and `row_id`), plus the ingest fields of its spatial provenance | a number or a field edited in `journal/patterns.jsonl`: the finding is `mismatch`, never a seed or evidence item, with a `NOTE` | an edit with the digest recomputed or removed (a record without one reads `unverified` and is used); a record deleted or inserted whole | [3.1](03_insights.md#31-the-insight-record), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
+| metadata digest (`metadata_digest`, `integrity` on the Dataset) | SHA-256 over what the graph reads of a batch record (`BATCH_DIGEST_FIELDS`) | a source, rating, registry or profile edited in the record: its declarations are ignored, the trust lines and a `NOTE` say so, a `PATCH` is refused (`metadata_mismatch`) | an edit with the digest recomputed or removed (`unverified`, used as declared); the baselines it covers are still shown | [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
+| recomputation (`Engine.verify_pattern`) | support, every shift, the median test with the same effective n, the adjusted p and the spatial provenance, from the stored upload read with the batch's options | a forged number or structure whose digest was recomputed (`differs`); a changed upload (`source_changed`); a missing one (`source_missing`) | which metrics shift (mining is not re-run); the bootstrap stability, the scores (`sd_score`, `emm_score`, `volume_utility`) and the weight, which ranks the seeds, so a forged weight with its digest recomputed reads `reproduced`; drivers and the correlation change (`NOT_RECOMPUTED`) | [6.7](06_graph_and_storage.md#67-configuration-and-guarantees), [8.1](08_interface.md#81-http-api) |
 
-A record written before its digest existed reads `unverified`, is used as recorded, and is marked as such on its trust line; the workspace is not degraded.
+A record without a digest — written before digests, or with its digest removed — reads `unverified`, is used as recorded, and is marked as such on its trust line; the workspace is not degraded. So `unverified` on a record of a workspace newer than the digests is itself a warning sign.
 
 ## 13.5 Where trust is shown
 
@@ -92,10 +90,10 @@ The paper's attack needs five conditions (its §3.7). Before is SIG at the end o
 | | Precondition | Before | After | What remains |
 |---|---|---|---|---|
 | P1 | a structured data store that AI agents query | the dual graph, queried for every answer | unchanged: it is the product | — |
-| P2 | write access, with shared credentials and no per-user access control | uploads, `PATCH`, deletions and reset open to anyone who reaches the port; the files open to anyone with the disk | unchanged; the ports are bound to `127.0.0.1`, and the records an attacker edits by hand are caught by P5 | a write token before any deployment beyond localhost (#10) |
+| P2 | write access, with shared credentials and no per-user access control | uploads, `PATCH`, deletions and reset open to anyone who reaches the port; the files open to anyone with the disk | unchanged; the ports are bound to `127.0.0.1`, and the records an attacker edits by hand are caught by P5 | a write token before any deployment beyond localhost ([#10](https://github.com/woldemarg/proj_sig/issues/10)) |
 | P3 | no provenance tracking on individual entries | every finding names its dataset, batch, file hash and rows, but nothing says where the data came from | each dataset declares a source and its reliability; each finding carries its credibility and the sources and findings behind it; the evidence and the console show all three | a source is what the uploader declares |
 | P4 | agents treat query results as ground truth | evidence introduced as *verified statistical observations* | the header calls the findings computed, with trust per item; each item's trust line names an unconfirmed or contradicted finding and an unreliable source; rule 11 | the model still restates a flagged finding plainly beside its one qualified sentence ([13.7](#137-measured-behaviour)) |
-| P5 | no integrity verification against the authoritative data source | none | record and metadata digests at every compile; any finding recomputed from its stored upload; a changed upload is `source_changed` | the digests are unkeyed; deletion of a whole record is not detected; the stored upload is the authority, so a file poisoned before upload passes every check |
+| P5 | no integrity verification against the authoritative data source | none | record and metadata digests at every compile; any finding recomputed from its stored upload; a changed upload is `source_changed` | the digests are unkeyed, and a removed digest reads `unverified`, not `mismatch`; a record deleted or inserted whole is not detected; the recomputation leaves the weight unchecked; the stored upload is the authority, so a file poisoned before upload passes every check |
 
 Credibility is the paper's cross-verification made structural: the second source is in the graph, and the evidence names the result, so the model does not have to look it up.
 

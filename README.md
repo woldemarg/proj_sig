@@ -253,7 +253,7 @@ sig/
   compose.yaml, constraints.txt, .dockerignore   the service suite in start order; the images' pinned versions
   requirements-dev.txt        host development: every service's runtime + the test tools
   tests/                      contract / integration / E2E / UI tests (doubles.py: the deterministic test embedder)
-  docs/                       eleven chapters in pipeline order and the architecture chapter; init_concepts/ (the theory)
+  docs/                       eleven chapters in pipeline order, the architecture and the trust chapters; init_concepts/ (the theory)
   scripts/                    check.py (the gate), compose_check.py (the Docker check), dev.py (host composite),
                               multilingual_benchmark.py, eval_answers.py, experiment.py (measurements), scratch.py (their helpers)
   models/, data/              local, git-ignored: the embedding model; housing.csv
