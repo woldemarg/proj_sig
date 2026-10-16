@@ -144,7 +144,7 @@ Evidence(
         provenance={dataset_id, filename, batch_id, engine, steps, expression, rows_ref, pattern_id, ...})],
     attractors=[{id, label, description, n_patterns, distinct_scopes, related[{id, links {CO_OCCURS?, RELATED_TO?}, shared?}], signature, same_as?}],
     paths=[...], metrics=[{metric, dataset_id, global_median, global_mad}],
-    datasets=[{dataset_id, filename, rows, batch_id}], provenance=[{key, ...}], notes=[...])
+    datasets=[{dataset_id, filename, rows, batch_id, source?, reliability, integrity, glossary?}], provenance=[{key, ...}], notes=[...])
 ```
 
 Rendering happens here, with the configuration: `shift_text` holds the phenomenon shifts only (the target and `|z| ≥ MIN_COMPONENT_Z`), `relationship` appears only when the correlation change is material, the scope is prose, and an anchor's `description` comes from its signature ([5.8](05_latent_anchors.md#58-how-an-anchor-is-described)). `metrics` holds the global median and MAD of every metric the prompt mentions. A note lists the items that share no scope condition with the seeds (they may still be structurally reachable; `structural_distance` says how far), or says that no pattern matched.
