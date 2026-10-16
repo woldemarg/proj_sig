@@ -32,7 +32,6 @@ from insight_contracts.text import (
 )
 
 EVIDENCE_MAX_PATTERNS = 10
-LINK_NOTE = {"CO_OCCURS": "shared members", "RELATED_TO": "centroid"}  # what joins two anchors, in this order
 LOCATION_TAG = {  # an item reached only by location: the same area, not a related finding
     "same_region": " [reached by location only: same area, zones do not overlap]",
     "adjacent": " [reached by location only: zones touch or barely overlap]",
@@ -211,8 +210,12 @@ class Evidence:
     @staticmethod
     def _links(related: dict[str, Any]) -> str:
         """``9 shared members, 1.00; centroid 0.90``: what joins an anchor to one neighbour."""
-        texts = {"CO_OCCURS": f"{_members(related.get('shared', 0), 'shared ')}, {{:.2f}}", "RELATED_TO": "centroid {:.2f}"}
-        return "; ".join(texts[t].format(related["links"][t]) for t in LINK_NOTE if t in related["links"])
+        links, parts = related["links"], []
+        if "CO_OCCURS" in links:
+            parts.append(f"{_members(related['shared'], 'shared ')}, {links['CO_OCCURS']:.2f}")
+        if "RELATED_TO" in links:
+            parts.append(f"centroid {links['RELATED_TO']:.2f}")
+        return "; ".join(parts)
 
     def _keys(self) -> dict[str, str]:
         return {it.pattern_id: it.key for it in self.items}
