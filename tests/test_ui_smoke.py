@@ -141,6 +141,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate(chips)[0] == "Чому median house value нижчий у зонах INLAND?"
         page.select_option("#dataset-filter", "")
         page.wait_for_function(f"({chips}).length === 8", timeout=10000)
+        options = page.evaluate("[...document.querySelectorAll('#dataset-filter option')].map((o) => o.textContent)")
+        assert "california_housing.csv · H3 r5" in options  # a geo dataset names its level, as the levels of one upload must
         # insights table view lists every pattern node
         page.click("#view-switch button[data-view='table']")
         page.wait_for_selector("#ins-table tbody tr[data-id]")

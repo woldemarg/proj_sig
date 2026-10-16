@@ -80,11 +80,18 @@ def _relation(graph: DualGraph, a: str, b: str) -> tuple[str, str] | None:
     return ("corresponds" if za[metric] * zb[metric] > 0 else "contrasts"), metric
 
 
+def _affinity(graph: DualGraph, a: str, b: str) -> float:
+    """The Jaccard overlap of two patterns' scope conditions: 1 for the same subgroup at another level."""
+    ca, cb = set(graph.insight(a).conditions), set(graph.insight(b).conditions)
+    return len(ca & cb) / (len(ca | cb) or 1)
+
+
 def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> VerticalStep | None:
-    """The best coarser (up) or finer (down) pattern of the same phenomenon in a region the two share; one of the
-    same upload first."""
-    res, anchors, upload = resolution(graph, pid), _anchors(graph, pid), upload_of(graph, pid)
-    best: tuple[tuple[bool, float], VerticalStep] | None = None
+    """The coarser (up) or finer (down) pattern of the same phenomenon in a region the two share: one of the same upload
+    first, then the nearest level (no level skipped), then the closest scope (the pattern's own subgroup before another
+    pattern of the region), then the score."""
+    res, anchors, upload, own = resolution(graph, pid), _anchors(graph, pid), upload_of(graph, pid), _finest(graph, pid)
+    best: tuple[tuple[bool, int, float, float], VerticalStep] | None = None
     for region, share in _regions(graph, pid).items():
         for e in graph.inc.get(region, []):
             other = e["source"]
@@ -93,7 +100,7 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
             if (other_res := resolution(graph, other)) is None:
                 continue
             coarser, finer_share = (other_res < res, share) if direction == "up" else (other_res > res, e["weight"])
-            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in _finest(graph, other if direction == "up" else pid):
+            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in (_finest(graph, other) if direction == "up" else own):
                 continue
             shared = [(anchors[a] * w * finer_share, a) for a, w in _anchors(graph, other).items() if a in anchors]
             relation = _relation(graph, pid, other)
@@ -101,7 +108,7 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
                 continue
             score, anchor = max(shared)
             step = VerticalStep(other, pid, direction, relation[0], relation[1], region, anchor, round(score, 4))
-            key = (upload is not None and upload_of(graph, other) == upload, score)
+            key = (upload is not None and upload_of(graph, other) == upload, -abs(other_res - res), _affinity(graph, pid, other), score)
             if best is None or key > best[0]:
                 best = (key, step)
     return best[1] if best else None
@@ -109,40 +116,41 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
 
 def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
     """The vertical chain of every geo pattern in ``pattern_ids``: up to ``VERTICAL_MAX_PER_PATTERN`` steps each way,
-    at most ``VERTICAL_MAX_TOTAL`` vertical patterns in all, then the regions above the top pattern (from the region the
-    last step met in); the ``scale`` label compares the pattern with the coarser levels of its own upload, budget or not."""
-    chains, used = [], 0
+    at most ``VERTICAL_MAX_TOTAL`` distinct vertical patterns in all (one already in a chain costs nothing again), then
+    the regions above the top pattern (from the region the last step met in); the ``scale`` label compares the pattern
+    with its first step up, budget or not."""
+    chains, reached = [], set()
     for pid in pattern_ids:
         if resolution(graph, pid) is None or not _regions(graph, pid):
             continue
         chain, seen = ScaleChain(pid), {pid}
+        nearest = _step(graph, pid, "up", seen)
         for direction, steps in (("up", chain.up), ("down", chain.down)):
-            at = pid
-            while len(steps) < VERTICAL_MAX_PER_PATTERN and used < VERTICAL_MAX_TOTAL and (step := _step(graph, at, direction, seen)):
+            step = nearest if direction == "up" else _step(graph, pid, "down", seen)
+            while step and (step.pattern_id in reached or len(reached) < VERTICAL_MAX_TOTAL):
                 steps.append(step)
                 seen.add(step.pattern_id)
-                used += 1
-                at = step.pattern_id
+                reached.add(step.pattern_id)
+                step = _step(graph, step.pattern_id, direction, seen) if len(steps) < VERTICAL_MAX_PER_PATTERN else None
         top = chain.up[-1].pattern_id if chain.up else pid
         region, top_res = (chain.up[-1].region if chain.up else _home(graph, pid)), resolution(graph, top)
         while region:
             if graph.nodes[region]["props"]["resolution"] < top_res:
                 chain.regions.append(region)
             region = next((e["target"] for e in graph.out.get(region, []) if e["type"] == "PARENT_OF"), None)
-        chain.scale = _scale(graph, pid, chain.up)
+        chain.scale = _scale(graph, pid, nearest)
         chains.append(chain)
     return chains
 
 
-def _scale(graph: DualGraph, pid: str, up: list[VerticalStep]) -> str:
+def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
+    """The pattern against its nearest coarser level of the same upload: ``nearest`` is its first step up, which ranks
+    the same upload and the nearest level first, so a reversal at the next level is never hidden by a farther one."""
     upload = upload_of(graph, pid)
     if upload is None:
         return ""
-    same = next((s.pattern_id for s in up if upload_of(graph, s.pattern_id) == upload), None)
-    if same is None and (step := _step(graph, pid, "up", {pid})) and upload_of(graph, step.pattern_id) == upload:
-        same = step.pattern_id  # the label is searched for even when the chain's budget ran out
-    if same and (relation := _relation(graph, pid, same)):
-        return "regional" if relation[0] == "corresponds" else "scale-dependent"
+    if nearest and upload_of(graph, nearest.pattern_id) == upload:
+        return "regional" if nearest.relation == "corresponds" else "scale-dependent"
     planned = graph.nodes[dataset_node_id(graph.insight(pid).dataset_id)]["props"].get("upload_levels", [])
     coarser = [lv for lv in planned if lv.isdigit() and int(lv) < resolution(graph, pid)]  # mined, even if it found nothing
     return "not_found_coarser" if coarser else "insufficient"
