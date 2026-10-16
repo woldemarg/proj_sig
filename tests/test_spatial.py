@@ -443,7 +443,13 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 2 * edge}, 7) == set(h3.grid_disk(centre, 1))  # neighbours' centres √3 edges away
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 1.0}, 7) == {centre}
     assert geometry_to_cells({"bbox": [lon - 1e-4, lat - 1e-4, lon + 1e-4, lat + 1e-4]}, 7) == {centre}
-    for bad in ({"type": "Point", "coordinates": [lon, lat]}, {"center": [lon]}, {"bbox": "x"}, [lon, lat]):
+    for bad in (
+        {"type": "Point", "coordinates": [lon, lat]},
+        {"center": [lon]},
+        {"center": [lon, lat], "radius_m": float("inf")},
+        {"bbox": "x"},
+        [lon, lat],
+    ):
         with pytest.raises(SpatialError):
             geometry_to_cells(bad, 7)
     for bad in ([], ["nope"], [centre, 7]):
@@ -453,8 +459,8 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     cells = np.array(sorted(h3.grid_disk(centre, 3)))
     inner = np.flatnonzero(np.isin(cells, list(h3.grid_disk(centre, 1))))
     covers = {"A": inner, "B": np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, 3))))}
-    assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0}  # A is the zone; B lies outside: left out
-    assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1])) == {"A": round(1 / 7**0.5, 4)}  # a finer cell: its parent
+    assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
+    assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
     parent = h3.cell_to_parent(centre, 6)
     below = {str(c) for c in cells if h3.cell_to_parent(str(c), 6) == parent}  # a coarser cell: every cell below it
     hit = len(below & set(h3.grid_disk(centre, 1)))
@@ -495,6 +501,8 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
     graph = engine.graph()
     coarse = engine.place_scores(engine.committed(), cells=zone, resolution=7)
     assert coarse and {resolution(graph, p) for p in coarse} == {7} and {resolution(graph, p) for p in place} == {7, 8}
+    area = engine.search(question, cells=zone, resolution=7).evidence
+    assert {it.key for it in area.items if resolution(graph, it.pattern_id) == 7} == set(area.area)  # level 8: neither in nor out
 
     with TestClient(create_app(engine)) as client:
         assert client.post("/api/search", json={"cells": zone}).json()["evidence_prompt"] == alone.payload().evidence_prompt

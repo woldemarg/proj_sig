@@ -68,6 +68,7 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
                     {
                         "at": datetime.now(UTC).isoformat(timespec="seconds"),
                         "question": qa.question,
+                        **body.model_dump(include={"cells", "geometry", "resolution"}, exclude_none=True),  # a zone, to replay it
                         "mode": qa.answer_mode,
                         "metrics": qa.metrics,
                         "evidence": [c["pattern_id"] for c in payload.citations.values()],

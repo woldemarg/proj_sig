@@ -610,7 +610,7 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
             rings = geometry["coordinates"] if kind == "Polygon" else [r for poly in geometry["coordinates"] for r in poly]
             cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
         return frozenset(cells)
-    except (AttributeError, KeyError, TypeError, ValueError) as exc:  # h3's own errors are ValueErrors; SpatialError is one too
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
@@ -618,7 +618,7 @@ def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozens
     """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
     and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts its parent,
     a coarser one every dataset cell below it). A focus that is the zone scores 1, as does a pattern that is; a pattern far
-    larger or smaller than the zone scores little; one outside it is left out."""
+    larger or smaller than the zone scores little; one outside it scores 0."""
     if not len(cells):
         return {}
     res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
@@ -634,8 +634,8 @@ def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozens
     out, size = {}, int(inside.sum())
     for pid, rows in covers.items():
         rows = np.unique(np.asarray(rows, dtype=np.int64))
-        if hit := int(inside[rows].sum()):
-            out[pid] = round(hit / float(np.sqrt(len(rows) * size)), 4)
+        hit = int(inside[rows].sum())
+        out[pid] = round(hit / float(np.sqrt(len(rows) * size)), 4) if hit else 0.0
     return out
 
 

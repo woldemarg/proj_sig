@@ -110,7 +110,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 
 | Code | Meaning | Stage |
 |---|---|---|
-| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400) | VALIDATING |
+| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400); `invalid_options` also refuses a question's map zone that cannot be read (`cells`, `geometry`; HTTP 400, no batch) | VALIDATING |
 | `invalid_schema` | too few rows or columns; no categorical dimension after profiling | VALIDATING / PROFILING |
 | `no_numeric_targets` | no numeric column | VALIDATING / PROFILING |
 | `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING) | PROFILING / DISCOVERING |

@@ -29,7 +29,7 @@ Rules:
    condition), point out that the same phenomenon recurs in a different part of the data.
 6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
    Say they are in the same area; do not explain one by the other, not even as a hypothesis. An AREA line names
-   the findings that lie in the map area the question is about; present the others as lying outside it.
+   the findings that lie in the map area the question is about and those outside it; it says nothing of the rest.
 7. SCALE: a "scale:" line and the SCALE CHAIN follow a finding to coarser and finer levels of the same phenomenon.
    Say whether it holds at the coarser level or reverses there; "not found at the coarser level" means it is not
    confirmed there on its own, never that it is local.

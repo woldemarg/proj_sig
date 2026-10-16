@@ -245,13 +245,13 @@ class Workspace:
         """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
         return self.datasets_dir / dataset_id / "cells.geojson"
 
-    def load_geo(self, dataset_id: str) -> dict[str, Any] | None:
-        """The spatial context ``save_geo`` stored for a geo dataset; None for any other dataset."""
+    def load_geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any] | None:
+        """The spatial context ``save_geo`` stored for a geo dataset (only ``keys``, if given); None for any other dataset."""
         path = self.datasets_dir / dataset_id / "geo.npz"
         if not path.is_file():
             return None
         with np.load(path, allow_pickle=False) as data:
-            return {k: data[k] for k in data.files}
+            return {k: data[k] for k in keys or data.files}
 
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.

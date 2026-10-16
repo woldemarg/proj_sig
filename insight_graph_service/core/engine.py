@@ -36,7 +36,8 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight, SpatialProvenance
+from graph_query_engine.vertical import resolution as pattern_resolution
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
@@ -243,14 +244,14 @@ class Engine:
         datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone."""
         if cells is None and geometry is None:
             return None
+        graph = state.graph
         levels = sorted(
             {
-                (ins.dataset_id, sp.resolution)
-                for ins in state.graph.insights.values()
-                if (sp := SpatialProvenance.from_dict(ins.provenance.get("spatial"))) and sp.resolution is not None
+                (graph.insight(pid).dataset_id, r)
+                for pid in graph.insights
+                if (r := pattern_resolution(graph, pid)) is not None and (resolution is None or r <= resolution)
             }
         )
-        levels = [(d, r) for d, r in levels if resolution is None or r <= resolution]
         try:
             zone = parse_zone(cells) if cells is not None else geometry_to_cells(geometry or {}, max((r for _, r in levels), default=0))
         except SpatialError as exc:
@@ -262,7 +263,7 @@ class Engine:
         dataset id fixes its files."""
         out: dict[str, float] = {}
         for dataset_id, _ in levels:
-            if (geo := self.ws.load_geo(dataset_id)) is not None:
+            if (geo := self.ws.load_geo(dataset_id, ("cells",))) is not None:
                 out.update(zone_overlap(geo["cells"], self.ws.load_covers(dataset_id), zone))
         return out
 
@@ -282,7 +283,11 @@ class Engine:
         records, vectors = self.ws.patterns(), self.ws.vectors()
         geo = []  # every READY geo dataset's stored cells and extents: the spatial plane is derived, never journaled
         for b in batches.values():
-            stored = self.ws.load_geo(b["dataset_id"]) if b.get("status") == "READY" and (b.get("profile") or {}).get("geo") else None
+            stored = (
+                self.ws.load_geo(b["dataset_id"], ("cells", "nbr_ptr", "nbr_idx"))
+                if b.get("status") == "READY" and (b.get("profile") or {}).get("geo")
+                else None
+            )
             if stored is not None:
                 geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
         snapshot = build_snapshot(

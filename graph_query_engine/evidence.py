@@ -88,7 +88,7 @@ class Evidence:
     notes: list[str] = field(default_factory=list)
     scale_chains: list[dict[str, Any]] = field(default_factory=list)  # ScaleChain as dicts, the items' keys added
     zones: list[dict[str, Any]] = field(default_factory=list)  # rank_zones: a question without scope over geo items
-    area: dict[str, float] | None = None  # an asked map zone: item key -> its overlap with the zone (place); None: no zone
+    area: dict[str, float] | None = None  # an asked map zone: item key -> place (0 outside) for the levels it weighed; None: no zone
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -105,12 +105,17 @@ class Evidence:
         if p.get("conditions"):
             parsed_bits.append("scope=" + ",".join(p["conditions"]))
         lines.append("PARSED: " + (" | ".join(parsed_bits) or "no explicit metric/scope recognised"))
-        if self.area is not None:
-            inside = ", ".join(f"{k} {v:.0%}" for k, v in self.area.items())
+        if self.area is not None:  # findings of the levels the zone weighed; it says nothing of the others
+            inside = ", ".join(f"{k} {v:.0%}" for k, v in self.area.items() if v)
+            outside = ", ".join(k for k, v in self.area.items() if not v)
             lines.append(
-                f"AREA: the question is about a map area; the findings in it, with how closely each one's map cells match it (100% = the same cells): {inside}; the others lie outside it."
-                if inside
-                else "AREA: the question is about a map area; none of the findings lies in it."
+                "AREA: the question is about a map area; "
+                + (
+                    f"in it, with how closely each one's map cells match it (100% = the same cells): {inside}"
+                    if inside
+                    else "none of the findings lies in it"
+                )
+                + (f"; outside it: {outside}." if outside else ".")
             )
         lines.append(
             "UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset."
@@ -290,7 +295,7 @@ class Evidence:
         keys = self._keys()
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
         if self.area is not None:
-            lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k in self.area) or 'жодного свідчення'}")
+            lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v) or 'жодного свідчення'}")
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)

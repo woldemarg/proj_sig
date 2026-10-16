@@ -16,7 +16,7 @@ const ERROR_HELP = {
   no_viable_insights: ["Nothing significant found", "Subgroups were tested, but none passed the significance, stability and effect-size checks.", "Try more rows or other grouping columns."],
   unsupported_file: ["Unsupported file", "Use CSV, TSV or Parquet (up to the upload limit).", ""],
   unreadable_file: ["Couldn’t read the file", "The parser failed — check the delimiter and encoding.", ""],
-  invalid_options: ["Column option problem", "A column named in the options doesn’t exist or isn’t numeric.", "Check the spelling of the column names."],
+  invalid_options: ["Option problem", "A column named in the options doesn’t exist or isn’t numeric, or a map zone could not be read.", "Check the spelling of the column names, or the zone’s cells or shape."],
   representation_mismatch: ["Workspace mismatch", "This workspace was built with a different embedding setup.", "Reset the workspace to change the embedding model or weights."],
   duplicate_patterns: ["Already ingested", "These insights are already in the graph.", ""],
   interrupted: ["Interrupted", "Processing stopped before finishing; nothing partial was kept.", "Upload the file again."],
@@ -683,7 +683,7 @@ function botCard(turn) {
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${renderChain(it)}</div>`;
   }).join("");
-  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.</div>` : "";
+  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.naive_nearest || []).length ? `${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.` : ""}</div>` : "";
   const panes = [
     items.length ? ["Evidence & how it was found", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Click an item to isolate its path in the graph or on the sphere.</p>${hypo}${evid}`] : null,
     ["Sources", "", `<div class="muted" style="font-size:12.5px">${esc(qa.provenance_footer || "")}</div>`],

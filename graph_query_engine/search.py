@@ -93,7 +93,7 @@ def compute_baselines(
     ingest, so the question is the only text embedded here; a pattern without a document vector is left out."""
     closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES)
     doc_vecs = {pid: frame.documents[pid] for pid in graph.insights if pid in frame.documents}
-    naive = naive_nearest(encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved)
+    naive = naive_nearest(encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved) if question.strip() else []  # a zone alone
     retrieved = {r.node_id for r in result.patterns}
     return {
         "structural_only": sorted(closure),
