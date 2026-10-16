@@ -27,7 +27,7 @@ These chapters describe the system as it is implemented, in the order data flows
 * **Formulas** are written in plain text blocks, next to the code that computes them; [11.4](11_reference.md#114-formula-index) indexes them all.
 * **Running example** blocks show the demo's actual output at that stage.
 * **Section numbers** (`§5.6`) are stable handles: code comments cite chapters as `docs/05_latent_anchors.md §5.6`.
-* The docs describe the current state. The `PROVENANCE.md` files record how the vendored code differs from its origins: [the EDA engine](../subgroup_miner/vendor/PROVENANCE.md), [the ontology engine](../attractor_topology/vendor/PROVENANCE.md) and [the chunk journal](../insight_graph_service/core/PROVENANCE.md). [`AGENTS.md`](../AGENTS.md) holds the rules for changing code and docs together.
+* The docs describe the current state. The `PROVENANCE.md` files record how the vendored code differs from its origins: [the EDA engine](../subgroup_miner/vendor/PROVENANCE.md), [the ontology engine](../attractor_topology/vendor/PROVENANCE.md), [the chunk journal](../insight_graph_service/core/PROVENANCE.md) and [the test data](../tests/vendor/PROVENANCE.md). [`AGENTS.md`](../AGENTS.md) holds the rules for changing code and docs together.
 
 ## Background material
 

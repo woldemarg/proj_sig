@@ -581,3 +581,57 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
         assert client.post("/api/search", json={"question": " "}).status_code == 400
+
+
+def test_the_graph_exports_as_geosparql(tmp_path):
+    """``GET /api/export/geosparql.ttl``: Turtle that rdflib parses and the GeoSPARQL 1.1 validator accepts; a SPARQL
+    query for the insights inside a region returns its IN_REGION members; CO_LOCATED keeps its relation; the trust axes
+    and the provenance chain are there."""
+    import rdflib
+    from fastapi.testclient import TestClient
+    from pyshacl import validate
+
+    from insight_graph_service.server.app import create_app
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        done = [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo="auto@8,7", source="sensor net", reliability="B")]
+    assert [r["status"] for r in done] == ["READY", "READY"]
+    response = TestClient(create_app(engine=engine)).get("/api/export/geosparql.ttl")
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/turtle")
+    data = rdflib.Graph().parse(data=response.text, format="turtle")
+    shapes = rdflib.Graph().parse(PROJECT_ROOT / "tests" / "vendor" / "geosparql_validator.ttl", format="turtle")
+    conforms, _, report = validate(data, shacl_graph=shapes)
+    assert conforms, report
+
+    graph = engine.graph()
+    edges = [e for e in graph.edges if e["type"] == "IN_REGION"]
+    region = max({e["target"] for e in edges}, key=lambda r: sum(e["target"] == r for e in edges))
+    rows = data.query(f"PREFIX sig: <urn:sig:vocab#> SELECT ?p WHERE {{ ?p a sig:Insight ; sig:inRegion <urn:sig:{region}> }}")
+    assert {str(r.p) for r in rows} == {f"urn:sig:{e['source']}" for e in edges if e["target"] == region}
+    features = (
+        "PREFIX geo: <http://www.opengis.net/ont/geosparql#> SELECT (COUNT(?f) AS ?n) WHERE { ?f a geo:Feature ; geo:hasGeometry/geo:asWKT ?w }"
+    )
+    assert int(next(iter(data.query(features))).n) == sum(1 for n in graph.of_kind("Pattern")) + sum(1 for _ in graph.of_kind("Region"))
+    sig = rdflib.Namespace("urn:sig:vocab#")
+    relation = {"overlaps": sig.extentsOverlap, "adjacent": sig.extentsTouch, "same_region": sig.sameRegion}
+    co = [e for e in graph.edges if e["type"] == "CO_LOCATED"]
+    assert co and all(
+        (rdflib.URIRef(f"urn:sig:{e['source']}"), relation[e["props"]["relation"]], rdflib.URIRef(f"urn:sig:{e['target']}")) in data for e in co
+    )
+    pid = next(n["id"] for n in graph.of_kind("Pattern"))
+    insight, dataset = rdflib.URIRef(f"urn:sig:{pid}"), rdflib.URIRef(f"urn:sig:DS:{graph.insight(pid).dataset_id}")
+    prov = rdflib.Namespace("http://www.w3.org/ns/prov#")
+    assert (insight, prov.wasDerivedFrom, dataset) in data and (dataset, sig.sourceReliability, rdflib.Literal("B")) in data
+    assert data.value(insight, sig.credibility).toPython() == graph.nodes[pid]["props"]["credibility"]
+    assert data.value(dataset, prov.wasDerivedFrom) == rdflib.URIRef(f"urn:sig:{done[0]['upload_id']}")
+    geo = rdflib.Namespace("http://www.opengis.net/ont/geosparql#")
+    wkt = str(data.value(data.value(insight, geo.hasGeometry), geo.asWKT))
+    body = wkt.removeprefix("MULTIPOLYGON (((").removesuffix(")))")  # polygons split by ")), ((", their rings by "), ("
+    rings = [[[tuple(map(float, xy.split()))[::-1] for xy in r.split(", ")] for r in poly.split("), (")] for poly in body.split(")), ((")]
+    shape = h3.LatLngMultiPoly(*(h3.LatLngPoly(*poly) for poly in rings))
+    ds = graph.insight(pid).dataset_id
+    cells = {str(c) for c in engine.ws.load_geo(ds)["cells"][engine.ws.load_covers(ds)[pid]]}
+    assert set(h3.h3shape_to_cells(shape, h3.get_resolution(next(iter(cells))))) == cells  # the WKT outline holds exactly its cells
