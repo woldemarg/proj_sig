@@ -113,10 +113,9 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
     ok = np.isfinite(lat) & np.isfinite(lon)
     if not ok.any():
         raise SpatialError("No valid point for @auto")
-    cells = pd.Series([h3.latlng_to_cell(a, b, GEO_AUTO_RESOLUTIONS[0]) for a, b in zip(lat[ok], lon[ok])]).value_counts()
-    candidates = {}
-    for res in GEO_AUTO_RESOLUTIONS:  # each level from the one finer: a parent's parent is the coarser parent
-        cells = cells.groupby([h3.cell_to_parent(c, res) for c in cells.index]).sum()
+    lat, lon, candidates = lat[ok], lon[ok], {}
+    for res in GEO_AUTO_RESOLUTIONS:  # each point indexed at each level as build_cells does: H3 children do not tile their parent
+        cells = pd.Series([h3.latlng_to_cell(a, b, res) for a, b in zip(lat, lon)]).value_counts()
         candidates[str(res)] = {
             "cells": len(cells),
             "dense_share": round(float((cells >= min_cell_points).mean()), 4),
@@ -162,13 +161,17 @@ def _tokens(name: str) -> set[str]:
 
 
 def locate_points(frame: pd.DataFrame, locator: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """(lat, lon, location columns). ``auto`` takes the first text column whose values parse as points,
-    else the numeric pair named like lat/latitude and lon/lng/longitude."""
+    """(lat, lon, location columns). ``<lat>,<lon>`` by position, unless the names say longitude then latitude;
+    ``auto`` takes the first text column whose values parse as points, else the numeric pair named like lat/latitude
+    and lon/lng/longitude."""
     if "," in locator:
         names = [c.strip() for c in locator.split(",")]
         missing = [c for c in names if c not in frame.columns]
         if len(names) != 2 or missing:
             raise SpatialError(f"Geo columns not in dataset: {missing or names}")
+        first, second = _tokens(names[0]), _tokens(names[1])
+        if first & LON_NAMES and not first & LAT_NAMES and second & LAT_NAMES and not second & LON_NAMES:
+            names.reverse()  # `longitude,latitude`: in range either way, so position alone would swap the axes silently
         lat, lon = (pd.to_numeric(frame[c], errors="coerce").to_numpy(dtype=float) for c in names)
         return (*_in_range(lat, lon), names)
     if locator != "auto":

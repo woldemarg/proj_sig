@@ -89,10 +89,16 @@ async function refreshHealth() {
 }
 
 // datasets
+function datasetName(b) {
+  /* the file and its level: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9) */
+  const res = /^\d+$/.test(b.level || "") ? b.level : ((b.profile || {}).geo || {}).resolution;
+  return res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · table` : b.filename;
+}
+
 function datasetCard(b) {
   const running = !TERMINAL.has(b.status);
   const m = b.metrics || {}, p = b.profile || {};
-  const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id;
+  const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id, name = datasetName(b);
   let body = "";
   if (running) {
     const i = Math.max(0, STAGES.indexOf(b.status));
@@ -115,10 +121,10 @@ function datasetCard(b) {
   const chip = running ? `<span class="chip run">Processing</span>` : b.status === "READY" ? `<span class="chip ok">Ready</span>`
     : b.status === "FAILED" ? `<span class="chip bad">Failed</span>` : `<span class="chip">Skipped</span>`;
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
-  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(b.filename)}" title="Remove this dataset and its insights from the knowledge base">` +
+  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" title="Remove this dataset and its insights from the knowledge base">` +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
-    `<div class="ds-head"><span class="ds-name" title="${esc(b.filename)}">${esc(b.filename)}</span>${chip}</div>` +
+    `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${chip}</div>` +
     `<div class="ds-sub">${esc(when)}</div>` +
     (b.source || b.reliability ? `<div class="ds-src"><span class="chip" title="Source and its reliability (Admiralty code)">${esc(b.source || "source")} · ${esc(b.reliability || "F")}</span></div>` : "") +
     `${body}${del}</div>`;
@@ -148,10 +154,11 @@ async function refreshBatches() {
     const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; setFilter();
   }));
   $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
-  const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b.filename])).entries()];
+  const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b])).values()];
   const sel = $("dataset-filter"), cur = sel.value;
-  sel.innerHTML = `<option value="">All datasets</option>` + ready.map(([id, f]) => `<option value="${esc(id)}">${esc(f)}</option>`).join("");
-  sel.value = ready.some(([id]) => id === cur) ? cur : "";
+  sel.innerHTML = `<option value="">All datasets</option>` +
+    ready.map((b) => `<option value="${esc(b.dataset_id)}" data-file="${esc(b.filename)}">${esc(datasetName(b))}</option>`).join("");
+  sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
   if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets that are there
   const readyKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",");
   if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); GeoMap.refresh(); }
@@ -718,7 +725,7 @@ function suggestions() {
   const filter = $("dataset-filter").value;
   const out = [];
   for (const o of [...$("dataset-filter").options].filter((o) => o.value && (!filter || o.value === filter))) {
-    if (SUGGESTIONS[o.text]) out.push(...SUGGESTIONS[o.text]);
+    if (SUGGESTIONS[o.dataset.file]) out.push(...SUGGESTIONS[o.dataset.file]);
     else if (o.value === GeoMap.current()) out.push(...GeoMap.suggestions());
   }
   return out;
