@@ -21,8 +21,8 @@ shift of one of its planted metrics that draw at least half their events from it
     S-two-sources  source a: two foci in the region cell and a third in the next region cell farthest from them; source b,
                 over the same area but for that cell, repeats focus 0 the same way and focus 1 with load lowered (every
                 metric declared the same indicator in both)
-    S-poison    source a has one focus; source b repeats it and adds a second, planted in b only, where a has its ordinary
-                events
+    S-poison    source a (rated B) has one focus; source b (rated E) repeats it and adds a second, planted in b only, where a
+                has its ordinary events
     S-size      about 10⁴ fine cells in three datasets of ten foci each
 
 Metrics, per encoder (the hashing double; the bundled model when present):
@@ -92,6 +92,7 @@ class Upload:
     table: bool = False  # the table level too (its point columns left out)
     supersedes: int | None = None  # the index of the scenario's upload this one replaces
     source: str | None = None  # the declared source
+    reliability: str | None = None  # its A-F rating
     indicators: str | None = None  # the indicator registry of its metrics
 
 
@@ -218,8 +219,9 @@ def generate(name: str, seed: int) -> Scenario:
     if name == "S-poison":
         centres = _spread(_fits(region, area), 2)
         registry = ",".join(f"{m}_median:{m}" for m in ("load", *SIGNATURES))
-        a = replace(_foci_upload(rng, "s_poison_a.csv", centres[:1], area, 8000), source="a", indicators=registry)
-        b = replace(_foci_upload(np.random.default_rng(seed + 1), "s_poison_b.csv", centres, area, 8000), source="b", indicators=registry)
+        a = replace(_foci_upload(rng, "s_poison_a.csv", centres[:1], area, 8000), source="a", reliability="B", indicators=registry)
+        b = _foci_upload(np.random.default_rng(seed + 1), "s_poison_b.csv", centres, area, 8000)
+        b = replace(b, source="b", reliability="E", indicators=registry)
         return Scenario(name, [a, b], {"expected": "6 -> 1 / 1,2 (b's focus 1 is planted in b only, where a has events)"})
     if name == "S-control":
         others = h3.grid_ring(region, 1)[::2]  # three region cells, no two adjacent
@@ -388,7 +390,14 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
         with path.open("rb") as stream:
             supersedes = None if upload.supersedes is None else upload_ids[upload.supersedes]
             levels = engine.upload(
-                upload.name, stream, geo=upload.geo, table=upload.table, supersedes=supersedes, source=upload.source, indicators=upload.indicators
+                upload.name,
+                stream,
+                geo=upload.geo,
+                table=upload.table,
+                supersedes=supersedes,
+                source=upload.source,
+                reliability=upload.reliability,
+                indicators=upload.indicators,
             )
         upload_ids.append(levels[0]["upload_id"])
         for level in levels:

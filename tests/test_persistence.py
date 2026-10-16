@@ -399,6 +399,51 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
+def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, demo_csv):
+    """The READY record signs what the graph reads of its dataset, as stored, and a PATCH signs it again (``ok``); a rating
+    edited in the record is ``mismatch`` after the rebuild: its source, rating and registry are ignored, the evidence says
+    so on the trust line, in the summary and in a NOTE, and a PATCH refuses to sign it; a record without a digest is
+    ``unverified``, not degraded, and its trust lines say so."""
+    import numpy as np
+
+    from insight_graph_service.core.engine import PipelineError
+    from insight_graph_service.core.snapshot import metadata_digest
+
+    cfg = make_config(tmp_path / "ws")
+    engine = make_engine(cfg)
+    ds = engine.ingest_file(demo_csv)["dataset_id"]
+    record = engine.ws.ready_batch_for(ds)
+    assert record["metadata_digest"] == metadata_digest(record)
+    engine.update_dataset_metadata(ds, source="Field reports", reliability="E", indicators="margin:gross margin")
+    assert engine.graph().nodes[f"DS:{ds}"]["props"]["integrity"] == "ok"
+    for field, value in (("source", "x"), ("filename", "y.csv"), ("profile", {}), ("indicators", {})):
+        assert metadata_digest({**engine.ws.ready_batch_for(ds), field: value}) != engine.ws.ready_batch_for(ds)["metadata_digest"], field
+
+    forged = engine.ws.ready_batch_for(ds)
+    engine.ws.save_batch({**forged, "reliability": "A"})  # by hand, past the API
+    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})  # rebuilt at the next start
+    engine = make_engine(cfg)
+    props = engine.graph().nodes[f"DS:{ds}"]["props"]
+    assert props["integrity"] == "mismatch" and "source" not in props and props["reliability"] == "F"
+    assert "indicator" not in engine.graph().nodes[f"M:{ds}:margin"]["props"]  # the registry is ignored too
+    found = engine.search("Why is margin lower for phones in the US?")
+    assert all(it.trust.startswith("source unknown (its dataset's metadata failed the integrity check)") for it in found.evidence.items)
+    assert any(ds in n and "its metadata no longer matches its digest" in n for n in found.evidence.notes)
+    assert "(джерело невідоме," in found.payload().evidence_summary
+    with pytest.raises(PipelineError) as refused:
+        engine.update_dataset_metadata(ds, indicators="")  # any PATCH would sign the forged rating as genuine
+    assert refused.value.code == "metadata_mismatch"
+
+    record = engine.ws.ready_batch_for(ds)
+    engine.ws.save_batch({k: v for k, v in record.items() if k != "metadata_digest"})  # journaled before digests
+    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    engine = make_engine(cfg)
+    assert engine.problem is None and engine.graph().nodes[f"DS:{ds}"]["props"]["integrity"] == "unverified"
+    trust = engine.search("Why is margin lower for phones in the US?").evidence.items[0].trust
+    assert trust.startswith("source A (completely reliable), metadata unverified")  # seen, though not refused
+    assert metadata_digest({"profile": {"n": np.int64(3), 7: "x"}}) == metadata_digest({"profile": {"n": "3", "7": "x"}})  # as stored
+
+
 def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unverified(tmp_path, demo_csv):
     """A p-value edited in the journal no longer matches its digest: after the rebuild the pattern is ``mismatch`` and
     left out of the evidence. A record without a digest (journaled before digests) reads ``unverified``, not degraded."""

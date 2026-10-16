@@ -50,6 +50,13 @@ Rules:
    for one not found there. The ZONES are larger areas: call them "зона Z1", "зона Z2" and say which findings
    each contains. Findings that lie in one region of the SCALE CHAIN are "в тому самому районі", which says nothing
    about their scale. The asked area is "виділена зона", never "район" (a district is about scale). Never write a region id.
+11. TRUST: a "trust:" line gives three separate things: the source's reliability (A-F, as the uploader rated it),
+   the credibility (whether another independent source confirms the finding) and the integrity check. None of them
+   follows from the statistics on the "validation:" line: a strong p-value from one source is still unconfirmed.
+   Say plainly when a finding is contradicted (credibility 5) or no other source covers it (6), or when its source
+   is rated D, E or F. When sources disagree, describe the disagreement; do not resolve it. Name the levels in words,
+   e.g. "підтверджено іншим джерелом", "суперечить іншому джерелу", "немає іншого джерела для перевірки", not by
+   their codes.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]
