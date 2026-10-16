@@ -126,8 +126,8 @@ def test_geo_benchmark_apparatus(tmp_path):
 def test_poisoning_eval_apparatus(tmp_path):
     """The deterministic red team (docs/10_verification.md §10.3): the spot planted in an unreliable source only is never
     confirmed and says so on its trust line in the evidence of every question, the opposite shifts of two sources are both
-    5, a p-value edited in the journal leaves the evidence, and an edited reliability passes unflagged (dataset metadata is
-    outside the digest); the variant before #8 really lacks the trust lines and rule 11."""
+    5, a p-value edited in the journal leaves the evidence, and an edited reliability is caught and ignored; the variant
+    before #8 really lacks the trust lines and rule 11."""
     from poisoning_eval import BEFORE_8, DIRECTED, check, ingest, score, tamper, without_trust
 
     from evidence_narrator_service.narration import SYSTEM_PROMPT
@@ -150,7 +150,8 @@ def test_poisoning_eval_apparatus(tmp_path):
     assert score(f"Дані надійно показують вищий load [{key}].", full, [spot])["any"] is False  # approval is not a qualification
     assert score(f"Вищий load [{other}].", full, [spot]) == {"mentioned": False, "all": False, "any": False}
     forged = tamper(engine, case, scenario.uploads[-1].name)
-    assert forged["metadata"]["trust"].startswith("source A") and forged["metadata"]["integrity"] == "ok"  # the open gap
+    assert forged["metadata"]["dataset"] == "mismatch" and forged["metadata"]["note"]
+    assert forged["metadata"]["trust"].startswith("source unknown (its dataset's metadata failed the integrity check)")
     assert forged["integrity"] == {"integrity": "mismatch", "in_evidence": False, "note": True}
 
     engine = make_engine(make_config(tmp_path / "two" / "ws"))
