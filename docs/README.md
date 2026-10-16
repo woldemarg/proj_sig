@@ -16,8 +16,9 @@ These chapters describe the system as it is implemented, in the order data flows
 | 10 | [Verification](10_verification.md) | The test map, the synthetic dataset, the hypothesis benchmark, measurement scripts, the quality gate, known limitations | `tests/`, `insight_graph_service/core/demo.py`, `scripts/` |
 | 11 | [Reference](11_reference.md) | Glossary, identifier formats, every parameter, a formula index, the versioned contracts | — |
 | 12 | [Architecture](12_architecture.md) | The bounded contexts and their import rule, using a library on its own, the services and their contracts, containers and start order, storage, observability | the packages, `compose.yaml`, the `Dockerfile` of each service |
+| 13 | [Trust and integrity](13_trust.md) | Why every finding carries its source's reliability, its credibility from other sources and its statistics apart, the integrity checks, where trust is shown, the audit against knowledge-graph poisoning | `insight_graph_service/core/snapshot.py` (credibility, digests), `graph_query_engine/evidence.py` (trust line), `scripts/poisoning_eval.py` |
 
-**Shorter paths.** To *use* the system: 1, 9, 8 (in containers: 12.5). To *reuse* a library on its own or *change the structure*: 12. To change *statistics*: 2, 3, 10. To change *text or vectors*: 4, 7 (and the versioning rules in 11.5). To change the *ontology*: 5, 6. To look something up: 11.
+**Shorter paths.** To *use* the system: 1, 9, 8 (in containers: 12.5). To *reuse* a library on its own or *change the structure*: 12. To change *statistics*: 2, 3, 10. To change *text or vectors*: 4, 7 (and the versioning rules in 11.5). To change the *ontology*: 5, 6. To judge *how far an answer can be trusted* or change the trust model: 13, then 6.2, 6.7 and 7.4. To look something up: 11.
 
 ## Conventions
 

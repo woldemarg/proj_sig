@@ -18,7 +18,7 @@
 >
 > Compose starts them in dependency order, and a test enforces every allowed import.
 
-**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md)
+**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md) · **Next** [13. Trust and integrity](13_trust.md)
 
 ---
 
