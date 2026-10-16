@@ -11,7 +11,9 @@ match the living ontology.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +31,6 @@ from insight_contracts import (
     batch_node_id,
     dataset_node_id,
     dimension_node_id,
-    metadata_digest,
     metric_node_id,
     record_digest,
 )
@@ -415,6 +416,16 @@ def compute_integrity(record: dict[str, Any]) -> str:
     if "record_digest" not in record:
         return "unverified"
     return "ok" if record["record_digest"] == record_digest(record) else "mismatch"
+
+
+BATCH_DIGEST_FIELDS = ("dataset_id", "upload_id", "level", "filename", "source", "reliability", "indicators", "supersedes", "profile")
+
+
+def metadata_digest(batch: dict[str, Any]) -> str:
+    """SHA-256 of a batch record's canonical JSON over what the graph reads of its dataset (``BATCH_DIGEST_FIELDS``), as
+    the record is stored: a source, rating, registry or profile changed in the record, or removed, no longer matches."""
+    covered = json.loads(json.dumps({k: batch[k] for k in BATCH_DIGEST_FIELDS if k in batch}, default=str))  # as atomic_write_json stores it
+    return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def compute_metadata_integrity(batch: dict[str, Any]) -> str:

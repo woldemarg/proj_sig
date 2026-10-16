@@ -145,16 +145,6 @@ def record_digest(record: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-BATCH_DIGEST_FIELDS = ("dataset_id", "upload_id", "level", "filename", "source", "reliability", "indicators", "supersedes", "profile")
-
-
-def metadata_digest(batch: dict[str, Any]) -> str:
-    """SHA-256 of a batch record's canonical JSON over what the graph reads of its dataset (``BATCH_DIGEST_FIELDS``): a
-    source, rating, registry or profile changed in the record, or removed from it, no longer matches the stored digest."""
-    covered = {k: batch[k] for k in BATCH_DIGEST_FIELDS if k in batch}
-    return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-
-
 def pattern_id(dataset_id: str, conditions: tuple[Condition, ...]) -> str:
     """Deterministic Pattern id: same dataset + same scope -> same id (idempotency)."""
     return "P-" + stable_hash(dataset_id, [c.expr for c in sorted(conditions)])

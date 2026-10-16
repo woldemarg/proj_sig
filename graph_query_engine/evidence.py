@@ -336,7 +336,7 @@ class Evidence:
             tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
             if it.trust and it.credibility in TRUST_WORDS:
-                tag += f" (джерело {it.reliability}, {TRUST_WORDS[it.credibility]})"
+                tag += f" (джерело {it.reliability or 'невідоме'}, {TRUST_WORDS[it.credibility]})"
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         keys = self._keys()
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
@@ -384,12 +384,14 @@ def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
     keys = {it.pattern_id: it.key for it in items}
     for it in items:
         props = graph.nodes.get(dataset_node_id(it.provenance["dataset_id"]), {"props": {}})["props"]
-        it.reliability = props.get("reliability", "F")
+        forged = props.get("integrity") == "mismatch"
+        it.reliability = "" if forged else props.get("reliability", "F")
+        mark = ("" if props.get("source") else ", undeclared") + (", metadata unverified" if props.get("integrity") == "unverified" else "")
         parts = [
-            f"source {it.reliability} ({RELIABILITY.get(it.reliability, 'unrecognised code')})" + ("" if props.get("source") else ", undeclared")
+            "source unknown (its dataset's metadata failed the integrity check)"
+            if forged
+            else f"source {it.reliability} ({RELIABILITY.get(it.reliability, 'unrecognised code')}){mark}"
         ]
-        if props.get("integrity") == "mismatch":
-            parts = ["source unknown (its dataset's metadata failed the integrity check)"]
         if it.credibility is not None:
             parts.append(_credibility_text(it.credibility, it.credibility_basis, keys))
         parts.append(f"integrity {graph.nodes[it.pattern_id]['props'].get('integrity', 'unverified')}")
@@ -565,7 +567,7 @@ def build_evidence(
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability") if k in props}
+            | {k: props[k] for k in ("source", "reliability", "integrity") if k in props}
         )
         if dnode["props"].get("glossary"):
             datasets[-1]["glossary"] = dnode["props"]["glossary"]
@@ -608,7 +610,7 @@ def build_evidence(
         f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability and indicators are ignored"
         " and its baselines are unchecked."
         for d in datasets
-        if graph.nodes.get(dataset_node_id(d["dataset_id"]), {"props": {}})["props"].get("integrity") == "mismatch"
+        if d.get("integrity") == "mismatch"
     ]
     if not items and not forged:
         notes.append("No pattern in the graph matched the question.")

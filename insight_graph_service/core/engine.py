@@ -37,11 +37,11 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from graph_query_engine.vertical import resolution as pattern_resolution
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight, metadata_digest
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, Insight
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.settings import Settings
-from insight_graph_service.core.snapshot import build_snapshot
+from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
 from subgroup_miner.discovery import build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset, parse_indicators
@@ -740,8 +740,9 @@ class Engine:
     ) -> dict[str, Any]:
         """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` / ``supersedes`` (None: unchanged, "":
         undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
-        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused; a dataset or
-        upload it now supersedes is deleted in the same transaction (docs/06_graph_and_storage.md §6.8)."""
+        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused, and so is a
+        record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
+        the same transaction (docs/06_graph_and_storage.md §6.8)."""
         changes = resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = self._check_supersedes(supersedes) or None
@@ -749,6 +750,10 @@ class Engine:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
+            if compute_metadata_integrity(record) == "mismatch":  # a PATCH would sign the forged fields as genuine
+                raise PipelineError(
+                    "metadata_mismatch", f"{dataset_id}: its batch record no longer matches its digest; delete it and upload it again"
+                )
             own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
             if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
                 raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")

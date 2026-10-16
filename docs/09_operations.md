@@ -127,6 +127,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `representation_mismatch` on a question (not a batch code) | the encoder's fingerprint differs from the workspace's; `POST /api/search` answers 409 | question |
 | `busy` (not a batch code) | a reset while a batch or a deletion runs or an upload waits; a deletion, or a `PATCH supersedes`, while one of the target's batches is still to run (HTTP 409) | — |
 | `unknown_batch` (not a batch code) | `Engine.process` was given an id with no record; over HTTP, `GET /api/batches/{id}` answers a plain 404 `{detail}` for an unknown id | — |
+| `metadata_mismatch` (not a batch code) | a `PATCH /api/datasets/{id}` on a dataset whose batch record no longer matches its `metadata_digest` (HTTP 409): signing it again would pass the edit off as genuine; delete the dataset and upload it again ([6.7](06_graph_and_storage.md#67-configuration-and-guarantees)) | — |
 | `unknown_dataset` (not a batch code) | `Engine.delete_dataset` was given an id no batch carries (HTTP 404) | — |
 | `unknown_upload` (not a batch code) | `Engine.delete_upload` was given an upload id no batch carries (HTTP 404) | — |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
