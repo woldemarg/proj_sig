@@ -359,6 +359,10 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
         f"in it, with how closely each one's map cells match it (100% = the same cells): {keys['P2']} 1%; outside it: {keys['P1']}."
         in found.payload().evidence_prompt
     )
+    prompt = found.payload().evidence_prompt
+    assert f"[{keys['P2']}] role=seed | in the asked area | scope:" in prompt and f"[{keys['P1']}] role=" in prompt
+    assert f"[{keys['P1']}] role={found.evidence.items[1].role} | outside the asked area" in prompt
+    assert "(у виділеній зоні)" in found.payload().evidence_summary and "(поза виділеною зоною)" in found.payload().evidence_summary
     assert not search("", state, encoder, QueryConfig(), place_scores={"P1": 0.0}).seeds
     unweighed = search("", state, encoder, QueryConfig(), place_scores={"P2": 0.004}).payload().evidence_prompt  # P1 not weighed
     assert f"{keys['P2']} <1%" in unweighed  # in the zone, however little

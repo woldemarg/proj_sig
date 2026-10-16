@@ -117,15 +117,15 @@ function fitRows(rows, padding) {
 
 function graticule() {
   const f = [];
-  for (let x = 18; x <= 44; x += 1) f.push({ type: "Feature", properties: { major: x % 5 === 0 }, geometry: { type: "LineString", coordinates: [[x, 41.5], [x, 57.5]] } });
-  for (let y = 42; y <= 57; y += 1) f.push({ type: "Feature", properties: { major: y % 5 === 0 }, geometry: { type: "LineString", coordinates: [[18, y], [44, y]] } });
+  for (let x = -180; x <= 180; x += 1) f.push({ type: "Feature", properties: { major: x % 5 === 0 }, geometry: { type: "LineString", coordinates: [[x, -80], [x, 80]] } });
+  for (let y = -80; y <= 80; y += 1) f.push({ type: "Feature", properties: { major: y % 5 === 0 }, geometry: { type: "LineString", coordinates: [[-180, y], [180, y]] } });
   return { type: "FeatureCollection", features: f };
 }
 
 function ensureMap() {
   if (G.ready) return G.ready;
-  G.map = new maplibregl.Map({
-    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
+  G.map = new maplibregl.Map({  // no box zoom: Shift-click selects zone cells
+    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
     style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
   });
   G.map.touchZoomRotate.disableRotation();
