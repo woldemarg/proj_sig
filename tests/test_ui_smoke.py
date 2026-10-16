@@ -227,6 +227,14 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.click("#map-zone-ask")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
+        badges = "[...[...document.querySelectorAll('.msg-bot')].at(-1).querySelectorAll('.ev .role')].map((b) => b.textContent)"
+        assert {"in the asked area", "outside the asked area"} & set(page.evaluate(badges))  # each item of the zone's levels says which
+        page.fill("#question", "Де найбільше households?")  # the chat box asks about the selected zone too
+        page.press("#question", "Enter")
+        page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
+        assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
+        page.evaluate("GeoMap.toggleZone('8a2a1072b59ffff')")  # a cell this map does not draw (another level, elsewhere)
+        assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
         page.click("#view-switch button[data-view='graph']")

@@ -467,8 +467,10 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():
-    """A polygon equal to a set of cells is that set, as a Feature or a FeatureCollection too; a circle and a box take the
-    cells whose centres they hold, a shape smaller than a cell the cell under it; anything else is refused."""
+    """A polygon equal to a set of cells is that set, as a Feature or a FeatureCollection too, whatever their own ``bbox``
+    member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
+    anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
+    by its centre, also where the centre lies outside its H3 parent."""
     from subgroup_miner.spatial import geometry_to_cells, parse_zone, zone_overlap
 
     centre = h3.latlng_to_cell(*HOT, 7)
@@ -479,6 +481,8 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
         geometry_to_cells(shape, 7)
         == geometry_to_cells(feature, 7)
         == geometry_to_cells({"type": "FeatureCollection", "features": [feature]}, 7)
+        == geometry_to_cells(feature | {"bbox": [0, 0, 0.001, 0.001]}, 7)  # GeoJSON's own bbox is metadata, not the shape
+        == geometry_to_cells({"type": "FeatureCollection", "bbox": [0, 0, 1, 1], "features": [feature]}, 7)
         == disk
     )
     lat, lon = h3.cell_to_latlng(centre)
@@ -491,6 +495,9 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
         {"center": [lon]},
         {"center": [lon, lat], "radius_m": float("inf")},
         {"bbox": "x"},
+        {"bbox": [170, -10, -170, 10]},  # across 180°: two boxes, not the rest of the world
+        {"center": [181, lat], "radius_m": 10.0},
+        {"center": [lon, 91], "radius_m": 10.0},
         [lon, lat],
     ):
         with pytest.raises(SpatialError):
@@ -504,10 +511,15 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     covers = {"A": inner, "B": np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, 3))))}
     assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
     assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
-    parent = h3.cell_to_parent(centre, 6)
-    below = {str(c) for c in cells if h3.cell_to_parent(str(c), 6) == parent}  # a coarser cell: every cell below it
+    coarse = h3.latlng_to_cell(*h3.cell_to_latlng(centre), 6)
+    below = {str(c) for c in cells if h3.latlng_to_cell(*h3.cell_to_latlng(str(c)), 6) == coarse}  # a coarser cell: the centres it holds
     hit = len(below & set(h3.grid_disk(centre, 1)))
-    assert zone_overlap(cells, covers, frozenset([parent]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
+    assert zone_overlap(cells, covers, frozenset([coarse]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
+    fine = "871e4985bffffff"  # its centre lies in another resolution-5 cell than its H3 parent
+    holder, parent = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5), h3.cell_to_parent(fine, 5)
+    assert holder != parent
+    assert zone_overlap(np.array([holder, parent]), {"holder": [0], "parent": [1]}, frozenset([fine])) == {"holder": 1.0, "parent": 0.0}
+    assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
 
 
 def test_a_zone_from_the_map_is_the_same_question(tmp_path):
@@ -534,6 +546,9 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
     chains = [[c for c in found.evidence.scale_chains if c["pattern_id"] == seed] for found in (text, zoned)]
     assert chains[0] and chains[0] == chains[1]  # the same SCALE CHAIN as the text question
     assert "AREA:" in zoned.payload().evidence_prompt and "AREA:" not in text.payload().evidence_prompt
+    assert text.evidence.zones and not zoned.evidence.zones  # the asked area is the question's place: no ZONES beside it
+    unweighed = engine.search(question, cells=zone, resolution=6).evidence  # no geo dataset at 6 or coarser
+    assert unweighed.area is None and unweighed.zones == text.evidence.zones and any("weighs no geo dataset" in n for n in unweighed.notes)
 
     place = engine.place_scores(engine.committed(), cells=zone)
     alone = engine.search("", cells=zone)

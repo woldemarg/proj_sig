@@ -215,10 +215,12 @@ async function loadDataset(ds) {
 }
 
 function paintZone() {
-  /* the selected cells outlined (H3 ids are global: the zone survives a switch of dataset), and the zone bar */
-  if (G.map && G.map.getSource("cells") && G.data) G.data.features.forEach((f) => G.map.setFeatureState({ source: "cells", id: f.properties.row }, { zone: G.zone.has(f.properties.h3) }));
+  /* the selected cells outlined (H3 ids are global: the zone survives a switch of dataset, and a map of another level,
+     which does not draw them, says how many it has), and the zone bar */
+  let shown = 0;
+  if (G.map && G.map.getSource("cells") && G.data) G.data.features.forEach((f) => { const on = G.zone.has(f.properties.h3); shown += on; G.map.setFeatureState({ source: "cells", id: f.properties.row }, { zone: on }); });
   $("map-zone").hidden = !G.zone.size;
-  $("map-zone-n").textContent = `ZONE · ${G.zone.size} cell${G.zone.size === 1 ? "" : "s"}`;
+  $("map-zone-n").textContent = `ZONE · ${G.zone.size} cell${G.zone.size === 1 ? "" : "s"}` + (G.data && shown < G.zone.size ? ` · ${shown} on this map` : "");
 }
 
 function colorBy(metric) {
