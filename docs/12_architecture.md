@@ -124,12 +124,13 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 | 1 | `model-init` | the graph service image | — | runs once, exits 0 | edge | volume `sig-models` (read-write); `./models` read-only as a seed |
 | 1 | `neo4j` | `neo4j:5.26.31-community` | — | `cypher-shell RETURN 1` | internal, edge (ports 17474 / 17687) | volume `neo4j-data` |
 | 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
-| 2 | `insight-graph` | `insight_graph_service/Dockerfile` (CPU torch) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
+| 2 | `insight-graph` | `insight_graph_service/Dockerfile` (build arg `TORCH`: `cpu`, or `cu130` and the GPU with `compose.gpu.yaml`) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
 | 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
 | 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
 python scripts/compose_check.py                   # verification: its own project, ports and volumes, beside your stack
 python scripts/compose_check.py --fresh --tests   # clean room: no build cache, pulled base images, the test suite inside the image
 ```
@@ -138,7 +139,7 @@ python scripts/compose_check.py --fresh --tests   # clean room: no build cache, 
 
 **Hardening.** Every image except Neo4j runs as an unprivileged user with a read-only root filesystem, a tmpfs at `/tmp`, `no-new-privileges` and no capabilities.
 
-**Settings.** The graph service reads `.env` (`env_file`). Its container values are overridden in `environment`: the workspace and model paths, `EMBEDDING_DEVICE=cpu`, the Neo4j address and password (`SIG_NEO4J_PASSWORD`), and blanks for the broker's `GEMMA_*` values and for `LLM_API_KEY`: the graph service reads no LLM key, so a key an `.env` file may still hold never reaches it. The narrator gets no `env_file`, only an allow-list (`INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S`, `LLM_BASE_URL`, `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`), so no key from `.env` reaches it either.
+**Settings.** The graph service reads `.env` (`env_file`). Its container values are overridden in `environment`: the workspace and model paths, `EMBEDDING_DEVICE=auto` (the GPU when `compose.gpu.yaml` attaches one, else the CPU), the Neo4j address and password (`SIG_NEO4J_PASSWORD`), and blanks for the broker's `GEMMA_*` values and for `LLM_API_KEY`: the graph service reads no LLM key, so a key an `.env` file may still hold never reaches it. The narrator gets no `env_file`, only an allow-list (`INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S`, `LLM_BASE_URL`, `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`), so no key from `.env` reaches it either.
 
 **The model.** `model-init` checks the pinned Qwen3 checkpoint file by file against `core/model_store.py`'s manifest (sizes and SHA-256 values, checked against the Hugging Face Hub):
 - A copy in the volume that verifies is kept.

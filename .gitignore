@@ -11,6 +11,7 @@ workspace.deleting-*/
 *.writer.lock
 .scratch*/
 review-reports/
+compose.override.yaml  # a host's own compose settings, e.g. a copy of compose.gpu.yaml
 
 # keep dirs, drop contents
 models/**

@@ -226,7 +226,7 @@ Lint and format cover the seven packages (`insight_contracts/`, `subgroup_miner/
 `python scripts/compose_check.py` verifies the suite of [12.5](12_architecture.md#125-containers-and-start-order) as deployed. It builds and starts all six services — `model-init`, `neo4j`, `llm-model-broker`, `insight-graph`, `evidence-narrator`, `sig-web-console` — as compose project `sig-check` on its own host ports, Neo4j password and volumes. The volumes are created for the run and removed after it (`--keep` leaves the stack running), so every run ingests from scratch and the user's own stack can keep running. Everything is reached through the console's nginx, as a user reaches it. It checks:
 - **start order:** `model-init` completed before `insight-graph` started; `neo4j` ≤ `insight-graph` ≤ `evidence-narrator`; the broker ≤ the narrator ≤ the console;
 - **model provisioning:** `model-init` exited 0 with the model present, copied from the seed or downloaded;
-- **the services:** the console serves the UI with its vendored libraries, the graph service answers through it, the narrator reaches the graph service and the broker's model, Neo4j answers;
+- **the services:** the console serves the UI with its vendored libraries, the graph service answers through it and embeds on the expected device (`embedding_device` `cpu`, or `cuda` with `--gpu`), the narrator reaches the graph service and the broker's model, Neo4j answers;
 - **an empty graph** answers `answer_mode: empty`;
 - **ingest:** the demo CSV uploaded through nginx (multipart) to READY, where a SKIPPED upload fails; `GET /api/health` stays under 2 s during the ingest;
 - **the mirror:** Neo4j holds the snapshot's nodes label by label and all its relationships;
@@ -235,9 +235,10 @@ Lint and format cover the seven packages (`insight_contracts/`, `subgroup_miner/
 - **reset:** `POST /api/reset` empties the graph and the mirror, and the next question answers `empty`.
 
 Options:
-- `--tests` builds the `test` target of `insight_graph_service/Dockerfile` and runs `scripts/check.py` inside it, with the model mounted read-only and no Chromium, so the browser test skips.
+- `--tests` builds the `test` target of `insight_graph_service/Dockerfile` and runs `scripts/check.py` inside it, with the model mounted read-only, no GPU (the model tests run on the CPU) and no Chromium, so the browser test skips.
 - `--fresh` rebuilds without the build cache and pulls the pinned base images (the clean-room run).
 - `--live-llm` asks one question through the broker to the real upstream — a paid call, so it is opt-in.
+- `--gpu` adds `compose.gpu.yaml`: the CUDA image is built, the graph service gets the GPU and must embed on CUDA.
 
 ## 10.6 Known approximations and limitations
 

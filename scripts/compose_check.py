@@ -4,12 +4,14 @@
     python scripts/compose_check.py --fresh       clean room: rebuild without the build cache and pull the base images
     python scripts/compose_check.py --tests       also run scripts/check.py inside the graph service's `test` image
     python scripts/compose_check.py --live-llm    also answer one question through the broker's real upstream (a paid call)
+    python scripts/compose_check.py --gpu         the graph service on the GPU (compose.gpu.yaml); without it, on the CPU
     python scripts/compose_check.py --keep        leave the stack running afterwards
 
 Everything is reached the way a user reaches it: through the web console's nginx on one host port. The stack runs as
 compose project ``sig-check`` on its own volumes (created for the run and removed after it), its own host ports and its
 own Neo4j password, so it runs beside the user's own stack (project ``sig``) and never touches its data.
-Needs Docker, ./models (the seed of the model volume; downloaded when it does not verify) and ./.env.
+Needs Docker, ./models (the seed of the model volume; downloaded when it does not verify) and ./.env; --gpu also needs
+an NVIDIA GPU (driver 580 or newer).
 """
 
 from __future__ import annotations
@@ -39,11 +41,12 @@ ENV = {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")} | {
     "SIG_NEO4J_HTTP_PORT": "27474",
     "SIG_NEO4J_BOLT_PORT": "27687",
 }
+FILES = ["-f", str(ROOT / "compose.yaml")]  # --gpu adds compose.gpu.yaml
 results: list[tuple[str, bool, str]] = []
 
 
 def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    cmd = ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yaml"), *args]
+    cmd = ["docker", "compose", "-p", PROJECT, *FILES, *args]
     print("$", " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, env=ENV, check=check, text=True, capture_output=capture)
 
@@ -102,10 +105,13 @@ def check_start_order(seconds: float) -> None:
     )
 
 
-def check_services() -> None:
+def check_services(gpu: bool) -> None:
     page = http("GET", "/")
     record("console serves the UI", 'id="cy"' in page and "/vendor/plotly-gl3d.min.js" in page)
-    record("graph service answers through the console", "graph" in http("GET", "/api/health"))
+    health = http("GET", "/api/health")
+    record("graph service answers through the console", "graph" in health)
+    device = str(health["embedding_device"])
+    record(f"embeddings run on the {'GPU' if gpu else 'CPU'}", device.startswith("cuda" if gpu else "cpu"), device)
     chat = http("GET", "/api/chat/health")
     llm = chat["llm"]
     record(
@@ -195,14 +201,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tests", action="store_true", help="also run the test suite inside the graph service image")
     parser.add_argument("--live-llm", action="store_true", help="also ask the real upstream model once (a paid call)")
     parser.add_argument("--keep", action="store_true", help="leave the stack running")
+    parser.add_argument("--gpu", action="store_true", help="attach the GPU (compose.gpu.yaml) and expect the embeddings on CUDA")
     args = parser.parse_args(argv)
+    if args.gpu:
+        FILES.extend(["-f", str(ROOT / "compose.gpu.yaml")])
     compose("down", "-v", "--remove-orphans")  # a run always starts from new volumes
     try:
         compose("build", *(["--no-cache", "--pull"] if args.fresh else []))
         start = time.perf_counter()
         compose("up", "-d", "--wait", "--wait-timeout", "900")
         check_start_order(time.perf_counter() - start)
-        check_services()
+        check_services(args.gpu)
         check_workflow(args.live_llm)
         if args.tests:
             run_tests(args.fresh)

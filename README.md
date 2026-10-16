@@ -19,7 +19,7 @@ browser ──> sig-web-console (nginx: the UI; /api/chat/ -> narrator, /api/ ->
               │                      │ POST /api/search                 one model, its key, the provider routing
               └─ /api/ ─────> insight-graph (graph service) ── bolt ──> neo4j (graph mirror)
                               subgroup_miner -> attractor_topology -> snapshot -> graph_query_engine
-                              workspace volume (journals, state, snapshot); Qwen3 on CPU
+                              workspace volume (journals, state, snapshot); Qwen3 on the GPU or the CPU
 ```
 
 | Package | Role |
@@ -60,14 +60,15 @@ Python **3.12+** (the EDA script uses PEP 701 f-strings).
 ```powershell
 copy .env.sample .env                     # then edit: GEMMA_* (the broker's upstream, model and key), tunables
 docker compose up -d --build --wait       # then http://127.0.0.1:8765
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
-The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The containers compute embeddings on the CPU (≈ 2.5 GB RAM for the graph service). The host setup below can use the GPU.
+The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 2.5 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
 
 **Host development**
 ```powershell
 python -m venv .venv                                                                # from the repository root
-.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126   # or CPU torch
+.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu130   # or CPU torch
 .venv\Scripts\pip install -r requirements-dev.txt                                    # every service's runtime + pytest, ruff, playwright
 .venv\Scripts\python.exe -m insight_graph_service.core.model_store                  # once: Qwen3-Embedding-0.6B into models/ (1.19 GB), verified
 .venv\Scripts\python.exe -m llm_model_broker                                         # the broker on :8080 (reads GEMMA_* from .env)
