@@ -209,10 +209,18 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         # the map: cells selected as a zone ask a question without text
         page.evaluate("document.querySelector('#drawer-close').click()")
         page.click("#view-switch button[data-view='map']")
-        page.wait_for_function("G.data && G.map && G.map.getSource('cells')", timeout=30000)
-        cells = page.evaluate("G.data.features.slice(0, 3).map((f) => f.properties.h3)")
-        page.evaluate(f"{cells}.forEach((h) => GeoMap.toggleZone(h))")
-        assert page.inner_text("#map-zone-n") == "ZONE · 3 cells"
+        page.wait_for_function("G.data && G.map && G.map.getSource('cells') && G.map.loaded()", timeout=30000)
+        nearest = """() => { const c = G.map.getCenter();  // the cells nearest the view's centre, as screen points
+            return G.data.features.map((f) => { const r = f.geometry.coordinates[0].slice(1);
+              const x = r.reduce((a, q) => a + q[0], 0) / r.length, y = r.reduce((a, q) => a + q[1], 0) / r.length;
+              return { h3: f.properties.h3, d: (x - c.lng) ** 2 + (y - c.lat) ** 2, ...G.map.project([x, y]) }; })
+              .sort((a, b) => a.d - b.d).slice(0, 3); }"""
+        box, cells = page.locator("#map").bounding_box(), page.evaluate(nearest)
+        for cell in cells:  # a real Shift-click on the map, as a user selects
+            page.keyboard.down("Shift")
+            page.mouse.click(box["x"] + cell["x"], box["y"] + cell["y"])
+            page.keyboard.up("Shift")
+        assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)

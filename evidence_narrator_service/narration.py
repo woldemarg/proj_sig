@@ -28,8 +28,10 @@ Rules:
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
    condition), point out that the same phenomenon recurs in a different part of the data.
 6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
-   Say they are in the same area; do not explain one by the other, not even as a hypothesis. An AREA line names
-   the findings that lie in the map area the question is about and those outside it; it says nothing of the rest.
+   Say they are in the same area; do not explain one by the other, not even as a hypothesis.
+   AREA: the question is about a map area the user selected. Answer it from the findings marked "in the asked area";
+   if none is, say so first. Findings marked "outside the asked area" are not in it: keep them apart, after the
+   area's own findings, as the same picture elsewhere. Findings with neither mark are from other levels or tables.
 7. SCALE: a "scale:" line and the SCALE CHAIN follow a finding to coarser and finer levels of the same phenomenon.
    Say whether it holds at the coarser level or reverses there; "not found at the coarser level" means it is not
    confirmed there on its own, never that it is local.
@@ -47,7 +49,7 @@ Rules:
    "на рівні району зсув протилежний" for one that reverses there and "на рівні району окремо не підтверджено"
    for one not found there. The ZONES are larger areas: call them "зона Z1", "зона Z2" and say which findings
    each contains. Findings that lie in one region of the SCALE CHAIN are "в тому самому районі", which says nothing
-   about their scale. The AREA is "виділена зона". Never write a region id.
+   about their scale. The asked area is "виділена зона", never "район" (a district is about scale). Never write a region id.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

@@ -42,6 +42,8 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
     "scale-dependent": "scale-dependent (reverses at a coarser level of this upload; see SCALE CHAIN)",
     "not_found_coarser": "not found at the coarser level",
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
+AREA_TAG = {True: " | in the asked area", False: " | outside the asked area"}  # an item of a level the zone weighed
+AREA_WORDS = {True: " (у виділеній зоні)", False: " (поза виділеною зоною)"}
 SCALE_WORDS = {  # the same labels in the evidence-only summary
     "regional": " (тримається і на рівні району)",
     "scale-dependent": " (на рівні району зсув протилежний)",
@@ -154,7 +156,8 @@ class Evidence:
                 continue
             s = it.statistics
             scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
-            lines.append(f"[{it.key}] role={it.role} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
+            area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
+            lines.append(f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
             lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
             if it.relationship:
                 lines.append(f"     relationship: {self.reword(it.relationship)} (divergence {s['emm_score']:.2f})")
@@ -291,6 +294,7 @@ class Evidence:
             tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
+            tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         keys = self._keys()
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
