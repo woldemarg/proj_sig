@@ -42,6 +42,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | asked zone (AREA) | zone | — | map cells or a shape sent with a question; how much each geo pattern's extent and it are one place (`place_scores`) weighs the seeds ([7.2](07_question_answering.md#72-seeds)); the answer calls it «виділена зона» |
 | indicator, unit | *What the metrics measure* | — | what a metric measures and in which unit, declared per dataset (`indicators`), so that metrics of two datasets compare by meaning, not by column name ([2.1](02_discovery.md#21-ingestion)) |
 | source, reliability | *Source*, *Source reliability* | — | where a dataset comes from and how far it is trusted: the Admiralty source-reliability code `A` (completely reliable) … `E` (unreliable), `F` (cannot be judged, the default); metadata of the dataset, not of its findings ([2.1](02_discovery.md#21-ingestion)) |
+| credibility (`credibility_basis`) | — | — | how far other independent sources confirm a finding: 1 confirmed, 2 another source has the metric, 5 contradicted, 6 cannot be judged; computed from the graph, never from the statistics ([6.2](06_graph_and_storage.md#62-the-graph-schema)) |
 | workspace | — | — | the folder that holds one knowledge base (`WORKSPACE_DIR`) ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 | degraded start | — | — | a start on a workspace the engine cannot serve: writes and questions refused with `workspace_degraded` until a reset ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)) |
 | bounded context | — | — | a package that owns one part of the model and imports only what [12.2](12_architecture.md#122-dependency-direction) allows ([12.1](12_architecture.md#121-bounded-contexts)) |
@@ -152,7 +153,7 @@ Two version strings in `attractor_topology/models.py` and one fingerprint decide
 | `CANONICAL_VERSION` | `ltir-canon-4` | the canonical form: both text contracts, the closed-intent scope, the phrase grammar, component labels and coefficients (covariance insights cite only their correlation change) ([4.2](04_representation.md#42-the-canonical-form)) |
 | `REPRESENTATION_VERSION` | `ltir-rep-3` | what is embedded and how it is composed: block layout, re-normalisation, the uncentred frame ([4.3](04_representation.md#43-the-tripartite-vector)) |
 | fingerprint | `sha1` of `EmbeddingSpec` | both versions plus model id and revision, dimensions, storage and compute dtype, truncation, query instruction, normalisation, block weights, EMM component weight and the three component settings (`MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF`) ([4.6](04_representation.md#46-representation-identity-and-versions)) |
-| `SNAPSHOT_VERSION` | 6 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
+| `SNAPSHOT_VERSION` | 7 | the layout of `graph/snapshot.json` ([6.3](06_graph_and_storage.md#63-the-workspace-on-disk)) |
 
 How the engine treats a stored workspace ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)):
 - **Another version.** Journals written under another `CANONICAL_VERSION` or `REPRESENTATION_VERSION` give a degraded start ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)).

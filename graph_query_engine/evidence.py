@@ -73,6 +73,8 @@ class EvidenceItem:
     scale: str = ""  # regional | scale-dependent | not_found_coarser | insufficient (ScaleChain.scale)
     folded_into: str = ""  # the key of the item this one restates at another level of the same upload
     also: list[str] = field(default_factory=list)  # the keys of the levels of the same upload that restate this item
+    credibility: int | None = None  # 1 | 2 | 5 | 6 from independent sources (docs/06_graph_and_storage.md §6.2); None: an older snapshot
+    credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
 
 
 @dataclass
@@ -445,6 +447,8 @@ def build_evidence(
             attractors=acts,
             transversal_only=transversal_only,
             located=located,
+            credibility=node["props"].get("credibility"),
+            credibility_basis=node["props"].get("credibility_basis", {}),
             provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
         )
 

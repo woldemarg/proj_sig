@@ -342,6 +342,8 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
     assert done[2]["dataset_id"] != load_dataset(path, engine.settings.miner, bins="").dataset_id  # not a plain upload
     assert not {"latitude", "longitude"} & set(done[2]["profile"]["numerics"])  # its point columns left out
+    patterns = engine.graph().of_kind("Pattern")  # a mixed snapshot: every level carries the rule that gave it; one upload, one source
+    assert patterns and {(n["props"]["credibility"], n["props"]["credibility_basis"]["rule"]) for n in patterns} == {(6, "anchor")}
     assert any("points" in w for w in done[2]["warnings"]) and any("left out of the table level" in w for w in done[2]["warnings"])
     with pytest.raises(IngestionError, match="pointz"):  # a name in neither the file nor the cells fails the geo levels
         load_dataset(path, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
