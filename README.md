@@ -143,6 +143,7 @@ curl http://127.0.0.1:8765/api/batches                                          
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
 curl -X POST -H "Content-Type: application/json" -d "{\"geometry\": {\"center\": [-122.27, 37.8], \"radius_m\": 20000}}" http://127.0.0.1:8765/api/search   # a map zone as the question
+curl -X POST http://127.0.0.1:8765/api/patterns/<pattern id>/verify               # an insight recomputed from its stored upload
 curl -X DELETE http://127.0.0.1:8765/api/datasets/<dataset id>
 curl -X POST http://127.0.0.1:8765/api/reset                                       # delete the workspace (and clear the mirror)
 ```

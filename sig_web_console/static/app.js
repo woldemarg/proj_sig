@@ -572,15 +572,16 @@ const VERIFIED = {  // POST /api/patterns/{id}/verify: status -> chip class, wor
 };
 
 async function verifyPattern(id) {
-  const out = $("verify-out");
-  $("verify-btn").disabled = true; out.textContent = "Recomputing…";
+  const btn = $("verify-btn"), out = $("verify-out");  // this drawer's: another may open while the answer is on its way
+  btn.disabled = true; out.textContent = "Recomputing…";
+  let html;
   try {
     const r = await api(`/api/patterns/${encodeURIComponent(id)}/verify`, { method: "POST" });
     const [cls, label, words] = VERIFIED[r.status] || ["warn", r.status, ""];
     const rows = (r.diff || []).map((d) => `<div class="shift-row"><span class="mono">${esc(d.field)}</span><span class="muted">${esc(String(d.journal))} → ${esc(String(d.recomputed))}</span></div>`).join("");
-    out.innerHTML = `<span class="chip ${cls}">${esc(label)}</span> ${esc(words)}${rows}<div class="muted">Not recomputed: ${esc(r.not_checked.join(", "))}</div>`;
-  } catch (e) { out.textContent = `Re-check failed: ${e.message}`; }
-  $("verify-btn").disabled = false;
+    html = `<span class="chip ${cls}">${esc(label)}</span> ${esc(words)}${rows}<div class="muted">Not recomputed: ${esc(r.not_checked.join(", "))}</div>`;
+  } catch (e) { html = esc(`Re-check failed: ${e.message}`); }
+  if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
 async function inspect(id) {
@@ -608,7 +609,7 @@ async function inspect(id) {
       ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
       ["Also known as", esc((p.aliases || []).join("; "))],
     ]);
-    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" data-id="${esc(n.id)}" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
+    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
     html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
     html += `<details class="nb-group"><summary>Provenance</summary>` + kv([
@@ -640,7 +641,7 @@ async function inspect(id) {
   }
   $("inspector").innerHTML = html;
   $("inspector").querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => { focusNodes([el.dataset.id]); inspect(el.dataset.id); }));
-  if ($("verify-btn")) $("verify-btn").addEventListener("click", () => verifyPattern($("verify-btn").dataset.id));
+  $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));
   $("drawer").hidden = false;
   if (S.cy) { S.cy.$(":selected").unselect(); S.cy.getElementById(id).select(); }
 }

@@ -16,6 +16,8 @@ def test_a_table_becomes_insights_and_llm_context(demo_csv):
     assert len(lines) == 5 and lines[0].startswith("1. ") and all(" sd " in line or "correlation" in line for line in lines)
     assert context.isascii()
     lead = next(i for i in insights if i.p_value is not None)  # recomputed from the table and its rows alone
-    again = recompute_statistics(table.frame, covers_of(found)[lead.expression], [s.metric for s in lead.shifts], None, found.n_tests)
+    conditions = [(c.attribute, c.value) for c in lead.conditions]
+    again = recompute_statistics(table.frame, conditions, lead.expression, [s.metric for s in lead.shifts], None, found.n_tests)
+    assert list(again["rows"]) == sorted(covers_of(found)[lead.expression]) and list(again["expression_rows"]) == list(again["rows"])
     assert again["support"] == lead.support and again["p_value"] == lead.p_value and again["p_adjusted"] == lead.p_adjusted
     assert [round(s["robust_z"], 9) for s in again["shifts"]] == [round(s.robust_z, 9) for s in lead.shifts]
