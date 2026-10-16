@@ -123,6 +123,45 @@ def test_geo_benchmark_apparatus(tmp_path):
     assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
 
 
+def test_poisoning_eval_apparatus(tmp_path):
+    """The deterministic red team (docs/10_verification.md §10.3): the spot planted in an unreliable source only is never
+    confirmed and says so on its trust line, the opposite shifts of two sources are both 5, a p-value edited in the
+    journal leaves the evidence, and an edited reliability passes unflagged (dataset metadata is outside the digest)."""
+    from poisoning_eval import check, ingest, score, tamper, without_trust
+
+    from insight_contracts import EvidencePayload
+
+    engine = make_engine(make_config(tmp_path / "poison" / "ws"))
+    scenario, case = ingest("S-poison", 1, tmp_path / "poison", engine)
+    found = check(engine, case)
+    (spot,) = case["flagged"]
+    assert found[spot]["credibility"] == 2 and found[spot]["trust"].startswith("source E (unreliable) | credibility 2 (not confirmed")
+    assert found[case["confirmed"]]["credibility"] == 1
+    forged = tamper(engine, case, scenario.uploads[-1].name)
+    assert forged["metadata"]["trust"].startswith("source A") and forged["metadata"]["integrity"] == "ok"  # the open gap
+    assert forged["integrity"] == {"integrity": "mismatch", "in_evidence": False, "note": True}
+
+    engine = make_engine(make_config(tmp_path / "two" / "ws"))
+    _, case = ingest("S-two-sources", 1, tmp_path / "two", engine)
+    found = check(engine, case)
+    assert len(case["flagged"]) == 2 and all(found[p]["credibility"] == 5 for p in case["flagged"])
+
+    payload = EvidencePayload(
+        "q",
+        evidence_prompt="EVIDENCE (x; trust is given per item; cite as [P#]):\n[P1] role=seed\n     trust: source E | credibility 2\n- Z1 = R: x; weakest credibility 2",
+        evidence_summary="- a=1 | n=1 [P1] (джерело E, не підтверджено)",
+        citations={"P1": {"pattern_id": spot}, "P2": {"pattern_id": "P-other"}},
+    )
+    before = without_trust(payload)
+    assert "trust" not in before.evidence_prompt and "weakest" not in before.evidence_prompt and "джерело" not in before.evidence_summary
+    assert score("У зоні вищий load [P1]. Але це не підтверджено іншим джерелом [P1][P2].", payload, [spot]) == {
+        "mentioned": True,
+        "all": False,
+        "any": True,
+    }
+    assert score("Вищий load [P2].", payload, [spot]) == {"mentioned": False, "all": False, "any": False}
+
+
 def test_chain_eval_apparatus(hashed_engine):
     from chain_eval import run_chain_eval
 
