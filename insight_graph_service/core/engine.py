@@ -347,8 +347,7 @@ class Engine:
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         if supersedes == upload_id:
-            if not any(b.get("source_path") == str(path) for b in self.ws.list_batches()):
-                path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
         options = {
             "filename": name,
@@ -544,6 +543,8 @@ class Engine:
                             record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
 
                     record["metrics"] = batch_metrics(result, kept, rejections, update, spec, snapshot, timings, t0)
+                    if replaced:  # the anchors left after the old version went
+                        record["metrics"]["attractors_total"] = len(ontology.attractor_ids)
                     record["status"] = "READY"
                     record["stage_times"]["READY"] = utc_now()
                     self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
@@ -709,6 +710,7 @@ class Engine:
         if self.ws.pending_path.exists():  # the rollback failed too (logged): its marker blocks every write until a restart
             record["warnings"].append("rollback failed; restart the service to retry it, no write runs until then")
         code = getattr(exc, "code", "internal_error")
+        record.pop("superseded", None)  # the transaction rolled the removal back with the batch
         record["status"] = "FAILED"
         record["failed_stage"] = list(record["stage_times"])[-1]
         record["error"] = {"code": code, "message": str(exc)}
@@ -748,20 +750,22 @@ class Engine:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
-            if changes.get("supersedes") and changes["supersedes"] in (dataset_id, record.get("upload_id")):
-                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself")
+            own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
+            if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
+                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")
             unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
             if unknown:
                 raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
-            replaced = self._targets(record, set()) if changes.get("supersedes") else None
+            replaced = self._targets(record, own) if changes.get("supersedes") else None
             ontology = self.ontology()
             # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
             with self.ws.transaction({"dataset_id": dataset_id}, journal=bool(replaced)) as cp:
                 superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
-                ontology.save()
+                if replaced:
+                    ontology.save()
                 snapshot, state = self._derive(ontology, pending=record)
                 self.ws.save_batch(record)
             return {
@@ -799,19 +803,26 @@ class Engine:
                 f"supersedes {record['supersedes']} not applied: a level of this upload failed or none holds insights; the old version stays"
             )
             return None
-        return self._targets(record, {b.get("dataset_id") for b in levels})
+        try:
+            return self._targets(record, {b.get("dataset_id") for b in levels})
+        except PipelineError as exc:  # busy: the batch commits, the old version stays
+            record["warnings"].append(f"supersedes {record['supersedes']} not applied: {exc}")
+            return None
 
     def _supersede_alone(self, record: dict[str, Any], outcome: tuple[str, str | None]) -> None:
         """``supersedes`` applied by a last level that commits nothing (SKIPPED, or no insight): a deletion of its own."""
         try:
             if replaced := self._superseded(record, outcome):
-                record["superseded"] = self._delete(lambda b: b.get("dataset_id") in replaced[0], {"batch_id": record["batch_id"]}, "unknown_dataset")
+                chosen = {b["batch_id"] for b in replaced[1]}
+                removed = self._delete(lambda b: b["batch_id"] in chosen, {"batch_id": record["batch_id"]}, "unknown_dataset")
+                record["neo4j"], record["superseded"] = removed.pop("neo4j"), removed
         except Exception as exc:  # the batch's own outcome stands; the old version stays
             record["warnings"].append(f"supersedes {record['supersedes']} not applied: {type(exc).__name__}: {exc}")
 
     def _targets(self, record: dict[str, Any], own: set[str | None]) -> tuple[set[str], list[dict[str, Any]]] | None:
         """The datasets named by ``record['supersedes']`` (a dataset id, or every dataset of an upload id) and all their
-        batches, never ``record``'s own dataset nor those in ``own``; None, with a warning, when none is left."""
+        batches, never ``record``'s own dataset nor those in ``own``; None, with a warning, when none is left; ``busy`` while
+        one of those batches is still to run."""
         target = record["supersedes"]
         every = [b for b in self.ws.list_batches() if b["batch_id"] != record["batch_id"]]
         ids = {b["dataset_id"] for b in every if target in (b.get("dataset_id"), b.get("upload_id")) and b.get("dataset_id")}
@@ -819,7 +830,10 @@ class Engine:
         if not ids:
             record["warnings"].append(f"supersedes {target}: nothing left to replace")
             return None
-        return ids, [b for b in every if b.get("dataset_id") in ids or b.get("upload_id") == target]
+        batches = [b for b in every if b.get("dataset_id") in ids or b.get("upload_id") == target]
+        if any(b["status"] not in TERMINAL for b in batches):
+            raise PipelineError("busy", f"supersedes {target}: a batch of it is still to run")
+        return ids, batches
 
     @_healthy
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:

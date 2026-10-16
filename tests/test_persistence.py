@@ -667,28 +667,32 @@ def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(tmp_
     engine = make_engine(make_config(tmp_path / "ws"))
     old = _upload(engine, v1)
     old_ids, old_upload = {r["dataset_id"] for r in old}, old[0]["upload_id"]
-    anchors = {a["attractor_id"] for a in engine.ws.activations()}
     journal = [p["id"] for p in engine.ws.patterns()]
 
-    remove = engine._remove
+    derive = engine._derive
 
-    def crash(*args):
-        remove(*args)
-        raise RuntimeError("crash after the removal, before the commit point")
+    def crash(ontology, pending=None):
+        if pending and "superseded" in pending:
+            raise RuntimeError("crash after the removal, before the commit point")
+        return derive(ontology, pending)
 
-    monkeypatch.setattr(engine, "_remove", crash)
+    monkeypatch.setattr(engine, "_derive", crash)
     failed = _upload(engine, v2, supersedes=old_upload)
-    assert [r["status"] for r in failed] == ["READY", "FAILED"] and "superseded" not in failed[0]  # level 8 waits for 7
+    assert [r["status"] for r in failed] == ["READY", "FAILED"] and not {"superseded"} & {*failed[0], *failed[1]}  # 8 waits for 7
     assert all(engine.ws.ready_batch_for(ds) for ds in old_ids) and Path(old[0]["source_path"]).is_file()  # rolled back
     assert [p["id"] for p in engine.ws.patterns() if p["dataset_id"] in old_ids] == journal
     monkeypatch.undo()
     engine.delete_upload(failed[0]["upload_id"])
 
+    before = {a["attractor_id"] for a in engine.ws.activations() if not a.get("weak")}  # every member is a row of v1
+    assert {p["dataset_id"] for p in engine.ws.patterns()} == old_ids
     new = _upload(engine, v2, supersedes=old_upload)
     assert [r["status"] for r in new] == ["READY", "READY"] and new[1]["superseded"]["datasets"] == sorted(old_ids)
     assert {p["id"] for p in engine.ws.patterns()} == {p["id"] for p in alone.ws.patterns()}  # as if v2 came alone
     assert not any(engine.ws.load_batch(r["batch_id"]) for r in old) and not Path(old[0]["source_path"]).exists()
-    assert {a["attractor_id"] for a in engine.ws.activations()} & anchors  # the shared anchors kept their ids
+    rows = {p["row_id"] for p in engine.ws.patterns()}  # all of v2's now
+    joined = {a["attractor_id"] for a in engine.ws.activations() if a["row_id"] in rows and not a.get("weak")}
+    assert joined & before  # anchors only v1's rows held before kept their ids as v2's
     assert {n["props"].get("supersedes") for n in engine.graph().of_kind("Dataset")} == {old_upload}
     rows = engine.ws.patterns()  # journal, frame and ontology agree, and the snapshot equals a fresh rebuild
     assert [r["row_id"] for r in rows] == list(range(len(rows))) == list(range(len(engine.ws.vectors())))
@@ -709,12 +713,17 @@ def test_patch_supersedes_deletes_the_old_version_without_mining(tmp_path):
     geo_frame(3).to_csv(v1, index=False)
     geo_frame(4).to_csv(v2, index=False)
     engine = make_engine(make_config(tmp_path / "ws"))
-    old, new = _upload(engine, v1), _upload(engine, v2)
+    with v1.open("rb") as f:
+        queued = engine.upload(v1.name, f, geo="auto@8,7")
+    old, new = [engine.process(queued[0]["batch_id"])], _upload(engine, v2)
     ds, mine = new[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] in {r["dataset_id"] for r in new}}
     with TestClient(create_app(engine)) as client:
-        for bad in (ds, new[0]["upload_id"], "ds-nope"):
+        for bad in (ds, new[0]["upload_id"], new[1]["dataset_id"], "ds-nope"):  # itself, its upload, its other level
             refused = client.patch(f"/api/datasets/{ds}", json={"supersedes": bad})
             assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        busy = client.patch(f"/api/datasets/{ds}", json={"supersedes": old[0]["upload_id"]})  # its level 7 still queued
+        assert busy.status_code == 409 and busy.json()["code"] == "busy" and engine.ws.load_batch(queued[1]["batch_id"])
+        old.append(engine.process(queued[1]["batch_id"]))
         with v1.open("rb") as f:  # the same bytes as the version it would replace
             same = client.post("/api/upload", files={"file": ("points_v1.csv", f, "text/csv")}, data={"supersedes": old[0]["upload_id"]})
         assert same.status_code == 400 and len(list(engine.ws.uploads_dir.iterdir())) == 2  # not kept
@@ -735,5 +744,5 @@ def test_a_coarser_level_with_nothing_to_mine_still_completes_a_new_version(tmp_
     with v2.open("rb") as f:
         new = [engine.process(r["batch_id"]) for r in engine.upload(v2.name, f, geo="auto@8,5", supersedes=old[0]["upload_id"])]
     assert [(r["status"], (r["error"] or {}).get("code")) for r in new] == [("READY", None), ("FAILED", "invalid_schema")]
-    assert new[1]["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old)
+    assert new[1]["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old) and "neo4j" not in new[1]["superseded"]
     assert {p["dataset_id"] for p in engine.ws.patterns()} == {new[0]["dataset_id"]}

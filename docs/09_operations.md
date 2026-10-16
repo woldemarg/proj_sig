@@ -110,7 +110,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 
 | Code | Meaning | Stage |
 |---|---|---|
-| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400); `invalid_options` also refuses a question's map zone that cannot be read (`cells`, `geometry`; HTTP 400, no batch) | VALIDATING |
+| `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability` or `indicators` is refused before the file is stored or a batch exists: HTTP 400); `invalid_options` also refuses a question's map zone that cannot be read (`cells`, `geometry`; HTTP 400, no batch) and a `supersedes` that names nothing, the same file, or (by `PATCH`) the dataset itself or its own upload ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) | VALIDATING |
 | `invalid_schema` | too few rows or columns; no categorical dimension after profiling | VALIDATING / PROFILING |
 | `no_numeric_targets` | no numeric column | VALIDATING / PROFILING |
 | `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING) | PROFILING / DISCOVERING |
@@ -125,7 +125,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `WorkspaceBusy` (not a batch code) | another writer process holds the workspace; the server exits with code 2 | engine start |
 | `workspace_degraded` (not a batch code) | the engine serves a workspace it cannot use ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)); writes and questions are refused (HTTP 409) until a reset | any call |
 | `representation_mismatch` on a question (not a batch code) | the encoder's fingerprint differs from the workspace's; `POST /api/search` answers 409 | question |
-| `busy` (not a batch code) | a reset while a batch or a deletion runs or an upload waits; a deletion while one of the dataset's batches runs (HTTP 409) | — |
+| `busy` (not a batch code) | a reset while a batch or a deletion runs or an upload waits; a deletion, or a `PATCH supersedes`, while one of the target's batches is still to run (HTTP 409) | — |
 | `unknown_batch` (not a batch code) | `Engine.process` was given an id with no record; over HTTP, `GET /api/batches/{id}` answers a plain 404 `{detail}` for an unknown id | — |
 | `unknown_dataset` (not a batch code) | `Engine.delete_dataset` was given an id no batch carries (HTTP 404) | — |
 | `unknown_upload` (not a batch code) | `Engine.delete_upload` was given an upload id no batch carries (HTTP 404) | — |
