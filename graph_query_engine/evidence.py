@@ -43,6 +43,13 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
 AREA_TAG = {True: " | in the asked area", False: " | outside the asked area"}  # an item of a level the zone weighed
 AREA_WORDS = {True: " (у виділеній зоні)", False: " (поза виділеною зоною)"}
+TRUST_WORDS = {  # the credibility level in the evidence-only summary
+    1: "підтверджено іншим джерелом",
+    2: "не підтверджено",
+    5: "суперечить іншому джерелу",
+    6: "немає іншого джерела для перевірки",
+}
+WEAKEST_FIRST = (5, 6, 2, 1)
 SCALE_WORDS = {  # the same labels in the evidence-only summary
     "regional": " (тримається і на рівні району)",
     "scale-dependent": " (на рівні району зсув протилежний)",
@@ -75,6 +82,8 @@ class EvidenceItem:
     also: list[str] = field(default_factory=list)  # the keys of the levels of the same upload that restate this item
     credibility: int | None = None  # 1 | 2 | 5 | 6 (docs/06_graph_and_storage.md §6.2); None: not in the snapshot
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
+    trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
+    reliability: str = ""  # its dataset's A-F code, with the trust line
 
 
 @dataclass
@@ -159,7 +168,10 @@ class Evidence:
                     f" related: {rel or 'none'}"
                 )
         lines.append("")
-        lines.append("EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):")
+        trusted = any(it.trust for it in self.items)
+        lines.append(
+            f"EVIDENCE (statistical findings computed from the uploaded data;{' trust is given per item;' if trusted else ''} cite as [P#]):"
+        )
         for it in self.items:
             if it.folded_into:  # restated on its host's scale line
                 continue
@@ -174,6 +186,8 @@ class Evidence:
                 f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
                 f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
             )
+            if it.trust:
+                lines.append(f"     trust: {it.trust}")
             spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
             if spatial and spatial.cells is not None and spatial.resolution is not None:
                 compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
@@ -201,7 +215,7 @@ class Evidence:
             )
             lines.extend(
                 f"- Z{n} = {z['id']} (res {z['resolution']}): contains {', '.join(keys[p] for p in z['holds'])}; score {z['score']:.2f};"
-                f" {z['patterns']} patterns over {z['datasets']} datasets, {z['themes']} themes"
+                f" {z['patterns']} patterns over {z['datasets']} datasets, {z['themes']} themes{self._weakest(z)}"
                 for n, z in enumerate(self.zones, start=1)
             )
         if self.notes:
@@ -218,6 +232,13 @@ class Evidence:
         if "RELATED_TO" in links:
             parts.append(f"centroid {links['RELATED_TO']:.2f}")
         return "; ".join(parts)
+
+    def _weakest(self, zone: dict[str, Any]) -> str:
+        """``; weakest credibility 6``: the least confirmed finding of a zone, with the trust lines."""
+        levels = [it.credibility for it in self.items if it.pattern_id in zone["holds"] and it.trust and it.credibility is not None]
+        if not levels:
+            return ""
+        return f"; weakest credibility {min(levels, key=lambda lv: WEAKEST_FIRST.index(lv) if lv in WEAKEST_FIRST else -1)}"  # unknown first
 
     def _keys(self) -> dict[str, str]:
         return {it.pattern_id: it.key for it in self.items}
@@ -314,6 +335,8 @@ class Evidence:
             tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
             tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
+            if it.trust and it.credibility in TRUST_WORDS:
+                tag += f" (джерело {it.reliability}, {TRUST_WORDS[it.credibility]})"
             lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
         keys = self._keys()
         lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
@@ -322,6 +345,53 @@ class Evidence:
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
+
+
+def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -> str:
+    """``credibility 1 (confirmed by another source at the same place: "b"; [P3])``: the level and its basis."""
+    place = basis.get("rule") == "place"
+    words = {
+        1: "confirmed by another source" + (" at the same place" if place else ""),
+        2: "not confirmed; another dataset has " + ("events at this place" if place else "the same metric"),
+        5: "contradicted by another source" + (" at the same place" if place else ""),
+        6: "no independent source covers this",
+    }.get(level, "unrecognised level")
+
+    def cited(pids: list[str]) -> str:
+        shown, rest = [f"[{keys[p]}]" for p in pids if p in keys], sum(p not in keys for p in pids)
+        return ", ".join(shown + ([f"{rest} finding{'s' if rest > 1 else ''} not in this evidence"] if rest else []))
+
+    detail = "; ".join(
+        x
+        for x in (
+            ", ".join(json.dumps(s, ensure_ascii=False) for s in basis.get("sources", [])),
+            cited(basis.get("patterns", [])),
+            f"confirmed by {cited(basis['confirmed_by'])}" if basis.get("confirmed_by") else "",
+        )
+        if x
+    )
+    return f"credibility {level} ({words}{': ' + detail if detail else ''})"
+
+
+def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
+    """Each item's trust line (source reliability | credibility | integrity) once the graph has a declared source or
+    reliability, or two uploads (the levels of one upload are one); otherwise the evidence stays as it was without sources."""
+    datasets = [d["props"] for d in graph.of_kind("Dataset")]
+    uploads = {d.get("upload_id") or d["dataset_id"] for d in datasets}
+    if not (len(uploads) >= 2 or any(d.get("source") or d.get("reliability", "F") != "F" for d in datasets)):
+        return
+    keys = {it.pattern_id: it.key for it in items}
+    for it in items:
+        props = graph.nodes.get(dataset_node_id(it.provenance["dataset_id"]), {"props": {}})["props"]
+        it.reliability = props.get("reliability", "F")
+        parts = [
+            f"source {it.reliability} ({RELIABILITY.get(it.reliability, 'unrecognised code')})" + ("" if props.get("source") else ", undeclared")
+        ]
+        if it.credibility is not None:
+            parts.append(_credibility_text(it.credibility, it.credibility_basis, keys))
+        parts.append(f"integrity {graph.nodes[it.pattern_id]['props'].get('integrity', 'unverified')}")
+        it.trust = " | ".join(parts)
+        it.validation = it.validation.removesuffix("; integrity unverified")  # the trust line says it
 
 
 def _members(n: int, kind: str = "") -> str:
@@ -455,6 +525,7 @@ def build_evidence(
     for idx, r in enumerate(chosen, start=1):
         items.append(item(f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located))
     chains = _add_vertical(items, graph, item)
+    _add_trust(items, graph)
 
     attractors, described = [], {}
     for a in result.attractors:
