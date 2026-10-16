@@ -346,8 +346,8 @@ class Engine:
             levels = resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
-        if supersedes == upload_id:
-            path.unlink(missing_ok=True)
+        if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
+            path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
         options = {
             "filename": name,

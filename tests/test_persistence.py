@@ -724,9 +724,10 @@ def test_patch_supersedes_deletes_the_old_version_without_mining(tmp_path):
         busy = client.patch(f"/api/datasets/{ds}", json={"supersedes": old[0]["upload_id"]})  # its level 7 still queued
         assert busy.status_code == 409 and busy.json()["code"] == "busy" and engine.ws.load_batch(queued[1]["batch_id"])
         old.append(engine.process(queued[1]["batch_id"]))
-        with v1.open("rb") as f:  # the same bytes as the version it would replace
-            same = client.post("/api/upload", files={"file": ("points_v1.csv", f, "text/csv")}, data={"supersedes": old[0]["upload_id"]})
-        assert same.status_code == 400 and len(list(engine.ws.uploads_dir.iterdir())) == 2  # not kept
+        for target, geo in ((old[0]["upload_id"], ""), (old[0]["dataset_id"], "auto@6")):  # the same bytes: its upload, or a level of it
+            with v1.open("rb") as f:
+                same = client.post("/api/upload", files={"file": ("points_v1.csv", f, "text/csv")}, data={"geo": geo, "supersedes": target})
+            assert same.status_code == 400 and len(list(engine.ws.uploads_dir.iterdir())) == 2  # not kept
         done = client.patch(f"/api/datasets/{ds}", json={"supersedes": old[0]["upload_id"]}).json()
     assert done["supersedes"] == old[0]["upload_id"] and done["superseded"]["datasets"] == sorted(r["dataset_id"] for r in old)
     assert {p["id"] for p in engine.ws.patterns()} == mine and len(engine.ws.list_batches()) == 2  # no mining, no new batch
