@@ -247,6 +247,13 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.mouse.click(box["x"] + cell["x"], box["y"] + cell["y"])
             page.keyboard.up("Shift")
         assert page.evaluate("G.regionMarks.length") > 0 and page.evaluate("G.overlay.features.some((f) => f.properties.resolution === G.level)")
+        ring = "[[179.87, 1.86], [179.18, 0.66], [179.84, -0.72], [-178.8, -0.94], [-178.08, 0.25], [-178.75, 1.67], [179.87, 1.86]]"
+        lon, lat = page.evaluate(f"centre({{geometry: {{coordinates: [{ring}]}}}})")  # a cell across ±180°: where it is
+        assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
+        page.evaluate("loadOverlay('ds-unknown')")  # an overlay that cannot be read says so, not an empty map of regions
+        assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
+        page.evaluate("loadOverlay(G.ds)")
+        assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
         assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")

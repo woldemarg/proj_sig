@@ -387,7 +387,8 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
     engine = make_engine(cfg)
     assert "ltir-canon-0" in engine.problem and not engine.graph().insights
-    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), engine.export_geosparql):
+    reads = (engine.export_geosparql, engine.geo_datasets, lambda: engine.geo_overlay("x"), lambda: engine.geo_cells_file("x"))  # the map too
+    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()
         assert refused.value.code == "workspace_degraded"
@@ -402,12 +403,14 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
 def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     """``verify_pattern`` (docs/06_graph_and_storage.md §6.7): every demo pattern recomputes as journaled; forged with
     their digests recomputed, so that they pass the integrity check, a p-value, a test family, a dropped p, a selector and a
-    target each differ, field by field, and a missing covers.npz changes nothing (the conditions decide the rows); a
+    target each differ, field by field, as does a shift order whose first shift is not the target, its p recomputed for
+    that first shift; a missing covers.npz changes nothing (the conditions decide the rows) and is named as not checked; a
     dropped shift is not caught (the metrics are not re-mined: ``not_checked``); a changed upload is ``source_changed``, a
     removed one ``source_missing``; an unknown id is refused."""
     import shutil
 
     from insight_graph_service.core.engine import PipelineError
+    from subgroup_miner.discovery import recompute_statistics
 
     own = tmp_path / "demo.csv"  # ingest_file keeps the path it is given: this test changes and removes the file
     shutil.copy(demo_csv, own)
@@ -420,7 +423,18 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     relabelled = next(r for r in rows if r["phenomenon_type"] == "covariance")
     relabelled["target"] = next(m for m in relabelled["covariance"]["pair"] if m != relabelled["target"])  # the weaker of its pair
     relabelled["record_digest"] = record_digest(relabelled)
-    forged, family, dropped, selector, target, shift = tested[:6]
+    forged, family, dropped, selector, target, shift, reordered = tested[:7]
+    loaded = engine._load(engine.ws.ready_batch_for(ds))
+    reordered["shifts"][:2] = reordered["shifts"][1::-1]  # its target second: its p now the test of another metric
+    again = recompute_statistics(
+        loaded.frame,
+        [(c["attribute"], c["value"]) for c in reordered["conditions"]],
+        reordered["expression"],
+        [s["metric"] for s in reordered["shifts"]],
+        loaded.spatial,
+        reordered["provenance"]["multiple_testing_family"],
+    )
+    reordered["p_value"], reordered["p_adjusted"] = again["p_value"], again["p_adjusted"]
     forged["p_value"], forged["p_adjusted"] = 0.0123, 0.0123 * forged["provenance"]["multiple_testing_family"]  # a demo p may be 0.0
     family["provenance"]["multiple_testing_family"] //= 100
     family["p_adjusted"] = min(1.0, family["p_value"] * family["provenance"]["multiple_testing_family"])
@@ -428,7 +442,7 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     selector["expression"] = "region=='MOON'"
     target["target"] = "no_such_metric"
     shift["shifts"] = shift["shifts"][:1]
-    for r in (forged, family, dropped, selector, target, shift):
+    for r in (forged, family, dropped, selector, target, shift, reordered):
         r["record_digest"] = record_digest(r)  # a writer who recomputes the digest
     engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
@@ -437,17 +451,19 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     checked = engine.verify_pattern(forged["id"])
     assert checked["status"] == "differs" and {d["field"] for d in checked["diff"]} == {"p_value", "p_adjusted"}
     assert next(d for d in checked["diff"] if d["field"] == "p_value")["journal"] == forged["p_value"]
-    caught = {r["id"]: {d["field"] for d in engine.verify_pattern(r["id"])["diff"]} for r in (family, dropped, selector, target)}
+    caught = {r["id"]: {d["field"] for d in engine.verify_pattern(r["id"])["diff"]} for r in (family, dropped, selector, target, reordered)}
     assert caught == {
         family["id"]: {"multiple_testing_family"},
         dropped["id"]: {"p_value"},
         selector["id"]: {"expression"},
         target["id"]: {"target"},
+        reordered["id"]: {"target"},
     }
     assert engine.verify_pattern(shift["id"])["status"] == "reproduced" and "the metrics shifted (mining is not re-run)" in checked["not_checked"]
     assert "target" in {d["field"] for d in engine.verify_pattern(relabelled["id"])["diff"]}  # selection picks the stronger metric
     (engine.ws.datasets_dir / ds / "covers.npz").unlink()
-    assert engine.verify_pattern(next(r["id"] for r in rows if r not in [*tested[:6], relabelled]))["status"] == "reproduced"
+    uncovered = engine.verify_pattern(next(r["id"] for r in rows if r not in [*tested[:7], relabelled]))
+    assert uncovered["status"] == "reproduced" and "its rows in covers.npz (none stored)" in uncovered["not_checked"]
     other = next(r["id"] for r in rows if r["id"] != forged["id"])
     source = Path(engine.ws.ready_batch_for(ds)["source_path"])
     source.write_bytes(source.read_bytes() + b"\n")  # one byte more

@@ -81,7 +81,7 @@ EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates"
 def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarray | None, family: int) -> list[dict[str, Any]]:
     """What of the journal record the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
     journal, recomputed}``: its id and selector against its conditions, the rows against ``covers.npz`` and the record's
-    row hash, its target among its shifts (on a covariance insight, the stronger of its pair), a missing p only on a
+    row hash, its target as its first shift (on a covariance insight, the stronger of its pair), a missing p only on a
     covariance insight, its test family against its dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
     rows = fresh["rows"]
     out = []
@@ -108,6 +108,8 @@ def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarra
     if primary is None:
         differs("target", record["target"], "not among its shifts")
         primary = fresh["shifts"][0]
+    elif not covariance and record["shifts"][0]["metric"] != record["target"]:  # its p and spatial test are of its first shift
+        differs("target", record["target"], f"not its first shift ({record['shifts'][0]['metric']}, whose test its p is)")
     pair = [s for s in fresh["shifts"] if s["metric"] in (record.get("covariance") or {}).get("pair", [])]
     if covariance and pair and record["target"] != (chosen := min(pair, key=lambda s: (-abs(s["robust_z"]), s["metric"]))["metric"]):
         differs("target", record["target"], f"{chosen} (the stronger metric of its pair)")
@@ -617,6 +619,7 @@ class Engine:
             "glossary": ctx.glossary,
         }
 
+    @_healthy
     def geo_datasets(self) -> list[dict[str, Any]]:
         """READY datasets analysed as H3 cells, with what the map needs to offer them."""
         out = []
@@ -630,6 +633,7 @@ class Engine:
         """Only a dataset with a READY geo batch is served: its files survive a failed batch, its listing does not."""
         return any(d["dataset_id"] == dataset_id for d in self.geo_datasets())
 
+    @_healthy
     def geo_cells_file(self, dataset_id: str) -> Path:
         """``geo_cells`` as written with the dataset's batch (the cells, their rings and the patterns' extents never
         change afterwards): the map reads the file on every open."""
@@ -727,9 +731,12 @@ class Engine:
             covers = self.ws.load_covers(ds).get(pattern_id)
         except (OSError, ValueError):  # rewritten meanwhile: the conditions decide the rows
             covers = None
+        if covers is None:
+            out["not_checked"].append("its rows in covers.npz (none stored)")
         diff = verify_diff(record, fresh, covers, family)
         return out | {"status": "differs" if diff else "reproduced", "diff": diff}
 
+    @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
         """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""
         geo = self._geo(dataset_id)
@@ -747,6 +754,7 @@ class Engine:
             "points": np.round(points.astype(float), 5).tolist(),
         }
 
+    @_healthy
     def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
         """What the graph says about a geo dataset's map: the regions above its patterns (``regions_above``) as GeoJSON,
         each with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale."""

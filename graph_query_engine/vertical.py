@@ -7,7 +7,7 @@ chain reads ACTIVATES, IN_REGION and PARENT_OF of the snapshot.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,15 +83,22 @@ def _regions(graph: DualGraph, pid: str) -> dict[str, float]:
 
 
 def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
-    """The regions coarser than each pattern's finest region level that it lies in, with their ancestors that hold a
-    pattern: what the console draws (a region at that level, the pattern's own or the next coarser, is one of its cells or
-    a handful of them, hundreds per dataset)."""
+    """The regions coarser than each pattern's finest region level that it lies in, with their ancestors that hold an
+    intact pattern: what the console draws (a region at that level, the pattern's own or the next coarser, is one of its
+    cells or a handful of them, hundreds per dataset; a region holding tampered patterns only holds nothing)."""
     found = {r for pid in pattern_ids for r in _regions(graph, pid).keys() - _finest(graph, pid)}
     frontier = set(found)
     while frontier:
         frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
         found |= frontier
-    return {r for r in found if graph.nodes[r]["props"]["patterns"]}  # an ancestor no pattern reaches holds nothing
+    tampered = Counter(
+        e["target"]
+        for pid in graph.insights
+        if graph.nodes[pid]["props"].get("integrity") == "mismatch"
+        for e in graph.out.get(pid, [])
+        if e["type"] == "IN_REGION"
+    )
+    return {r for r in found if graph.nodes[r]["props"]["patterns"] > tampered[r]}  # an ancestor no intact pattern reaches holds nothing
 
 
 def _finest(graph: DualGraph, pid: str) -> frozenset[str]:
