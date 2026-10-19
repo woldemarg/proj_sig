@@ -48,7 +48,7 @@ question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO |
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | the eda project: `scripts/main_upd.py` | vendored as [`subgroup_miner/vendor/eda/main_upd.py`](subgroup_miner/vendor/eda/main_upd.py); its differences in [`PROVENANCE.md`](subgroup_miner/vendor/PROVENANCE.md) |
 | Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, metrics) | the lac project ([`proj_ontology`](https://github.com/woldemarg/proj_ontology)): `v2_orchestrator/` | vendored as [`attractor_topology/vendor/lac/`](attractor_topology/vendor/lac); its differences in [`PROVENANCE.md`](attractor_topology/vendor/PROVENANCE.md) |
-| Embedding model | Qwen3-Embedding-0.6B at a pinned revision (Matryoshka-truncated to 384-d, bf16) | provisioned and verified file by file (`python -m insight_graph_service.core.model_store`) |
+| Embedding model | Qwen3-Embedding-0.6B at a pinned revision (Matryoshka-truncated to 384-d; bf16 on a GPU, float32 on the CPU) | provisioned and verified file by file (`python -m insight_graph_service.core.model_store`) |
 
 ---
 
@@ -199,7 +199,7 @@ The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIV
 - **Lattice vs anchor.** The lattice reaches them only through 2–4 hops among many other patterns. The anchor `discount ↑ · margin ↓` connects them in two hops.
 - **The prompt** is plain ASCII. It defines "sd" once and states every shift as a phrase plus a signed number ([7.4](docs/07_question_answering.md#74-the-evidence-object)).
 
-**Hypothesis benchmark** (`python scripts/experiment.py --k 3`; measured on the CPU, as on CUDA: on Apple silicon set `EMBEDDING_DEVICE=cpu` to reproduce it, [4.4](docs/04_representation.md#44-the-embedding-model)). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
+**Hypothesis benchmark** (`python scripts/experiment.py --k 3`; measured in bf16, as CUDA computes; on the CPU (float32) and on Apple silicon the transversal row reads 0.333 / 0.567 / 0.701, two analogues one rank lower, [4.4](docs/04_representation.md#44-the-embedding-model)). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
 
 | method | recall@3 | MRR | recall@5 |
 |---|---|---|---|

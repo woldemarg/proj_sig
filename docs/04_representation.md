@@ -107,8 +107,8 @@ The fallback fires whenever the component sum has a norm below `1e-9` — also w
 | provisioning | `python -m insight_graph_service.core.model_store [MODEL_DIR] [--seed DIR]` (without a folder: the service's `MODEL_DIR`, read from the environment, then `.env`) checks the folder file by file against a manifest of sizes and SHA-256 values at the pinned revision: a copy that verifies is kept, otherwise a verified seed is copied, otherwise the pinned revision is downloaded; it exits non-zero unless the result verifies. The graph service checks presence and sizes against the same manifest before it opens the workspace or loads the model, and refuses to start (exit code 3) with a message naming that command |
 | Matryoshka truncation | `TRUNCATE_DIM = 384` keeps the first 384 of 1024 dimensions; every row is then **re-normalised** (`E(x) = normalize(f(x)_{:384})`) — a slice of a unit vector is shorter than 1, and the decomposition above assumes unit blocks |
 | query instruction | `embed_queries` prefixes `Instruct: {QUERY_TASK}\nQuery: `; `embed` (documents, labels, recognised query strings) does not |
-| dtype and batching | the checkpoint dtype on every device (`dtype="auto"`: bf16), recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the embedder (one per engine) |
-| device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0` · `mps`; the graph service container uses `auto`: the GPU when `compose.gpu.yaml` attaches one, else the CPU); the model takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB; on the CPU the encoder leaves half of the cores to the rest of the batch; on Apple silicon `auto` picks MPS, whose bf16 kernels give slightly different vectors: the benchmarks of chapter 10 are measured on the CPU or CUDA and read otherwise there (the demo's hypothesis benchmark 0.333 / 0.361 / 0.567 instead of 0.500 / 0.528 / 0.581, [10.3](10_verification.md#103-hypothesis-benchmark)); `EMBEDDING_DEVICE=cpu` reproduces them |
+| dtype and batching | the checkpoint dtype (`dtype="auto"`: bf16) on a GPU (CUDA, MPS), float32 on the CPU, which has no fast bf16 kernels (36 insight documents: 294 s in bf16, 13.8 s in float32 in the CPU container); recorded as `compute_dtype`; batches of `ENCODE_BATCH_SIZE = 16` rows; every text embedding is memoised per `(prompt, text)` for the life of the embedder (one per engine) |
+| device | `EMBEDDING_DEVICE` (`auto` · `cpu` · `cuda` · `cuda:0` · `mps`; the graph service container uses `auto`: the GPU when `compose.gpu.yaml` attaches one, else the CPU); the model takes ≈ 1.15 GB of VRAM resident and peaks at ≈ 1.7 GB; on the CPU the encoder leaves half of the cores to the rest of the batch; on Apple silicon `auto` picks MPS. CUDA's bf16, MPS's bf16 kernels and the CPU's float32 give slightly different vectors (cosine ≥ 0.994 for the same text): the hypothesis benchmark of chapter 10 is measured in bf16, as CUDA computes, and reads 0.333 / 0.361 / 0.567 instead of 0.500 / 0.528 / 0.581 on the CPU and on MPS, two analogues one rank lower ([10.3](10_verification.md#103-hypothesis-benchmark)) |
 
 **Where the instruction goes.** Qwen3 is instruction-aware, but the prefix is applied **only** to free question text — the stand-in for an unrecognised scope or target block and for an empty component sum — and to the naive text baseline. Recognised scope and target strings and every component label are embedded exactly as for documents, because the signed composition needs the identical `E(label)` on both sides to keep its exact ±1 geometry. This forgoes the instruction gain on structured queries by design.
 
@@ -147,11 +147,11 @@ Reading: the composition fixes the direction contract (−0.33 for any model). Q
 | `model_revision` | `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` — `QWEN_REVISION`, the revision `model_store` provisions and verifies (the test double: `""`) |
 | `truncate_dim`, `query_instruction` | 384, `Instruct: Given a quantitative analysis question, retrieve relevant statistical subgroup patterns\nQuery: ` |
 | `block_dim`, `dim` | 384, 1152 |
-| `dtype`, `compute_dtype`, `normalization` | `float32` (storage), `bfloat16` (the model's computation), `l2(block) -> weighted concat -> l2` |
+| `dtype`, `compute_dtype`, `normalization` | `float32` (storage), `bfloat16` on a GPU and `float32` on the CPU (the model's computation), `l2(block) -> weighted concat -> l2` |
 | `block_weights`, `emm_component_weight` | (0.45, 0.55, 1.0), 0.5 |
 | `min_component_z`, `min_emm_score`, `weight_emm_ref` | 0.5, 0.08, 0.08 — the `PhenomenonThresholds` that decide which components exist and how large the correlation component is |
 | `canonical_version`, `representation_version` | `ltir-canon-4`, `ltir-rep-3` (`CANONICAL_VERSION`, `REPRESENTATION_VERSION` in `attractor_topology/models.py`) |
-| `fingerprint` | `sha1` of all of the above, first 10 hex (`3d08cee697` for the defaults) |
+| `fingerprint` | `sha1` of all of the above, first 10 hex (for the defaults `3d08cee697` on a GPU, `5098e2b028` on the CPU) |
 
 The spec is written to `state/representation.json` when the first batch commits; every pattern record carries `{fingerprint, model_id, dim, representation_version}`. Two checks refuse a mismatch instead of comparing vectors from different spaces:
 
@@ -160,14 +160,14 @@ The spec is written to `state/representation.json` when the first batch commits;
 
 `CANONICAL_VERSION` covers [4.2](#42-the-canonical-form); `REPRESENTATION_VERSION` covers [4.3](#43-the-tripartite-vector). Renderings can change without a bump; anything that changes an embedded string, a coefficient or the composition must bump a version.
 
-**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in and the storage dtype, the truncation, the query instruction, the block weights and the correlation component weight, the normalisation, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch`; the workspace is reset (`POST /api/reset`) and the data ingested again ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)). The device is not part of it: the model runs in its checkpoint dtype on CPU and GPU alike, so a workspace moves between them. Renderings — documents, headlines, the prompt — are not part of it either; the phenomenon sentence of the fallback is covered by `CANONICAL_VERSION`.
+**What the fingerprint covers.** Every input that shapes a stored vector: the model and its checkpoint revision, the dtype it computes in and the storage dtype, the truncation, the query instruction, the block weights and the correlation component weight, the normalisation, the three canonicalisation settings that decide the components, and both versions. Changing any of them on an existing workspace is refused with `representation_mismatch`; the workspace is reset (`POST /api/reset`) and the data ingested again ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)). The device is not part of it, but the dtype it implies is: a workspace built on the CPU (float32) refuses batches and questions on a GPU (bf16) and the other way round, while one moves between GPUs, and between CPUs, freely. Renderings — documents, headlines, the prompt — are not part of it either; the phenomenon sentence of the fallback is covered by `CANONICAL_VERSION`.
 
 ## 4.7 Configuration
 
 | Parameter | Default | Changes the fingerprint |
 |---|---|---|
 | `MODEL_DIR` | `models` | no (where the checkpoint is read; its revision is the pinned constant) |
-| `EMBEDDING_DEVICE` | `auto` | no (the model runs in its checkpoint dtype on every device) |
+| `EMBEDDING_DEVICE` | `auto` | between the CPU and a GPU: yes (float32 against bf16); otherwise no |
 | `BLOCK_WEIGHTS`, `EMM_COMPONENT_WEIGHT` | (0.45, 0.55, 1.0), 0.5 | yes |
 | `MIN_COMPONENT_Z`, `MIN_EMM_SCORE`, `WEIGHT_EMM_REF` | 0.5, 0.08, 0.08 | yes (they decide the components) |
 

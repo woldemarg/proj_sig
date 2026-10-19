@@ -69,7 +69,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | edge id | `<TYPE>:<source>-><target>` | `ACTIVATES:P-bc4657a04746->A-1` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | RDF IRI | `urn:sig:<node id>`; a geometry `urn:sig:<node id>:geometry`; the vocabulary `urn:sig:vocab#` | `urn:sig:P-bc4657a04746` | [6.9](06_graph_and_storage.md#69-rdf-export) |
 | journal row id | position of the vector in `journal/embeddings.mmap` | `1` | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk) |
-| representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` | [4.6](04_representation.md#46-representation-identity-and-versions) |
+| representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` (GPU), `5098e2b028` (CPU) | [4.6](04_representation.md#46-representation-identity-and-versions) |
 | citation key | `P` + 1-based rank in the evidence | `[P1]`, grouped `[P4, P7]` | [7.4](07_question_answering.md#74-the-evidence-object) |
 | condition expression | `attribute=value` (no spaces, no quotes) | `category=phones` | [3.1](03_insights.md#31-the-insight-record) |
 | EDA selector | pysubgroup's rendering, kept verbatim as provenance | `category=='phones' AND region=='US'` | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
