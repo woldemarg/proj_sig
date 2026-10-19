@@ -37,8 +37,8 @@ const GeoMap = {
     scheduleWindow();
   },
 
-  pick(pid, fit = false) {  // an insight chosen in the view's list (the view stays) or walked to: drawn, described in the chat
-    GeoMap.focusPattern(pid, fit);
+  pick(pid) {  // an insight chosen in the view's list or walked to: drawn, the camera on it, described in the chat
+    GeoMap.focusPattern(pid);
     pickInsight(pid, windowItem(pid));
   },
 
@@ -79,7 +79,7 @@ const GeoMap = {
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.remove("on"));
   },
 
-  async focusPattern(pid, fit = true) {
+  async focusPattern(pid) {
     const p = G.patterns[pid]; if (!p || !G.map) return;
     GeoMap.unfocus();
     G.focusId = pid;
@@ -87,7 +87,7 @@ const GeoMap = {
     const sign = item && item.phenomenon_type === "covariance" ? 0.5 : ((item ? item.statistics.effect_size : p.effect_size) >= 0 ? 1 : -1);
     G.focus = p.rows; setStates(G.focus, "focus", true); setStates(G.focus, "hl", sign);
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
-    if (fit) fitRows(p.rows, 90);
+    fitRows(p.rows, 90);
     renderCard(p, item, null);
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
@@ -201,6 +201,7 @@ function placeDensity() {
 
 async function loadDataset(ds) {
   await ensureMap();
+  G.loading = true; W.data = null; renderWindow();  // the list waits for the map to stand on the new dataset
   const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
   G.ds = ds; G.data = data; G.focus = []; G.evidence = [];
   await loadProjected(ds);
@@ -219,6 +220,7 @@ async function loadDataset(ds) {
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
   $("map-card").hidden = true; paintZone();
+  G.loading = false; scheduleWindow();
 }
 
 async function loadProjected(ds) {
@@ -299,7 +301,7 @@ function wireHud() {
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
   $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
   $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
-  $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
+  $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); scheduleWindow(); });
 }
 
 function shiftText(p, item) {
@@ -364,9 +366,12 @@ const W = { seq: 0, timer: null, data: null, fold: {}, folded: null };  // folde
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
 async function loadWindow() {
-  if (!G.map || !G.ds || S.view !== "map") return;
+  if (!G.map || !G.ds || G.loading || S.view !== "map") return;
   const b = G.map.getBounds(), seq = ++W.seq, clamp = (x, m) => Math.max(-m, Math.min(m, x)).toFixed(4);
-  const bbox = [clamp(b.getWest(), 180), clamp(b.getSouth(), 90), clamp(b.getEast(), 180), clamp(b.getNorth(), 90)].join(",");
+  // ponytail: the open list hides the map's right column, so the view stops at its left edge (the HUD, shorter, is not cut)
+  const mapW = $("map").clientWidth, open = !(W.folded ?? mapW < 600);
+  const east = open ? G.map.unproject([mapW - parseFloat(getComputedStyle($("map-window")).width) - 18, 0]).lng : b.getEast();
+  const bbox = [clamp(b.getWest(), 180), clamp(b.getSouth(), 90), clamp(east, 180), clamp(b.getNorth(), 90)].join(",");
   const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
   W.data = data; renderWindow();
@@ -379,18 +384,19 @@ function renderWindow() {
   const el = $("map-window"), d = W.data;
   el.hidden = !d || !G.ds;
   if (el.hidden) return;
-  if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
+  if (W.folded === null) W.folded = $("map").clientWidth < 600;  // a narrow map starts with the header alone (loadWindow reads the same)
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(d.themes.length, "theme")} · ${num(d.points, 0)} pts`;
   $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">No insight has enough of its points in this view.</div>` : d.themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.insights.length}</b></button>` +
-      (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
-        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}</i><span class="mw-nm">${esc(i.scope.map((c) => human(c.slice(c.indexOf("=") + 1))).join(" · "))}` +
+      (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells${i.also.length ? ` · also found at ${i.also.join(", ")}` : ""}">` +
+        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}${i.also.length ? " +" : ""}</i><span class="mw-nm">${esc(i.scope.map((c) => human(c.slice(c.indexOf("=") + 1))).join(" · "))}` +
         `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
-        `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
+        `<b title="lift: how many times more of its points are in this view than its map-wide share would put here">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
   }).join("");
   $("mw-body").querySelectorAll(".mw-th").forEach((b) => b.addEventListener("click", () => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); }));
-  $("mw-body").querySelectorAll(".mw-i").forEach((b) => b.addEventListener("click", () => GeoMap.pick(b.dataset.pid)));
+  // a second click on the focused insight unfocuses it
+  $("mw-body").querySelectorAll(".mw-i").forEach((b) => b.addEventListener("click", () => (b.dataset.pid === G.focusId ? GeoMap.unfocus() : GeoMap.pick(b.dataset.pid))));
 }
