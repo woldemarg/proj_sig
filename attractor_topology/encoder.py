@@ -106,9 +106,11 @@ class SentenceTransformerEmbedder:
                 from sentence_transformers import SentenceTransformer
 
                 device = None if self.device_pref == "auto" else self.device_pref
-                # the checkpoint dtype on every device (bf16), recorded as spec.compute_dtype
+                # the checkpoint dtype (bf16) on a GPU, float32 on the CPU (no fast bf16 kernels); recorded as spec.compute_dtype
                 self._model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
-                if self._model.device.type == "cpu":  # leave half the cores to pandas/numpy work running beside the encoder
+                if self._model.device.type == "cpu":
+                    self._model.float()
+                    # leave half the cores to pandas/numpy work running beside the encoder
                     cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 2
                     torch.set_num_threads(max(1, cores // 2))
                 self.dim = int(self._model.get_embedding_dimension())

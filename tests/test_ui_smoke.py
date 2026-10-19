@@ -269,8 +269,20 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
-        page.evaluate("ask('Де median_house_value вищий?')")  # a question without scope: its ZONES outlined on the map
-        page.wait_for_function("G.zoneMarks.length > 0 && G.zoneMarks[0].getElement().textContent === 'Z1'", timeout=30000)
+        answers = page.evaluate("document.querySelectorAll('.answer-box').length")
+        page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
+        page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
+        painted = "G.data.features.filter((f) => G.map.getFeatureState({source: 'cells', id: f.properties.row}).hl).length"
+        assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
+        page.locator(".msg-bot").last.locator("a.cite").first.click()
+        assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
+        opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
+        page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
+        first = page.evaluate(opacity)
+        page.wait_for_timeout(400)
+        assert page.evaluate(opacity) != first
+        page.keyboard.press("Escape")
+        assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}

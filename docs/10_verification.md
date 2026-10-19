@@ -92,7 +92,7 @@ Four rankers are compared:
 recall@k = hits / |analogues|        precision@k = hits / min(k, |analogues|)        MRR = 1 / rank of the first analogue (0 if none)
 ```
 
-Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwen3 → 384; 28 patterns; re-measured on 2026-10-16 on the CPU, which reads as CUDA does; on Apple silicon's MPS the same code gives transversal 0.333 / 0.361 / 0.567 at k = 3, [4.4](04_representation.md#44-the-embedding-model)):
+Results on the demo (12 seed cases: 8 discount erosion, 4 delay → returns; Qwen3 → 384; 28 patterns; re-measured on 2026-10-16 in bf16, which reads as CUDA does; in float32 on the CPU (2026-10-19) and on Apple silicon's MPS the same code gives transversal 0.333 / 0.361 / 0.567 at k = 3 and the same recall@5: in two delay → returns cases the analogue ranks fourth instead of third, [4.4](04_representation.md#44-the-embedding-model)):
 
 | Method | recall@3 | precision@3 | MRR | recall@5 |
 |---|---|---|---|---|
@@ -130,7 +130,7 @@ Values are recall@5 / MRR, re-measured on 2026-10-12 after the kernel changes (m
 correlations; the pre-registered read of 2026-10-11 under the earlier kernel gave the same picture: −0.011 against
 k-means, +0.066 over the previous band on 455 cases). Under the previous band the lifecycle's groups were larger and
 mixed mechanisms, and the walk over k-means won by −0.031 [−0.059, −0.005]. The precision band fixes that: the walk
-over the tuned attractors is level with the walk over k-means at the same count (−0.009 [−0.032, +0.013]; re-measured on 2026-10-16 on the CPU after M4, −0.018 [−0.041, +0.005], Holm p 0.136, the same as on the code before the SKG epic), +0.037
+over the tuned attractors is level with the walk over k-means at the same count (−0.009 [−0.032, +0.013]; re-measured on 2026-10-16 on the CPU after M4, −0.018 [−0.041, +0.005], Holm p 0.136, the same as on the code before the SKG epic; in float32 on the CPU on 2026-10-19, −0.017 [−0.043, +0.010], Holm p 0.210), +0.037
 [+0.005, +0.077] over the previous band on the same cases, +0.21 over vector neighbours; random groups collapse it to
 0.08, so the grouping carries the value. The lifecycle chooses its group count
 itself, incrementally; k-means was handed it. These are planted data under one embedder: the result speaks to the
