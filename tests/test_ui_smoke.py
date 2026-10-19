@@ -269,18 +269,6 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
-        page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)  # the list of what is in view
-        assert page.evaluate("W.folded") is False
-        camera = "G.map.getCenter().toArray().map((x) => x.toFixed(4)).join() + '@' + G.map.getZoom().toFixed(2)"
-        before, turns = page.evaluate(camera), page.evaluate("S.chat.length")
-        first = page.locator("#map-window .mw-i").first
-        pid = first.get_attribute("data-pid")
-        first.click()  # a pick flies the camera to the insight and describes it in the chat once
-        page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
-        page.wait_for_function(f"!G.map.isMoving() && ({camera}) !== '{before}'", timeout=30000)
-        page.wait_for_selector(f"#map-window .mw-i.on[data-pid='{pid}']", timeout=30000)
-        page.click(f"#map-window .mw-i[data-pid='{pid}']")  # a second click unfocuses, without another card
-        assert page.evaluate("G.focusId") is None and page.evaluate("S.chat.length") == turns + 1
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)

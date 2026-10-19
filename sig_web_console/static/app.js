@@ -867,8 +867,6 @@ const WALK = { CONTRASTS: "contrasts with", "CONTRASTS (in)": "contrasts with", 
 async function pickInsight(pid, view) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
-  const last = S.chat.at(-1);
-  if (last && last.picked && last.insight.node.id === pid) return;  // the same insight again: its card is already the last
   S.chat.push({ question: d.node.label, picked: true, insight: d, view });
   renderThread();
 }
@@ -923,7 +921,7 @@ function renderThread() {
   t.querySelectorAll(".insight-card").forEach((card) => {
     const p = S.chat[Number(card.closest(".msg-bot").dataset.turn)].insight.node.props;
     card.querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => {
-      if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.pick(el.dataset.id); else { focusNodes([el.dataset.id]); inspect(el.dataset.id); }
+      if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.pick(el.dataset.id, true); else { focusNodes([el.dataset.id]); inspect(el.dataset.id); }
     }));
     card.querySelector(".ic-theme")?.addEventListener("click", (e) => inspect(e.currentTarget.dataset.id));
     card.querySelector(".ic-ask").addEventListener("click", () => ask(askAbout(p)));

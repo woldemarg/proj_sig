@@ -21,7 +21,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -70,7 +70,6 @@ log = logging.getLogger(__name__)
 
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
 WINDOW_MIN_POINTS = 10  # an insight lists in a map view holding at least this many of its points
-WINDOW_LIFT_PRIOR = 10  # pseudo-points added to an insight's points in view and to their expected count: a few points do not make a large lift
 
 
 class PipelineError(RuntimeError):
@@ -796,8 +795,7 @@ class Engine:
     def _projection(self, dataset_id: str) -> dict[str, Any]:
         """Every intact insight of the dataset's upload on the dataset's cells, derived once per commit: an insight of the
         dataset keeps its cells, any other (the table's, another level's) the ``footprint`` of its member points.
-        ``patterns``: id -> (drawn cell rows, their points, the level it was found at, every cell row holding its points, their
-        points); ``per_cell``: points; ``centres``."""
+        ``patterns``: id -> (cell rows, their points, the level it was found at); ``per_cell``: points; ``centres``."""
         graph = self.graph()
         if (key := ("projection", dataset_id)) in graph.memo:
             return graph.memo[key]
@@ -806,7 +804,7 @@ class Engine:
         per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
         ready = [b for b in self.ws.list_batches() if b.get("status") == "READY"]
         upload = next((b.get("upload_id") for b in ready if b["dataset_id"] == dataset_id), None)
-        patterns: dict[str, tuple[np.ndarray, np.ndarray, str, np.ndarray, np.ndarray]] = {}
+        patterns: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
         for b in ready:
             own = b["dataset_id"] == dataset_id
             if not own and (upload is None or b.get("upload_id") != upload):
@@ -819,12 +817,7 @@ class Engine:
                 node = graph.nodes.get(pid)
                 if node is None or node["props"].get("integrity") == "mismatch":
                     continue
-                if own:
-                    patterns[pid] = (rows, per_cell[rows], level, rows, per_cell[rows])
-                    continue
-                spread, counts = footprint(point_cell, members(rows), 1.0)  # every cell holding its points, busiest first
-                k = int(np.searchsorted(np.cumsum(counts), GEO_FOOTPRINT_SHARE * counts.sum())) + 1 if len(counts) else 0
-                patterns[pid] = (spread[:k], counts[:k], level, spread, counts)
+                patterns[pid] = (rows, per_cell[rows], level) if own else (*footprint(point_cell, members(rows)), level)
         out = {"patterns": patterns, "per_cell": per_cell, "centres": cell_centres(geo["cells"])}
         graph.memo[key] = out
         return out
@@ -835,7 +828,7 @@ class Engine:
         as ``geo_cells`` draws its own: the rows of their ``footprint``, their scope and shift."""
         proj, graph = self._projection(dataset_id), self.graph()
         out = []
-        for pid, (rows, counts, level, _, spread) in proj["patterns"].items():
+        for pid, (rows, counts, level) in proj["patterns"].items():
             if graph.nodes[pid]["props"]["dataset_id"] == dataset_id:
                 continue
             ins = graph.insight(pid)
@@ -850,19 +843,17 @@ class Engine:
                     "support": ins.support,
                     "weight": ins.weight,
                     "level": level,
-                    "spatial": {"footprint_share": round(int(counts.sum()) / max(int(spread.sum()), 1), 3), "footprint_points": int(counts.sum())},
+                    "spatial": {"footprint_share": GEO_FOOTPRINT_SHARE, "footprint_points": int(counts.sum())},
                 }
             )
         return out
 
     @_healthy
     def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
-        """The map as a window on the graph: the insights of the dataset's upload characteristic of the cells whose centres lie
-        in ``bbox`` ("west,south,east,north"), under their theme (strongest non-weak ACTIVATES). An insight counts every
-        point of its own (not only its drawn footprint); it lists with at least ``WINDOW_MIN_POINTS`` of them in view and a
-        ``lift`` of at least 1: (its points in view + ``WINDOW_LIFT_PRIOR``) / (the points it would have there at its
-        map-wide share + the same), so a handful of points cannot make it lead. One finding found at several levels lists
-        once, at this map's level or else its strongest (``also``: the others). Insights by lift, themes by their best."""
+        """The map as a window on the graph: the insights of the dataset's upload with at least ``WINDOW_MIN_POINTS`` of their
+        points in the cells whose centres lie in ``bbox`` ("west,south,east,north"), under their theme (strongest
+        ACTIVATES). ``lift``: an insight's share of the view's points over its share of the map's, so the insights
+        characteristic of the view come first; themes by their best insight, then by their points in view."""
         try:
             w, s, e, n = (float(x) for x in bbox.split(","))
         except ValueError:
@@ -871,15 +862,17 @@ class Engine:
         lon, lat = proj["centres"].T
         view = (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)
         total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
-        found: dict[tuple[frozenset[str], str], list[dict[str, Any]]] = defaultdict(list)
-        for pid, (_, _, level, rows, counts) in proj["patterns"].items():
-            inside, mine = view[rows], int(counts.sum())
+        themes: dict[str | None, dict[str, Any]] = {}
+        for pid, (rows, counts, level) in proj["patterns"].items():
+            inside = view[rows]
             points = int(counts[inside].sum())
-            lift = (points + WINDOW_LIFT_PRIOR) / (here * mine / max(total, 1) + WINDOW_LIFT_PRIOR)
-            if points < WINDOW_MIN_POINTS or lift < 1 - 1e-9:  # its share of the view below its share of the map: not of this place
+            if points < WINDOW_MIN_POINTS:
                 continue
             ins = graph.insight(pid)
-            found[(frozenset(c.expr for c in ins.conditions), ins.target)].append(
+            anchor = max((x for x in graph.out[pid] if x["type"] == "ACTIVATES"), key=lambda x: x["weight"], default=None)
+            aid = anchor["target"] if anchor else None
+            theme = themes.setdefault(aid, {"id": aid, "label": graph.nodes[aid]["label"] if aid else "no theme", "insights": []})
+            theme["insights"].append(
                 {
                     "id": pid,
                     "label": graph.nodes[pid]["label"],
@@ -890,19 +883,11 @@ class Engine:
                     "ptype": ins.phenomenon_type,
                     "weight": round(ins.weight, 3),
                     "points": points,
-                    "share": round(points / mine, 3),
+                    "share": round(points / int(counts.sum()), 3),
                     "cells": int(inside.sum()),
-                    "lift": round(lift, 2),
-                    "own": graph.nodes[pid]["props"]["dataset_id"] == dataset_id,
+                    "lift": round(points / here / (int(counts.sum()) / total), 2),
                 }
             )
-        themes: dict[str | None, dict[str, Any]] = {}
-        for same in found.values():
-            best, *rest = sorted(same, key=lambda i: (not i["own"], -i["weight"]))
-            best["also"] = [i["level"] for i in rest]
-            edges = [x for x in graph.out[best["id"]] if x["type"] == "ACTIVATES" and not x["props"].get("weak")]
-            aid = max(edges, key=lambda x: x["weight"])["target"] if edges else None
-            themes.setdefault(aid, {"id": aid, "label": graph.nodes[aid]["label"] if aid else "no theme", "insights": []})["insights"].append(best)
         for t in themes.values():
             t["insights"].sort(key=lambda i: (-i["lift"], -i["weight"]))
         order = sorted(themes.values(), key=lambda t: (-t["insights"][0]["lift"], -sum(i["points"] for i in t["insights"])))
