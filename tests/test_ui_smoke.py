@@ -276,6 +276,11 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
+        opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
+        page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
+        first = page.evaluate(opacity)
+        page.wait_for_timeout(400)
+        assert page.evaluate(opacity) != first
         page.keyboard.press("Escape")
         assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0
         page.click("#view-switch button[data-view='graph']")
