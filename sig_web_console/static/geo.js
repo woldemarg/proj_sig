@@ -109,7 +109,8 @@ function ensureMap() {
   if (G.ready) return G.ready;
   G.map = new maplibregl.Map({  // no box zoom: Shift-click selects zone cells
     container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
-    style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
+    fadeDuration: 0,  // with the zero transition below a pulse step is one frame; no symbol layers fade (labels are DOM markers)
+    style: { version: 8, transition: { duration: 0, delay: 0 }, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
   });
   G.map.touchZoomRotate.disableRotation();
   G.map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
@@ -144,8 +145,20 @@ function ensureMap() {
     layer("zone-line", "line", "cells", { "line-color": "#eef3ff", "line-width": ["case", ["boolean", ["feature-state", "zone"], false], 2, 0], "line-dasharray": [2, 1] });
     layer("pts-halo", "circle", "pts", { "circle-color": "#ff4d6d", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 8], "circle-blur": 1, "circle-opacity": 0.45 });
     layer("pts-core", "circle", "pts", { "circle-color": "#ffe0e6", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4] });
-    let t = 0;
-    const pulse = () => { t += 0.06; if (G.focus.length) m.setPaintProperty("focus-line", "line-opacity", 0.55 + 0.45 * Math.sin(t)); requestAnimationFrame(pulse); };
+    // each pulse step redraws the whole map: ~15 steps a second, none while it moves (until it is idle again) or is out of sight
+    let rest = true, still = true, last = 0;
+    m.on("movestart", () => { rest = false; });
+    m.on("idle", () => { rest = true; });
+    const pulse = (now) => {
+      requestAnimationFrame(pulse);
+      if (!(G.focus.length && rest && S.view === "map" && !document.hidden)) {
+        if (!still) { m.setPaintProperty("focus-line", "line-opacity", 1); still = true; }
+        return;
+      }
+      if (now - last < 66) return;
+      last = now; still = false;
+      m.setPaintProperty("focus-line", "line-opacity", 0.55 + 0.45 * Math.sin(now / 280));  // a period of ≈ 1.8 s
+    };
     requestAnimationFrame(pulse);
     addPlaces(await fetch("/vendor/geo/places.json").then((r) => r.json()));
     m.on("mousemove", (e) => {
