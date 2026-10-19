@@ -1,7 +1,7 @@
-/* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map and its tour (docs/08_interface.md §8.7). */
+/* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set(), overlay: null, level: null, regionMarks: [], zoneMarks: [] };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], places: [], zone: new Set(), overlay: null, level: null, regionMarks: [], zoneMarks: [] };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 
@@ -67,29 +67,27 @@ const GeoMap = {
       }
       G.map.setPaintProperty("cells-fill", "fill-opacity", G.evidence.length ? 0.14 : 0.55);
       paintZones(qa.view.evidence.zones || []);
-      renderTourBar();
-      if (G.evidence.length) GeoMap.focusPattern(G.evidence[0].pattern_id);
+      renderKeyBar();
+      fitRows(G.hl, 60, 9);  // the whole answer in view; the camera moves further only on the user's click
     };
     if (geoDs !== G.ds) loadDataset(geoDs).then(apply); else apply();
   },
 
   clear() {
-    stopTour();
     if (!G.map || !G.map.getSource("cells")) return;
     setStates(G.hl, "hl", 0); setStates(G.focus, "focus", false); G.hl = []; G.focus = []; G.evidence = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
     paintZones([]);
     G.map.getSource("pts").setData(empty());
-    $("map-card").hidden = true; renderTourBar();
+    $("map-card").hidden = true; renderKeyBar();
   },
 
   unfocus() {
     if (!G.map || !G.map.getSource("pts")) return;
-    stopTour();
     setStates(G.focus, "focus", false); G.focus = []; G.focusId = null;
     G.map.getSource("pts").setData(empty());
     $("map-card").hidden = true;
-    document.querySelectorAll("#map-tour .tk").forEach((b) => b.classList.remove("on"));
+    document.querySelectorAll("#map-keys .tk").forEach((b) => b.classList.remove("on"));
   },
 
   async focusPattern(pid) {
@@ -100,7 +98,7 @@ const GeoMap = {
     fitRows(p.rows, 90);
     const item = G.evidence.find((i) => i.pattern_id === pid);
     renderCard(p, item, null);
-    document.querySelectorAll("#map-tour .tk").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
+    document.querySelectorAll("#map-keys .tk").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
       const pts = await api(`/api/geo/${encodeURIComponent(G.ds)}/patterns/${encodeURIComponent(pid)}`);
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
@@ -112,10 +110,10 @@ const GeoMap = {
 const empty = () => ({ type: "FeatureCollection", features: [] });
 function setStates(rows, key, value) { if (G.map && G.map.getSource("cells")) rows.forEach((r) => G.map.setFeatureState({ source: "cells", id: r }, { [key]: value })); }
 
-function fitRows(rows, padding) {
+function fitRows(rows, padding, maxZoom = 10) {
   if (!rows.length) return;
   const b = rows.reduce((a, r) => { const x = G.bounds[r]; return x ? [Math.min(a[0], x[0]), Math.min(a[1], x[1]), Math.max(a[2], x[2]), Math.max(a[3], x[3])] : a; }, [180, 90, -180, -90]);
-  G.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom: 10, duration: 900 });
+  G.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom, duration: 900 });
 }
 
 function graticule() {
@@ -218,7 +216,7 @@ async function loadDataset(ds) {
   $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
-  $("map-card").hidden = true; renderTourBar(); paintZone();
+  $("map-card").hidden = true; renderKeyBar(); paintZone();
 }
 
 async function loadOverlay(ds) {
@@ -324,25 +322,16 @@ function renderCard(p, item, pts) {
   $("map-card").hidden = false;
 }
 
-function renderTourBar() {
-  const bar = $("map-tour");
+function renderKeyBar() {
+  const bar = $("map-keys");
   if (!G.evidence.length) { bar.hidden = true; return; }
   bar.hidden = false;
-  bar.innerHTML = `<button type="button" class="tour-play" title="Fly through the evidence">${G.tour ? "■" : "▶"} TOUR</button>` +
-    G.evidence.map((i) => `<button type="button" class="tk ${i.statistics.effect_size >= 0 ? "up" : "down"} ${i.pattern_id === G.focusId ? "on" : ""}" data-pid="${esc(i.pattern_id)}" title="${esc(i.scope.join(" · "))}">${esc(i.key)}</button>`).join("") +
-    `<button type="button" class="tour-clear" title="Remove the answer from the map (Esc removes only the focus)">✕ CLEAR</button>`;
-  bar.querySelector(".tour-play").addEventListener("click", () => (G.tour ? stopTour() : startTour()));
-  bar.querySelector(".tour-clear").addEventListener("click", () => GeoMap.clear());
+  bar.innerHTML = G.evidence.map((i) => `<button type="button" class="tk ${i.statistics.effect_size >= 0 ? "up" : "down"} ${i.pattern_id === G.focusId ? "on" : ""}" data-pid="${esc(i.pattern_id)}" title="${esc(i.scope.join(" · "))}">${esc(i.key)}</button>`).join("") +
+    `<button type="button" class="key-clear" title="Remove the answer from the map (Esc removes only the focus)">✕ CLEAR</button>`;
+  bar.querySelector(".key-clear").addEventListener("click", () => GeoMap.clear());
   // a second click on the focused key unfocuses it
-  bar.querySelectorAll(".tk").forEach((b) => b.addEventListener("click", () => { stopTour(); b.dataset.pid === G.focusId ? GeoMap.unfocus() : GeoMap.focusPattern(b.dataset.pid); }));
+  bar.querySelectorAll(".tk").forEach((b) => b.addEventListener("click", () => (b.dataset.pid === G.focusId ? GeoMap.unfocus() : GeoMap.focusPattern(b.dataset.pid))));
 }
-
-function startTour() {
-  let i = 0;
-  const step = () => { if (i >= G.evidence.length) { stopTour(); return; } GeoMap.focusPattern(G.evidence[i++].pattern_id); };
-  G.tour = setInterval(step, 4200); step(); renderTourBar();
-}
-function stopTour() { if (G.tour) { clearInterval(G.tour); G.tour = null; renderTourBar(); } }
 
 function trustTags(pid) {
   /* an insight's credibility and scale label, as the graph holds them */

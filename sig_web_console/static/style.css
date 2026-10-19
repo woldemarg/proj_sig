@@ -286,15 +286,14 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .hud-keys i, .hud-layers i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .lg-up { background: #ff8a3d; box-shadow: 0 0 6px #ff8a3d; } .lg-down { background: #36d6ff; box-shadow: 0 0 6px #36d6ff; }
 .lg-focus { border: 2px solid #ffb000; } .lg-region { border: 1.5px dashed #4cc9c0; } .lg-hot { background: #ff3b4f; box-shadow: 0 0 6px #ff3b4f; } .lg-cold { background: #3d8bff; box-shadow: 0 0 6px #3d8bff; }
-.map-tour { position: absolute; top: 12px; right: 12px; z-index: 2; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
-.map-tour button { font: 11px var(--mono); padding: 4px 8px; border-radius: 3px; cursor: pointer; background: rgba(8, 12, 19, .88); color: #dfe7f7; border: 1px solid #263248; }
-.map-tour .tour-play { color: #ffb000; border-color: #ffb000; letter-spacing: .1em; font-weight: 700; }
-.map-tour .tk.up { border-color: #ff8a3d88; } .map-tour .tk.down { border-color: #36d6ff88; }
-.map-tour .tk.on { background: #ffb000; color: #05080d; border-color: #ffb000; }
+.map-keys { position: absolute; top: 12px; right: 12px; z-index: 2; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
+.map-keys button { font: 11px var(--mono); padding: 4px 8px; border-radius: 3px; cursor: pointer; background: rgba(8, 12, 19, .88); color: #dfe7f7; border: 1px solid #263248; }
+.map-keys .tk.up { border-color: #ff8a3d88; } .map-keys .tk.down { border-color: #36d6ff88; }
+.map-keys .tk.on { background: #ffb000; color: #05080d; border-color: #ffb000; }
 .map-zone { position: absolute; right: 12px; bottom: 96px; z-index: 3; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; background: rgba(8, 12, 19, .9); border: 1px dashed #eef3ff; border-radius: 3px; font: 11px var(--mono); color: #eef3ff; letter-spacing: .08em; }
 .map-zone button { font: 700 11px var(--mono); padding: 3px 8px; border-radius: 3px; cursor: pointer; background: none; color: #8592ab; border: 1px solid #263248; }
 .map-zone #map-zone-ask { background: #ffb000; color: #05080d; border-color: #ffb000; }
-.map-tour .tour-clear { color: #8592ab; } .map-tour .tour-clear:hover { color: #ff6b6b; border-color: #ff6b6b; }
+.map-keys .key-clear { color: #8592ab; } .map-keys .key-clear:hover { color: #ff6b6b; border-color: #ff6b6b; }
 .map-card { position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 2; width: min(460px, 70%); background: rgba(8, 12, 19, .92); border: 1px solid #263248; border-top: 2px solid #ffb000; border-radius: 4px; padding: 9px 12px 10px; font-size: 11.5px; box-shadow: 0 10px 40px rgba(0, 0, 0, .6); }
 .mc-head { display: flex; justify-content: space-between; color: #ffb000; font-weight: 700; letter-spacing: .12em; }
 .mc-x { background: none; border: 0; color: #8592ab; cursor: pointer; font-size: 16px; line-height: 1; }
