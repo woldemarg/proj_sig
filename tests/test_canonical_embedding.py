@@ -89,6 +89,14 @@ def encoder(request):
     return InsightEncoder(emb, cfg)
 
 
+@pytest.mark.model
+def test_the_model_computes_in_float32_on_the_cpu():
+    """bf16 has no fast CPU kernels: the CPU runs the model in float32, and the spec records it."""
+    emb = SentenceTransformerEmbedder(replace(load_settings().topology, embedding_device="cpu"))
+    assert emb.compute_dtype == "float32"
+    assert InsightEncoder(emb, load_settings().topology).spec.compute_dtype == "float32"
+
+
 def test_embedding_contract(encoder):
     cfg = load_settings().topology
     cans = [

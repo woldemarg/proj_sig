@@ -59,7 +59,7 @@ class EmbeddingSpec:
     block_dim: int
     dim: int
     dtype: str  # storage dtype of the vectors
-    compute_dtype: str  # dtype the model ran in (its checkpoint dtype: bf16 for Qwen3)
+    compute_dtype: str  # dtype the model ran in (Qwen3: bf16 on a GPU, float32 on the CPU)
     normalization: str
     block_weights: tuple[float, float, float]
     emm_component_weight: float
