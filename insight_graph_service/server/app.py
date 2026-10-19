@@ -198,6 +198,14 @@ def create_app(engine: Engine) -> FastAPI:
     def geo_overlay(dataset_id: str) -> dict[str, Any]:
         return engine.geo_overlay(dataset_id)
 
+    @app.get("/api/geo/{dataset_id}/projected")
+    def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
+        return engine.geo_projected(dataset_id)
+
+    @app.get("/api/geo/{dataset_id}/window")
+    def geo_window(dataset_id: str, bbox: str) -> dict[str, Any]:
+        return engine.geo_window(dataset_id, bbox)
+
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
         return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)

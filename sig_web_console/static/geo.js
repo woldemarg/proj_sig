@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map and its tour (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set(), overlay: null, level: null, regionMarks: [], zoneMarks: [] };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], hl: [], focus: [], tour: null, places: [], zone: new Set(), overlay: null, level: null, regionMarks: [], zoneMarks: [] };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 
@@ -21,11 +21,11 @@ const GeoMap = {
   async refresh() {
     try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
     $("map-tab").hidden = !G.datasets.length;
-    if (!G.datasets.length) { G.ds = null; G.data = null; G.patterns = {}; if (S.view === "map") setView("graph"); return; }
+    if (!G.datasets.length) { G.ds = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
     const filter = $("dataset-filter").value;
     const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.ds) || G.datasets[0];
     if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
-    else await loadOverlay(G.ds);  // a commit (another source, say) changes the graph over the same cells
+    else { await loadOverlay(G.ds); await loadProjected(G.ds); scheduleWindow(); }  // a commit changes the graph over the same cells
     if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
   },
 
@@ -34,6 +34,12 @@ const GeoMap = {
     G.map.resize();
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
     else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: 40, duration: 0 });
+    scheduleWindow();
+  },
+
+  pick(pid, fit = false) {  // an insight chosen in the view's list (the view stays) or walked to: drawn, described in the chat
+    GeoMap.focusPattern(pid, fit);
+    pickInsight(pid, windowItem(pid));
   },
 
   suggestions() {
@@ -53,7 +59,8 @@ const GeoMap = {
 
   onAnswer(qa) {
     const items = ((qa.view && qa.view.evidence && qa.view.evidence.items) || []);
-    const geoDs = items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds));
+    const geoDs = items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds))
+      || (items.some((i) => G.patterns[i.pattern_id]) ? G.ds : null);  // a table insight of this upload: drawn by its footprint
     if (!geoDs) { GeoMap.clear(); return; }
     if (!G.map || S.view !== "map") { G.pending = qa; return; }
     const apply = () => {
@@ -89,18 +96,18 @@ const GeoMap = {
     setStates(G.focus, "focus", false); G.focus = []; G.focusId = null;
     G.map.getSource("pts").setData(empty());
     $("map-card").hidden = true;
-    document.querySelectorAll("#map-tour .tk").forEach((b) => b.classList.remove("on"));
+    document.querySelectorAll("#map-tour .tk, #map-window .mw-i").forEach((b) => b.classList.remove("on"));
   },
 
-  async focusPattern(pid) {
+  async focusPattern(pid, fit = true) {
     const p = G.patterns[pid]; if (!p || !G.map) return;
     G.focusId = pid;
     setStates(G.focus, "focus", false);
     G.focus = p.rows; setStates(G.focus, "focus", true);
-    fitRows(p.rows, 90);
+    if (fit) fitRows(p.rows, 90);
     const item = G.evidence.find((i) => i.pattern_id === pid);
     renderCard(p, item, null);
-    document.querySelectorAll("#map-tour .tk").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
+    document.querySelectorAll("#map-tour .tk, #map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
       const pts = await api(`/api/geo/${encodeURIComponent(G.ds)}/patterns/${encodeURIComponent(pid)}`);
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
@@ -176,6 +183,7 @@ function ensureMap() {
     });
     m.on("click", "cells-fill", (e) => (e.originalEvent.shiftKey ? GeoMap.toggleZone(e.features[0].properties.h3) : cellPopup(e.features[0], e.lngLat)));
     m.on("zoom", () => { placeDensity(); paintRegions(); });
+    m.on("moveend", scheduleWindow);
     wireHud();
   });
   return G.ready;
@@ -201,9 +209,7 @@ async function loadDataset(ds) {
   await ensureMap();
   const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
   G.ds = ds; G.data = data; G.hl = []; G.focus = []; G.evidence = [];
-  G.patterns = Object.fromEntries(data.patterns.map((p) => [p.id, p]));
-  G.byRow = data.features.map(() => []);
-  data.patterns.forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
+  await loadProjected(ds);
   G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
   G.map.getSource("cells").setData(data);
   G.map.getSource("pts").setData(empty());
@@ -219,6 +225,14 @@ async function loadDataset(ds) {
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
   $("map-card").hidden = true; renderTourBar(); paintZone();
+}
+
+async function loadProjected(ds) {
+  /* the upload's insights found at another level (the table, another resolution) on this map's cells, by their footprint */
+  G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch(() => []);
+  G.patterns = Object.fromEntries([...G.data.patterns, ...G.projected].map((p) => [p.id, p]));
+  G.byRow = G.data.features.map(() => []);
+  Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
 }
 
 async function loadOverlay(ds) {
@@ -303,6 +317,7 @@ function wireHud() {
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
   $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
   $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
+  $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
 }
 
 function shiftText(p, item) {
@@ -317,16 +332,20 @@ function renderCard(p, item, pts) {
   $("map-card-body").innerHTML =
     `<div class="mc-scope">${p.scope.map((s) => esc(human(s))).join(" · ")}</div>` +
     `<div class="mc-shift">${shiftText(p, item)}</div>` +
-    `<div class="mc-grid"><span>cells</span><b>${num(p.rows.length, 0)}</b><span>compactness</span><b>${num(sp.compactness)}</b>` +
-    `<span>points</span><b>${pts ? num(pts.n_points, 0) : "…"}</b><span>n<sub>eff</sub></span><b>${num(sp.n_eff, 0)}</b>` +
-    `<span>Moran's I</span><b>${num(sp.moran_i)}</b><span>weight</span><b>${num(p.weight)}</b></div>` +
+    (p.level  // found at another level: drawn by the cells holding most of its points
+      ? `<div class="mc-grid"><span>found at</span><b>${esc(p.level)}</b><span>cells</span><b>${num(p.rows.length, 0)}</b>` +
+        `<span>points</span><b>${pts ? num(pts.n_points, 0) : "…"}</b><span>footprint</span><b>${num(sp.footprint_share * 100, 0)}%</b>` +
+        `<span>rows</span><b>${num(p.support, 0)}</b><span>weight</span><b>${num(p.weight)}</b></div>`
+      : `<div class="mc-grid"><span>cells</span><b>${num(p.rows.length, 0)}</b><span>compactness</span><b>${num(sp.compactness)}</b>` +
+        `<span>points</span><b>${pts ? num(pts.n_points, 0) : "…"}</b><span>n<sub>eff</sub></span><b>${num(sp.n_eff, 0)}</b>` +
+        `<span>Moran's I</span><b>${num(sp.moran_i)}</b><span>weight</span><b>${num(p.weight)}</b></div>`) +
     (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
   $("map-card").hidden = false;
 }
 
 function renderTourBar() {
   const bar = $("map-tour");
-  if (!G.evidence.length) { bar.hidden = true; return; }
+  if (!G.evidence.length) { bar.hidden = true; placeWindow(); return; }
   bar.hidden = false;
   bar.innerHTML = `<button type="button" class="tour-play" title="Fly through the evidence">${G.tour ? "■" : "▶"} TOUR</button>` +
     G.evidence.map((i) => `<button type="button" class="tk ${i.statistics.effect_size >= 0 ? "up" : "down"} ${i.pattern_id === G.focusId ? "on" : ""}" data-pid="${esc(i.pattern_id)}" title="${esc(i.scope.join(" · "))}">${esc(i.key)}</button>`).join("") +
@@ -335,6 +354,7 @@ function renderTourBar() {
   bar.querySelector(".tour-clear").addEventListener("click", () => GeoMap.clear());
   // a second click on the focused key unfocuses it
   bar.querySelectorAll(".tk").forEach((b) => b.addEventListener("click", () => { stopTour(); b.dataset.pid === G.focusId ? GeoMap.unfocus() : GeoMap.focusPattern(b.dataset.pid); }));
+  placeWindow();
 }
 
 function startTour() {
@@ -360,7 +380,7 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${trustTags(pid)}</div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
@@ -374,4 +394,44 @@ function cellPopup(f, lngLat) {
   el.querySelector(".pp-ask").addEventListener("click", () => {  // the selected zone if it holds this cell, else the cell; the typed text, if any
     popup.remove(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
   });
+}
+
+// ponytail: PoC — the map as a window on the hidden graph (GET /api/geo/{ds}/window): the themes and insights of the view,
+// re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
+const W = { seq: 0, timer: null, data: null, fold: {}, folded: null };  // folded: decided by the map's width at the first render
+
+function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
+
+async function loadWindow() {
+  if (!G.map || !G.ds || S.view !== "map") return;
+  const b = G.map.getBounds(), seq = ++W.seq, clamp = (x, m) => Math.max(-m, Math.min(m, x)).toFixed(4);
+  const bbox = [clamp(b.getWest(), 180), clamp(b.getSouth(), 90), clamp(b.getEast(), 180), clamp(b.getNorth(), 90)].join(",");
+  const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}`).catch((e) => ({ error: e.message }));
+  if (seq !== W.seq) return;  // a later view answered first
+  W.data = data; renderWindow();
+}
+
+const windowItem = (pid) => ((W.data && W.data.themes) || []).flatMap((t) => t.insights).find((i) => i.id === pid) || null;
+const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the headline after its scope: "score +1.20 sd"
+
+function placeWindow() { const bar = $("map-tour"); $("map-window").style.top = bar.hidden ? "" : `${bar.offsetHeight + 20}px`; }
+
+function renderWindow() {
+  const el = $("map-window"), d = W.data;
+  el.hidden = !d || !G.ds;
+  if (el.hidden) return;
+  if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
+  el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–"; placeWindow();
+  if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
+  $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(d.themes.length, "theme")} · ${num(d.points, 0)} pts`;
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">No insight has enough of its points in this view.</div>` : d.themes.map((t, k) => {
+    const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
+    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.insights.length}</b></button>` +
+      (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
+        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}</i><span class="mw-nm">${esc(i.scope.map((c) => human(c.slice(c.indexOf("=") + 1))).join(" · "))}` +
+        `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
+        `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
+  }).join("");
+  $("mw-body").querySelectorAll(".mw-th").forEach((b) => b.addEventListener("click", () => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); }));
+  $("mw-body").querySelectorAll(".mw-i").forEach((b) => b.addEventListener("click", () => GeoMap.pick(b.dataset.pid)));
 }
