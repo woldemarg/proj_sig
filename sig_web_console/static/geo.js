@@ -8,7 +8,6 @@ const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is reposit
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
-  datasetOf: (pid) => (G.patterns[pid] ? G.ds : null),
   current: () => G.ds,  // the geo dataset the map holds (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 

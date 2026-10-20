@@ -135,14 +135,14 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/batches")
     def batches(upload_id: str | None = None) -> list[dict[str, Any]]:
-        return [b for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
+        return [engine.polled(b) for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
         record = engine.ws.load_batch(batch_id) if re.fullmatch(r"[\w-]+", batch_id) else None  # an id, never a path
         if record is None:
             raise HTTPException(404, "unknown batch")
-        return record
+        return engine.polled(record)
 
     @app.post("/api/upload")
     def upload(

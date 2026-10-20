@@ -98,8 +98,10 @@ def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
 
 def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions): ``regions_above`` and
-    every region an intact pattern's scale chain names, its finest home region included when it has no coarser step, so
-    the map holds each region a SCALE CHAIN names; a region holding tampered patterns only is none."""
+    every region an intact pattern's scale chain names (the regions coarser than its top pattern, walked up from the
+    region its last step up met in, or from its home region when it has none: level 7 for cells at 8; never one at the
+    top pattern's own level, which is one of its cells), so the map holds each region a SCALE CHAIN names; a region
+    holding tampered patterns only is none."""
     intact = [pid for pid in pattern_ids if graph.nodes[pid]["props"].get("integrity") != "mismatch"]
     return regions_above(graph, pattern_ids) | _held(graph, {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions})
 

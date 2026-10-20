@@ -186,12 +186,18 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
+        self._publishing: str | None = None  # the batch past its commit point whose graph readers do not see yet
         self._open()
 
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
         touch the journal or a lock, so they neither race nor wait for a batch."""
         return self._state
+
+    def polled(self, record: dict[str, Any]) -> dict[str, Any]:
+        """A batch record as a poller reads it (``GET /api/batches``): READY once readers see its graph, PERSISTING from
+        its commit point until then, so a client that acts on READY reads the new graph (docs/09_operations.md §9.1)."""
+        return {**record, "status": "PERSISTING"} if record.get("status") == "READY" and record["batch_id"] == self._publishing else record
 
     def graph(self) -> DualGraph:
         return self.committed().graph
@@ -546,6 +552,7 @@ class Engine:
                         record["metrics"]["attractors_total"] = len(ontology.attractor_ids)
                     record["status"] = "READY"
                     record["stage_times"]["READY"] = utc_now()
+                    self._publishing = batch_id  # set before READY is on disk: a poll reads PERSISTING until _publish
                     self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
             except Exception as exc:  # failures before READY were rolled back by the transaction
                 return self._fail(record, exc, t0)
@@ -709,6 +716,7 @@ class Engine:
         """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and
         the optional Neo4j mirror is synced; returns the mirror status."""
         self._state = state
+        self._publishing = None  # after the switch: READY in a poll means the new graph
         return self.sync_neo4j(snapshot)
 
     @_healthy

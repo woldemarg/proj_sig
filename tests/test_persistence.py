@@ -108,6 +108,29 @@ def test_committed_batch_stays_ready_when_publish_save_fails(engine, demo_csv, m
     assert engine.ws.patterns()
 
 
+def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):
+    """READY is on disk a moment before readers switch to the new graph (the commit point, then ``_publish``): a poll in
+    that moment reads PERSISTING, so a client that acts on READY — the console's one reload — never reads the old graph."""
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+
+    seen, publish = [], engine._publish
+
+    def spy(state, snapshot):  # the moment between the commit point and the switch
+        bid = engine.ws.list_batches()[-1]["batch_id"]  # the newest
+        polls = [b["status"] for b in client.get("/api/batches").json()] + [client.get(f"/api/batches/{bid}").json()["status"]]
+        seen.append((engine.ws.load_batch(bid)["status"], polls, len(engine.graph().insights)))
+        return publish(state, snapshot)
+
+    monkeypatch.setattr(engine, "_publish", spy)
+    with TestClient(create_app(engine)) as client:
+        rec = engine.ingest_file(demo_csv)
+        after = client.get(f"/api/batches/{rec['batch_id']}").json()["status"]
+    assert seen == [("READY", ["PERSISTING", "PERSISTING"], 0)]  # READY on disk, readers still on the empty graph
+    assert after == "READY" and engine.graph().insights
+
+
 def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     other = make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0)))
