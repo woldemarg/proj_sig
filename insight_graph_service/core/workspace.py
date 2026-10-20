@@ -11,7 +11,7 @@ Layout under ``WORKSPACE_DIR``::
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
     journal/embeddings.mmap (+ _meta.json) float32 unit insight vectors, row = row_id
-    journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks, document vectors, pattern ids
+    journal/blocks/<batch_id>.npz          scope / target / phenomenon blocks, pattern ids
     state/                                 lac ConceptStore.save() + representation.json + sig_state.json
     graph/snapshot.json                    materialised dual-layer graph (derived, rebuildable)
     graph/literals.npz                     literal-catalog vectors by text (a cache, docs/07_question_answering.md §7.1.1)

@@ -101,7 +101,8 @@ def place_scores(
 @functools.lru_cache(maxsize=64)
 def read_zone_scores(ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...]) -> dict[str, float]:
     """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cached on its arguments, since a
-    dataset id fixes its files."""
+    dataset id fixes its files: a READY id is never mined again (its duplicate is SKIPPED), one uploaded again after its
+    deletion is mined to the same files, and a commit that adds, deletes or supersedes a geo dataset changes ``levels``."""
     out: dict[str, float] = {}
     for dataset_id, _ in levels:
         if (geo := ws.load_geo(dataset_id, ("cells",))) is not None:
