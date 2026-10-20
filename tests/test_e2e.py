@@ -225,42 +225,23 @@ def test_llm_failure_keeps_knowledge(hashed_engine):
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
 
-def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch):
-    """Document vectors are stored at ingest: an answer (and its naive text baseline) embeds no document."""
-    graph = hashed_engine.graph()
-    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
-    embedder = hashed_engine.encoder.embedder
-    seen: list[str] = []
+def test_answering_embeds_the_question_not_the_corpus(tmp_path, demo_csv, monkeypatch):
+    """A batch embeds each insight's three blocks and no canonical document (the naive text baseline is a measurement of
+    scripts/experiment.py, docs/07_question_answering.md §7.6); an answer embeds the question, never a document, and
+    carries the structural baselines only."""
+    engine = make_engine(make_config(tmp_path / "ws"))
+    embedder, seen = engine.encoder.embedder, []
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)
         monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
-    qa = ask(hashed_engine, "Why is margin lower for phones in the US?")
-    assert qa.view["traversal"]["baselines"]["naive_nearest"]
-    assert seen and not documents & set(seen)
-
-
-def test_missing_document_vectors_are_filled_at_start(tmp_path, demo_csv, monkeypatch):
-    """A batch without stored document vectors is embedded when the engine loads its state, never by a question,
-    and a writer saves them."""
-    import numpy as np
-
-    cfg = make_config(tmp_path / "ws")
-    make_engine(cfg).ingest_file(demo_csv)
-    for path in (cfg.workspace_dir / "journal" / "blocks").glob("*.npz"):  # as written before documents were stored
-        with np.load(path) as data:
-            kept = {k: data[k] for k in data.files if k not in ("document", "pattern_ids")}
-        np.savez_compressed(path, **kept)
-    engine = make_engine(cfg)
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
     graph = engine.graph()
-    ids = {n["id"] for n in graph.of_kind("Pattern")}
-    assert set(engine.frame().documents) == ids  # filled when the state was loaded
-    documents = {graph.canonical_document(i) for i in ids}
-    seen: list[str] = []
-    original = engine.encoder.embedder.embed
-    monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
-    engine.evidence("Why is margin lower for phones in the US?")
-    assert not documents & set(seen)  # a question embeds no document
-    assert set(make_engine(cfg, recover=False).frame().documents) == ids  # saved
+    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
+    assert seen and not documents & set(seen)  # the batch embedded blocks and literals, no document
+    seen.clear()
+    qa = ask(engine, "Why is margin lower for phones in the US?")
+    assert seen and not documents & set(seen)
+    assert set(qa.view["traversal"]["baselines"]) == {"structural_only", "transversal_only", "not_structurally_reachable"}
 
 
 def test_search_is_the_structured_context_the_narrator_verbalises(hashed_engine):

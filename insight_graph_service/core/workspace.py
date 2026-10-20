@@ -314,43 +314,6 @@ class Workspace:
     def patterns(self) -> list[dict[str, Any]]:
         return self.journal.load_chunks()
 
-    def document_vectors(self, batch_ids: set[str]) -> dict[str, np.ndarray]:
-        """Canonical-document embeddings stored at ingest (the naive text baseline), pattern id -> vector."""
-        out: dict[str, np.ndarray] = {}
-        for batch_id in batch_ids:
-            path = self.journal_dir / "blocks" / f"{batch_id}.npz"
-            if not path.is_file():
-                continue
-            with np.load(path) as data:
-                if "document" in data.files and "pattern_ids" in data.files:
-                    out.update(zip(data["pattern_ids"].tolist(), data["document"]))
-        return out
-
-    def save_document_vectors(self, documents: dict[str, np.ndarray], changed: set[str]) -> None:
-        """Back-fill document vectors: every batch holding a ``changed`` pattern gets all its patterns' vectors from
-        ``documents``, in the batch's journal order (the row order of its blocks file)."""
-        by_batch: dict[str, list[str]] = {}
-        for record in self.patterns():
-            if record["id"] in documents:
-                by_batch.setdefault(record["batch_id"], []).append(record["id"])
-        for batch_id, ids in by_batch.items():
-            if changed.intersection(ids):
-                self._write_document_vectors(batch_id, ids, np.stack([documents[i] for i in ids]))
-
-    def _write_document_vectors(self, batch_id: str, pattern_ids: list[str], vectors: np.ndarray) -> None:
-        """One batch's document vectors into its blocks file; the other arrays are kept, the file replaced atomically."""
-        path = self.journal_dir / "blocks" / f"{batch_id}.npz"
-        arrays: dict[str, np.ndarray] = {}
-        if path.is_file():
-            with np.load(path) as data:
-                arrays = {k: data[k] for k in data.files}
-        arrays["document"] = np.asarray(vectors, dtype=np.float32)
-        arrays["pattern_ids"] = np.array(pattern_ids)
-        tmp = path.with_name(path.name + ".tmp")
-        with tmp.open("wb") as handle:
-            np.savez_compressed(handle, **arrays)
-        replace_file(tmp, path)
-
     def activations(self) -> list[dict[str, Any]]:
         return self.journal.load_activations()
 

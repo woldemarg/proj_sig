@@ -816,7 +816,7 @@ function botCard(turn) {
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
-  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.naive_nearest || []).length ? `${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.` : ""}</div>` : "";
+  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему.</div>` : "";
   const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
   const zones = (ev.zones || []).length ? `<div class="hypo"><b>Zones</b>${ev.zones.map((z, n) => `<div>Z${n + 1} · res ${z.resolution} · ${z.holds.map((p) => keyOf[p]).join(", ")} — ${picture(z)}</div>`).join("")}</div>` : "";
   const notes = (ev.notes || []).length ? `<div class="hypo"><b>Notes</b>${ev.notes.map((n) => `<div>${esc(n)}</div>`).join("")}</div>` : "";

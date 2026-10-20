@@ -13,7 +13,7 @@
 - **Processing.** `Engine.process(batch_id)` runs a batch; `Engine.ingest_file()` submits and processes in one call (tests and scripts). The HTTP app queues `process` on its single worker thread ([8.1](08_interface.md#81-http-api)). Read-only callers pass `recover=False` ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)).
 - **Questions.** Over the committed state, `Engine.search(question)` returns the `SearchResult` and `Engine.evidence(question)` its `EvidencePayload` (the empty payload while the graph holds no insight) ([7.5](07_question_answering.md#75-the-language-model-and-citation-check)). No language model runs in this process; the narrator verbalises the payload.
 - **Other writes.** `Engine.delete_dataset(id)`, `Engine.delete_upload(upload_id)` (every level of one upload) and `Engine.reset()`. A reset is refused with `busy` at once while a batch or a deletion runs or an upload waits.
-- **Readers.** Readers see the committed state through `Engine.committed()`: graph, vectors and literal catalog of one commit, loaded when the engine starts ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). `graph()` and `frame()` read from it; it holds the literal catalog and every document vector from the moment it is committed.
+- **Readers.** Readers see the committed state through `Engine.committed()`: graph, vectors and literal catalog of one commit, loaded when the engine starts ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery)). `graph()` and `frame()` read from it; it holds the literal catalog from the moment it is committed.
 
 **Start.** The server first checks the model files, before anything touches the workspace (exit 3 when one is missing; [9.3](#93-configuration)). A writer engine then takes the workspace's writer lock — another writer process gets `WorkspaceBusy`, and the server exits with code 2 — and:
 1. it recovers interrupted writes ([6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery));
@@ -35,7 +35,7 @@ UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS �
 | PROFILING | EDA steps 1–3 (an empty search space fails here) | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
 | DISCOVERING | pass 1, deduplication, pass 2 (the bootstrap) | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps), [2.3](02_discovery.md#23-deduplication-before-validation) |
 | VALIDATING_INSIGHTS | `build_insights` + `select_insights` (validity rules R1–R3, weight) + `batch.admit_insights` (admission: R4 weight floor, R7 batch budget); rejections persisted | [3](03_insights.md) |
-| EMBEDDING | canonicalise and encode; embed the canonical documents for the text baseline; representation check | [4](04_representation.md) |
+| EMBEDDING | canonicalise and encode the three blocks; representation check | [4](04_representation.md) |
 | UPDATING_ONTOLOGY | **transaction** (checkpoint + `pending.json`), batch sequence, `LatentOntology.ingest` | [5](05_latent_anchors.md) |
 | BUILDING_GRAPH | pattern records (+ canonical form, embedding metadata), covers | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | PERSISTING | duplicate guard, journal append, state save, representation record, batch sequence commit, snapshot, committed graph and frame loaded | [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |

@@ -46,8 +46,7 @@ def test_a_question_becomes_an_evidence_payload():
 
     graph, encoder = DualGraph(snapshot()), ShapeOnlyEncoder()
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
-    state = CommittedState(graph, LatentFrame(vectors, {}, documents))
+    state = CommittedState(graph, LatentFrame(vectors, {}))
     found = search(QUESTION, state, encoder, QueryConfig())
     payload = found.payload()
 
@@ -69,8 +68,7 @@ def test_the_citations_come_from_the_insight_not_its_free_form_provenance():
     snap = snapshot()
     snap["nodes"] = [{**n, "props": {**n["props"], "provenance": {}}} if n["kind"] == "Pattern" else n for n in snap["nodes"]]
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
-    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}))
     payload = search(QUESTION, state, encoder, QueryConfig()).payload()
     cited = {c["pattern_id"]: c for c in payload.citations.values()}
     assert cited["P1"] == {"pattern_id": "P1", "expression": "region=US AND category=phones", "dataset_id": "ds1", "filename": "", "batch_id": "B1"}
@@ -84,8 +82,7 @@ def test_a_partial_spatial_provenance_reads_without_the_missing_fields():
     spatial = {"resolution": 7, "cells": 40}  # an older record: no n_eff
     snap["nodes"] = [{**n, "props": {**n["props"], "provenance": {"spatial": spatial}}} if n["kind"] == "Pattern" else n for n in snap["nodes"]]
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
-    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}))
     prompt = search(QUESTION, state, encoder, QueryConfig()).payload().evidence_prompt
     assert "place: 40 H3 cells (resolution 7)" in prompt and "effective n" not in prompt
 
@@ -117,8 +114,7 @@ def test_an_item_reached_only_by_location_is_marked():
     snap = snapshot()
     snap["edges"].append(edge("P1", "P2", "CO_LOCATED", 1.0, relation="same_region"))  # stronger than the walk through A-1
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
-    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, documents))
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}))
     found = search(QUESTION, state, encoder, QueryConfig())
     item = next(it for it in found.evidence.items if it.pattern_id == "P2")
     prompt = found.payload().evidence_prompt
@@ -135,9 +131,8 @@ def test_a_location_step_after_the_latent_plane_wins_over_the_latent_mark():
     snap["nodes"].append(pattern("P3", ["region=APAC", "category=laptops"]))
     snap["edges"].append(edge("P2", "P3", "CO_LOCATED", 1.0, relation="same_region"))  # P1 -> A-1 -> P2 -> P3
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0]), "P3": np.array([0.0, 0.0, 1.0])}
-    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {}, documents)), encoder, QueryConfig())
+    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {})), encoder, QueryConfig())
     item = next(it for it in found.evidence.items if it.pattern_id == "P3")
     assert [st["edge_type"] for st in item.path] == ["ACTIVATES", "ACTIVATES", "CO_LOCATED"]
     assert item.located == "same_region" and not item.transversal_only  # only the place links it to P2's phenomenon
@@ -200,12 +195,11 @@ def _levels_search(snap: dict, coarse_first: bool = False):
     from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
 
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.0, 1.0, 0.0])}
     if coarse_first:  # the coarser level matches the question, the finer one is reached through the anchor
         vectors = {"P1": vectors["P7"], "P7": vectors["P1"]}
     return graph, search(
-        QUESTION, CommittedState(graph, LatentFrame({k: v for k, v in vectors.items() if k in graph.insights}, {}, documents)), encoder, QueryConfig()
+        QUESTION, CommittedState(graph, LatentFrame({k: v for k, v in vectors.items() if k in graph.insights}, {})), encoder, QueryConfig()
     )
 
 
@@ -435,9 +429,8 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     from graph_query_engine import CommittedState, LatentFrame, QueryConfig, search
 
     graph, encoder = DualGraph(_levels(-1.2, ("7", "5"))), ShapeOnlyEncoder()
-    documents = {pid: encoder.embedder.embed([graph.canonical_document(pid)])[0] for pid in graph.insights}
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P7": np.array([0.8, 0.6, 0.0])}
-    found = search("Where is margin lower?", CommittedState(graph, LatentFrame(vectors, {}, documents)), encoder, QueryConfig())
+    found = search("Where is margin lower?", CommittedState(graph, LatentFrame(vectors, {})), encoder, QueryConfig())
     assert [z["id"] for z in found.evidence.zones] == ["R:5:a"] and "- Z1 = R:5:a (res 5): contains P1" in found.payload().evidence_prompt
 
 
@@ -449,10 +442,10 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
     snap = snapshot()
     snap["nodes"][:2] = [pattern("P1", ["region=US", "category=phones"], w=0.2), pattern("P2", ["region=EU", "category=tablets"], w=0.2)]
     graph, encoder = DualGraph(snap), ShapeOnlyEncoder()
-    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}, {}))
+    state = CommittedState(graph, LatentFrame({"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}, {}))
     found = search("", state, encoder, QueryConfig(), place_scores={"P2": 0.01, "P1": 0.0})
     assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", "place")]
-    assert not found.traversal.baselines["naive_nearest"] and not found.traversal.baselines["not_in_naive_topk"]  # nothing to embed
+    assert set(found.traversal.baselines) == {"structural_only", "transversal_only", "not_structurally_reachable"}
     keys = {it.pattern_id: it.key for it in found.evidence.items}
     assert (
         f"in it, with how closely each one's map cells match it (100% = the same cells): {keys['P2']} 1%; outside it: {keys['P1']}."
@@ -480,7 +473,7 @@ def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():
         pattern("Y", ["zone=south"], w=0.5),
     ]
     snap["edges"] = [edge("I", "O", "SPECIALIZES"), *(edge(p, "A-1", "ACTIVATES", 0.9) for p in "OIY")]
-    state = CommittedState(DualGraph(snap), LatentFrame({p: np.array([1.0, 0.0, 0.0]) for p in "OIY"}, {}, {}))
+    state = CommittedState(DualGraph(snap), LatentFrame({p: np.array([1.0, 0.0, 0.0]) for p in "OIY"}, {}))
 
     def roles(place_scores):
         found = search(QUESTION, state, ShapeOnlyEncoder(), QueryConfig(), place_scores=place_scores)
@@ -503,7 +496,7 @@ def test_a_tampered_pattern_takes_no_place_in_the_walk_or_a_region():
     snap["edges"] += [edge("P3", "A-1", "ACTIVATES", 0.8), edge("P2", "R:5:a", "IN_REGION", 0.9), edge("P3", "R:5:a", "IN_REGION", 0.9)]
     graph = DualGraph(snap)
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0]), "P3": np.array([0.8, 0.6, 0.0])}
-    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig(max_retrieved=1))
+    found = search(QUESTION, CommittedState(graph, LatentFrame(vectors, {})), ShapeOnlyEncoder(), QueryConfig(max_retrieved=1))
     assert [r.node_id for r in found.traversal.patterns] == ["P1", "P3"] and [r.node_id for r in found.traversal.excluded] == ["P2"]
     assert found.evidence.excluded == ["P2"] and any(n.startswith("P2 excluded: integrity check failed") for n in found.evidence.notes)
     assert "виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): P2" in found.payload().evidence_summary
@@ -526,7 +519,7 @@ def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_exp
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
 
     def anchors_and_prompt(edges):
-        found = search(QUESTION, CommittedState(DualGraph(snap | {"edges": edges}), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+        found = search(QUESTION, CommittedState(DualGraph(snap | {"edges": edges}), LatentFrame(vectors, {})), ShapeOnlyEncoder(), QueryConfig())
         return {a["id"]: a for a in found.evidence.attractors}, found.payload().evidence_prompt
 
     anchors, prompt = anchors_and_prompt(snap["edges"])
@@ -545,7 +538,7 @@ def test_the_evidence_carries_each_pattern_credibility():
     snap = snapshot()
     snap["nodes"][0]["props"] |= {"credibility": 1, "credibility_basis": {"rule": "anchor", "patterns": ["P9"], "sources": ["b"]}}
     vectors = {"P1": np.array([1.0, 0.0, 0.0]), "P2": np.array([0.8, 0.6, 0.0])}
-    found = search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+    found = search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {})), ShapeOnlyEncoder(), QueryConfig())
     p1 = next(it for it in found.evidence.items if it.pattern_id == "P1")
     assert (p1.credibility, p1.credibility_basis["patterns"]) == (1, ["P9"]) and "credibility" not in found.payload().evidence_prompt
 
@@ -567,7 +560,7 @@ def test_the_evidence_shows_trust_once_the_graph_has_a_declared_source():
         snap["nodes"][1]["props"]["integrity"] = "unverified"
         for i, props in enumerate([dataset_props, *more], start=1):
             snap["nodes"].append({"id": f"DS:ds{i}", "kind": "Dataset", "label": f"ds{i}", "props": {"dataset_id": f"ds{i}", **props}})
-        return search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {}, {})), ShapeOnlyEncoder(), QueryConfig())
+        return search(QUESTION, CommittedState(DualGraph(snap), LatentFrame(vectors, {})), ShapeOnlyEncoder(), QueryConfig())
 
     plain = found({"reliability": "F"})
     assert all(not it.trust for it in plain.evidence.items) and "trust" not in plain.payload().evidence_prompt
