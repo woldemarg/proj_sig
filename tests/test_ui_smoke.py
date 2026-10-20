@@ -235,7 +235,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.keyboard.down("Shift")
             page.mouse.click(box["x"] + cell["x"], box["y"] + cell["y"])
             page.keyboard.up("Shift")
-        assert page.evaluate("G.regionMarks.length") > 0 and page.evaluate("G.overlay.features.some((f) => f.properties.resolution === G.level)")
+        assert page.evaluate("G.map.getFilter('regions-n')[2] === G.level && G.overlay.features.some((f) => f.properties.resolution === G.level)")
+        assert page.evaluate("document.querySelectorAll('.maplibregl-marker').length") < 50  # region counts are a symbol layer, places capped
         ring = "[[179.87, 1.86], [179.18, 0.66], [179.84, -0.72], [-178.8, -0.94], [-178.08, 0.25], [-178.75, 1.67], [179.87, 1.86]]"
         lon, lat = page.evaluate(f"centre({{geometry: {{coordinates: [{ring}]}}}})")  # a cell across ±180°: where it is
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
@@ -261,7 +262,7 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
-        painted = "G.data.features.filter((f) => G.map.getFeatureState({source: 'cells', id: f.properties.row}).hl).length"
+        painted = "G.map.getSource('focus').serialize().data.features.length"  # the focused insight's cells, its own source
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
@@ -271,7 +272,10 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.wait_for_timeout(400)
         assert page.evaluate(opacity) != first
         page.keyboard.press("Escape")
-        assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0
+        assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0 and page.evaluate(painted) == 0
+        page.locator(".msg-bot").last.locator("a.cite").first.click()
+        page.evaluate("loadDataset(G.ds)")  # a dataset loaded again, or another one: no cell of the old focus stays painted
+        assert page.evaluate("G.focusId") is None and page.evaluate(painted) == 0
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
         if page.evaluate("W.folded"):  # a narrow map starts with the list folded

@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from graph_query_engine.graph import DualGraph, primary_anchor
-from graph_query_engine.vertical import picture, regions_above, scale_label
+from graph_query_engine.vertical import picture, scale_label, shown_regions
 from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import Insight
 from insight_graph_service.core.errors import PipelineError
@@ -193,14 +193,14 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, Any]:
-    """What the graph says about a geo dataset's map: the regions above its patterns (``regions_above``) as GeoJSON, each
+    """What the graph says about a geo dataset's map: the regions drawn for its patterns (``shown_regions``) as GeoJSON, each
     with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale;
     derived once per commit."""
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells",))  # inside: a memo hit reads no file
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id]
-        features = region_features(geo["cells"], sorted(regions_above(graph, pids)))
+        features = region_features(geo["cells"], sorted(shown_regions(graph, pids)))
         for f in features:
             f["properties"].update(picture(graph, f["properties"]["id"]))
         trust = {
