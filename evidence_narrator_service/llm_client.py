@@ -43,6 +43,10 @@ class OpenAICompatibleLLM:
         self.base_url = settings.llm_base_url.rstrip("/")
         self._health: tuple[float, dict[str, Any]] | None = None
         self._down_until = 0.0  # after a refused connection, answers fall back at once until then
+        self.http = httpx.Client(base_url=self.base_url)  # pooled, as the narrator's graph client; timeouts per call
+
+    def close(self) -> None:
+        self.http.close()
 
     def health(self) -> dict[str, Any]:
         """Status for the UI: reachable and the model the broker serves; cached for ``HEALTH_TTL_S``."""
@@ -50,7 +54,7 @@ class OpenAICompatibleLLM:
             return self._health[1]
         result: dict[str, Any] = {"reachable": False, "model": None, "model_available": False, "base_url": self.base_url}
         try:
-            resp = httpx.get(f"{self.base_url}/models", timeout=2.0)
+            resp = self.http.get("/models", timeout=2.0)
             resp.raise_for_status()
             listed = [str(m.get("id")) for m in resp.json().get("data", [])]
         except Exception as exc:
@@ -72,7 +76,7 @@ class OpenAICompatibleLLM:
         }
         try:
             timeout = httpx.Timeout(self.settings.llm_timeout_s, connect=5.0)
-            resp = httpx.post(f"{self.base_url}/chat/completions", json=payload, timeout=timeout)
+            resp = self.http.post("/chat/completions", json=payload, timeout=timeout)
             if resp.status_code >= 400:
                 raise ValueError(f"HTTP {resp.status_code}: {resp.text[:300]}")
             data = resp.json()

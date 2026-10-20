@@ -423,6 +423,4 @@ function renderWindow() {
         `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
         `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
   }).join("");
-  $("mw-body").querySelectorAll(".mw-th").forEach((b) => b.addEventListener("click", () => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); }));
-  $("mw-body").querySelectorAll(".mw-i").forEach((b) => b.addEventListener("click", () => GeoMap.pick(b.dataset.pid)));
 }

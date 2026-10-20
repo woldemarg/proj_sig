@@ -265,9 +265,16 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
+        retail = page.evaluate(
+            f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
+        )
+        page.select_option("#dataset-filter", retail)  # a filter the next answer's evidence does not live in
+        page.wait_for_selector(f".ds.active[data-ds='{retail}']")
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
+        now = page.input_value("#dataset-filter")  # the filter moved to where the evidence lives, and the rail's active card with it
+        assert now != retail and page.evaluate("[...document.querySelectorAll('.ds.active')].map((e) => e.dataset.ds)") == ([now] if now else [])
         painted = "G.map.getSource('focus').serialize().data.features.length"  # the focused insight's cells, its own source
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()

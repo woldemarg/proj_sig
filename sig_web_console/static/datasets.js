@@ -30,13 +30,12 @@ function datasetCard(b) {
   } else if (b.status === "SKIPPED") {
     body = `<div class="ds-note">Already analysed — nothing new to add.</div>`;
   }
-  const chip = running ? `<span class="chip run">Processing</span>` : b.status === "READY" ? `<span class="chip ok">Ready</span>`
-    : b.status === "FAILED" ? `<span class="chip bad">Failed</span>` : `<span class="chip">Skipped</span>`;
+  const status = running ? chip("run", "Processing") : b.status === "READY" ? chip("ok", "Ready") : b.status === "FAILED" ? chip("bad", "Failed") : chip("", "Skipped");
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
   const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" title="Remove this dataset and its insights from the knowledge base">` +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
-    `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${chip}</div>` +
+    `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${status}</div>` +
     `<div class="ds-sub">${esc(when)}</div>` +
     datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
     `${body}${del}</div>`;
@@ -75,19 +74,17 @@ async function refreshBatches() {
   sel.innerHTML = `<option value="">All datasets</option>` +
     ready.map((b) => `<option value="${esc(b.dataset_id)}" data-file="${esc(b.filename)}">${esc(datasetName(b))}</option>`).join("");
   sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
-  if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets that are there
-  const readyKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",");
-  if (readyKey !== S.lastReady) { S.lastReady = readyKey; await loadGraph(); refreshHealth(); GeoMap.refresh(); }
+  // one key for what every view follows: the READY batches and the dataset filter
+  const viewKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",") + "|" + sel.value;
+  if (viewKey !== S.lastReady) {
+    S.lastReady = viewKey;
+    await loadGraph(); refreshHealth(); GeoMap.refresh();
+    if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
+  }
   $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
-  $("batches").querySelectorAll(".ds.clickable").forEach((el) => el.addEventListener("click", () => {
-    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; setFilter();
-  }));
-  $("batches").querySelectorAll(".ds-del").forEach((el) => el.addEventListener("click", (e) => { e.stopPropagation(); deleteDataset(el.dataset.del, el.dataset.name); }));
   clearTimeout(S.poll);
   if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
 }
-
-function setFilter() { loadGraph(); refreshBatches(); GeoMap.refresh(); }  // every view, the map and the welcome card follow the filter
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
