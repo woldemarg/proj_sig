@@ -131,6 +131,34 @@ def test_geo_benchmark_apparatus(tmp_path):
     assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
 
 
+def test_geo_coverage_apparatus(tmp_path):
+    """The geo coverage measurement (docs/10_verification.md §10.4) on ``geo_frame`` with rows that have no point: every
+    group gets the three coverages and the four rules on each region level; C_members is 1 for an insight of located rows
+    and 0 for one of rows without a point; an insight of the whole map has lift 1 in every region."""
+    import numpy as np
+    import pandas as pd
+    from geo_coverage import RULES, measure, run, upload_insights
+    from test_spatial import geo_frame
+
+    frame = geo_frame()
+    blank = frame.head(60).assign(latitude=np.nan, longitude=np.nan)
+    pd.concat([frame, blank], ignore_index=True).to_csv(path := tmp_path / "points.csv", index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    result = run(engine, path, "latitude,longitude@auto")
+    assert result["map"]["rows"] == len(frame) + 60 and result["map"]["events"] == len(frame) and result["region_levels"] == [7, 5, 3, 1]
+    base = result["groups"]["base"]
+    assert base["insights"] > 0 and 0 < base["c_members"]["min"] <= base["c_members"]["median"] <= 1 and 0 < base["c_map"]["events"] <= 1
+    assert all(0 <= base[lv][rule]["c_insights"] <= 1 for lv in result["region_levels"] for rule in RULES)
+    finest, _ = upload_insights(engine, engine.ws.list_batches())
+    n = len(finest["point_cell"])
+    probe = {"located": np.arange(len(frame)), "none": np.arange(len(frame), n), "all": np.arange(n)}
+    measured = measure(finest["point_cell"], finest["cells"], probe, [5, 3])["insights"]
+    assert measured["located"]["c_members"] == 1.0 and measured["none"]["c_members"] == 0.0 and "levels" not in measured["none"]
+    for lv in (5, 3):
+        whole = measured["all"]["levels"][lv]
+        assert whole["lift_min"] == pytest.approx(1.0) and whole["lift_max"] == pytest.approx(1.0) and whole["lift_2"] == 0
+
+
 def test_perf_benchmark_apparatus(tmp_path, caplog):
     """The performance benchmark (docs/10_verification.md §10.4): its synthetic deliveries are the same for one seed and
     keep to their own territory and calendar; one upload through the API reports each level's stages, the Neo4j sync's
