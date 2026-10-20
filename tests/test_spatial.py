@@ -480,15 +480,16 @@ def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
     assert picked["chosen"] == [5] and picked == auto_levels(california, "auto", cfg, levels)
     rng = np.random.default_rng(0)
     finest = {
-        n: select_levels(rng.uniform(48, 49, n), rng.uniform(35, 36, n), levels, min_rows=50, min_cell_points=5)["chosen"][0] for n in (2_000, 50_000)
+        n: select_levels(rng.uniform(36, 37, n), rng.uniform(-120, -119.17, n), levels, min_rows=50, min_cell_points=5)["chosen"][0]
+        for n in (2_000, 50_000)
     }
-    assert finest == {2_000: 6, 50_000: 7}  # the denser file the finer level; 8 has 12,000 cells of its own
+    assert finest == {2_000: 6, 50_000: 7}  # the denser file the finer level; 8 has 10,000 cells of its own
     with pytest.raises(SpatialError, match="dense share"):  # many cells, none dense: the refusal names that
         select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
-    big = np.random.default_rng(1)  # a large export: level 7 dense but 15,000 cells, level 5 only ~350
-    picked = select_levels(48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3, levels, min_rows=50, min_cell_points=5)
+    big = np.random.default_rng(1)  # a large export: level 7 dense but 13,500 cells, level 5 only ~310
+    picked = select_levels(35 + big.random(80_000) * 3, -121 + big.random(80_000) * 2.5, levels, min_rows=50, min_cell_points=5)
     assert picked["chosen"] == [6] and "GEO_AUTO_MAX_CELLS" in picked["reasons"]["7"] and "GEO_AUTO_MIN_CELLS" in picked["reasons"]["5"]
-    box = 48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3
+    box = 35 + big.random(80_000) * 3, -121 + big.random(80_000) * 2.5
     assert select_levels(*box, (5, 3, 1), min_rows=50, min_cell_points=5)["chosen"] == [6]  # finer than every region level: its own cells
     with monkeypatch.context() as m:  # a cap of 300: 6 counts the cells of 5, 4 those of 3
         m.setattr("subgroup_miner.spatial.GEO_AUTO_MAX_CELLS", 300)
@@ -499,9 +500,9 @@ def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
     assert wide["chosen"] == [6, 5] and wide["capped"] == []  # the wide box: 6 counts its IN_REGION regions at 5
     world = select_levels(big.uniform(-80, 80, 250_000), big.uniform(-179, 179, 250_000), levels, min_rows=50, min_cell_points=5)
     assert world["chosen"] == [3] and world["candidates"]["3"]["cells"] > 5_000  # every level over the cap: the coarsest that fits
-    rng = np.random.default_rng(71)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
+    rng = np.random.default_rng(48)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
     n, size = int(rng.integers(2000, 6000)), float(rng.uniform(0.6, 1.2))
-    lat0, lon0 = rng.uniform(-60, 60), rng.uniform(-170, 170)
+    lat0, lon0 = rng.uniform(32.6, 40.7), rng.uniform(-124.3, -115.4)  # inside CALIFORNIA
     lat, lon = lat0 + rng.random(n) * size, lon0 + rng.random(n) * size
     picked = select_levels(lat, lon, levels, min_rows=50, min_cell_points=5)
     for res, candidate in picked["candidates"].items():  # each count is the cell table build_cells makes at that level
