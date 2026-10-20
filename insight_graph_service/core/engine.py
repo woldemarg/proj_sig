@@ -185,7 +185,7 @@ class Engine:
         self.ws = Workspace(settings)
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
-        self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
+        self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
         self._open()
 
     def committed(self) -> CommittedState:

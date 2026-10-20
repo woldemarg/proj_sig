@@ -67,7 +67,8 @@ def write_synthetic_points(folder: Path, n: int = SYNTHETIC_POINTS, seed: int = 
     home = rng.integers(0, len(metros), near)
     lat = np.clip(np.r_[rng.normal(metros[home, 0], metros[home, 2]), rng.uniform(south, north, n - near)], south, north)
     lon = np.clip(np.r_[rng.normal(metros[home, 1], 1.2 * metros[home, 2]), rng.uniform(west, east, n - near)], west, east)
-    nearest = np.hypot(lat[:, None] - metros[:, 0], lon[:, None] - metros[:, 1]).min(axis=1)
+    dist = np.hypot(lat[:, None] - metros[:, 0], lon[:, None] - metros[:, 1])  # to each metro centre, in degrees
+    nearest = dist.min(axis=1)
     metro = np.r_[home, np.full(n - near, -1)]  # the metro a point was drawn around, -1 for the state-wide rest
     u = rng.random((5, n))
     business = np.where(np.isin(metro, [1, 5]), 0.5, 0.25)
@@ -79,13 +80,7 @@ def write_synthetic_points(folder: Path, n: int = SYNTHETIC_POINTS, seed: int = 
             "ordered_at": np.datetime64(EPOCH) + rng.integers(0, 60, n).astype("timedelta64[D]"),
             "segment": np.where(u[0] < business, "business", np.where(u[0] < business + 0.1, "public", "consumer")),
             "channel": np.where(u[1] < np.where(lat > 37.0, 0.3, 0.1), "phone", np.where(u[2] < 0.55, "web", "store")),
-            "area": np.where(
-                nearest < 0.6,
-                np.array([f"metro {i + 1}" for i in range(len(metros))])[
-                    np.argmin(np.hypot(lat[:, None] - metros[:, 0], lon[:, None] - metros[:, 1]), axis=1)
-                ],
-                "outside",
-            ),
+            "area": np.where(nearest < 0.6, np.char.add("metro ", (dist.argmin(axis=1) + 1).astype(str)), "outside"),
             "vehicle": np.where(nearest < 0.08, np.where(u[3] < 0.4, "bike", "van"), np.where((metro < 0) & (u[3] < 0.5), "truck", "van")),
             "refunded": np.where(u[4] < np.where(metro == 7, 0.2, 0.05), "yes", "no"),
             "basket": (rng.gamma(2.0, 20.0, n) * np.where(np.isin(metro, [1, 4]), 1.5, 1.0)).round(2),
@@ -98,17 +93,19 @@ def write_synthetic_points(folder: Path, n: int = SYNTHETIC_POINTS, seed: int = 
     return path
 
 
-def timed(client: TestClient, method: str, path: str, **kw: Any) -> dict[str, Any]:
+def timed(client: TestClient, method: str, path: str, **kw: Any) -> tuple[dict[str, Any], Any]:
+    """One request's time and size, raw and gzipped, and the response."""
     start = time.perf_counter()
     resp = client.request(method, path, **kw)
     seconds = time.perf_counter() - start
-    return {
+    record = {
         "path": path,
         "status": resp.status_code,
         "s": round(seconds, 3),
         "bytes": len(resp.content),
         "gzip_bytes": len(gzip.compress(resp.content, 6)),
     }
+    return record, resp
 
 
 def widest_insight(client: TestClient) -> dict[str, Any] | None:
@@ -118,13 +115,14 @@ def widest_insight(client: TestClient) -> dict[str, Any] | None:
 
 def console_reads(client: TestClient) -> list[dict[str, Any]]:
     """What an open console asks after a READY: the graph, the geo datasets and each one's map reads, the widest node."""
-    out = [timed(client, "GET", "/api/graph"), timed(client, "GET", "/api/geo")]
-    for d in client.get("/api/geo").json():
+    (graph, _), (geo, datasets) = timed(client, "GET", "/api/graph"), timed(client, "GET", "/api/geo")
+    out = [graph, geo]
+    for d in datasets.json():
         ds = d["dataset_id"]
-        out += [timed(client, "GET", f"/api/geo/{ds}/{part}") for part in ("cells", "overlay", "projected")]
-        out.append(timed(client, "GET", f"/api/geo/{ds}/window", params={"bbox": "-180,-90,180,90"}))
+        out += [timed(client, "GET", f"/api/geo/{ds}/{part}")[0] for part in ("cells", "overlay", "projected")]
+        out.append(timed(client, "GET", f"/api/geo/{ds}/window", params={"bbox": "-180,-90,180,90"})[0])
     if widest := widest_insight(client):
-        out.append(timed(client, "GET", f"/api/nodes/{widest['id']}"))
+        out.append(timed(client, "GET", f"/api/nodes/{widest['id']}")[0])
     return out
 
 
@@ -184,7 +182,7 @@ def reads_after(client: TestClient, workspace: Path) -> dict[str, Any]:
     widest = widest_insight(client)
     target = widest["target"].replace("_", " ") if widest else "anything"
     asked = [
-        timed(client, "POST", "/api/search", json={"question": q}) | {"question": q}
+        timed(client, "POST", "/api/search", json={"question": q})[0] | {"question": q}
         for q in (f"Where is {target} higher?", f"Where is {target} lower?", f"What is special about {target}?")
     ]
     sizes = {
@@ -284,10 +282,14 @@ def main() -> int:
     from scratch import build_engine, save_result, scratch_dir  # loads .env, as the services do
 
     root = scratch_dir(f"perf_benchmark_{args.label}", fresh=True)
-    path = {
-        "synthetic": lambda: write_synthetic_points(scratch_dir("perf_benchmark_data")),
-        "california": lambda: PROJECT_ROOT / "data" / "demo" / "california_housing.csv",
-    }.get(args.source, lambda: Path(args.source))()
+    demo = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
+    path = (
+        write_synthetic_points(scratch_dir("perf_benchmark_data"))
+        if args.source == "synthetic"
+        else demo
+        if args.source == "california"
+        else Path(args.source)
+    )
     engine = build_engine(root / "ws")
     app = create_app(engine)
     result: dict[str, Any] = {"source": args.source, "geo": args.geo, "table": args.table}

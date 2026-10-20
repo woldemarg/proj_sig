@@ -285,6 +285,7 @@ def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
         }
     )
     assert regions_above(tampered, ["P1", "P2"]) == {"R:5:c", "R:3:d"}  # R:5:e holds the tampered P2 alone
+    assert shown_regions(tampered, ["P1", "P2"]) == {"R:7:a", "R:5:c", "R:3:d"}  # the tampered P2 names no region: its home R:7:b is not drawn
 
 
 def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():

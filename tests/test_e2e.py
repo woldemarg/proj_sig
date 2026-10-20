@@ -140,20 +140,7 @@ def test_perf_benchmark_apparatus(tmp_path, caplog):
     path = write_synthetic_points(tmp_path, n=3000, seed=1)
     assert path.read_bytes() == write_synthetic_points(tmp_path / "again", n=3000, seed=1).read_bytes()
     frame, (south, west, north, east) = pd.read_csv(path), CALIFORNIA
-    assert list(frame.columns) == [
-        "lat",
-        "lon",
-        "ordered_at",
-        "segment",
-        "channel",
-        "area",
-        "vehicle",
-        "refunded",
-        "basket",
-        "items",
-        "wait_min",
-        "rating",
-    ]
+    assert list(frame.columns) == "lat lon ordered_at segment channel area vehicle refunded basket items wait_min rating".split()
     assert frame["lat"].between(south, north).all() and frame["lon"].between(west, east).all()
     assert (pd.to_datetime(frame["ordered_at"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 59).all()
     engine = make_engine(make_config(tmp_path / "ws"))
