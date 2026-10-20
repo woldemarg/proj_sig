@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import primary_anchor
-from graph_query_engine.vertical import picture, regions_above, scale_chain
+from graph_query_engine.vertical import picture, scale_chain, shown_regions
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
@@ -40,7 +40,7 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
     members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view
-    regions = {r for r in regions_above(graph, list(pids)) if members[r]}
+    regions = {r for r in shown_regions(graph, list(pids)) if members[r]}
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and n["id"] not in regions:

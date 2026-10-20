@@ -103,6 +103,13 @@ def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     return {r for r in found if graph.nodes[r]["props"]["patterns"] > tampered[r]}  # an ancestor no intact pattern reaches holds nothing
 
 
+def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
+    """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions): ``regions_above`` and
+    every region a pattern's scale chain names, its finest home region included when it has no coarser step, so the map
+    holds each region a SCALE CHAIN names."""
+    return regions_above(graph, pattern_ids) | {r for pid in pattern_ids for chain in scale_chain(graph, [pid]) for r in chain.regions}
+
+
 def _finest(graph: DualGraph, pid: str) -> frozenset[str]:
     """The pattern's regions at its finest level (its own resolution when that is a region level): a broad pattern has many."""
     return _facts(graph, pid).finest

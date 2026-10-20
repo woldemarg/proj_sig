@@ -258,9 +258,10 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
 def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
     """``regions_above`` leaves out a pattern's finest region level, its own or, at resolution 8, level 7 (a handful of its
     cells each: hundreds per dataset), and keeps the coarser levels and their ancestors; a region holding tampered
-    patterns only is none."""
+    patterns only is none. ``shown_regions`` adds the regions its scale chain names: with no coarser step, from its home
+    region at that finest level up."""
     from graph_query_engine import DualGraph
-    from graph_query_engine.vertical import regions_above
+    from graph_query_engine.vertical import regions_above, scale_chain, shown_regions
     from insight_contracts import SNAPSHOT_VERSION
 
     node = pattern("P1", ["district=north"])
@@ -271,6 +272,7 @@ def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
     edges += [edge("R:7:a", "R:5:c", "PARENT_OF"), edge("R:7:b", "R:5:c", "PARENT_OF"), edge("R:5:c", "R:3:d", "PARENT_OF")]
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [node, *regions], "edges": edges})
     assert regions_above(graph, ["P1"]) == {"R:5:c", "R:3:d"}
+    assert scale_chain(graph, ["P1"])[0].regions == ["R:7:a", "R:5:c", "R:3:d"] and shown_regions(graph, ["P1"]) == {"R:7:a", "R:5:c", "R:3:d"}
     forged = pattern("P2", ["district=south"])
     forged["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
     forged["props"]["integrity"] = "mismatch"
