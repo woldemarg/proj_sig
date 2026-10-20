@@ -53,7 +53,9 @@ def test_upload_process_render_query(client, demo_csv):
     assert batches[0]["status"] == "READY"
     assert batches[0]["metrics"]["validated_insights"] > 0 and batches[0]["profile"]["rows"] == 5000
 
-    g = client.get("/api/graph").json()
+    graph = client.get("/api/graph", headers={"Accept-Encoding": "gzip"})  # compressed, as nginx compresses it
+    assert graph.headers["content-encoding"] == "gzip"
+    g = graph.json()
     kinds = {n["data"]["kind"] for n in g["nodes"]}
     types = {e["data"]["type"] for e in g["edges"]}
     assert {"Pattern", "Attractor", "Dimension", "Metric"} <= kinds
@@ -82,7 +84,8 @@ def test_upload_process_render_query(client, demo_csv):
     assert geo_batch["metrics"]["validated_insights"] > 0 and "median_income_median_band" in geo_batch["profile"]["selected_dimensions"]
     geo_ds = geo_batch["dataset_id"]
     assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
-    assert len(client.get(f"/api/geo/{geo_ds}/cells").json()["features"]) == 884
+    cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
+    assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["features"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
     overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # the regions above its insights, their trust and scale
     assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])

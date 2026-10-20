@@ -164,6 +164,9 @@ def check_workflow(live_llm: bool) -> None:
     mirrored, relationships = mirror_counts()
     same = mirrored == dict(kinds) and relationships == len(graph["edges"]) and rec.get("neo4j", {}).get("status") == "ok"
     record("Neo4j mirror equals the snapshot", same, f"{mirrored}, {relationships} relationships")
+    with urllib.request.urlopen(urllib.request.Request(CONSOLE + "/api/graph", headers={"Accept-Encoding": "gzip"}), timeout=60) as resp:
+        encoding, size = resp.headers.get("Content-Encoding"), len(resp.read())
+    record("the console's edge gzips JSON", encoding == "gzip", f"/api/graph {encoding or 'uncompressed'}, {size} bytes on the wire")
     qa = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": False}, timeout=300)
     items, cited = qa["view"]["evidence"].get("items", []), qa["citations"]
     ok = qa["answer_mode"] == "fallback" and items and cited["cited"] and not cited["unknown"]

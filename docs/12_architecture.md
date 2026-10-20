@@ -128,7 +128,7 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 | 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
 | 2 | `insight-graph` | `insight_graph_service/Dockerfile` (build arg `TORCH`: `cpu`, or `cu130` and the GPU with `compose.gpu.yaml`) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
 | 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
-| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`) | both services healthy | `GET /` | internal, edge (port 8765) | none |
+| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`; gzip for responses over 1 KB) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765

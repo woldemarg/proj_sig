@@ -27,7 +27,8 @@ CONSOLE = Path(__file__).resolve().parents[1] / "sig_web_console" / "static"
 
 def compose(graph_service: Any, narrator: Any) -> Any:
     """One ASGI app: ``/api/chat/...`` to the narrator, other ``/api/...`` (and the lifespan) to the graph service,
-    the rest to the console's static files."""
+    the rest to the console's static files; responses over 1 KB gzipped for a client that accepts it, as nginx does."""
+    from starlette.middleware.gzip import GZipMiddleware
     from starlette.staticfiles import StaticFiles
 
     console = StaticFiles(directory=CONSOLE, html=True)
@@ -37,7 +38,7 @@ def compose(graph_service: Any, narrator: Any) -> Any:
         target = narrator if path.startswith("/api/chat/") else graph_service if path.startswith("/api/") or scope["type"] != "http" else console
         await target(scope, receive, send)
 
-    return app
+    return GZipMiddleware(app, minimum_size=1024)
 
 
 def chromium() -> str | None:

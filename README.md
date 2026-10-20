@@ -84,6 +84,17 @@ python -m venv .venv                                                            
   - a source file holds a machine path, or a relative path leading out of the repository;
   - a path setting resolves outside the repository.
 
+### Mac: GPU
+
+Docker Desktop on a Mac gives containers no GPU, so the stack's graph service embeds on the CPU, in float32, and the console's health pill shows the device `cpu` in amber. On Apple silicon the graph service is faster on the host, where `EMBEDDING_DEVICE=auto` takes the GPU (MPS): run the broker and the host composite instead of the stack,
+
+```bash
+python -m llm_model_broker          # the LLM, GEMMA_* from .env
+python scripts/dev.py               # console, graph service and narrator on http://127.0.0.1:8765
+```
+
+and check that the pill names `mps`. With an NVIDIA GPU (Windows with WSL 2, Linux), start the stack with `compose.gpu.yaml` instead (above).
+
 ### Gemma 4 through the LLM model broker
 The narrator reaches the LLM only through `LLM_BASE_URL`, by default the broker (`llm_model_broker/`, [12.4](docs/12_architecture.md#124-services-and-contracts)). The broker holds the upstream, the model, its key and the OpenRouter provider pinning. The configured deployment calls `google/gemma-4-26b-a4b-it` on OpenRouter with pinned providers. Put this in `.env` (gitignored; template `.env.sample`):
 ```ini
