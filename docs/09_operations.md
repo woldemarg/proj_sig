@@ -142,7 +142,7 @@ Over HTTP every refusal is `{detail, code}` with the status of [12.4](12_archite
 
 `neo4j_s` is the Neo4j sync after the commit point, written with the record's last save (with `neo4j`), so it is absent while the record says READY and the mirror is still being written; `processing_duration_s` ends at the commit point and does not include it.
 
-> **Running example.** The demo batch: 5,000 rows, 11 columns, 4 metrics, 3 dimensions, 88 conjunctions, 84 pass-1 subgroups and distinct cohorts, 50 validated, 28 insights, `pruned {weak_effect: 22}`, 4 anchors, 281 graph edges, READY in 13.1 s — of which 10.9 s embedding (the one-off model load, the three blocks and the documents), 1.1 s discovery and 0.9 s ontology. `housing.csv` with two bands (20,640 rows) is READY in about 17 s from a cold start.
+> **Running example.** The demo batch: 5,000 rows, 11 columns, 4 metrics, 3 dimensions, 88 conjunctions, 84 pass-1 subgroups and distinct cohorts, 50 validated, 28 insights, `pruned {weak_effect: 22}`, 4 anchors, 281 graph edges, READY in 13.8 s on a host with an NVIDIA GPU — of which 11.3 s embedding (the one-off model load and the three blocks), 1.4 s discovery and 0.8 s ontology; on the same host's CPU 23.4 s, of which 19.9 s embedding (35.3 s and 32.5 s while every canonical document was embedded too, [10.4](10_verification.md#104-measurement-scripts)). `housing.csv` with two bands (20,640 rows) is READY in about 17 s from a cold start.
 
 ## 9.6 Guarantees
 
