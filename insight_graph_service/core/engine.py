@@ -490,10 +490,6 @@ class Engine:
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])
                     if not kept:
-                        levels = record["profile"].get("geo", {}).get("levels") or {}
-                        capped = [r for r, why in levels.get("reasons", {}).items() if "GEO_AUTO_MAX_CELLS" in why]
-                        if capped and str(levels["chosen"][0]) == str(record.get("level")):  # @auto's finest level found nothing
-                            record["warnings"].append(f"@auto left level {capped[-1]} out for GEO_AUTO_MAX_CELLS only; try @{capped[-1]}")
                         raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
 
                 with self._stage(record, "EMBEDDING", timings, "embed_s"):
@@ -696,6 +692,10 @@ class Engine:
         record["status"] = "FAILED"
         record["failed_stage"] = list(record["stage_times"])[-1]
         record["error"] = {"code": code, "message": str(exc)}
+        levels = record["profile"].get("geo", {}).get("levels") or {}
+        if code in EMPTY_LEVEL and levels.get("capped") and str(levels["chosen"][0]) == str(record.get("level")):  # @auto's finest
+            finer = f"{record['geo'].partition('@')[0]}@{min(levels['capped'])}"  # the nearest level the cap left out
+            record["error"]["message"] += f"; @auto left {finer} out for GEO_AUTO_MAX_CELLS alone, try it"
         if code == "internal_error":
             record["error"]["trace"] = traceback.format_exc(limit=6)
         record["metrics"]["processing_duration_s"] = time.perf_counter() - t0

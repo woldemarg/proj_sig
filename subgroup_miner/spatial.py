@@ -50,7 +50,7 @@ GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: |P ∩ R| over the smaller of the patte
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 GEO_AUTO_RESOLUTIONS = range(10, 2, -1)  # the resolutions ``@auto`` weighs, finest first
 GEO_DENSE_SHARE_MIN = 0.3  # ``@auto``: the finest level needs this share of cells with at least min_cell_points points
-GEO_AUTO_MAX_CELLS = 5_000  # ``@auto``: the finest level's IN_REGION regions at most, the cells of its finest region level
+GEO_AUTO_MAX_CELLS = 5_000  # ``@auto``: the finest level's cells at most, counted at its region level (docs/02 §2.9)
 GEO_AUTO_MIN_CELLS = 500  # ``@auto``: a coarser level's cells at least (the miner's least subgroup, 5 cells per metric, fills a smaller one)
 GEO_LEVELS_MAX = 3  # ``@auto``: levels chosen, the finest included
 GEO_FOOTPRINT_SHARE = 0.8  # an insight drawn on another level's cells: the busiest cells holding this share of its points
@@ -110,17 +110,21 @@ def parse_geo_levels(spec: str, default_resolution: int) -> list[tuple[str, int]
 def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ...], *, min_rows: int, min_cell_points: int) -> dict[str, Any]:
     """The resolutions ``@auto`` picks for these points (docs/02_discovery.md §2.9): the finest of
     ``GEO_AUTO_RESOLUTIONS`` with at least ``min_rows`` cells of which ``GEO_DENSE_SHARE_MIN`` hold ``min_cell_points``
-    points and at most ``GEO_AUTO_MAX_CELLS`` cells at the finest of ``region_levels`` not finer than it, where its
-    patterns' IN_REGION edges lie (the coarsest such level when every one has more), then the coarser ``region_levels``
-    that keep ``GEO_AUTO_MIN_CELLS`` cells, at most ``GEO_LEVELS_MAX`` in all.
-    Returns ``{chosen, candidates: {res: {cells, dense_share, median_points}}, reasons: {res: why}}``, keyed by the
-    resolution as text (as JSON stores it)."""
+    points and at most ``GEO_AUTO_MAX_CELLS`` cells (``cap_cells``): those of the finest of ``region_levels`` not finer
+    than it, where its patterns' IN_REGION edges lie, or its own when it is finer than every region level or below them
+    (the coarsest such level when every one has more), then the coarser ``region_levels`` that keep
+    ``GEO_AUTO_MIN_CELLS`` cells, at most ``GEO_LEVELS_MAX`` in all.
+    Returns ``{chosen, capped, candidates: {res: {cells, dense_share, median_points, cap_cells}}, reasons: {res: why}}``,
+    ``capped`` the finer resolutions left out by the cap alone, finest first; keyed by the resolution as text (as JSON
+    stores it)."""
     ok = np.isfinite(lat) & np.isfinite(lon)
     if not ok.any():
         raise SpatialError("No valid point for @auto")
     lat, lon, counts = lat[ok], lon[ok], {}
+    finest_region = max(region_levels, default=-1)
     region_of = {res: max((lv for lv in region_levels if lv <= res), default=None) for res in GEO_AUTO_RESOLUTIONS}
-    for res in sorted({*GEO_AUTO_RESOLUTIONS, *(lv for lv in region_of.values() if lv is not None)}, reverse=True):
+    cap_of = {res: res if lv is None or res > finest_region else lv for res, lv in region_of.items()}  # where cap_cells count
+    for res in sorted({*GEO_AUTO_RESOLUTIONS, *cap_of.values()}, reverse=True):
         # each point indexed at each level as build_cells does: H3 children do not tile their parent
         counts[res] = pd.Series([h3.latlng_to_cell(a, b, res) for a, b in zip(lat, lon)]).value_counts()
     candidates = {
@@ -128,20 +132,23 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
             "cells": len(counts[res]),
             "dense_share": round(float((counts[res] >= min_cell_points).mean()), 4),
             "median_points": float(counts[res].median()),
+            "cap_cells": len(counts[cap_of[res]]),
         }
         for res in GEO_AUTO_RESOLUTIONS
     }
-    regions = {str(res): 0 if lv is None else len(counts[lv]) for res, lv in region_of.items()}  # no region level: no IN_REGION
     fits = [res for res, c in candidates.items() if c["cells"] >= min_rows and c["dense_share"] >= GEO_DENSE_SHARE_MIN]
-    finest = next((res for res in fits if regions[res] <= GEO_AUTO_MAX_CELLS), fits[-1] if fits else None)
-    reasons, chosen = {}, []
+    finest = next((res for res in fits if candidates[res]["cap_cells"] <= GEO_AUTO_MAX_CELLS), fits[-1] if fits else None)
+    reasons, chosen, capped = {}, [], []
     for res, c in candidates.items():
         if c["cells"] < min_rows:
             reasons[res] = f"{c['cells']} cells < MIN_ROWS {min_rows}"
         elif finest is None or int(res) > int(finest):
             too_sparse = c["dense_share"] < GEO_DENSE_SHARE_MIN
-            capped = f"{regions[res]} cells at region level {region_of[int(res)]} > GEO_AUTO_MAX_CELLS"
-            reasons[res] = f"dense share {c['dense_share']} < {GEO_DENSE_SHARE_MIN}" if too_sparse else capped
+            if too_sparse:
+                reasons[res] = f"dense share {c['dense_share']} < {GEO_DENSE_SHARE_MIN}"
+            else:
+                reasons[res] = f"{c['cap_cells']} cells at {cap_of[int(res)]} > GEO_AUTO_MAX_CELLS"
+                capped.append(int(res))
         elif res == finest:
             reasons[res] = "finest level"
             chosen.append(int(res))
@@ -156,7 +163,7 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
             chosen.append(int(res))
     if not chosen:
         raise SpatialError("no resolution fits @auto: " + "; ".join(f"{res}: {why}" for res, why in reasons.items()))
-    return {"chosen": chosen, "candidates": candidates, "reasons": reasons}
+    return {"chosen": chosen, "capped": capped, "candidates": candidates, "reasons": reasons}
 
 
 def parse_points(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:
