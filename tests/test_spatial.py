@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from unittest import mock
 
 import h3
 import numpy as np
@@ -401,11 +402,18 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
     assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
     assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
+    overlay = engine.geo_overlay(fine)
+    with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
+        assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
     drawn = engine.geo_pattern(fine, pid)
     assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
+    plain = engine.ingest_file(path)  # the same file as a plain table: as many rows as the map has points, but no upload
+    plain_ids = {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == plain["dataset_id"]}
+    assert plain["status"] == "READY" and plain_ids and not plain_ids & {p["id"] for p in engine.geo_projected(fine)}
+    engine.delete_dataset(plain["dataset_id"])
     upload_id = done[0]["upload_id"]
     with TestClient(create_app(engine)) as client:
         listed = client.get("/api/batches", params={"upload_id": upload_id}).json()

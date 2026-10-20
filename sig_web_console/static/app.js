@@ -882,7 +882,7 @@ function insightCard(turn) {
   const lead = p.phenomenon_type === "covariance" && cov
     ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>.`
     : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
-  const theme = (d.neighbors.ACTIVATES || [])[0], seen = new Set([p.id]);
+  const theme = (d.neighbors.ACTIVATES || []).find((it) => !(it.props && it.props.weak)), seen = new Set([p.id]);  // primary_anchor: not a weak membership
   const links = Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +

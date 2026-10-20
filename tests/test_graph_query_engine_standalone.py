@@ -598,3 +598,41 @@ def test_the_evidence_shows_trust_once_the_graph_has_a_declared_source():
         _credibility_text(2, {"rule": "anchor", "patterns": [], "sources": ["c"]}, {})
         == 'credibility 2 (not confirmed; another dataset has the same metric: "c")'
     )
+
+
+def test_a_theme_is_the_strongest_walkable_membership():
+    """``primary_anchor``: the theme an insight is shown and walked under skips a weak (coverage-only) membership, however
+    strong; an insight with weak memberships only has no theme."""
+    from graph_query_engine.graph import DualGraph, primary_anchor
+
+    snap = snapshot()
+    snap["nodes"].append({"id": "A-2", "kind": "Attractor", "label": "other", "props": {"n_patterns": 1}})
+    strong_weak = edge("P1", "A-2", "ACTIVATES", 0.95)
+    strong_weak["props"]["weak"] = True
+    snap["edges"] = [strong_weak, edge("P1", "A-1", "ACTIVATES", 0.5), {**edge("P2", "A-1", "ACTIVATES", 0.9), "props": {"weak": True}}]
+    graph = DualGraph(snap)
+    assert primary_anchor(graph, "P1")["target"] == "A-1" and primary_anchor(graph, "P2") is None
+
+
+def test_a_memoised_fact_is_built_once_however_many_readers_ask():
+    """``DualGraph.memoised``: readers on several threads asking for one key at once share one build (a projection of a
+    large upload takes seconds); a new commit's graph builds its own."""
+    import threading
+    import time
+
+    from graph_query_engine.graph import DualGraph
+
+    graph, builds = DualGraph(snapshot()), []
+
+    def build():
+        builds.append(1)
+        time.sleep(0.05)
+        return len(builds)
+
+    readers = [threading.Thread(target=graph.memoised, args=(("projection", "ds"), build)) for _ in range(8)]
+    for r in readers:
+        r.start()
+    for r in readers:
+        r.join()
+    assert builds == [1] and graph.memoised(("projection", "ds"), build) == 1
+    assert DualGraph(snapshot()).memoised(("projection", "ds"), build) == 2
