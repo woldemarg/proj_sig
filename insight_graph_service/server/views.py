@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
+from graph_query_engine.graph import primary_anchor
 from graph_query_engine.vertical import picture, regions_above, scale_chain
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
@@ -29,12 +30,12 @@ def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> st
     return f"{scope}\n{humanize(ins.target)} {ins.effect_size:+.2f} sd"
 
 
-def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
-    """The pattern's strongest ACTIVATES edge: the theme it is shown under."""
-    return max((e for e, _ in graph.incident(pattern_id, ["ACTIVATES"])), key=lambda e: e["weight"], default=None)
-
-
 def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str, Any]:
+    """The graph view of one dataset (or all), derived once per commit."""
+    return graph.memoised(("cytoscape", dataset or ""), lambda: _elements(graph, dataset))
+
+
+def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
     keep: set[str] = set()
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
@@ -134,7 +135,7 @@ def project_to_sphere(vectors: np.ndarray, seed: int) -> np.ndarray:
     return y / norms * minmax_scale(np.log(norms**2), feature_range=(0.1, 1))
 
 
-def _pattern_hover(ins: Insight, anchor_label: str, alignment: float) -> str:
+def _pattern_hover(ins: Insight, theme: str) -> str:
     # the data's names are escaped: plotly renders hover text as HTML
     shifts = "<br>".join(
         f"&nbsp;&nbsp;{escape(s.metric)}: {s.local_median:.4g} vs {s.global_median:.4g} (z {s.robust_z:+.2f})" for s in ins.shifts[:3]
@@ -144,7 +145,7 @@ def _pattern_hover(ins: Insight, anchor_label: str, alignment: float) -> str:
         f"<b>Scope:</b> {escape(' ∧ '.join(c.expr for c in ins.conditions))}<br>"
         f"<b>Target:</b> {escape(ins.target)} ({ins.phenomenon_type})<br>{shifts}<br>"
         f"<b>Support:</b> {ins.support} rows · <b>evidence</b> {ins.weight:.2f}<br>"
-        f"<b>Theme:</b> {escape(anchor_label)} (alignment {alignment:.2f})<br>"
+        f"<b>Theme:</b> {theme}<br>"
         f"<b>Dataset:</b> {escape(ins.provenance.get('filename', ''))}"
     )
 
@@ -177,6 +178,9 @@ def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) 
     for n, xyz in zip(pats, coords):
         ins = g.insight(n["id"])
         anchor = primary_anchor(g, n["id"])
+        theme = (
+            f"{escape(g.nodes[anchor['target']]['label'])} (alignment {float(anchor['weight']):.2f})" if anchor else "none (weak memberships only)"
+        )
         cls = "cov" if ins.phenomenon_type == "covariance" else "up" if ins.effect_size > 0 else "down"
         points.append(
             {
@@ -185,7 +189,7 @@ def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) 
                 "cls": cls,
                 "weight": ins.weight,
                 "xyz": xyz.round(5).tolist(),
-                "hover": _pattern_hover(ins, g.nodes[anchor["target"]]["label"], float(anchor["weight"])),
+                "hover": _pattern_hover(ins, theme),
             }
         )
     for a, xyz in zip(anchors, coords[len(pats) :]):

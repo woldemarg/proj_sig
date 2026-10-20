@@ -37,12 +37,11 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from graph_query_engine.vertical import picture, regions_above, scale_label
-from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import Condition, EvidencePayload, Insight, pattern_id
 from insight_contracts.text import RELIABILITY
+from insight_graph_service.core import geo_views
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
-from insight_graph_service.core.geosparql import build_turtle
+from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
@@ -50,32 +49,16 @@ from subgroup_miner.discovery import NOT_RECOMPUTED, build_insights, covers_of, 
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import (
-    GEO_FOOTPRINT_SHARE,
     GeoDataset,
     SpatialError,
-    cell_boundary,
-    cell_centres,
-    compactness,
     derive_spatial,
-    footprint,
-    geometry_to_cells,
     parse_geo_levels,
-    parse_zone,
-    region_features,
     sac_summary,
-    zone_overlap,
 )
 
 log = logging.getLogger(__name__)
 
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
-WINDOW_MIN_POINTS = 10  # an insight lists in a map view holding at least this many of its points
-
-
-class PipelineError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
 
 
 SOURCE_MAX_CHARS = 120
@@ -203,7 +186,7 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
-        self._zone_scores = functools.lru_cache(maxsize=64)(self._read_zone_scores)
+        self._zone_scores = functools.lru_cache(maxsize=64)(functools.partial(geo_views.read_zone_scores, self.ws))
         self._open()
 
     def committed(self) -> CommittedState:
@@ -302,32 +285,7 @@ class Engine:
     def place_scores(
         self, state: CommittedState, cells: list[str] | None = None, geometry: dict[str, Any] | None = None, resolution: int | None = None
     ) -> dict[str, float] | None:
-        """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
-        datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone."""
-        if cells is None and geometry is None:
-            return None
-        graph = state.graph
-        levels = sorted(
-            {
-                (graph.insight(pid).dataset_id, r)
-                for pid in graph.insights
-                if (r := pattern_resolution(graph, pid)) is not None and (resolution is None or r <= resolution)
-            }
-        )
-        try:
-            zone = parse_zone(cells) if cells is not None else geometry_to_cells(geometry or {}, max((r for _, r in levels), default=0))
-        except SpatialError as exc:
-            raise PipelineError("invalid_options", str(exc)) from exc
-        return self._zone_scores(zone, tuple(levels)) if levels else {}
-
-    def _read_zone_scores(self, zone: frozenset[str], levels: tuple[tuple[str, int], ...]) -> dict[str, float]:
-        """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cached on its arguments, since a
-        dataset id fixes its files."""
-        out: dict[str, float] = {}
-        for dataset_id, _ in levels:
-            if (geo := self.ws.load_geo(dataset_id, ("cells",))) is not None:
-                out.update(zone_overlap(geo["cells"], self.ws.load_covers(dataset_id), zone))
-        return out
+        return geo_views.place_scores(state.graph, self._zone_scores, cells, geometry, resolution)
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
         return LatentFrame(
@@ -522,7 +480,7 @@ class Engine:
                         "categorical_overrides": loaded.categories,
                     }
                     if loaded.spatial:
-                        record["profile"]["geo"] = self._geo_profile(loaded) | ({"levels": selection} if selection else {})
+                        record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})
                     if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
                         record["warnings"].append(
                             f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"
@@ -582,7 +540,7 @@ class Engine:
                                     "nbr_idx": ctx.nbr_idx,
                                 },
                             )
-                            atomic_write_json(self.ws.geo_cells_path(ds), self.geo_cells(ds, loaded))
+                            atomic_write_json(self.ws.geo_cells_path(ds), geo_views.geo_cells(self.ws, ds, loaded))
                         if replaced:  # after the new version joined its anchors: those it shares keep their ids
                             record["superseded"] = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed")
                         ontology.save()
@@ -607,86 +565,15 @@ class Engine:
             self.ws.save_batch(record)
             return record
 
-    @staticmethod
-    def _geo_profile(loaded: Any) -> dict[str, Any]:
-        ctx = loaded.spatial
-        return {
-            "option": loaded.geo,
-            "resolution": ctx.resolution,
-            "location": ctx.location,
-            "cells": len(ctx.cells),
-            "points": int((ctx.point_cell >= 0).sum()),
-            "sparse_cells": ctx.sparse_cells,
-            "min_cell_points": ctx.min_cell_points,
-            "base": "H3 cells holding at least one point",
-            "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
-            "glossary": ctx.glossary,
-        }
+    # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
 
     @_healthy
     def geo_datasets(self) -> list[dict[str, Any]]:
-        """READY datasets analysed as H3 cells, with what the map needs to offer them."""
-        out = []
-        for b in self.ws.list_batches():
-            geo = (b.get("profile") or {}).get("geo")
-            if b.get("status") == "READY" and geo:
-                out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
-        return out
-
-    def _geo_ready(self, dataset_id: str) -> bool:
-        """Only a dataset with a READY geo batch is served: its files survive a failed batch, its listing does not."""
-        return any(d["dataset_id"] == dataset_id for d in self.geo_datasets())
+        return geo_views.geo_datasets(self.ws)
 
     @_healthy
     def geo_cells_file(self, dataset_id: str) -> Path:
-        """``geo_cells`` as written with the dataset's batch (the cells, their rings and the patterns' extents never
-        change afterwards): the map reads the file on every open."""
-        if not (self._geo_ready(dataset_id) and self.ws.geo_cells_path(dataset_id).is_file()):
-            raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
-        return self.ws.geo_cells_path(dataset_id)
-
-    def geo_cells(self, dataset_id: str, loaded: Any) -> dict[str, Any]:
-        """The dataset's cells as a GeoJSON FeatureCollection with the journaled patterns' extents; properties are the
-        columns of the analysed cell table (``loaded.frame``), read once, when the batch writes the file."""
-        ctx, frame = loaded.spatial, loaded.frame
-        cols = {c: frame[c].to_numpy(dtype=float if frame[c].dtype.kind in "fiu" else str) for c in frame.columns}
-        features = []
-        for i, cell in enumerate(ctx.cells):
-            props: dict[str, Any] = {"h3": str(cell), "row": i}
-            for name, values in cols.items():
-                v = values[i]
-                props[name] = (None if not np.isfinite(v) else round(float(v), 4)) if values.dtype.kind == "f" else str(v)
-            features.append(
-                {"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props}
-            )
-        lonlat = ctx.lonlat[ctx.point_cell >= 0]
-        bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
-        covers = self.ws.load_covers(dataset_id)
-        patterns = [
-            {
-                "id": r["id"],
-                "rows": covers[r["id"]].tolist(),
-                "scope": [f"{c['attribute']} = {c['value']}" for c in r["conditions"]],
-                "target": r["target"],
-                "effect_size": r["effect_size"],
-                "phenomenon_type": r["phenomenon_type"],
-                "support": r["support"],
-                "weight": r["weight"],
-                "spatial": {
-                    **r["provenance"].get("spatial", {}),
-                    "compactness": round(compactness(covers[r["id"]], ctx.nbr_ptr, ctx.nbr_idx), 4),
-                },
-            }
-            for r in self.ws.patterns()
-            if r["dataset_id"] == dataset_id and r["id"] in covers
-        ]
-        return {
-            "type": "FeatureCollection",
-            "features": features,
-            "bbox": bbox,
-            "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
-            "patterns": patterns,
-        }
+        return geo_views.geo_cells_file(self.ws, dataset_id)
 
     def _load(self, record: dict[str, Any]) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it."""
@@ -742,174 +629,23 @@ class Engine:
 
     @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
-        """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
-        another level of the upload (``geo_projected``): its footprint's cells and its own points inside them."""
-        geo = self._geo(dataset_id)
-        rows = self.ws.load_covers(dataset_id).get(pattern_id)
-        if rows is not None:
-            inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
-        else:
-            found = self._projection(dataset_id)["patterns"].get(pattern_id)
-            batch = self.ws.ready_batch_for(self.graph().nodes[pattern_id]["props"]["dataset_id"]) if found else None
-            members = self._point_rows(batch, len(geo["point_cell"])) if batch else None
-            if members is None:
-                raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-            rows = found[0]
-            src = members(self.ws.load_covers(batch["dataset_id"])[pattern_id])
-            inside = src[np.isin(geo["point_cell"][src], rows)]
-        step = max(1, int(np.ceil(len(inside) / max_points)))
-        points = geo["lonlat"][inside[::step]]
-        return {
-            "pattern_id": pattern_id,
-            "cells": [str(c) for c in geo["cells"][rows]],
-            "rows": rows.tolist(),
-            "n_points": int(len(inside)),
-            "points": np.round(points.astype(float), 5).tolist(),
-        }
+        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, max_points)
 
     @_healthy
     def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
-        """What the graph says about a geo dataset's map: the regions above its patterns (``regions_above``) as GeoJSON,
-        each with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale."""
-        geo, graph = self._geo(dataset_id, ("cells",)), self.graph()
-        pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id]
-        features = region_features(geo["cells"], sorted(regions_above(graph, pids)))
-        for f in features:
-            f["properties"].update(picture(graph, f["properties"]["id"]))
-        trust = {
-            pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")} | {"scale": scale_label(graph, pid)} for pid in pids
-        }
-        return {"type": "FeatureCollection", "features": features, "patterns": trust}
-
-    # ponytail: PoC (the map as a window on the graph), derived on read per commit for one upload's levels; production
-    # would derive the table insights' places at commit (derive_spatial), so IN_REGION, zones and the scale chain see them
-    def _point_rows(self, batch: dict[str, Any], n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
-        """Source rows of a pattern's covered rows: a geo level's rows are cells, whose points its ``point_cell`` names; a
-        table's rows are source rows when it holds as many rows as the map has points. None: the rows do not match."""
-        geo = self.ws.load_geo(batch["dataset_id"], ("point_cell",))
-        if geo is not None:
-            cells_of = geo["point_cell"]
-            return (lambda rows: np.flatnonzero(np.isin(cells_of, rows))) if len(cells_of) == n_points else None
-        return (lambda rows: rows) if (batch.get("profile") or {}).get("rows") == n_points else None
-
-    def _projection(self, dataset_id: str) -> dict[str, Any]:
-        """Every intact insight of the dataset's upload on the dataset's cells, derived once per commit: an insight of the
-        dataset keeps its cells, any other (the table's, another level's) the ``footprint`` of its member points.
-        ``patterns``: id -> (cell rows, their points, the level it was found at); ``per_cell``: points; ``centres``."""
-        graph = self.graph()
-        if (key := ("projection", dataset_id)) in graph.memo:
-            return graph.memo[key]
-        geo = self._geo(dataset_id, ("cells", "point_cell"))
-        point_cell = geo["point_cell"]
-        per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
-        ready = [b for b in self.ws.list_batches() if b.get("status") == "READY"]
-        upload = next((b.get("upload_id") for b in ready if b["dataset_id"] == dataset_id), None)
-        patterns: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
-        for b in ready:
-            own = b["dataset_id"] == dataset_id
-            if not own and (upload is None or b.get("upload_id") != upload):
-                continue
-            members = None if own else self._point_rows(b, len(point_cell))
-            if not own and members is None:
-                continue
-            level = "table" if b.get("level") == "table" else f"res {b.get('level')}"
-            for pid, rows in self.ws.load_covers(b["dataset_id"]).items():
-                node = graph.nodes.get(pid)
-                if node is None or node["props"].get("integrity") == "mismatch":
-                    continue
-                patterns[pid] = (rows, per_cell[rows], level) if own else (*footprint(point_cell, members(rows)), level)
-        out = {"patterns": patterns, "per_cell": per_cell, "centres": cell_centres(geo["cells"])}
-        graph.memo[key] = out
-        return out
+        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id)
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
-        """The insights of the dataset's upload found at another level (the table, another resolution) drawn on its cells
-        as ``geo_cells`` draws its own: the rows of their ``footprint``, their scope and shift."""
-        proj, graph = self._projection(dataset_id), self.graph()
-        out = []
-        for pid, (rows, counts, level) in proj["patterns"].items():
-            if graph.nodes[pid]["props"]["dataset_id"] == dataset_id:
-                continue
-            ins = graph.insight(pid)
-            out.append(
-                {
-                    "id": pid,
-                    "rows": rows.tolist(),
-                    "scope": [f"{c.attribute} = {c.value}" for c in ins.conditions],
-                    "target": ins.target,
-                    "effect_size": ins.effect_size,
-                    "phenomenon_type": ins.phenomenon_type,
-                    "support": ins.support,
-                    "weight": ins.weight,
-                    "level": level,
-                    "spatial": {"footprint_share": GEO_FOOTPRINT_SHARE, "footprint_points": int(counts.sum())},
-                }
-            )
-        return out
+        return geo_views.geo_projected(self.ws, self.graph(), dataset_id)
 
     @_healthy
     def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
-        """The map as a window on the graph: the insights of the dataset's upload with at least ``WINDOW_MIN_POINTS`` of their
-        points in the cells whose centres lie in ``bbox`` ("west,south,east,north"), under their theme (strongest
-        ACTIVATES). ``lift``: an insight's share of the view's points over its share of the map's, so the insights
-        characteristic of the view come first; themes by their best insight, then by their points in view."""
-        try:
-            w, s, e, n = (float(x) for x in bbox.split(","))
-        except ValueError:
-            raise PipelineError("invalid_options", f"bbox {bbox!r} is not west,south,east,north") from None
-        proj, graph = self._projection(dataset_id), self.graph()
-        lon, lat = proj["centres"].T
-        view = (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)
-        total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
-        themes: dict[str | None, dict[str, Any]] = {}
-        for pid, (rows, counts, level) in proj["patterns"].items():
-            inside = view[rows]
-            points = int(counts[inside].sum())
-            if points < WINDOW_MIN_POINTS:
-                continue
-            ins = graph.insight(pid)
-            anchor = max((x for x in graph.out[pid] if x["type"] == "ACTIVATES"), key=lambda x: x["weight"], default=None)
-            aid = anchor["target"] if anchor else None
-            theme = themes.setdefault(aid, {"id": aid, "label": graph.nodes[aid]["label"] if aid else "no theme", "insights": []})
-            theme["insights"].append(
-                {
-                    "id": pid,
-                    "label": graph.nodes[pid]["label"],
-                    "level": level,
-                    "scope": [c.expr for c in ins.conditions],
-                    "target": ins.target,
-                    "effect": round(ins.effect_size, 3),
-                    "ptype": ins.phenomenon_type,
-                    "weight": round(ins.weight, 3),
-                    "points": points,
-                    "share": round(points / int(counts.sum()), 3),
-                    "cells": int(inside.sum()),
-                    "lift": round(points / here / (int(counts.sum()) / total), 2),
-                }
-            )
-        for t in themes.values():
-            t["insights"].sort(key=lambda i: (-i["lift"], -i["weight"]))
-        order = sorted(themes.values(), key=lambda t: (-t["insights"][0]["lift"], -sum(i["points"] for i in t["insights"])))
-        return {"cells": int(view.sum()), "points": here, "insights": sum(len(t["insights"]) for t in order), "themes": order}
+        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox)
 
     @_healthy
     def export_geosparql(self) -> str:
-        """The committed graph as GeoSPARQL Turtle (``geosparql.build_turtle``), each geo insight with the H3 cells of its extent."""
-        graph, extents = self.graph(), {}
-        for d in self.geo_datasets():
-            if (geo := self.ws.load_geo(d["dataset_id"], ("cells",))) is None:  # a deletion moving its files aside
-                continue
-            for pid, rows in self.ws.load_covers(d["dataset_id"]).items():
-                if pid in graph.nodes:
-                    extents[pid] = [str(c) for c in geo["cells"][rows]]
-        return build_turtle(graph, extents)
-
-    def _geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
-        geo = self.ws.load_geo(dataset_id, keys) if self._geo_ready(dataset_id) else None
-        if geo is None:
-            raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
-        return geo
+        return geo_views.export_geosparql(self.ws, self.graph())
 
     @contextmanager
     def _stage(self, record: dict[str, Any], stage: str, timings: dict[str, float], key: str) -> Iterator[None]:
