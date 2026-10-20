@@ -204,18 +204,18 @@ Measured on 2026-10-16, against the phase-A rules of credibility (anchors, [#7](
 - `C_insights` per rule and level: the share of base insights with `C_members ≥ 0.5` and at least one link; the 60–80 % aimed at for base-insight places is a target for this share, not a threshold for one link;
 - `C_map`: the share of the finest level's cells and located points inside the union of the base footprints (`GEO_FOOTPRINT_SHARE`), descriptive.
 
-The rules weighed, with x the insight's events in region R, n_R the map's and N all located: S `x / |P_loc| ≥ 0.2`; E `x / min(|P_loc|, n_R) ≥ 0.2`, x ≥ 30 (IN_REGION's rule counted in events); F IN_REGION's rule on the footprint's cells; L the binomial tail `P(X ≥ x | n_R, |P_loc| / N)` under Benjamini-Hochberg at 0.05 over the level's regions, lift ≥ 1.5, x ≥ 30. The geo levels' own insights are measured alike, beside their IN_REGION edges.
+The rules weighed, with x the insight's events in region R, n_R the map's and N all located: S `x / |P_loc| ≥ 0.2`; E `x / min(|P_loc|, n_R) ≥ 0.2`, x ≥ 30 (IN_REGION's rule counted in events); F IN_REGION's rule on the footprint's cells; L the hypergeometric tail `P(X ≥ x)` of `|P_loc|` events drawn from N with n_R in R, under Benjamini-Hochberg at 0.05 over the level's regions, lift ≥ 1.5, x ≥ 30. The geo levels' own insights are measured alike, beside their IN_REGION edges at each level.
 
 | | California, `auto@auto` (5) + table, income in quartiles | synthetic deliveries, 300,000 points, `lat,lon@auto` (6, 5) + table |
 |---|---|---|
 | base insights; `C_members` median / minimum | 11; 1 / 1 | 27; 1 / 1 |
-| resolution-5 regions touched, k50 / k80, largest share (medians) | 66 of 884, 9 / 19, 0.10 | 54 of 3,537, 8 / 17, 0.08 |
+| resolution-5 regions touched, k50 / k80, largest share (medians) | 66 of 884, 9 / 19, 0.10 | 54 of 3,544, 8 / 17, 0.08 |
 | `C_map`: cells / located points | 0.27 / 0.86 | 0.84 / 0.65 |
 | insights with a link at 5: S / E / F / L | 2 / 11 / 11 / 11 of 11 | 0 / 17 / 27 / 21 of 27 |
 | links per insight at 5, median: E / F / L | 5 / 19 / 9 | 23 / 18 / 25 |
 | `C_insights` at 5: S / E / F / L; at 3 | 0.18 / 1 / 1 / 1; 0.91 / 1 / 1 / 1 | 0 / 0.63 / 1 / 0.78; 0.59 / 0.81 / 1 / 1 |
 
-Measured on 2026-10-20 with the bundled model. Every base event is located in both sets, so the narrow point is the rule, not the geography. S alone links next to nothing at 5: a base insight is broad, half its events in 8–9 regions of 5, and no region holds a fifth of it; at 3 it says where the insight lies. F links every insight, as broad as its footprint; E and L are the selective ones, and L asks that the region hold more of the insight than the map would.
+Measured on 2026-10-20 with the bundled model. Every base event is located in both sets, so the narrow point is the rule, not the geography. S alone links next to nothing at 5: a base insight is broad, half its events in 8–9 regions of 5, and for 9 of the 11 California insights and all 27 synthetic ones no region holds a fifth of it; at 3 it says where the insight lies. F links every insight, as broad as its footprint; E and L are the selective ones, and L asks that the region hold more of the insight than the map would.
 
 **The red team** (`python scripts/poisoning_eval.py`, [10.4](#104-measurement-scripts)). S-poison and S-two-sources ingested with the bundled model, then the questions an attacker's planted finding has to survive. Deterministic, as `test_poisoning_eval_apparatus` runs it:
 - **The planted spot is never confirmed.** S-poison's spot, in source b only (rated E), is credibility 2 with `trust: source E (unreliable) | credibility 2 (not confirmed; another dataset has events at this place: "a") | integrity ok`; the focus both sources show is 1. The two foci of S-two-sources that the sources shift opposite ways are both 5, each naming the other.

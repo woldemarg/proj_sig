@@ -20,7 +20,8 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     S   x / |P_loc| >= SHARE_MIN                                  R holds a fifth of P
     E   x / min(|P_loc|, n_R) >= SHARE_MIN, x >= EVENTS_MIN       IN_REGION's rule, counted in events
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
-    L   P(X >= x | n_R, |P_loc| / N) under BH at FDR_Q over the level's regions, lift >= LIFT_MIN, x >= EVENTS_MIN
+    L   the hypergeometric tail P(X >= x) of |P_loc| events drawn from N with n_R in R, under BH at FDR_Q over the level's
+        regions, lift >= LIFT_MIN, x >= EVENTS_MIN
 A real export prints aggregates only; its result stays in ``.scratch/results/geo_coverage_<label>.json``.
 """
 
@@ -33,13 +34,12 @@ from typing import Any
 
 import h3
 import numpy as np
-from scipy.stats import binom, false_discovery_control
+from scipy.stats import false_discovery_control, hypergeom
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
 
-from perf_benchmark import write_synthetic_points  # noqa: E402
-
 from insight_graph_service.core.engine import Engine  # noqa: E402
+from insight_graph_service.core.geo_views import member_rows  # noqa: E402
 from insight_graph_service.core.settings import PROJECT_ROOT  # noqa: E402
 from subgroup_miner.spatial import footprint  # noqa: E402
 
@@ -63,25 +63,27 @@ def ingest(engine: Engine, path: Path, geo: str, bins: str | None = None) -> lis
 
 def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict[str, np.ndarray], dict[str, dict[str, np.ndarray]]]:
     """The finest geo level's ``cells`` and ``point_cell``, and each committed insight's events by group: ``base`` (the
-    table level, linked by ``upload_id`` and a row count equal to the points', contract 6) and ``r<res>`` per geo level."""
+    table level) and ``r<res>`` per geo level, each linked to the finest level's points by ``member_rows`` (one
+    ``upload_id`` and one row per point, contract 6)."""
     ready = [r for r in records if r["status"] == "READY"]
-    geo = {r["level"]: engine.ws.load_geo(r["dataset_id"], ("cells", "point_cell")) for r in ready if r["level"] != "table"}
+    geo = [r for r in ready if r["level"] != "table"]
     if not geo:
         raise SystemExit("no geo level of the upload is READY")
-    finest = geo[max(geo, key=int)]
-    table = [r for r in ready if r["level"] == "table" and r["profile"].get("rows") == len(finest["point_cell"])]
-    if not table:
-        raise SystemExit("no READY table level with one row per point")
+    top = max(geo, key=lambda r: int(r["level"]))
+    finest = engine.ws.load_geo(top["dataset_id"], ("cells", "point_cell"))
     graph = engine.committed().graph
     groups: dict[str, dict[str, np.ndarray]] = {}
-    for r in [*table, *(r for r in ready if r["level"] != "table")]:
-        name = "base" if r["level"] == "table" else f"r{r['level']}"
-        cells_of = None if name == "base" else geo[r["level"]]["point_cell"]
-        groups[name] = {
-            pid: rows if cells_of is None else np.flatnonzero(np.isin(cells_of, rows))
+    for r in sorted(ready, key=lambda r: r["level"] != "table"):  # the base first
+        members = member_rows(engine.ws, r, top.get("upload_id"), len(finest["point_cell"]))
+        if members is None:
+            continue
+        groups["base" if r["level"] == "table" else f"r{r['level']}"] = {
+            pid: members(rows)
             for pid, rows in engine.ws.load_covers(r["dataset_id"]).items()
             if pid in graph.nodes and graph.nodes[pid]["props"].get("integrity") != "mismatch"
         }
+    if "base" not in groups:
+        raise SystemExit("no READY table level of the upload with one row per point")
     return finest, groups
 
 
@@ -107,18 +109,18 @@ def measure(point_cell: np.ndarray, cells: np.ndarray, insights: dict[str, np.nd
         if len(loc):
             fp = footprint(point_cell, loc)[0]
             entry["footprint"] = fp
-            entry["levels"] = {lv: _level(point_cell[loc], fp, regions[lv], *per_level[lv], n_map) for lv in levels}
+            entry["levels"] = {lv: level_stats(point_cell[loc], fp, regions[lv], *per_level[lv], n_map) for lv in levels}
         out[pid] = entry
-    return {"insights": out, "map": {"events": n_map, "cells": len(cells)}, "n_R": {lv: v[0] for lv, v in per_level.items()}}
+    return {"insights": out, "events": n_map, "n_R": {lv: v[0] for lv, v in per_level.items()}}
 
 
-def _level(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.ndarray, occupied: np.ndarray, n_map: int) -> dict[str, Any]:
+def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.ndarray, occupied: np.ndarray, n_map: int) -> dict[str, Any]:
     x = np.bincount(idx[cell_rows], minlength=len(n_r))
     n_loc = len(cell_rows)
     share = x / n_loc
     lift = share / (n_r / n_map)
     held = np.cumsum(np.sort(x)[::-1])
-    pv = np.where(x > 0, binom.sf(x - 1, n_r, n_loc / n_map), 1.0)
+    pv = np.where(x > 0, hypergeom.sf(x - 1, n_map, n_r, n_loc), 1.0)  # P's |P_loc| events drawn from the map's N
     fp_in = np.bincount(idx[fp], minlength=len(n_r))
     links = {
         "S": share >= SHARE_MIN,
@@ -141,7 +143,7 @@ def _level(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.ndarr
     }
 
 
-def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[str, int], per_cell: np.ndarray) -> dict[str, Any]:
+def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[tuple[str, int], int] | None, per_cell: np.ndarray) -> dict[str, Any]:
     """The aggregates of one group: C_members, the distributions' medians, each rule's links, C_insights and C_map."""
     insights = measured["insights"]
     placed = {pid: e for pid, e in insights.items() if "levels" in e}
@@ -149,11 +151,11 @@ def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[str, 
     out: dict[str, Any] = {
         "insights": len(insights),
         "c_members": {"median": _median(c_members), "min": min(c_members, default=None)},
-        "in_region": _median([in_region.get(pid, 0) for pid in insights]) if in_region else None,
     }
     for lv in levels:
         stats = [e["levels"][lv] for e in placed.values()]
         row: dict[str, Any] = {k: _median([s[k] for s in stats]) for k in ("touched", "k50", "k80", "top_share", "lift_2", "lift_2_share")}
+        row["in_region"] = None if in_region is None else _median([in_region.get((pid, lv), 0) for pid in insights])  # its own edges at lv
         for rule in RULES:
             counts = [len(s["links"][rule]) for s in stats]
             union = np.unique(np.concatenate([s["links"][rule] for s in stats])) if stats else np.array([], int)
@@ -163,7 +165,7 @@ def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[str, 
                 "links_median": _median(counts),
                 "links_max": max(counts, default=0),
                 "regions": len(union),
-                "map_share": float(measured["n_R"][lv][union].sum() / measured["map"]["events"]),
+                "map_share": float(measured["n_R"][lv][union].sum() / measured["events"]),
                 "c_insights": linked / len(insights) if insights else None,
             }
         out[lv] = row
@@ -183,10 +185,11 @@ def run(engine: Engine, path: Path, geo: str, bins: str | None = None) -> dict[s
     point_cell, cells = finest["point_cell"], finest["cells"]
     res = h3.get_resolution(str(cells[0]))
     levels = [lv for lv in engine.settings.region_levels if lv <= res]
-    in_region: dict[str, int] = {}
+    in_region: dict[tuple[str, int], int] = {}
     for e in engine.committed().graph.edges:
-        if e["type"] == "IN_REGION":
-            in_region[e["source"]] = in_region.get(e["source"], 0) + 1
+        if e["type"] == "IN_REGION":  # R:<level>:<h3>
+            key = (e["source"], int(e["target"].split(":")[1]))
+            in_region[key] = in_region.get(key, 0) + 1
     per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(cells))
     out: dict[str, Any] = {
         "levels": [{"level": r["level"], "status": r["status"], "insights": r["metrics"].get("validated_insights", 0)} for r in records]
@@ -194,7 +197,9 @@ def run(engine: Engine, path: Path, geo: str, bins: str | None = None) -> dict[s
     out["map"] = {"resolution": res, "cells": len(cells), "events": int(per_cell.sum()), "rows": len(point_cell)}
     out["region_levels"], out["groups"] = levels, {}
     for name, insights in groups.items():
-        out["groups"][name] = summarise(measure(point_cell, cells, insights, levels), levels, {} if name == "base" else in_region, per_cell)
+        measured = measure(point_cell, cells, insights, levels)
+        out["map"]["regions"] = {lv: len(n_r) for lv, n_r in measured["n_R"].items()}
+        out["groups"][name] = summarise(measured, levels, None if name == "base" else in_region, per_cell)
     return out
 
 
@@ -203,19 +208,22 @@ def format_tables(result: dict[str, Any]) -> str:
     levels, groups = result["region_levels"], result["groups"]
     m = result["map"]
     lines = [
-        f"map: resolution {m['resolution']}, {m['cells']} cells, {m['events']} located of {m['rows']} rows; levels "
+        f"map: resolution {m['resolution']}, {m['cells']} cells, {m['events']} located of {m['rows']} rows; regions "
+        + ", ".join(f"r{lv} {n}" for lv, n in m["regions"].items())
+        + "; levels "
         + ", ".join(f"{lv['level']} {lv['status']} {lv['insights']}" for lv in result["levels"])
     ]
-    lines.append(f"{'insights':<10}{'n':>4}  {'C_members':<12}{'C_map':<14}{'IN_REGION':>9}   level  touched    k50    k80      top  lift≥2 (share)")
-    lines.append(f"{'':<10}{'':>4}  {'med / min':<12}{'cells / ev':<14}{'median':>9}")
+    lines.append(f"{'insights':<10}{'n':>4}  {'C_members':<12}{'C_map':<14} level  touched    k50    k80      top  lift≥2 (share)  IN_REGION")
+    lines.append(f"{'':<10}{'':>4}  {'med / min':<12}{'cells / ev':<14}{'':<55}  median")
     for name, g in groups.items():
         cm, cmap = g["c_members"], g["c_map"]
         head = f"{_group(name):<10}{g['insights']:>4}  {_fmt(cm['median']) + ' / ' + _fmt(cm['min']):<12}"
-        head += f"{_fmt(cmap['cells']) + ' / ' + _fmt(cmap['events']):<14}{_fmt(g['in_region']):>9}"
+        head += f"{_fmt(cmap['cells']) + ' / ' + _fmt(cmap['events']):<14}"
         for i, lv in enumerate(levels):
             r = g[lv]
-            stats = f"   r{lv:<4}{_fmt(r['touched']):>8}{_fmt(r['k50']):>7}{_fmt(r['k80']):>7}{_fmt(r['top_share']):>9}"
-            lines.append((head if i == 0 else " " * len(head)) + stats + f"{_fmt(r['lift_2']):>8} ({_fmt(r['lift_2_share'])})")
+            stats = f" r{lv:<4}{_fmt(r['touched']):>8}{_fmt(r['k50']):>7}{_fmt(r['k80']):>7}{_fmt(r['top_share']):>9}"
+            lift = f"{_fmt(r['lift_2']):>8} ({_fmt(r['lift_2_share'])})"
+            lines.append((head if i == 0 else " " * len(head)) + stats + f"{lift:<17}{_fmt(r['in_region']):>9}")
     lines.append("")
     lines.append("rule  level  insights: with a link / links median (max) / regions in the union (their share of the map's events) / C_insights")
     for rule in RULES:
@@ -238,6 +246,7 @@ def _fmt(v: float | None) -> str:
 
 
 def main() -> int:
+    from perf_benchmark import write_synthetic_points
     from scratch import build_engine, save_result, scratch_dir  # loads .env, as the services do
 
     from tests.doubles import HashingEmbedder

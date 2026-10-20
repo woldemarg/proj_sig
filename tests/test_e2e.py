@@ -134,10 +134,11 @@ def test_geo_benchmark_apparatus(tmp_path):
 def test_geo_coverage_apparatus(tmp_path):
     """The geo coverage measurement (docs/10_verification.md §10.4) on ``geo_frame`` with rows that have no point: every
     group gets the three coverages and the four rules on each region level; C_members is 1 for an insight of located rows
-    and 0 for one of rows without a point; an insight of the whole map has lift 1 in every region."""
+    and 0 for one of rows without a point; an insight of the whole map has lift 1 in every region. On two regions of 60
+    and 40 events, each rule links what its formula says, and k50 / k80 count the regions holding half and 80 %."""
     import numpy as np
     import pandas as pd
-    from geo_coverage import RULES, measure, run, upload_insights
+    from geo_coverage import RULES, level_stats, measure, run, upload_insights
     from test_spatial import geo_frame
 
     frame = geo_frame()
@@ -157,6 +158,13 @@ def test_geo_coverage_apparatus(tmp_path):
     for lv in (5, 3):
         whole = measured["all"]["levels"][lv]
         assert whole["lift_min"] == pytest.approx(1.0) and whole["lift_max"] == pytest.approx(1.0) and whole["lift_2"] == 0
+    regions, n_r, occupied = np.array([0, 1]), np.array([60, 40]), np.array([1, 1])  # one cell per region
+    inside = level_stats(np.full(30, 1), np.array([1]), regions, n_r, occupied, 100)  # 30 events, all in region 1
+    assert (inside["k50"], inside["k80"], inside["top_share"], inside["lift_max"]) == (1, 1, 1.0, pytest.approx(2.5))
+    assert {rule: links.tolist() for rule, links in inside["links"].items()} == {"S": [1], "E": [1], "F": [1], "L": [1]}
+    split = level_stats(np.r_[np.zeros(20, int), np.ones(10, int)], np.array([0]), regions, n_r, occupied, 100)  # 20 and 10
+    assert (split["k50"], split["k80"]) == (1, 2) and split["lift_15"] == split["lift_2"] == 0
+    assert {rule: links.tolist() for rule, links in split["links"].items()} == {"S": [0, 1], "E": [], "F": [0], "L": []}  # x < 30
 
 
 def test_perf_benchmark_apparatus(tmp_path, caplog):

@@ -175,7 +175,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = _member_rows(ws, batch, ws.ready_batch_for(dataset_id)["upload_id"], len(geo["point_cell"])) if batch else None
+        members = member_rows(ws, batch, ws.ready_batch_for(dataset_id)["upload_id"], len(geo["point_cell"])) if batch else None
         if members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
         rows = found[0]
@@ -213,7 +213,7 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
 
 # ponytail: the PoC's projection, derived on read per commit for one upload's levels; #119 derives the table insights'
 # places at the commit (derive_spatial), so IN_REGION, zones and the scale chain see them too
-def _member_rows(ws: Workspace, batch: dict[str, Any], upload: str | None, n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
+def member_rows(ws: Workspace, batch: dict[str, Any], upload: str | None, n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
     """The map's point rows of a pattern's covered rows, for a READY batch of the map's own upload: a geo level's rows are
     cells, whose points its ``point_cell`` names; a table level's rows are the file's rows. None for another upload, or
     when the rows do not index the map's points: a matching row count alone links nothing."""
@@ -241,7 +241,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
             if b.get("status") != "READY":
                 continue
             own = b["dataset_id"] == dataset_id
-            members = None if own else _member_rows(ws, b, upload, len(point_cell))
+            members = None if own else member_rows(ws, b, upload, len(point_cell))
             if not own and members is None:
                 continue
             level = "table" if b.get("level") == "table" else f"res {b.get('level')}"
