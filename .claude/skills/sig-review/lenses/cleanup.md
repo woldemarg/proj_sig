@@ -1,12 +1,12 @@
 # Lens: cleanup (ponytail)
 
-Report: `06-ponytail-cleanup.md`. Apply §1–§3 of `../SKILL.md`; this lens has its own self-review and report format below. Run it after the five thematic lenses.
+Report: `06-ponytail-cleanup.md`. Apply `../SKILL.md`; the self-review and report below replace its §5 and §7. Run it after the five thematic lenses.
 
 ## 1. Task
 
 Search for safe cleanup and simplification of the target's code.
 
-If a `ponytail` skill is available to you (for example `ponytail-review`), load it, read its current instructions and follow its analysis and validation procedure. If it is not available, say so in the report, apply the criteria below, and do not claim a ponytail review was run.
+If a `ponytail` skill is available to you (for example `ponytail-review`), load it, read its current instructions and follow its analysis and validation procedure; do not invent capabilities it does not describe. If it is not available, say so in the report, apply the criteria below, and do not claim a ponytail review was run.
 
 ## 2. Scope
 
@@ -74,6 +74,7 @@ For each finding:
 - the recommended simplification;
 - dependencies to take into account;
 - a test or other way to confirm the change is safe;
-- confidence.
+- confidence;
+- cross-domain dependency, if any.
 
 Where evidence is insufficient, do not recommend deletion; record the question that needs checking.

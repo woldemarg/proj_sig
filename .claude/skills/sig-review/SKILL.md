@@ -6,9 +6,9 @@ argument-hint: "[commit | A..B | PR number | branch | milestone] [lens]"
 
 # SIG review
 
-You are a software engineer doing an independent technical review of finished, integrated work in this repository. Find real defects, logic errors, contract violations, reliability problems and well-founded improvements — and report them. Others may be building the next pieces in parallel, so:
+You are a software engineer doing an independent technical review of a change in this repository. Find real defects, logic errors, contract violations, reliability problems and well-founded improvements — and report them. Others may be working on the same branches in parallel, so:
 
-- review finished, integrated work; stay out of active development;
+- review the code at the reviewed revision (§1): read it with `git show <rev>:<path>` or a throwaway `git worktree` outside the repository; never switch or modify the working tree you are in;
 - do not change source code, tests, configuration or product docs; no refactoring;
 - no commits, branches or pull requests;
 - the only files you write are the reports in the output directory.
@@ -17,20 +17,20 @@ You are a software engineer doing an independent technical review of finished, i
 
 ## 1. Inputs
 
-From the request (or the arguments after `/sig-review`):
+From the request (or the arguments after `/sig-review`). Run `git fetch origin` first and use remote refs (`origin/<branch>`): local branches may lag behind.
 
-| Target | How to read it | Base |
-|---|---|---|
-| commit `abc123` | `git show abc123` | its parent |
-| range `A..B` | `git log A..B`, `git diff A..B` | `A` |
-| PR `#N` | `gh pr view N --comments`, `gh pr diff N` | the PR's base branch |
-| branch | `git diff develop...<branch>` | `develop` |
-| milestone | `gh issue list --milestone "<title>" --state all`, then the PRs that close those issues | `develop` |
-| nothing given | the current branch against `develop` | `develop` |
+| Target | How to read it | Base | Reviewed revision |
+|---|---|---|---|
+| commit `abc123` | `git show abc123` | `abc123^` | `abc123` |
+| range `A..B` | `git log A..B`, `git diff A..B` | `A` | `B` |
+| PR / MR `#N` | `gh pr view N --comments`, `gh pr diff N` | its base branch (`baseRefName`) | its head (`headRefOid`; `git fetch origin pull/N/head` if missing) |
+| branch `X` | `git diff <base>...X` | the base the request names, else the base of X's open PR (`gh pr view X`), else ask | the tip of `origin/X` (local `X` if unpushed) |
+| milestone | `gh issue list --milestone "<title>" --state all`, then the PRs that close those issues | — | the tip of the branch those PRs merged into |
+| nothing given | the current branch, as a branch | as a branch | as a branch |
 
-Lens — optional: `math`, `geo`, `graph`, `data`, `system`, `cleanup` or `synthesis`. None given means the full review (§4).
+Lens — optional: `math`, `geo`, `graph`, `data`, `system`, `cleanup`, or `synthesis` (merges the existing reports). None given means the full review (§4).
 
-Output directory: `review-reports/<target>/` (gitignored), for example `review-reports/pr-118/`, `review-reports/abc1234/`, `review-reports/m9a/`. Record the target, the base and the commit you reviewed at.
+Output directory: `review-reports/<target>/` (gitignored), for example `review-reports/pr-118/`, `review-reports/abc1234/`, `review-reports/m9a/`. Record the target, the base and the reviewed revision (its sha).
 
 For a milestone with no name given, take the first milestone in the plan that is finished, integrated and safe to review, and record which one and why.
 
@@ -38,10 +38,10 @@ For a milestone with no name given, take the first milestone in the plan that is
 
 Before any analysis:
 
-1. Read `AGENTS.md` (the repository rules), the owning docs chapter of each touched module (`AGENTS.md` §6 maps code to chapters) and `docs/12_architecture.md` for the import rules.
+1. Read `AGENTS.md` (the repository rules), `README.md`, the owning docs chapter of each touched module (`AGENTS.md` §6 maps code to chapters), `docs/12_architecture.md` for the import rules, and any other instructions the repository gives.
 2. Find the description of the target: the PR body, the linked issues and their acceptance checkboxes, the milestone description.
-3. For a milestone: find every related PR and check which were merged, rejected, superseded or abandoned. A Closed PR is not integrated code — if its change never reached the base branch, do not review it as existing behaviour without a stated reason.
-4. Map the history to the code in the base branch: the files, modules, functions and tests that implement the change.
+3. Find the related PRs (for a milestone, every one) and check which were merged, rejected, superseded or abandoned. A Closed PR is not integrated code — if its change never reached the reviewed revision, do not review it as existing behaviour without a stated reason.
+4. Map the history to the code at the reviewed revision: the files, modules, functions and tests that implement the change.
 5. Follow dependencies outside those files only as far as checking correctness needs.
 
 Do not judge the system from one file when correctness depends on its callers, dependencies or contracts. Do not scan the repository aimlessly: start from the change and widen along concrete dependencies.
@@ -80,7 +80,9 @@ Running commands is allowed when it produces evidence and changes nothing: `git`
 
 ## 4. Running a review
 
-- **One lens** (`/sig-review <target> <lens>`): read `lenses/<lens>.md`, apply §2–§3 and §5–§7, write that lens's report.
+Every lens and the synthesis apply this whole file; where a lens file sets its own self-review or report, that part replaces §5 or §7.
+
+- **One lens** (`/sig-review <target> <lens>`): read `lenses/<lens>.md` (`synthesis` reads `synthesis.md`) and write that report.
 - **Full review** (default): run the lenses `math`, `geo`, `graph`, `data`, `system`, then `cleanup`, then `synthesis.md`. A lens whose surface the change does not touch is skipped — say which and why in `FINAL_REVIEW.md` (a skipped lens is not a passed one). If your agent can start subagents, run the five thematic lenses as parallel subagents, each given this file, its lens file and the target; run `cleanup` after them and `synthesis` last.
 
 | Lens | File | Report | Usually bites in |
@@ -133,13 +135,13 @@ Drop claims without enough evidence. Lower severity or confidence when needed. N
 
 Never fill a field with invented data: write `Not established` or `Requires verification` with a short reason. In each finding keep fact, interpretation and recommendation apart.
 
-Code references: current paths and lines in the reviewed base. If a line cannot be fixed reliably, give the symbol and the closest location. Do not cite only an old PR diff when the code has changed since. When a finding rests on several components, name every material point, not only the line where the effect shows.
+Code references: paths and lines at the reviewed revision. If a line cannot be fixed reliably, give the symbol and the closest location. Do not cite only an old PR diff when the code has changed since. When a finding rests on several components, name every material point, not only the line where the effect shows.
 
 ## 7. Lens report
 
 One Markdown file per lens in the output directory (names in §4), containing:
 
-1. The target and its id, the base and the reviewed commit.
+1. The target and its id, the base and the reviewed revision.
 2. The boundaries of the review.
 3. The main components checked.
 4. Findings in the format above.

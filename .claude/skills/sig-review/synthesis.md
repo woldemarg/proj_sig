@@ -1,6 +1,6 @@
 # Final synthesis
 
-Report: `FINAL_REVIEW.md`. Apply §1, §3 and §6 of `SKILL.md`.
+Report: `FINAL_REVIEW.md`. Apply `SKILL.md`; the verification and report structure below replace its §5 and §7.
 
 You are the reviewer who turns all the lens reports of the target into one final, consistent report. The intermediate reports, in the output directory:
 
@@ -19,10 +19,10 @@ Do not rewrite the reports mechanically; turn them into one technical document f
 
 For each finding:
 
-1. Find the code in the current base.
+1. Find the code at the reviewed revision.
 2. Check that file, symbol and lines are current.
 3. Confirm the description matches the code.
-4. Check whether a later commit has already fixed it.
+4. Check whether a commit after the reviewed revision (the branch tip now) has already fixed it.
 5. Match the evidence against the claim and the proposed fix.
 6. Check whether it repeats another finding.
 7. Keep the uncertainty where the problem could not be confirmed.
@@ -88,19 +88,7 @@ Only unique findings, after verification and deduplication.
 
 ### 4. Detailed findings
 
-For each material finding:
-
-- unique ID;
-- severity and confidence;
-- exact location in the code;
-- description and root cause;
-- evidence;
-- scenario;
-- expected correct behaviour;
-- impact on the system;
-- recommended fix;
-- required regression tests;
-- related findings and dependencies.
+Each material finding in the §6 format of `SKILL.md`, with the required regression tests under `Validation` and the related findings and dependencies under `Cross-domain dependency`.
 
 Detailed enough to hand the finding to another coding agent for fixing without repeating the review.
 
