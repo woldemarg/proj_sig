@@ -41,7 +41,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 import numpy as np
 
@@ -49,6 +49,9 @@ from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION,
 from insight_graph_service.core.chunk_journal import ChunkJournal
 from insight_graph_service.core.fileio import replace_file
 from insight_graph_service.core.settings import Settings
+
+if TYPE_CHECKING:
+    from subgroup_miner.spatial import SpatialContext
 
 log = logging.getLogger(__name__)
 
@@ -179,14 +182,18 @@ class Workspace:
         return copy.deepcopy(self._batches.get(batch_id))
 
     def list_batches(self) -> list[dict[str, Any]]:
-        return sorted(copy.deepcopy(list(self._batches.values())), key=lambda b: b.get("created_at", ""))
+        """Every batch record, oldest first: the cached records themselves, to read (``load_batch`` gives a copy to edit). A
+        record is replaced whole when it is saved, never edited in place, so a reader holds a consistent one."""
+        return sorted(self._batches.values(), key=lambda b: b.get("created_at", ""))
 
     def ready_batch_for(self, dataset_id: str) -> dict[str, Any] | None:
-        return next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
+        """A copy of the dataset's READY record (a caller may edit it and save it)."""
+        found = next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
+        return copy.deepcopy(found)
 
     def unfinished_batches(self) -> list[dict[str, Any]]:
-        """Batches not yet READY, FAILED or SKIPPED (queued or running)."""
-        return [b for b in self.list_batches() if b["status"] not in TERMINAL]
+        """Copies of the batches not yet READY, FAILED or SKIPPED (queued or running): recovery edits and saves them."""
+        return [copy.deepcopy(b) for b in self.list_batches() if b["status"] not in TERMINAL]
 
     def next_batch_seq(self) -> int:
         state = read_json(self.state_dir / "sig_state.json", {"next_batch_seq": 0})
@@ -237,12 +244,23 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, geo: dict[str, np.ndarray]) -> None:
-        """A geo dataset's spatial context (``cells``, ``point_cell``, ``lonlat``, ``nbr_ptr``, ``nbr_idx``)."""
-        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **geo)
+    def save_geo(self, dataset_id: str, spatial: SpatialContext) -> None:
+        """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph."""
+        np.savez_compressed(
+            self.dataset_dir(dataset_id) / "geo.npz",
+            cells=spatial.cells.astype(str),
+            point_cell=spatial.point_cell,
+            lonlat=spatial.lonlat,
+            nbr_ptr=spatial.nbr_ptr,
+            nbr_idx=spatial.nbr_idx,
+        )
+
+    def save_geo_cells(self, dataset_id: str, payload: dict[str, Any]) -> None:
+        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch."""
+        atomic_write_json(self.geo_cells_path(dataset_id), payload)
 
     def geo_cells_path(self, dataset_id: str) -> Path:
-        """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
+        """The map's GeoJSON of a geo dataset (``save_geo_cells``); absent for any other dataset."""
         return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any] | None:

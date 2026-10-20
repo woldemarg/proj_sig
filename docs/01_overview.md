@@ -111,6 +111,8 @@ The repository is split into bounded contexts: four libraries, which import only
 | | `search.py`, `ports.py`, `config.py` | one question end to end over a `CommittedState`; the embedder shape it needs; `QueryConfig` | [7](07_question_answering.md) |
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
 | | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question | [9](09_operations.md) |
+| | `uploads.py`, `verify.py` | the levels of one upload and the version it replaces; an insight recomputed from its stored upload | [6.8](06_graph_and_storage.md#68-deleting-a-dataset), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
+| | `geo_views.py`, `errors.py` | the map's reads over one commit's graph; the error codes as `PipelineError` | [8.7](08_interface.md#87-the-map), [9.4](09_operations.md#94-error-codes) |
 | | `snapshot.py` | the dual-graph compiler and the anchor descriptions | [6.2](06_graph_and_storage.md#62-the-graph-schema), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
 | | `workspace.py`, `chunk_journal.py`, `fileio.py` | workspace layout, journals, transactions and recovery, the writer lock; atomic file replacement | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | | `neo4j_mirror.py`, `cypher/` | the Neo4j mirror | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |

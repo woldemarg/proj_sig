@@ -423,7 +423,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
                     "patterns": len(patterns),
                     "found": found,
                     "seconds": round(metrics["processing_duration_s"], 2),
-                    "graph_seconds": round(metrics["timings"].get("graph_s", 0.0), 2),
+                    "graph_seconds": round(metrics["timings"].get("graph_s", 0.0) + metrics["timings"].get("persist_s", 0.0), 2),
                 }
             )
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []

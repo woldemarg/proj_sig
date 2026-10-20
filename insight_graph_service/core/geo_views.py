@@ -49,7 +49,7 @@ def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
 
 def _geo_ready(ws: Workspace, dataset_id: str) -> bool:
     """Only a dataset with a READY geo batch is served: its files survive a failed batch, its listing does not."""
-    return any(d["dataset_id"] == dataset_id for d in geo_datasets(ws))
+    return any(b["dataset_id"] == dataset_id and b["status"] == "READY" and (b.get("profile") or {}).get("geo") for b in ws.list_batches())
 
 
 def _geo(ws: Workspace, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
