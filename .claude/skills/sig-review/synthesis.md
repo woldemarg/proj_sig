@@ -27,7 +27,7 @@ For each finding:
 6. Check whether it repeats another finding.
 7. Keep the uncertainty where the problem could not be confirmed.
 
-Do not trust an intermediate report: it is a source of hypotheses to check. An unconfirmed finding does not go into the confirmed defects; move it to the uncertainties with a reason if needed.
+Do not trust an intermediate report: it is a source of hypotheses to check. After verification a `LIKELY` finding stays in Detailed findings marked as such; a `NEEDS_CLARIFICATION` one moves to Unresolved questions with a reason; a refuted one is dropped and listed in Traceability.
 
 ## 2. Deduplicate and reconcile
 

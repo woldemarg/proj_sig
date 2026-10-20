@@ -24,7 +24,7 @@ From the request (or the arguments after `/sig-review`). Run `git fetch origin` 
 | commit `abc123` | `git show abc123` | `abc123^` | `abc123` |
 | range `A..B` | `git log A..B`, `git diff A..B` | `A` | `B` |
 | PR / MR `#N` | `gh pr view N --comments`, `gh pr diff N` | its base branch (`baseRefName`) | its head (`headRefOid`; `git fetch origin pull/N/head` if missing) |
-| branch `X` | `git diff <base>...X` | the base the request names, else the base of X's open PR (`gh pr view X`), else ask | the tip of `origin/X` (local `X` if unpushed) |
+| branch `X` | `git diff <base>...X` | the base the request names, else the base of X's open PR (`gh pr view X`), else ask | the tip of `origin/X`, or local `X` when it is unpushed or ahead (say so); uncommitted changes are not reviewed unless asked — mention them |
 | milestone | `gh issue list --milestone "<title>" --state all`, then the PRs that close those issues | — | the tip of the branch those PRs merged into |
 | nothing given | the current branch, as a branch | as a branch | as a branch |
 
@@ -76,7 +76,7 @@ Do not inflate severity. Code is not wrong just because another way to write it 
 
 No large architecture changes without a clear technical reason. Do not start implementing fixes.
 
-Running commands is allowed when it produces evidence and changes nothing: `git`, `gh`, targeted `python -m pytest …`, read-only scripts. Report what you ran and its actual output. Do not run paid calls (`AGENTS.md`, `CLAUDE.md`), and never touch `workspace/` or `.env`.
+Running commands is allowed when it produces evidence and changes nothing: `git`, `gh`, targeted `python -m pytest …`, read-only scripts. Report what you ran and its actual output. Run tests only in a tree checked out at the reviewed revision (the current one, or the throwaway worktree with the repository's `.venv` interpreter); remove the worktree afterwards (`git worktree remove`) and name the tests skipped for a missing model. Do not run paid calls (`AGENTS.md`, `CLAUDE.md`), and never touch `workspace/` or `.env`.
 
 ## 4. Running a review
 
