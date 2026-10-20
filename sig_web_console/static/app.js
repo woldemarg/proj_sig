@@ -210,7 +210,10 @@ function init() {
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
-  on($("inspector"), ".nb", (el) => { focusNodes([el.dataset.id]); inspect(el.dataset.id); });
+  on($("inspector"), ".nb", (el) => {  // the drawer follows the row; the map focuses it when it draws it, else the graph
+    if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.focusPattern(el.dataset.id); else focusNodes([el.dataset.id]);
+    inspect(el.dataset.id);
+  });
   on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });
   on($("mw-body"), ".mw-i", (b) => GeoMap.pick(b.dataset.pid));
   // chat
