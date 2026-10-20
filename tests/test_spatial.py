@@ -470,9 +470,10 @@ def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
     assert levels_and_scales() == (["8"], {"insufficient"})  # no coarser level left: nothing was "not found" there
 
 
-def test_auto_picks_the_levels_from_the_points(tmp_path):
-    """``@auto``: the finest resolution with enough cells, enough of them dense, then the coarser region levels; the
-    same file the same levels; a denser file a finer level; an upload with ``@auto`` is the upload of its levels."""
+def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
+    """``@auto``: the finest resolution with enough cells, enough of them dense and few enough at its region level (its
+    own below the finest region level), then the coarser region levels; the same file the same levels; a denser file
+    a finer level; an upload with ``@auto`` is the upload of its levels."""
     cfg, levels = MinerConfig(), (7, 5, 3, 1)
     california = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
     picked = auto_levels(california, "auto", cfg, levels)
@@ -481,12 +482,21 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     finest = {
         n: select_levels(rng.uniform(48, 49, n), rng.uniform(35, 36, n), levels, min_rows=50, min_cell_points=5)["chosen"][0] for n in (2_000, 50_000)
     }
-    assert finest[50_000] > finest[2_000]  # the denser file gets the finer level
+    assert finest == {2_000: 6, 50_000: 7}  # the denser file the finer level; 8 has 12,000 cells of its own
     with pytest.raises(SpatialError, match="dense share"):  # many cells, none dense: the refusal names that
         select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
     big = np.random.default_rng(1)  # a large export: level 7 dense but 15,000 cells, level 5 only ~350
     picked = select_levels(48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3, levels, min_rows=50, min_cell_points=5)
     assert picked["chosen"] == [6] and "GEO_AUTO_MAX_CELLS" in picked["reasons"]["7"] and "GEO_AUTO_MIN_CELLS" in picked["reasons"]["5"]
+    box = 48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3
+    assert select_levels(*box, (5, 3, 1), min_rows=50, min_cell_points=5)["chosen"] == [6]  # finer than every region level: its own cells
+    with monkeypatch.context() as m:  # a cap of 300: 6 counts the cells of 5, 4 those of 3
+        m.setattr("subgroup_miner.spatial.GEO_AUTO_MAX_CELLS", 300)
+        capped = select_levels(*box, levels, min_rows=50, min_cell_points=5)
+    assert capped["chosen"] == [4] and capped["capped"] == [7, 6, 5] and capped["reasons"]["6"].endswith("cells at 5 > GEO_AUTO_MAX_CELLS")
+    wide = select_levels(34 + big.random(40_000) * 4, -122 + big.random(40_000) * 6, levels, min_rows=50, min_cell_points=5)
+    assert wide["candidates"]["6"]["cells"] > 5_000 >= wide["candidates"]["6"]["cap_cells"] == wide["candidates"]["5"]["cells"]
+    assert wide["chosen"] == [6, 5] and wide["capped"] == []  # the wide box: 6 counts its IN_REGION regions at 5
     world = select_levels(big.uniform(-80, 80, 250_000), big.uniform(-179, 179, 250_000), levels, min_rows=50, min_cell_points=5)
     assert world["chosen"] == [3] and world["candidates"]["3"]["cells"] > 5_000  # every level over the cap: the coarsest that fits
     rng = np.random.default_rng(71)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
@@ -512,6 +522,23 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
         engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
     assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
+
+
+def test_an_auto_level_with_nothing_names_the_level_the_cap_left_out(tmp_path, monkeypatch):
+    """``@auto``'s finest level that finds nothing while finer ones were left out by ``GEO_AUTO_MAX_CELLS`` alone: the
+    batch's error names the nearest of them as the explicit option to try."""
+    rng = np.random.default_rng(0)
+    lat, lon = 36 + rng.random(40_000) * 0.5, -120 + rng.random(40_000) * 0.5
+    frame = pd.DataFrame({"latitude": lat, "longitude": lon, "sector": np.where(lat > 36.25, "north", "south"), "load": rng.normal(10, 2, 40_000)})
+    frame.to_csv(path := tmp_path / "noise.csv", index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    monkeypatch.setattr("subgroup_miner.spatial.GEO_AUTO_MAX_CELLS", 400)  # 8 (3,200 cells) and 7 (500) over it, 6 under
+    with path.open("rb") as f:
+        (record,) = engine.upload("noise.csv", f, geo="latitude,longitude@auto")
+    assert record["profile"]["geo"]["levels"]["capped"] == [8, 7]
+    done = engine.process(record["batch_id"])
+    assert done["level"] == "6" and done["error"]["code"] in {"no_candidates", "no_viable_insights"}
+    assert done["error"]["message"].endswith("@auto left latitude,longitude@7 out for GEO_AUTO_MAX_CELLS alone, try it")
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():
