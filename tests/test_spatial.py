@@ -11,12 +11,14 @@ import numpy as np
 import pandas as pd
 import pytest
 from conftest import HOT, geo_frame, make_engine, upload_levels
+from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
 from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset
@@ -326,10 +328,6 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
     assert len({r["upload_id"] for r in done}) == len({r["source_path"] for r in done}) == 1  # one file, one upload id
@@ -554,10 +552,6 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
 def test_a_zone_from_the_map_is_the_same_question(engine, points_csv):
     """A zone weighs the seeds of the ordinary search: the question's seed stays first and gets the same scale chain, a
     zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     question = "Where is load higher?"
     text = engine.search(question)
@@ -599,10 +593,7 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     query for the insights inside a region returns its IN_REGION members; CO_LOCATED keeps its relation; the trust axes
     and the provenance chain are there."""
     import rdflib
-    from fastapi.testclient import TestClient
     from pyshacl import validate
-
-    from insight_graph_service.server.app import create_app
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", source="sensor net", reliability="B")
     assert [r["status"] for r in done] == ["READY", "READY"]

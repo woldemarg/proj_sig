@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 from conftest import make_engine, rewrite_patterns, stale_snapshot
+from fastapi.testclient import TestClient
 
 from insight_contracts import EdgeType, GraphEdge, record_digest
+from insight_graph_service.server.app import create_app
 
 
 def test_a_pattern_is_recomputed_from_its_stored_upload(cfg, tmp_path, demo_csv):
@@ -183,9 +185,6 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
 def test_dataset_source_and_reliability(engine, demo_csv):
     """Source and reliability are upload options outside the dataset id; PATCH changes them on the batch record and
     recompiles the snapshot (no new batch, the same pattern ids); the prompt names them, quoted, only once declared."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
     from subgroup_miner.ingestion import load_dataset
 
     question = "Why is margin lower for phones in the US?"
@@ -218,10 +217,6 @@ def test_dataset_source_and_reliability(engine, demo_csv):
 def test_indicator_registry(engine, demo_csv):
     """What each metric measures: an upload option outside the dataset id (an unknown metric only warns), on the Metric
     nodes and, quoted, in the prompt's baselines; PATCH replaces it strictly, without a new batch or new pattern ids."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     question = "Why is margin lower for phones in the US?"
     record = engine.process(engine.submit(demo_csv, indicators="margin: gross margin :%, discount:discount_rate, nosuch:x")["batch_id"])
     assert record["status"] == "READY" and any("nosuch" in w for w in record["warnings"]) and "nosuch" not in record["indicators"]

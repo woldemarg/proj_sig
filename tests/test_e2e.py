@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeLLM, ask, make_config, make_engine
+from fastapi.testclient import TestClient
+
+from insight_graph_service.server.app import create_app
 
 QUESTION = "Why is margin lower for phones in the US?"
 EROSION_ANALOGUES = {
@@ -172,11 +175,9 @@ def test_perf_benchmark_apparatus(engine, tmp_path, caplog):
     import logging
 
     import pandas as pd
-    from fastapi.testclient import TestClient
     from perf_benchmark import CALIFORNIA, EPOCH, reads_after, run_upload, write_synthetic_points
 
     from insight_graph_service.core.settings import PROJECT_ROOT
-    from insight_graph_service.server.app import create_app
 
     (tmp_path / "again").mkdir()
     path = write_synthetic_points(tmp_path, n=3000, seed=1)

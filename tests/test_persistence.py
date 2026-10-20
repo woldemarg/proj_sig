@@ -6,8 +6,10 @@ from collections import Counter
 
 import pytest
 from conftest import Crash, make_config, make_engine
+from fastapi.testclient import TestClient
 
 from insight_graph_service.core import engine as engine_mod
+from insight_graph_service.server.app import create_app
 
 
 def test_write_reload_and_idempotency(engine, demo_csv):
@@ -128,10 +130,6 @@ def test_a_marker_that_cannot_be_closed_does_not_undo_a_committed_batch(engine, 
 def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):
     """READY is on disk a moment before readers switch to the new graph (the commit point, then ``_publish``): a poll in
     that moment reads PERSISTING, so a client that acts on READY — the console's one reload — never reads the old graph."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     seen, publish = [], engine._publish
 
     def spy(state, snapshot):  # the moment between the commit point and the switch
@@ -330,10 +328,6 @@ def test_an_unreadable_snapshot_is_rebuilt_at_start(cfg, demo_csv):
 
 def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):
     """The graph service's status mapping: 413 too large, 404 unknown dataset or batch, a column id with '/' resolves."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     with TestClient(create_app(hashed_engine)) as client:
         assert client.delete("/api/datasets/nope").json()["code"] == "unknown_dataset"
         assert client.get("/api/batches/..%5Cregistry").status_code == 404

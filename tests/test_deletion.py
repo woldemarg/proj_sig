@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 from conftest import Crash, geo_frame, make_config, make_engine, upload_levels
+from fastapi.testclient import TestClient
 
 from graph_query_engine.graph import DualGraph
+from insight_graph_service.server.app import create_app
 
 
 def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(cfg, tmp_path, demo_df, demo_csv):
@@ -167,10 +169,6 @@ def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(engi
 def test_patch_supersedes_deletes_the_old_version_without_mining(engine, tmp_path):
     """``PATCH supersedes`` on a READY dataset removes what it names at once: no new batch, the same pattern ids; a
     dataset cannot replace itself or its own upload, an unknown id or the very file it replaces is refused."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
     geo_frame(3).to_csv(v1, index=False)
     geo_frame(4).to_csv(v2, index=False)

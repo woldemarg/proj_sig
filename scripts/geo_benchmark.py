@@ -439,24 +439,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
 
 
 def format_table(results: list[dict[str, Any]]) -> str:
-    head = (
-        "encoder",
-        "scenario",
-        "found",
-        "recall@k",
-        "reached",
-        "rank",
-        "shared",
-        "x-coloc",
-        "scale",
-        "zone",
-        "place",
-        "supersede",
-        "cred",
-        "visited",
-        "prompt",
-        "sec",
-    )
+    head = "encoder scenario found recall@k reached rank shared x-coloc scale zone place supersede cred visited prompt sec".split()
     short = {"regional": "reg", "scale-dependent": "dep", "not_found_coarser": "nfc", "insufficient": "ins"}
     lines = [" ".join(f"{h:>9}" for h in head)]
     for r in results:
