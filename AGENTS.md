@@ -42,6 +42,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
 | `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
+| `.claude/skills/` | the repository's agent skills (open `SKILL.md` format): `sig-review` |
 | `scripts/check.py` | the quality gate (Rule 0) |
 | `scripts/compose_check.py` | the Docker check: builds and starts the suite on its own volumes and ports, runs the workflow through the console (`--tests`: the gate inside the image; `--fresh`: clean room) |
 | `scripts/dev.py` | host development: console, graph service and narrator on one port, routed as `nginx.conf` routes them |
@@ -165,6 +166,8 @@ Consolidation pass (after the implementation todos, before handoff), scoped to t
 - grep for references to anything you removed or renamed (code, tests, docs, README, `.env.sample`, `app.js`);
 - sweep legacy terms (glossary: `docs/11_reference.md` §11.1) and re-measure quoted numbers if the statistics changed;
 - run **`scripts/check.py`** and confirm it passed.
+
+Review: asked to review a commit, a PR, a branch or a milestone, follow `.claude/skills/sig-review/SKILL.md` (in Claude Code `/sig-review <target>`). A review writes reports to `review-reports/`, never code.
 
 Before handoff: Rule 0 passed in this session; docs updated per §5–6; summary states what changed, why, what was verified (with the real command output, not a paraphrase of success), and any residual risk — including whether the user's `workspace/` will start degraded after a version bump.
 
