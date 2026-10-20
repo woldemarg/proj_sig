@@ -87,6 +87,8 @@ function setTheme(t) {
   renderSphere();  // same palette in 3D
 }
 
+const CPU_HINT = "Embeddings run on the CPU: slower ingests. On a Mac run the graph service on the host, where it uses the GPU (MPS; README, Mac: GPU); with an NVIDIA GPU start the stack with compose.gpu.yaml.";
+
 async function refreshHealth() {
   try {
     const [h, chat] = await Promise.all([api("/api/health"), api("/api/chat/health").catch(() => ({}))]);
@@ -94,11 +96,12 @@ async function refreshHealth() {
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
     const llmTxt = llm.reachable ? (llm.model_available ? model : `${model} not found`) : `${model} offline`;
+    const cpu = h.embedding_device === "cpu";  // amber: on a Mac, Docker sees no GPU (README, Mac: GPU)
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `embeddings · ${h.embedding_device}`;
     $("health").innerHTML =
       `<span class="pill ${llmCls}" title="Language model · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
       `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Graph database mirror"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j off"}</span>` +
-      `<span class="pill opt" title="Embedding model and device"><i class="dot"></i>${esc(emb)}</span>`;
+      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Embedding model and device"}"><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `${model} explanation`;
     $("reset-btn").hidden = !h.problem;  // a degraded workspace: only a reset makes it usable again
     if (h.problem) setUploadMsg(`The workspace can’t be used: ${h.problem}`, true);
@@ -816,7 +819,7 @@ function botCard(turn) {
       `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
       `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
-  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему; ${(b.naive_nearest || []).length ? `${(b.not_in_naive_topk || []).length} пропустив би звичайний текстовий пошук.` : ""}</div>` : "";
+  const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему.</div>` : "";
   const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
   const zones = (ev.zones || []).length ? `<div class="hypo"><b>Zones</b>${ev.zones.map((z, n) => `<div>Z${n + 1} · res ${z.resolution} · ${z.holds.map((p) => keyOf[p]).join(", ")} — ${picture(z)}</div>`).join("")}</div>` : "";
   const notes = (ev.notes || []).length ? `<div class="hypo"><b>Notes</b>${ev.notes.map((n) => `<div>${esc(n)}</div>`).join("")}</div>` : "";

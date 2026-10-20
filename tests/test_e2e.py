@@ -123,6 +123,39 @@ def test_geo_benchmark_apparatus(tmp_path):
     assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
 
 
+def test_perf_benchmark_apparatus(tmp_path, caplog):
+    """The performance benchmark (docs/10_verification.md §10.4): its synthetic deliveries are the same for one seed and
+    keep to their own territory and calendar; one upload through the API reports each level's stages, the Neo4j sync's
+    included, then the console's reads cold and warm and three questions; the service logs every request's time."""
+    import logging
+
+    import pandas as pd
+    from fastapi.testclient import TestClient
+    from perf_benchmark import CALIFORNIA, EPOCH, reads_after, run_upload, write_synthetic_points
+
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from insight_graph_service.server.app import create_app
+
+    (tmp_path / "again").mkdir()
+    path = write_synthetic_points(tmp_path, n=3000, seed=1)
+    assert path.read_bytes() == write_synthetic_points(tmp_path / "again", n=3000, seed=1).read_bytes()
+    frame, (south, west, north, east) = pd.read_csv(path), CALIFORNIA
+    assert list(frame.columns) == "lat lon ordered_at segment channel area vehicle refunded basket items wait_min rating".split()
+    assert frame["lat"].between(south, north).all() and frame["lon"].between(west, east).all()
+    assert (pd.to_datetime(frame["ordered_at"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 59).all()
+    engine = make_engine(make_config(tmp_path / "ws"))
+    app = create_app(engine)
+    with caplog.at_level(logging.INFO, logger="insight_graph_service.server.app"), TestClient(app) as client:
+        upload = run_upload(client, app, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "auto@5", False, True)
+        reads = reads_after(client, tmp_path / "ws")
+    (level,) = upload["levels"]
+    assert level["status"] == "READY" and {"validate_s", "discover_s", "embed_s", "graph_s", "neo4j_s"} <= set(level["timings"])
+    paths = {r["path"].rsplit("/", 1)[-1] for r in reads["cold"]}
+    assert {"graph", "cells", "overlay", "projected", "window"} <= paths and all(r["status"] == 200 for r in reads["cold"] + reads["warm"])
+    assert len(reads["questions"]) == 3 and all(q["status"] == 200 for q in reads["questions"]) and "graph/snapshot.json" in reads["bytes"]
+    assert any(r.getMessage().startswith("GET /api/geo") and r.getMessage().endswith(" s") for r in caplog.records)
+
+
 def test_poisoning_eval_apparatus(tmp_path):
     """The deterministic red team (docs/10_verification.md §10.3): the spot planted in an unreliable source only is never
     confirmed and says so on its trust line in the evidence of every question, the opposite shifts of two sources are both
@@ -179,42 +212,23 @@ def test_llm_failure_keeps_knowledge(hashed_engine):
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
 
-def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch):
-    """Document vectors are stored at ingest: an answer (and its naive text baseline) embeds no document."""
-    graph = hashed_engine.graph()
-    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
-    embedder = hashed_engine.encoder.embedder
-    seen: list[str] = []
+def test_answering_embeds_the_question_not_the_corpus(tmp_path, demo_csv, monkeypatch):
+    """A batch embeds each insight's three blocks and no canonical document (the naive text baseline is a measurement of
+    scripts/experiment.py, docs/07_question_answering.md §7.6); an answer embeds the question, never a document, and
+    carries the structural baselines only."""
+    engine = make_engine(make_config(tmp_path / "ws"))
+    embedder, seen = engine.encoder.embedder, []
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)
         monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
-    qa = ask(hashed_engine, "Why is margin lower for phones in the US?")
-    assert qa.view["traversal"]["baselines"]["naive_nearest"]
-    assert seen and not documents & set(seen)
-
-
-def test_missing_document_vectors_are_filled_at_start(tmp_path, demo_csv, monkeypatch):
-    """A batch without stored document vectors is embedded when the engine loads its state, never by a question,
-    and a writer saves them."""
-    import numpy as np
-
-    cfg = make_config(tmp_path / "ws")
-    make_engine(cfg).ingest_file(demo_csv)
-    for path in (cfg.workspace_dir / "journal" / "blocks").glob("*.npz"):  # as written before documents were stored
-        with np.load(path) as data:
-            kept = {k: data[k] for k in data.files if k not in ("document", "pattern_ids")}
-        np.savez_compressed(path, **kept)
-    engine = make_engine(cfg)
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
     graph = engine.graph()
-    ids = {n["id"] for n in graph.of_kind("Pattern")}
-    assert set(engine.frame().documents) == ids  # filled when the state was loaded
-    documents = {graph.canonical_document(i) for i in ids}
-    seen: list[str] = []
-    original = engine.encoder.embedder.embed
-    monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
-    engine.evidence("Why is margin lower for phones in the US?")
-    assert not documents & set(seen)  # a question embeds no document
-    assert set(make_engine(cfg, recover=False).frame().documents) == ids  # saved
+    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
+    assert seen and not documents & set(seen)  # the batch embedded blocks and literals, no document
+    seen.clear()
+    qa = ask(engine, "Why is margin lower for phones in the US?")
+    assert seen and not documents & set(seen)
+    assert set(qa.view["traversal"]["baselines"]) == {"structural_only", "transversal_only", "not_structurally_reachable"}
 
 
 def test_search_is_the_structured_context_the_narrator_verbalises(hashed_engine):

@@ -185,7 +185,7 @@ class Engine:
         self.ws = Workspace(settings)
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
-        self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
+        self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
         self._open()
 
     def committed(self) -> CommittedState:
@@ -229,25 +229,17 @@ class Engine:
 
     @staticmethod
     def _empty_state() -> CommittedState:
-        return CommittedState(DualGraph.empty(), LatentFrame({}, {}, {}))
+        return CommittedState(DualGraph.empty(), LatentFrame({}, {}))
 
     def _committed_state(self, graph: DualGraph, frame: LatentFrame) -> CommittedState:
-        """The read state of a commit, complete before readers see it: every pattern's canonical-document vector (stored
-        at ingest; one missing, from a batch written before documents were embedded, is embedded here) and the literal
-        catalog (docs/07_question_answering.md §7.1.1; known literals from the workspace's literal cache). A writer
-        saves both, so no later commit or restart pays for them again. Neither is built for a workspace of another
-        representation (its questions are refused) nor when the model fails: then ``search`` builds the catalog on the
-        first question, and a pattern without a document vector stays out of the naive baseline."""
+        """The read state of a commit, complete before readers see it: the literal catalog
+        (docs/07_question_answering.md §7.1.1; known literals from the workspace's literal cache, which a writer saves, so
+        no later commit or restart pays for them again). It is not built for a workspace of another representation (its
+        questions are refused) nor when the model fails: then ``search`` builds it on the first question."""
         if not graph.insights:
             return CommittedState(graph, frame)
         try:
             self.ws.check_representation(self.encoder.spec)  # never embed or save with a model the workspace does not use
-            missing = [pid for pid in graph.insights if pid not in frame.documents]
-            if missing:
-                filled = dict(zip(missing, self.encoder.embedder.embed([graph.canonical_document(i) for i in missing])))
-                frame.documents.update(filled)
-                if self._writer:
-                    self.ws.save_document_vectors(frame.documents, set(filled))
             fingerprint = self.encoder.spec.fingerprint
             known = self.ws.load_literals(fingerprint)
             catalog = build_catalog(graph, self.encoder.embedder, known)
@@ -290,7 +282,6 @@ class Engine:
         return LatentFrame(
             patterns={r["id"]: vectors[r["row_id"]] for r in records} if len(vectors) else {},
             attractors={a.id: a.centroid for a in ontology.attractors()},
-            documents=self.ws.document_vectors({r["batch_id"] for r in records}),
         )
 
     def _derive(self, ontology: LatentOntology, pending: dict[str, Any] | None = None) -> tuple[dict[str, Any], CommittedState]:
@@ -525,7 +516,7 @@ class Engine:
                         self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
                         self._enter(record, "PERSISTING")
                         self._refuse_journaled(kept)
-                        blocks = {**{k: enc[k] for k in BLOCKS}, "document": enc["document"], "pattern_ids": np.array([i.id for i in kept])}
+                        blocks = {**{k: enc[k] for k in BLOCKS}, "pattern_ids": np.array([i.id for i in kept])}
                         self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
                         if loaded.spatial:  # the map's file, from the journaled patterns
                             ctx = loaded.spatial
@@ -558,7 +549,9 @@ class Engine:
                     self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
             except Exception as exc:  # failures before READY were rolled back by the transaction
                 return self._fail(record, exc, t0)
+            start = time.perf_counter()
             record["neo4j"] = self._publish(state, snapshot)  # committed: nothing below may turn READY into FAILED
+            record["metrics"]["timings"]["neo4j_s"] = time.perf_counter() - start
             if record["neo4j"]["status"] == "failed":
                 record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
             self.ws.save_batch(record)
@@ -679,10 +672,7 @@ class Engine:
     def _encode(self, canon: list[CanonicalInsight]) -> tuple[dict[str, np.ndarray], EmbeddingSpec]:
         """Tripartite vectors + their spec; any encoder error becomes ``embedding_failure``."""
         try:
-            enc = self.encoder.encode(canon)
-            # embedded once here, so the per-question naive text baseline is a dot product, not a corpus pass
-            enc["document"] = self.encoder.embedder.embed([c.document() for c in canon])
-            return enc, self.encoder.spec
+            return self.encoder.encode(canon), self.encoder.spec
         except Exception as exc:
             raise PipelineError("embedding_failure", f"Embedding failed: {exc}") from exc
 

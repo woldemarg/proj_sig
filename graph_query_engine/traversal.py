@@ -10,8 +10,8 @@ disjoint) patterns, then optional structural expansion there. Best-first search
 maximises the product of edge factors (alignment, relation weight, structural
 decay); node ranking multiplies by the pattern's Insight.weight.
 
-Two baselines make the research hypothesis inspectable (docs/07_question_answering.md §7.6):
-structural-only BFS and naive nearest-neighbour text retrieval.
+A structural-only baseline makes the research hypothesis inspectable (docs/07_question_answering.md §7.6); the naive
+nearest-neighbour text baseline is a measurement of ``scripts/experiment.py``, not part of an answer.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ import heapq
 import itertools
 from dataclasses import asdict, dataclass, field
 from typing import Any
-
-import numpy as np
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
@@ -228,9 +226,3 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         max_depth=max((len(r.path) for r in patterns), default=0),
         excluded=[r for r in ordered[:budget] if r.node_id in tampered],
     )
-
-
-def naive_nearest(question_vec: np.ndarray, doc_vectors: dict[str, np.ndarray], k: int) -> list[tuple[str, float]]:
-    """Baseline 2: nearest canonical-document texts to the question text (plain vector RAG)."""
-    scored = sorted(((pid, float(v @ question_vec)) for pid, v in doc_vectors.items()), key=lambda x: -x[1])
-    return scored[:k]

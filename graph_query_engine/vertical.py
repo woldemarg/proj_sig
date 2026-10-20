@@ -93,6 +93,20 @@ def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     while frontier:
         frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
         found |= frontier
+    return _held(graph, found)
+
+
+def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
+    """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions): ``regions_above`` and
+    every region an intact pattern's scale chain names, its finest home region included when it has no coarser step, so
+    the map holds each region a SCALE CHAIN names; a region holding tampered patterns only is none."""
+    intact = [pid for pid in pattern_ids if graph.nodes[pid]["props"].get("integrity") != "mismatch"]
+    return regions_above(graph, pattern_ids) | _held(graph, {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions})
+
+
+def _held(graph: DualGraph, regions: set[str]) -> set[str]:
+    """The regions that hold an intact pattern: an ancestor no intact pattern reaches, or a region of tampered patterns
+    only, holds nothing."""
     tampered = Counter(
         e["target"]
         for pid in graph.insights
@@ -100,7 +114,7 @@ def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
         for e in graph.out.get(pid, [])
         if e["type"] == "IN_REGION"
     )
-    return {r for r in found if graph.nodes[r]["props"]["patterns"] > tampered[r]}  # an ancestor no intact pattern reaches holds nothing
+    return {r for r in regions if graph.nodes[r]["props"]["patterns"] > tampered[r]}
 
 
 def _finest(graph: DualGraph, pid: str) -> frozenset[str]:

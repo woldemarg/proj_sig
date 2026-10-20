@@ -17,7 +17,7 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import LiteralCatalog, ParsedQuery, build_catalog, parse_query
 from graph_query_engine.seeds import SeedMatch, resolve_seeds
-from graph_query_engine.traversal import LATTICE_EDGES, TraversalResult, naive_nearest, structural_closure, traverse
+from graph_query_engine.traversal import LATTICE_EDGES, TraversalResult, structural_closure, traverse
 from insight_contracts.payload import CITATION_FIELDS, EvidencePayload
 
 _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transversal_only")
@@ -39,7 +39,7 @@ class SearchResult:
     question: str
     parsed: ParsedQuery
     seeds: list[SeedMatch]
-    traversal: TraversalResult  # ``baselines``: what structural-only and naive text retrieval return (§7.6)
+    traversal: TraversalResult  # ``baselines``: what the structural lattice alone reaches (§7.6)
     evidence: Evidence
     seconds: float  # the search, evidence included (a caller may add its own preparation)
 
@@ -86,20 +86,14 @@ def empty_payload(question: str) -> EvidencePayload:
     return EvidencePayload(question, graph_empty=True, view={"evidence": {}, "traversal": {}, "highlight": {k: [] for k in _HIGHLIGHT_KEYS}})
 
 
-def compute_baselines(
-    graph: DualGraph, question: str, seeds: list[SeedMatch], result: TraversalResult, frame: LatentFrame, encoder: QueryEncoder, config: QueryConfig
-) -> dict[str, Any]:
-    """What structural-only and naive text retrieval would have returned (§7.6). The documents were embedded at
-    ingest, so the question is the only text embedded here; a pattern without a document vector is left out."""
+def compute_baselines(graph: DualGraph, seeds: list[SeedMatch], result: TraversalResult, config: QueryConfig) -> dict[str, Any]:
+    """What the structural lattice alone would have reached from the seeds, and what the walk found beyond it (§7.6). The
+    naive text baseline is a measurement, not part of an answer: ``scripts/experiment.py`` embeds the documents itself."""
     closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES)
-    doc_vecs = {pid: frame.documents[pid] for pid in graph.insights if pid in frame.documents}
-    naive = naive_nearest(encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved) if question.strip() else []  # a zone alone
     retrieved = {r.node_id for r in result.patterns}
     return {
         "structural_only": sorted(closure),
-        "naive_nearest": [{"pattern_id": p, "cosine": round(c, 3)} for p, c in naive],
         "transversal_only": [r.node_id for r in result.patterns if r.transversal_only],
-        "not_in_naive_topk": sorted(retrieved - {p for p, _ in naive}) if naive else [],  # no text search to compare with
         "not_structurally_reachable": sorted(retrieved - set(closure)),
     }
 
@@ -116,6 +110,6 @@ def search(
     parsed = parse_query(question, graph, config, state.catalog)
     seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores)
     result = traverse(graph, seeds, config)
-    result.baselines = compute_baselines(graph, question, seeds, result, state.frame, encoder, config)
+    result.baselines = compute_baselines(graph, seeds, result, config)
     evidence = build_evidence(parsed, result, graph, config, place_scores)
     return SearchResult(question, parsed, seeds, result, evidence, time.perf_counter() - start)

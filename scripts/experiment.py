@@ -103,7 +103,7 @@ def run_experiment(engine: Engine, *, k: int = 5) -> dict[str, Any]:
     cases = build_cases(state, truth)
     ids = [n["id"] for n in g.of_kind("Pattern")]
     vec_nn = state.frame.patterns  # the insight representation itself, no attractor graph
-    text = {p: state.frame.documents[p] for p in ids}
+    text = dict(zip(ids, engine.encoder.embedder.embed([g.canonical_document(p) for p in ids])))  # the naive baseline's documents
     wide = replace(cfg, max_retrieved=len(ids))
     weight = {p: g.insight(p).weight for p in ids}
 

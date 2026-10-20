@@ -128,7 +128,7 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 | 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
 | 2 | `insight-graph` | `insight_graph_service/Dockerfile` (build arg `TORCH`: `cpu`, or `cu130` and the GPU with `compose.gpu.yaml`) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
 | 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
-| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`) | both services healthy | `GET /` | internal, edge (port 8765) | none |
+| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`; gzip for responses over 1 KB) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765
@@ -190,6 +190,8 @@ Neo4j mirrors the graph for people and other applications. The narrator is state
 - **The ontology's metrics CSV** ([5](05_latent_anchors.md)).
 - **The narrator's query log:** logger `evidence_narrator_service.queries`, one JSON line with the time, the question, the mode, the metrics, the cited evidence (the manifest's pattern ids) and the citation check.
 - **Per-answer metrics:** the `metrics` of every answer.
+
+**The graph service** logs one line per HTTP request (`server/app.py::RequestTimer`): method, path, status and wall time, a streamed file until its last byte; a request slower than `SLOW_REQUEST_S` (2 s) is a warning. It replaces uvicorn's access log in `python -m insight_graph_service.server`. The batch record's `timings` carry each stage and the Neo4j sync (`neo4j_s`).
 
 **The broker** logs one line per completion: model, messages, prompt and completion tokens, and latency. It never logs the prompt itself.
 

@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 from conftest import FakeLLM, make_config, make_engine, serve
-from dev import compose
+from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
 from evidence_narrator_service.settings import NarratorSettings
@@ -56,7 +53,9 @@ def test_upload_process_render_query(client, demo_csv):
     assert batches[0]["status"] == "READY"
     assert batches[0]["metrics"]["validated_insights"] > 0 and batches[0]["profile"]["rows"] == 5000
 
-    g = client.get("/api/graph").json()
+    graph = client.get("/api/graph", headers={"Accept-Encoding": "gzip"})  # compressed, as nginx compresses it
+    assert graph.headers["content-encoding"] == "gzip"
+    g = graph.json()
     kinds = {n["data"]["kind"] for n in g["nodes"]}
     types = {e["data"]["type"] for e in g["edges"]}
     assert {"Pattern", "Attractor", "Dimension", "Metric"} <= kinds
@@ -85,7 +84,8 @@ def test_upload_process_render_query(client, demo_csv):
     assert geo_batch["metrics"]["validated_insights"] > 0 and "median_income_median_band" in geo_batch["profile"]["selected_dimensions"]
     geo_ds = geo_batch["dataset_id"]
     assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
-    assert len(client.get(f"/api/geo/{geo_ds}/cells").json()["features"]) == 884
+    cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
+    assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["features"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
     overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # the regions above its insights, their trust and scale
     assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
@@ -114,21 +114,10 @@ def test_upload_process_render_query(client, demo_csv):
     assert client.post("/api/reset").json()["status"] == "reset"
 
 
-def _chromium() -> str | None:
-    """The newest Chromium in Playwright's browser cache, whichever revision this Playwright pins."""
-    cache = {"win32": Path(os.environ.get("LOCALAPPDATA", "")), "darwin": Path.home() / "Library" / "Caches"}.get(
-        sys.platform, Path.home() / ".cache"
-    )
-    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or cache / "ms-playwright")
-    patterns = ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-linux*/chrome", "chromium-*/chrome-mac*/*.app/Contents/MacOS/*")
-    found = [exe for pattern in patterns for exe in root.glob(pattern)]
-    return str(max(found, key=lambda exe: int(exe.relative_to(root).parts[0].removeprefix("chromium-")))) if found else None
-
-
 @pytest.mark.browser
 def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
     sync_api = pytest.importorskip("playwright.sync_api")
-    exe = _chromium()
+    exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     cfg = make_config(tmp_path / "ws")
@@ -246,7 +235,8 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.keyboard.down("Shift")
             page.mouse.click(box["x"] + cell["x"], box["y"] + cell["y"])
             page.keyboard.up("Shift")
-        assert page.evaluate("G.regionMarks.length") > 0 and page.evaluate("G.overlay.features.some((f) => f.properties.resolution === G.level)")
+        assert page.evaluate("G.map.getFilter('regions-n')[2] === G.level && G.overlay.features.some((f) => f.properties.resolution === G.level)")
+        assert page.evaluate("document.querySelectorAll('.maplibregl-marker').length") < 50  # region counts are a symbol layer, places capped
         ring = "[[179.87, 1.86], [179.18, 0.66], [179.84, -0.72], [-178.8, -0.94], [-178.08, 0.25], [-178.75, 1.67], [179.87, 1.86]]"
         lon, lat = page.evaluate(f"centre({{geometry: {{coordinates: [{ring}]}}}})")  # a cell across ±180°: where it is
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
@@ -272,7 +262,7 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
-        painted = "G.data.features.filter((f) => G.map.getFeatureState({source: 'cells', id: f.properties.row}).hl).length"
+        painted = "G.map.getSource('focus').serialize().data.features.length"  # the focused insight's cells, its own source
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
@@ -282,7 +272,10 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         page.wait_for_timeout(400)
         assert page.evaluate(opacity) != first
         page.keyboard.press("Escape")
-        assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0
+        assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0 and page.evaluate(painted) == 0
+        page.locator(".msg-bot").last.locator("a.cite").first.click()
+        page.evaluate("loadDataset(G.ds)")  # a dataset loaded again, or another one: no cell of the old focus stays painted
+        assert page.evaluate("G.focusId") is None and page.evaluate(painted) == 0
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
         if page.evaluate("W.folded"):  # a narrow map starts with the list folded
