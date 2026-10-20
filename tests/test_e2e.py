@@ -109,7 +109,7 @@ def test_geo_benchmark_apparatus(tmp_path):
     import h3
     import numpy as np
     import pandas as pd
-    from geo_benchmark import FINE, REGION, generate, run_scenario
+    from geo_benchmark import BROAD, FINE, REGION, SIZE_BOX, generate, run_scenario
     from perf_benchmark import CALIFORNIA, EPOCH
     from test_spatial import geo_frame
 
@@ -122,6 +122,8 @@ def test_geo_benchmark_apparatus(tmp_path):
     for frame in (upload.frame, geo_frame().rename(columns={"latitude": "lat", "longitude": "lon"})):  # one territory, one epoch
         assert frame["lat"].between(CALIFORNIA[0], CALIFORNIA[2]).all() and frame["lon"].between(CALIFORNIA[1], CALIFORNIA[3]).all()
         assert (pd.to_datetime(frame["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
+    for lat0, lon0, dlat, dlon in (BROAD, SIZE_BOX):  # the other scenarios' boxes; the focus scenarios share S-regional's area
+        assert CALIFORNIA[0] <= lat0 and lat0 + dlat <= CALIFORNIA[2] and CALIFORNIA[1] <= lon0 and lon0 + dlon <= CALIFORNIA[3]
     result = run_scenario(scenario, tmp_path, make_engine(make_config(tmp_path / "ws")), k=5)
     found = result["files"][0]["found"]
     assert len({f["pattern"] for f in found.values()}) == 3 and all(f["coverage"] >= 0.9 for f in found.values())  # one insight per focus

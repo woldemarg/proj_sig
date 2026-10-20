@@ -10,8 +10,8 @@ which no set of cells is an insight. Three foci fit in one ``REGION`` cell, thre
 focus also raises its own signature metric, so that it is its own insight. A part is found when the patterns with an upward
 shift of one of its planted metrics that draw at least half their events from it hold at least ``FOUND`` of its events.
 
-    S-regional  three foci in one region cell, centres 10-11 cells apart (the nearest cells of two foci 4 apart), so no
-                CO_LOCATED links them
+    S-regional  three foci in one region cell, centres 11-12 cells apart (the nearest cells of two foci 5 apart); two
+                pairs of their best patterns are CO_LOCATED (same_region, adjacent)
     S-control   three foci in three different region cells
     S-local     one focus, uploaded at FINE and 7; the rest of its region is ordinary
     S-levels    a broad zone (the eastern half of a large area) in one file, uploaded at 7 and 5 with its table level
