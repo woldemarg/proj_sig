@@ -76,14 +76,17 @@ async function refreshBatches() {
   sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
   // one key for what every view follows: the READY batches and the dataset filter
   const viewKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",") + "|" + sel.value;
+  let map;
   if (viewKey !== S.lastReady) {
     S.lastReady = viewKey;
-    await loadGraph(); refreshHealth(); GeoMap.refresh();
+    await loadGraph(); refreshHealth();
+    map = GeoMap.refresh().catch((e) => console.error("map refresh failed", e));  // the map never breaks the rail or an answer
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
+  return map;  // a caller that acts on the map afterwards (ask) awaits its load too; the poll does not
 }
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }

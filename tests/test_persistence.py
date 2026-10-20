@@ -110,9 +110,10 @@ def test_committed_batch_stays_ready_when_publish_save_fails(engine, demo_csv, m
     assert engine.ws.patterns()
 
 
-def test_a_marker_that_cannot_be_closed_does_not_undo_a_committed_batch(engine, demo_csv, monkeypatch):
-    """The READY record is the commit point: removing the transaction's marker afterwards can fail (a file another process
-    holds open) without turning the batch FAILED. The graph is published, and the next writer start closes the marker."""
+def test_a_transaction_marker_that_cannot_be_removed(engine, demo_csv, monkeypatch):
+    """Removing a transaction's marker can fail (a file another process holds open). A batch committed at its READY record:
+    it stays READY and is published, and the next writer start closes the marker. A deletion commits when its marker goes:
+    it fails, readers keep the dataset, and the next writer start rolls it back."""
 
     def locked(self, cp):
         raise PermissionError("pending.json is held open")
@@ -125,6 +126,14 @@ def test_a_marker_that_cannot_be_closed_does_not_undo_a_committed_batch(engine, 
     again = make_engine(engine.settings)
     assert again.problem is None and not again.ws.pending_path.exists()
     assert [b["status"] for b in again.ws.list_batches()] == ["READY"] and again.graph().insights
+    monkeypatch.setattr(type(again.ws), "_close", locked)
+    with pytest.raises(PermissionError):
+        again.delete_dataset(rec["dataset_id"])
+    assert again.graph().insights and again.ws.pending_path.exists()  # not published; the marker waits for the next start
+    monkeypatch.undo()
+    last = make_engine(engine.settings)
+    assert last.problem is None and not last.ws.pending_path.exists()
+    assert [b["status"] for b in last.ws.list_batches()] == ["READY"] and last.graph().insights  # rolled back
 
 
 def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):

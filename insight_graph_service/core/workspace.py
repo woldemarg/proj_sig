@@ -345,7 +345,9 @@ class Workspace:
         ``intent`` and the checkpoint. An error in the body rolls back; a crash leaves the marker for ``recover``.
         A rollback that fails itself leaves the marker too, and no transaction starts again until ``recover`` ran."""
         if self.pending_path.exists():
-            raise RollbackPending("an earlier write was not rolled back; restart the service to recover, or reset the workspace (POST /api/reset)")
+            raise RollbackPending(
+                "an earlier write was not finished; restart the service to finish it (POST /api/reset deletes the workspace instead)"
+            )
         cp = self.checkpoint(journal=journal)
         atomic_write_json(self.pending_path, {**intent, "checkpoint": cp})
         try:
@@ -356,9 +358,12 @@ class Workspace:
             except Exception:
                 log.exception("rollback of %s failed; the next writer start retries it", intent)
             else:
-                self._finish(cp, intent)
+                self._finish(cp, intent)  # the body's error is the one to raise; recover rolls back again
             raise
-        self._finish(cp, intent)
+        if "batch_id" in intent:  # a batch committed at its READY record, the body's last write: nothing after it may undo it
+            self._finish(cp, intent)
+        else:  # a deletion or a metadata change commits when its marker goes: a marker that stays fails the write
+            self._close(cp)
 
     def recover(self) -> dict[str, Any] | None:
         """Finish an interrupted transaction (writer start: no other writer alive). A batch whose READY record was
@@ -379,9 +384,9 @@ class Workspace:
         shutil.rmtree(cp["dir"], ignore_errors=True)
 
     def _finish(self, cp: dict[str, Any], intent: dict[str, Any]) -> None:
-        """Close a transaction's marker after its body (committed, or rolled back). A marker that cannot be removed (a file another
-        process holds open) is logged and left: the READY record is the commit point, nothing after it may undo a batch, and
-        ``recover`` at the next writer start closes the marker."""
+        """Close the marker of a batch that committed, or of a body that was rolled back. A marker that cannot be removed (a file
+        another process holds open) is logged and left: ``recover`` at the next writer start closes it after a READY batch and
+        rolls back anything else again; until then writes are refused (``rollback_pending``)."""
         try:
             self._close(cp)
         except OSError:
