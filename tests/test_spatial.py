@@ -487,6 +487,9 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     big = np.random.default_rng(1)  # a large export: level 7 dense but 15,000 cells, level 5 only ~350
     picked = select_levels(48 + big.random(80_000) * 3, 35 + big.random(80_000) * 3, levels, min_rows=50, min_cell_points=5)
     assert picked["chosen"] == [6] and "GEO_AUTO_MAX_CELLS" in picked["reasons"]["7"] and "GEO_AUTO_MIN_CELLS" in picked["reasons"]["5"]
+    wide = select_levels(34 + big.random(40_000) * 4, -122 + big.random(40_000) * 6, levels, min_rows=50, min_cell_points=5)
+    assert wide["candidates"]["6"]["cells"] > 5_000 >= wide["candidates"]["5"]["cells"]  # the cap counts 6's IN_REGION regions, at 5
+    assert wide["chosen"] == [6, 5] and "at region level 7" in picked["reasons"]["7"]
     world = select_levels(big.uniform(-80, 80, 250_000), big.uniform(-179, 179, 250_000), levels, min_rows=50, min_cell_points=5)
     assert world["chosen"] == [3] and world["candidates"]["3"]["cells"] > 5_000  # every level over the cap: the coarsest that fits
     rng = np.random.default_rng(71)  # parents of the resolution-10 cells counted 50 cells at 5, the points' own cells 49
@@ -512,6 +515,20 @@ def test_auto_picks_the_levels_from_the_points(tmp_path):
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
         engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
     assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
+
+
+def test_an_auto_level_with_nothing_names_the_level_the_cap_left_out(tmp_path):
+    """``@auto``'s finest level that finds nothing, a finer one left out by ``GEO_AUTO_MAX_CELLS`` alone: the batch's
+    warnings name that level and its explicit option."""
+    rng = np.random.default_rng(0)
+    lat, lon = 36 + rng.random(6000) * 0.5, -120 + rng.random(6000) * 0.5
+    frame = pd.DataFrame({"latitude": lat, "longitude": lon, "sector": np.where(lat > 36.25, "north", "south"), "load": rng.normal(10, 2, 6000)})
+    frame.to_csv(path := tmp_path / "noise.csv", index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    levels = {"chosen": [7], "candidates": {}, "reasons": {"8": "9000 cells at region level 7 > GEO_AUTO_MAX_CELLS", "7": "finest level"}}
+    record = engine.submit(path, geo="auto@7", upload={"upload_id": "up-noise", "level": "7"}, geo_levels=levels)
+    done = engine.process(record["batch_id"])
+    assert done["error"]["code"] == "no_viable_insights" and any("try @8" in w for w in done["warnings"])
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():

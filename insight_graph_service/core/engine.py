@@ -490,6 +490,10 @@ class Engine:
                     rejections = [*result.rejections, *selection.rejections, *refused]
                     self.ws.save_rejections(ds, [asdict(r) for r in rejections])
                     if not kept:
+                        levels = record["profile"].get("geo", {}).get("levels") or {}
+                        capped = [r for r, why in levels.get("reasons", {}).items() if "GEO_AUTO_MAX_CELLS" in why]
+                        if capped and str(levels["chosen"][0]) == str(record.get("level")):  # @auto's finest level found nothing
+                            record["warnings"].append(f"@auto left level {capped[-1]} out for GEO_AUTO_MAX_CELLS only; try @{capped[-1]}")
                         raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
 
                 with self._stage(record, "EMBEDDING", timings, "embed_s"):
