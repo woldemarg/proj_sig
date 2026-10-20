@@ -338,9 +338,9 @@ class Workspace:
             except Exception:
                 log.exception("rollback of %s failed; the next writer start retries it", intent)
             else:
-                self._close(cp)
+                self._finish(cp, intent)
             raise
-        self._close(cp)
+        self._finish(cp, intent)
 
     def recover(self) -> dict[str, Any] | None:
         """Finish an interrupted transaction (writer start: no other writer alive). A batch whose READY record was
@@ -359,6 +359,15 @@ class Workspace:
     def _close(self, cp: dict[str, Any]) -> None:
         self.pending_path.unlink()
         shutil.rmtree(cp["dir"], ignore_errors=True)
+
+    def _finish(self, cp: dict[str, Any], intent: dict[str, Any]) -> None:
+        """Close a transaction's marker after its body (committed, or rolled back). A marker that cannot be removed (a file another
+        process holds open) is logged and left: the READY record is the commit point, nothing after it may undo a batch, and
+        ``recover`` at the next writer start closes the marker."""
+        try:
+            self._close(cp)
+        except OSError:
+            log.exception("marker of %s not removed; the next writer start closes it", intent)
 
     def checkpoint(self, *, journal: bool = False) -> dict[str, Any]:
         """Copy ``state/`` and the snapshot aside (and, for a rewrite that may shrink the journal, ``journal/``);

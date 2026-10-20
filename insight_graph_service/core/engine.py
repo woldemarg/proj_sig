@@ -344,7 +344,7 @@ class Engine:
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
         levels = [] if auto else resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
-        path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
+        path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
         if auto:
             try:
@@ -470,7 +470,7 @@ class Engine:
                     result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s), spatial=loaded.spatial)
                     selection = record["profile"].get("geo", {}).get("levels")  # @auto's, from the upload
                     record["profile"] = {
-                        **result.profile.to_dict(),
+                        **asdict(result.profile),
                         "derived_columns": loaded.derived_columns,
                         "bins": loaded.bins,
                         "categorical_overrides": loaded.categories,

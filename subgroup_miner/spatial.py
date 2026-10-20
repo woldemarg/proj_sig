@@ -80,9 +80,6 @@ class SpatialContext:
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
 
-    def neighbours(self, row: int) -> np.ndarray:
-        return self.nbr_idx[self.nbr_ptr[row] : self.nbr_ptr[row + 1]]
-
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
     """``"auto"``, ``"<col>"``, ``"<lat>,<lon>"``, each optionally ``@<res>`` -> (locator, resolution)."""
@@ -128,7 +125,7 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
         # each point indexed at each level as build_cells does: H3 children do not tile their parent
         counts[res] = pd.Series([h3.latlng_to_cell(a, b, res) for a, b in zip(lat, lon)]).value_counts()
     candidates = {
-        str(res): {
+        res: {
             "cells": len(counts[res]),
             "dense_share": round(float((counts[res] >= min_cell_points).mean()), 4),
             "median_points": float(counts[res].median()),
@@ -142,17 +139,17 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
     for res, c in candidates.items():
         if c["cells"] < min_rows:
             reasons[res] = f"{c['cells']} cells < MIN_ROWS {min_rows}"
-        elif finest is None or int(res) > int(finest):
+        elif finest is None or res > finest:
             too_sparse = c["dense_share"] < GEO_DENSE_SHARE_MIN
             if too_sparse:
                 reasons[res] = f"dense share {c['dense_share']} < {GEO_DENSE_SHARE_MIN}"
             else:
-                reasons[res] = f"{c['cap_cells']} cells at {cap_of[int(res)]} > GEO_AUTO_MAX_CELLS"
-                capped.append(int(res))
+                reasons[res] = f"{c['cap_cells']} cells at {cap_of[res]} > GEO_AUTO_MAX_CELLS"
+                capped.append(res)
         elif res == finest:
             reasons[res] = "finest level"
-            chosen.append(int(res))
-        elif int(res) not in region_levels:
+            chosen.append(res)
+        elif res not in region_levels:
             reasons[res] = "not a GEO_REGION_LEVELS level"
         elif c["cells"] < GEO_AUTO_MIN_CELLS:
             reasons[res] = f"{c['cells']} cells < GEO_AUTO_MIN_CELLS"
@@ -160,10 +157,15 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
             reasons[res] = f"GEO_LEVELS_MAX {GEO_LEVELS_MAX} reached"
         else:
             reasons[res] = "region level"
-            chosen.append(int(res))
+            chosen.append(res)
     if not chosen:
         raise SpatialError("no resolution fits @auto: " + "; ".join(f"{res}: {why}" for res, why in reasons.items()))
-    return {"chosen": chosen, "capped": capped, "candidates": candidates, "reasons": reasons}
+    return {  # as JSON stores it: the resolutions of the two maps as text
+        "chosen": chosen,
+        "capped": capped,
+        "candidates": {str(res): c for res, c in candidates.items()},
+        "reasons": {str(res): why for res, why in reasons.items()},
+    }
 
 
 def parse_points(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:

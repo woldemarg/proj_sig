@@ -17,7 +17,6 @@ import numpy as np
 
 from graph_query_engine.graph import DualGraph, primary_anchor
 from graph_query_engine.vertical import picture, scale_label, shown_regions
-from graph_query_engine.vertical import resolution as pattern_resolution
 from insight_contracts import Insight
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
@@ -88,7 +87,7 @@ def place_scores(
         {
             (graph.insight(pid).dataset_id, r)
             for pid in graph.insights
-            if (r := pattern_resolution(graph, pid)) is not None and (resolution is None or r <= resolution)
+            if (r := graph.facts(pid).resolution) is not None and (resolution is None or r <= resolution)
         }
     )
     try:
@@ -248,8 +247,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
             res = ((b.get("profile") or {}).get("geo") or {}).get("resolution", b.get("level"))  # also without upload levels
             level = "table" if b.get("level") == "table" else f"res {res}"
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
-                node = graph.nodes.get(pid)
-                if node is None or node["props"].get("integrity") == "mismatch":
+                if pid not in graph.nodes or graph.tampered(pid):
                     continue
                 patterns[pid] = (rows, per_cell[rows], level) if own else (*footprint(point_cell, members(rows)), level)
         return {"patterns": patterns, "per_cell": per_cell, "centres": cell_centres(geo["cells"])}

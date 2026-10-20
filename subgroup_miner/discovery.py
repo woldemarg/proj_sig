@@ -17,7 +17,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
@@ -56,9 +56,6 @@ class DatasetProfile:
     global_mads: dict[str, float]
     dimension_cardinality: dict[str, int]
     dimension_entropy: dict[str, float]
-
-    def to_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
 
 
 @dataclass
@@ -371,15 +368,11 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics, cand.restated)
         shifts: list[Shift] = []  # never empty: a cohort without a shift entered the rank on its covariance pair
         for metric, magnitude in cand.top_shifts:
-            local_median = float(np.median(rows[metric].dropna()))
-            sign = np.sign(local_median - prof.global_medians[metric]) or 1.0
-            shifts.append(Shift(metric, float(sign * magnitude), local_median, prof.global_medians[metric], prof.global_mads[metric]))
+            shifts.append(_shift(metric, float(np.median(rows[metric].dropna())), prof.global_medians[metric], prof.global_mads[metric], magnitude))
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
-                gm, gd = prof.global_medians[metric], prof.global_mads[metric]
-                sign = np.sign(local_median - gm) or 1.0
-                shifts.append(Shift(metric, float(sign * eda.robust_z_score(local_median, gm, gd)), local_median, gm, gd, "covariance_pair"))
+                shifts.append(_shift(metric, local_median, prof.global_medians[metric], prof.global_mads[metric], source="covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
         primary = shifts[0]
         values = rows[primary.metric].to_numpy(dtype=float)
@@ -387,14 +380,8 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         pid = pattern_id(dataset_id, cand.conditions)
         provenance_extra = {}
         if spatial:
-            p_iid = _median_test(values, primary.global_median, primary.global_mad)
-            provenance_extra["spatial"] = SpatialProvenance(
-                resolution=spatial.resolution,
-                cells=cand.row_count,
-                moran_i=round(rho, 4),
-                n_eff=round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
-                p_adjusted_iid=min(1.0, p_iid * result.n_tests),
-            ).to_dict()
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests)
+            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
         insights.append(
             Insight(
                 id=pid,
@@ -485,6 +472,26 @@ def _median_evidence(
     return _median_test(values, global_median, global_mad, factor), rho, factor
 
 
+def _shift(metric: str, local_median: float, global_median: float, global_mad: float, magnitude: float | None = None, source: str = "eda") -> Shift:
+    """A metric's signed shift inside a subgroup: ``magnitude`` (the EDA's own, pass 1) or the robust z of the local median,
+    signed by the side of the global median it lies on. Mining and its recomputation both build shifts here."""
+    sign = np.sign(local_median - global_median) or 1.0
+    z = eda.robust_z_score(local_median, global_median, global_mad) if magnitude is None else magnitude
+    return Shift(metric, float(sign * z), local_median, global_median, global_mad, source)
+
+
+def _spatial_stats(values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int) -> dict[str, Any]:
+    """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
+    one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
+    p_iid = _median_test(values, primary.global_median, primary.global_mad)
+    return {
+        "cells": cells,
+        "moran_i": round(rho, 4),
+        "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
+        "p_adjusted_iid": min(1.0, p_iid * n_tests),
+    }
+
+
 def recompute_statistics(
     frame: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, metrics: list[str], spatial: SpatialContext | None, n_tests: int
 ) -> dict[str, Any]:
@@ -502,30 +509,13 @@ def recompute_statistics(
         return out
     cohort, shifts = data.iloc[rows], []
     for metric in metrics:
-        gm, gd = _global_stats(data[metric])
-        local = float(np.median(cohort[metric].dropna()))
-        sign = np.sign(local - gm) or 1.0
-        shifts.append(
-            {
-                "metric": metric,
-                "robust_z": float(sign * eda.robust_z_score(local, gm, gd)),
-                "local_median": local,
-                "global_median": gm,
-                "global_mad": gd,
-            }
-        )
+        shifts.append(_shift(metric, float(np.median(cohort[metric].dropna())), *_global_stats(data[metric])))
     primary = shifts[0]
-    values = cohort[primary["metric"]].to_numpy(dtype=float)
-    p_value, rho, factor = _median_evidence(values, rows, spatial, primary["global_median"], primary["global_mad"])
-    out |= {"shifts": shifts, "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
+    values = cohort[primary.metric].to_numpy(dtype=float)
+    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
+    out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
-        p_iid = _median_test(values, primary["global_median"], primary["global_mad"])
-        out["spatial"] = {
-            "cells": len(rows),
-            "moran_i": round(rho, 4),
-            "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
-            "p_adjusted_iid": min(1.0, p_iid * n_tests),
-        }
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests)
     return out
 
 

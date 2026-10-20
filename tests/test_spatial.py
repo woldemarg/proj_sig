@@ -121,7 +121,7 @@ def test_subgroup_moran_sees_a_block_not_scattered_cells():
     assert subgroup_moran(table["points"].to_numpy(float)[block], block, ctx) > 0.0
     scattered = []
     for i in range(len(ctx.cells)):  # no two of them neighbours
-        if not np.isin(ctx.neighbours(i), scattered).any():
+        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], scattered).any():
             scattered.append(i)
     scattered = np.array(scattered)
     assert subgroup_moran(table["points"].to_numpy(float)[scattered], scattered, ctx) == 0.0
@@ -446,7 +446,7 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
 def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
     """The coarser levels a scale label compares with are the levels the upload's batches stand for now: one added later
     by an upload of the same file counts, one deleted alone does not."""
-    from graph_query_engine.vertical import resolution, scale_chain
+    from graph_query_engine.vertical import scale_chain
 
     path = tmp_path / "points.csv"
     geo_frame().to_csv(path, index=False)
@@ -458,7 +458,7 @@ def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
 
     def levels_and_scales() -> tuple[list[str], set[str]]:
         graph = engine.graph()
-        fine = [p for p in graph.insights if resolution(graph, p) == 8]
+        fine = [p for p in graph.insights if graph.facts(p).resolution == 8]
         return graph.nodes[f"DS:{fine_ds}"]["props"]["upload_levels"], {c.scale for c in scale_chain(graph, fine)}
 
     fine_ds = upload("auto@8")[0]["dataset_id"]
@@ -603,7 +603,6 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
     zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
     from fastapi.testclient import TestClient
 
-    from graph_query_engine.vertical import resolution
     from insight_graph_service.server.app import create_app
 
     path = tmp_path / "points.csv"
@@ -634,9 +633,9 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
     assert [(s.pattern_id, s.score) for s in polygon.seeds] == [(s.pattern_id, s.score) for s in alone.seeds]
     graph = engine.graph()
     coarse = engine.place_scores(engine.committed(), cells=zone, resolution=7)
-    assert coarse and {resolution(graph, p) for p in coarse} == {7} and {resolution(graph, p) for p in place} == {7, 8}
+    assert coarse and {graph.facts(p).resolution for p in coarse} == {7} and {graph.facts(p).resolution for p in place} == {7, 8}
     area = engine.search(question, cells=zone, resolution=7).evidence
-    assert {it.key for it in area.items if resolution(graph, it.pattern_id) == 7} == set(area.area)  # level 8: neither in nor out
+    assert {it.key for it in area.items if graph.facts(it.pattern_id).resolution == 7} == set(area.area)  # level 8: neither in nor out
 
     with TestClient(create_app(engine)) as client:
         assert client.post("/api/search", json={"cells": zone}).json()["evidence_prompt"] == alone.payload().evidence_prompt

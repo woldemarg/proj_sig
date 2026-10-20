@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from insight_contracts import SNAPSHOT_VERSION, Insight
+from insight_contracts import SNAPSHOT_VERSION, Insight, SpatialProvenance, dataset_node_id
 from insight_contracts.text import describe_component
 
 
@@ -21,6 +21,18 @@ class LatentFrame:
 
     patterns: dict[str, np.ndarray]
     attractors: dict[int, np.ndarray]
+
+
+@dataclass(frozen=True)
+class PatternFacts:
+    """What the vertical zoom and the walk read of one pattern. A broad pattern at resolution 8 lies in thousands of regions, and
+    a step meets every pattern of each of them: re-deriving these per meeting made one step take a minute."""
+
+    resolution: int | None
+    upload: str | None
+    regions: dict[str, float]  # IN_REGION target -> share (read only)
+    finest: frozenset[str]  # its regions at its finest level: its own resolution when that is a region level, many for a broad one
+    anchors: dict[str, float]  # non-weak ACTIVATES target -> alignment (read only)
 
 
 def describe_components(signature: list[dict[str, Any]]) -> str:
@@ -63,6 +75,29 @@ class DualGraph:
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]
+
+    def tampered(self, pattern_id: str) -> bool:
+        """Whether the pattern's journal record fails its digest (docs/13_trust.md §13.4): never a seed, a walk slot or evidence."""
+        return self.nodes[pattern_id]["props"].get("integrity") == "mismatch"
+
+    def facts(self, pattern_id: str) -> PatternFacts:
+        """``pattern_id``'s facts, derived once per graph (``memoised``)."""
+
+        def build() -> PatternFacts:
+            out, ins = self.out.get(pattern_id, []), self.insight(pattern_id)
+            spatial = SpatialProvenance.from_dict(ins.provenance.get("spatial"))
+            regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
+            levels = {r: self.nodes[r]["props"]["resolution"] for r in regions}
+            top = max(levels.values(), default=None)
+            return PatternFacts(
+                resolution=spatial.resolution if spatial else None,
+                upload=self.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
+                regions=regions,
+                finest=frozenset(r for r, lv in levels.items() if lv == top),
+                anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
+            )
+
+        return self.memoised(("facts", pattern_id), build)
 
     def canonical_document(self, node_id: str) -> str:
         return self.nodes[node_id]["props"]["canonical"]["document"]

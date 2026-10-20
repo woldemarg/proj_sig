@@ -24,7 +24,6 @@ from typing import Any
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
-from graph_query_engine.vertical import upload_of
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
@@ -77,16 +76,7 @@ class TraversalResult:
     excluded: list[Retrieved] = field(default_factory=list)  # tampered patterns ranked within the budget: given no place in it
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "seeds": [asdict(s) for s in self.seeds],
-            "patterns": [asdict(r) for r in self.patterns],
-            "attractors": [asdict(r) for r in self.attractors],
-            "used_edges": self.used_edges,
-            "traversed_nodes": self.traversed_nodes,
-            "visited_count": self.visited_count,
-            "max_depth": self.max_depth,
-            "baselines": self.baselines,
-        }
+        return {k: v for k, v in asdict(self).items() if k != "excluded"}  # the tampered patterns stay out of the console's view
 
 
 def _conds(graph: DualGraph, pid: str) -> set[str]:
@@ -170,7 +160,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
 
     closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth)
     seed_conds = [_conds(graph, s) for s in seed_ids]
-    seed_uploads = {upload_of(graph, s) for s in seed_ids} - {None}  # another level of a seed's upload is no other segment
+    seed_uploads = {graph.facts(s).upload for s in seed_ids} - {None}  # another level of a seed's upload is no other segment
     best: dict[str, Retrieved] = {}
     attractors: dict[str, Retrieved] = {}
     for (node, phase, _s, _l), (score, seed, path) in final.items():
@@ -198,13 +188,13 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         )
         if route != "seed" and overlap == 0.0:
             r.located = _located(graph, node, path)
-            r.transversal_only = route == "transversal" and not r.located and upload_of(graph, node) not in seed_uploads
+            r.transversal_only = route == "transversal" and not r.located and graph.facts(node).upload not in seed_uploads
         if node not in best or r.score > best[node].score:
             best[node] = r
 
     ordered = sorted(best.values(), key=lambda r: (r.route != "seed", -r.score))
     budget = len(seed_ids) + config.max_retrieved
-    tampered = {r.node_id for r in ordered if graph.nodes[r.node_id]["props"].get("integrity") == "mismatch"}  # seeds never are
+    tampered = {r.node_id for r in ordered if graph.tampered(r.node_id)}  # seeds never are
     patterns = [r for r in ordered if r.node_id not in tampered][:budget]  # a tampered pattern takes no slot an intact one could
     used: dict[str, None] = {}
     nodes: dict[str, None] = {}

@@ -120,16 +120,23 @@ def _values(graph: DualGraph) -> dict[str, list[str]]:
     return {v: sorted(a) for v, a in values.items()}
 
 
+def _vocabulary(graph: DualGraph) -> tuple[list[str], dict[str, list[str]]]:
+    """The graph's metric names (sorted) and condition values (``_values``): facts of one commit, derived once per graph
+    (``DualGraph.memoised``) for the catalog and for every question's lexical match. Read only."""
+    return graph.memoised(("vocabulary", ""), lambda: (sorted({n["props"]["name"] for n in graph.of_kind("Metric")}), _values(graph)))
+
+
 def build_catalog(graph: DualGraph, embedder: Embedder, known: dict[str, np.ndarray] | None = None) -> LiteralCatalog | None:
     """The graph's literals, embedded with the document-side embedder (as component labels are); ``known`` maps a
     literal to its unit vector from an earlier build, so only new literals are embedded. ``None`` for an empty graph."""
     if not graph.insights:
         return None
     texts, types, symbols, case = [], [], [], []
-    for name in sorted({n["props"]["name"] for n in graph.of_kind("Metric")}):
+    metrics, values = _vocabulary(graph)
+    for name in metrics:
         for text in dict.fromkeys((name, humanize(name))):  # raw and humanised form (once when equal)
             texts.append(text), types.append("metric"), symbols.append(name), case.append(False)
-    for value, attrs in sorted(_values(graph).items()):
+    for value, attrs in sorted(values.items()):
         texts.append(value), types.append("condition"), symbols.append(attrs), case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
     vectors = dict(known or {})
     missing = [t for t in dict.fromkeys(texts) if t not in vectors]
@@ -302,7 +309,7 @@ def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, 
     q = ParsedQuery(text=text)
     claimed: set[int] = set()  # token positions taken by a literal, then by direction and relationship words
 
-    metrics = sorted({n["props"]["name"] for n in graph.of_kind("Metric")})
+    metrics, values = _vocabulary(graph)
     parts_of = {m: [p for p in humanize(m).lower().split() if len(p) >= 3] for m in metrics}
     head_count = Counter(parts[0] for parts in parts_of.values() if parts)
     matched: list[tuple[float, str]] = []
@@ -321,7 +328,7 @@ def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, 
         q.targets = sorted(name for score, name in matched if score == best)
         claimed |= {i for i, t in enumerate(tokens) for name in q.targets for p in parts_of[name] if _stem_match(p, t)}
 
-    for value, attrs in _values(graph).items():
+    for value, attrs in values.items():
         if len(value) <= ACRONYM_MAX_LEN and value.isupper():  # an acronym matches as typed: "us" is not "US"
             pos = {i for i, t in enumerate(raw_tokens) if t == value}
         else:  # every word of the value, inflected or not

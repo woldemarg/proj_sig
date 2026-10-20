@@ -78,9 +78,7 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
         if members is None:
             continue
         groups["base" if r["level"] == "table" else f"r{r['level']}"] = {
-            pid: members(rows)
-            for pid, rows in engine.ws.load_covers(r["dataset_id"]).items()
-            if pid in graph.nodes and graph.nodes[pid]["props"].get("integrity") != "mismatch"
+            pid: members(rows) for pid, rows in engine.ws.load_covers(r["dataset_id"]).items() if pid in graph.nodes and not graph.tampered(pid)
         }
     if "base" not in groups:
         raise SystemExit("no READY table level of the upload with one row per point")

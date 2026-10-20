@@ -14,7 +14,7 @@ It depends only on `insight_contracts`, numpy and scikit-learn (`requirements.tx
 ```python
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search
 
-state = CommittedState(DualGraph(snapshot), LatentFrame(patterns, attractors, documents))
+state = CommittedState(DualGraph(snapshot), LatentFrame(patterns, attractors))
 found = search("Why is margin lower for phones in the US?", state, encoder, QueryConfig())
 
 payload = found.payload()

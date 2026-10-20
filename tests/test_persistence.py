@@ -108,6 +108,23 @@ def test_committed_batch_stays_ready_when_publish_save_fails(engine, demo_csv, m
     assert engine.ws.patterns()
 
 
+def test_a_marker_that_cannot_be_closed_does_not_undo_a_committed_batch(engine, demo_csv, monkeypatch):
+    """The READY record is the commit point: removing the transaction's marker afterwards can fail (a file another process
+    holds open) without turning the batch FAILED. The graph is published, and the next writer start closes the marker."""
+
+    def locked(self, cp):
+        raise PermissionError("pending.json is held open")
+
+    monkeypatch.setattr(type(engine.ws), "_close", locked)
+    rec = engine.ingest_file(demo_csv)
+    assert rec["status"] == "READY" and engine.graph().insights
+    assert engine.ws.pending_path.exists()  # waits for the next writer start
+    monkeypatch.undo()
+    again = make_engine(engine.settings)
+    assert again.problem is None and not again.ws.pending_path.exists()
+    assert [b["status"] for b in again.ws.list_batches()] == ["READY"] and again.graph().insights
+
+
 def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):
     """READY is on disk a moment before readers switch to the new graph (the commit point, then ``_publish``): a poll in
     that moment reads PERSISTING, so a client that acts on READY — the console's one reload — never reads the old graph."""

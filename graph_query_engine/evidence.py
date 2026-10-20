@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
-from graph_query_engine.vertical import ScaleChain, picture, rank_zones, resolution, scale_chain, upload_of
+from graph_query_engine.vertical import ScaleChain, picture, rank_zones, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
@@ -285,25 +286,26 @@ class Evidence:
             for rid in shown
         ]
 
-    def _glossary(self) -> dict[str, str]:
+    @cached_property
+    def _glossary(self) -> dict[str, str]:  # read by every reword of one rendering: merged once
         return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
 
     def reword(self, text: str) -> str:
         """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning."""
-        for col, meaning in sorted(self._glossary().items(), key=lambda kv: -len(kv[0])):
+        for col, meaning in sorted(self._glossary.items(), key=lambda kv: -len(kv[0])):
             if "=" not in col:
                 text = text.replace(humanize(col), meaning).replace(col, meaning)
         return text
 
     def reword_condition(self, condition: str) -> str:
         """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>'."""
-        glossary = self._glossary()
+        glossary = self._glossary
         attribute, _, value = condition.partition("=")
         return glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
 
     def plain_language(self) -> list[tuple[str, str]]:
         """(column, meaning) for the derived columns the evidence names, from the datasets' glossaries."""
-        glossary = self._glossary()
+        glossary = self._glossary
         named: list[str] = []
         for it in self.items:
             named += [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]]
@@ -435,7 +437,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
             continue
         hosts.add(chain.pattern_id)
         host.scale = chain.scale
-        upload = upload_of(graph, chain.pattern_id)
+        upload = graph.facts(chain.pattern_id).upload
         for steps in (chain.up, chain.down):
             agrees = True
             for step in steps:
@@ -445,7 +447,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
                     other = by_id[step.pattern_id] = item(f"P{len(items) + 1}", step.pattern_id, f"vertical_{step.direction}", [], path_text)
                     items.append(other)
                 agrees = agrees and step.relation == "corresponds"
-                if agrees and upload is not None and upload_of(graph, step.pattern_id) == upload:
+                if agrees and upload is not None and graph.facts(step.pattern_id).upload == upload:
                     host.also.append(other.key)
                     if step.direction == "down" and host.scale == "insufficient":  # a finer level holds: the group is regional
                         host.scale = "regional"
@@ -469,7 +471,7 @@ def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, conf
 
     if query.conditions:
         return []
-    geo = [it.pattern_id for it in items if not it.folded_into and resolution(graph, it.pattern_id) is not None]
+    geo = [it.pattern_id for it in items if not it.folded_into and graph.facts(it.pattern_id).resolution is not None]
     return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
