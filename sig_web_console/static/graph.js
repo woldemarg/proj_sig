@@ -422,9 +422,7 @@ async function verifyPattern(id) {
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
-const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
 const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
-const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 
 function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */

@@ -70,6 +70,8 @@ const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const human = (s) => String(s || "").replace(/_/g, " ");
 const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
+const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
 
 async function api(path, opts = {}) {

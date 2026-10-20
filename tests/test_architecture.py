@@ -100,11 +100,10 @@ LINE_BUDGET = 1_000  # lines per source file: one past it is split by responsibi
 def test_no_source_file_outgrows_the_line_budget():
     """Every Python and JavaScript file of the repository's own code, scripts and tests stays within ``LINE_BUDGET`` lines;
     vendored copies are upstream's."""
-    roots = [ROOT / p for p in (*sorted(REPO), "tests", "scripts", "sig_web_console")]
+    roots = [ROOT / p for p in (*REPO, "tests", "scripts", "sig_web_console")]
     over = {
         str(path.relative_to(ROOT)): n
         for root in roots
-        if root.is_dir()
         for path in (*root.rglob("*.py"), *root.rglob("*.js"))
         if "vendor" not in path.parts and (n := len(path.read_text(encoding="utf-8").splitlines())) > LINE_BUDGET
     }

@@ -100,7 +100,7 @@ per-feature robust scaling (median, IQR over the 5–95 % quantile range)  →  
 
 Points lie inside the unit ball: the direction comes from the kernel PCA, the radius from the (log) spread. The kernel PCA's random state is `RANDOM_SEED` (42), so one commit always projects the same way. `views.sphere_points(state, seed, dataset)`, behind `GET /api/sphere`, takes the patterns — of one dataset when the filter is set, so the projection is refit on the subset — and the anchors they activate. It returns every placed point with its id, kind, class (`up`, `down`, `cov`) and evidence weight or member count, its coordinates and its hover text, plus every edge whose two ends are placed (the lattice edges, ACTIVATES with its `weak` flag, RELATED_TO and CO_OCCURS). An insight's hover names its primary theme (`views.primary_anchor`, its strongest membership) and the alignment.
 
-The console (`sphereTraces` in `app.js`) draws it in the graph's language ([8.3](#83-one-visual-language-for-the-graph-and-the-sphere)):
+The console (`sphereTraces` in `graph.js`) draws it in the graph's language ([8.3](#83-one-visual-language-for-the-graph-and-the-sphere)):
 - one trace per insight class and per link layer, each tagged with its legend key as `meta` and starting with the visibility of its toggle;
 - the themes as labelled diamonds;
 - six faint half-axes and three great circles for depth;
@@ -116,7 +116,7 @@ The console fetches the projection once per graph and dataset filter. An answer,
 |---|---|---|---|
 | headline — graph node `label`, Neo4j `label`, evidence `headline` | `insight_contracts/text.py::headline` | ASCII: `<attr>=<value>, …: <target> <±z> sd`; covariance `<scope>: corr(<a>, <b>) strengthens|weakens|reverses` | `category=phones, region=US: discount +2.21 sd` |
 | graph node label (`/api/graph`; `full_label` = headline) | `views._short_label` | the condition **values** joined by ` · `, a line break, `<target> <±z> sd` or `corr(<a>, <b>)` | `phones · US` / `discount +2.21 sd` |
-| table and drawer | `app.js` | scope tags `attr = value`, metric `human(target)`, effect `±z sd`; drawer lead `<metric> is higher/lower here — median <local> vs <global> overall (<±z> sd)`; covariance: `The relationship between <a> and <b> changes here: correlation <global> overall → <local> in this subgroup.` | |
+| table and drawer | `graph.js` | scope tags `attr = value`, metric `human(target)`, effect `±z sd`; drawer lead `<metric> is higher/lower here — median <local> vs <global> overall (<±z> sd)`; covariance: `The relationship between <a> and <b> changes here: correlation <global> overall → <local> in this subgroup.` | |
 | anchor label | `snapshot._attractor_nodes` (`insight_graph_service/core/snapshot.py`) | `discount ↑ · margin ↓` | [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
 | sphere hover, insight | `views._pattern_hover` | `Insight <id>`, `Scope: category=phones ∧ region=US`, `Target: discount (shift)`, up to three shifts `metric: local vs global (z ±x)` (raw column names), `Support: n rows · evidence w`, `Theme: <label> (alignment a)`, `Dataset: <file>` | |
 | sphere hover, anchor | `views._attractor_hover` | `Theme A-k`, label, `Insights: n over d scopes`, `Mass: m · evidence mass e`, `Columns: …` | |

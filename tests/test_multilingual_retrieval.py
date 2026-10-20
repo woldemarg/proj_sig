@@ -226,7 +226,7 @@ def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch)
     """The document's falsification step 6: identical seed scores with the mirror on (fake driver) and off."""
     from dataclasses import replace
 
-    from test_persistence import _Driver
+    from test_neo4j_mirror import _Driver
 
     from insight_graph_service.core import neo4j_mirror
 

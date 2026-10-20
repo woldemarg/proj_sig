@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -45,19 +46,8 @@ def client(tmp_path):
 def test_upload_process_render_query(client, demo_csv):
     page = client.get("/").text  # the console's static files, as nginx serves them
     assert "/vendor/cytoscape.min.js" in page and "/vendor/plotly-gl3d.min.js" in page and 'id="cy"' in page
-    assert all(
-        client.get(path).status_code == 200
-        for path in (
-            "/app.js",
-            "/datasets.js",
-            "/graph.js",
-            "/chat.js",
-            "/geo.js",
-            "/style.css",
-            "/vendor/cytoscape.min.js",
-            "/vendor/plotly-gl3d.min.js",
-        )
-    )
+    assets = re.findall(r'(?:src|href)="(/[^"]+)"', page)  # every script and stylesheet the page loads
+    assert "/chat.js" in assets and all(client.get(path).status_code == 200 for path in assets)
     with open(demo_csv, "rb") as f:
         r = client.post("/api/upload", files={"file": ("retail.csv", f, "text/csv")}, data={"bins": ""})
     assert r.status_code == 202 and r.json()["status"] == "UPLOADED"
