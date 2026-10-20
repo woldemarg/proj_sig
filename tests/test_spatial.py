@@ -23,6 +23,7 @@ from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
     effective_n_factor,
+    footprint,
     locate_points,
     parse_geo,
     parse_points,
@@ -346,6 +347,13 @@ def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(
     assert graph.of_kind("Region") and {e["props"]["relation"] for e in graph.edges if e["type"] == "CO_LOCATED"} >= {"overlaps"}
 
 
+def test_footprint_keeps_the_busiest_cells_up_to_the_share():
+    point_cell = np.array([0, 0, 0, 0, 0, 1, 1, 1, 2, 2, -1])  # the last point has no cell
+    rows, counts = footprint(point_cell, np.arange(11), 0.8)
+    assert rows.tolist() == [0, 1] and counts.tolist() == [5, 3]  # 8 of the 10 located points
+    assert footprint(point_cell, np.array([10]))[0].tolist() == []
+
+
 def test_one_upload_makes_one_dataset_per_level(tmp_path):
     """``geo=<loc>@<r1>,<r2>`` and ``table`` make ordinary datasets under one ``upload_id``: each geo level with the id
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
@@ -384,6 +392,20 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     graph, table = engine.graph(), done[2]["dataset_id"]
     assert graph.nodes[f"DS:{table}"]["props"]["level"] == "table"
     assert not any(graph.insight(e["source"]).dataset_id == table for e in graph.edges if e["type"] in ("IN_REGION", "CO_LOCATED"))
+    # the map as a window on the graph (PoC): every other level's insights on the finest level's cells, by their footprint
+    fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
+    projected = {p["id"]: p for p in engine.geo_projected(fine)}
+    assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
+    assert all(p["rows"] and p["spatial"]["footprint_share"] == 0.8 for p in projected.values())
+    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every insight at its own share, lift 1
+    listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
+    assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
+    assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
+    pid = next(iter(table_ids & set(listed)))
+    drawn = engine.geo_pattern(fine, pid)
+    assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
+    with pytest.raises(PipelineError, match="west,south"):
+        engine.geo_window(fine, "nowhere")
     upload_id = done[0]["upload_id"]
     with TestClient(create_app(engine)) as client:
         listed = client.get("/api/batches", params={"upload_id": upload_id}).json()

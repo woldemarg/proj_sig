@@ -53,6 +53,7 @@ GEO_DENSE_SHARE_MIN = 0.3  # ``@auto``: the finest level needs this share of cel
 GEO_AUTO_MAX_CELLS = 5_000  # ``@auto``: the finest level's cells at most (finer levels of a large export sweep the map)
 GEO_AUTO_MIN_CELLS = 500  # ``@auto``: a coarser level's cells at least (the miner's least subgroup, 5 cells per metric, fills a smaller one)
 GEO_LEVELS_MAX = 3  # ``@auto``: levels chosen, the finest included
+GEO_FOOTPRINT_SHARE = 0.8  # an insight drawn on another level's cells: the busiest cells holding this share of its points
 
 
 class SpatialError(ValueError):
@@ -667,6 +668,22 @@ def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozens
         hit = int(inside[rows].sum())
         out[pid] = round(hit / float(np.sqrt(len(rows) * size)), 4) if hit else 0.0
     return out
+
+
+def footprint(point_cell: np.ndarray, members: np.ndarray, share: float = GEO_FOOTPRINT_SHARE) -> tuple[np.ndarray, np.ndarray]:
+    """Where an insight's points lie on one level's cells: the busiest cell rows that together hold at least ``share`` of
+    its located points (``members`` are source rows, as ``point_cell`` indexes them), busiest first, and their counts."""
+    cells = point_cell[members]
+    rows, counts = np.unique(cells[cells >= 0], return_counts=True)
+    order = np.lexsort((rows, -counts))
+    rows, counts = rows[order], counts[order]
+    k = int(np.searchsorted(np.cumsum(counts), share * counts.sum())) + 1 if len(rows) else 0
+    return rows[:k], counts[:k]
+
+
+def cell_centres(cells: np.ndarray) -> np.ndarray:
+    """(lon, lat) of each cell's centre."""
+    return np.array([h3.cell_to_latlng(str(c))[::-1] for c in cells], dtype=float).reshape(-1, 2)
 
 
 def cell_boundary(cell: str) -> list[list[float]]:

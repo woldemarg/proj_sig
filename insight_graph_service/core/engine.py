@@ -50,11 +50,14 @@ from subgroup_miner.discovery import NOT_RECOMPUTED, build_insights, covers_of, 
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import (
+    GEO_FOOTPRINT_SHARE,
     GeoDataset,
     SpatialError,
     cell_boundary,
+    cell_centres,
     compactness,
     derive_spatial,
+    footprint,
     geometry_to_cells,
     parse_geo_levels,
     parse_zone,
@@ -66,6 +69,7 @@ from subgroup_miner.spatial import (
 log = logging.getLogger(__name__)
 
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
+WINDOW_MIN_POINTS = 10  # an insight lists in a map view holding at least this many of its points
 
 
 class PipelineError(RuntimeError):
@@ -738,12 +742,21 @@ class Engine:
 
     @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
-        """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them."""
+        """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
+        another level of the upload (``geo_projected``): its footprint's cells and its own points inside them."""
         geo = self._geo(dataset_id)
         rows = self.ws.load_covers(dataset_id).get(pattern_id)
-        if rows is None:
-            raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-        inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
+        if rows is not None:
+            inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
+        else:
+            found = self._projection(dataset_id)["patterns"].get(pattern_id)
+            batch = self.ws.ready_batch_for(self.graph().nodes[pattern_id]["props"]["dataset_id"]) if found else None
+            members = self._point_rows(batch, len(geo["point_cell"])) if batch else None
+            if members is None:
+                raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
+            rows = found[0]
+            src = members(self.ws.load_covers(batch["dataset_id"])[pattern_id])
+            inside = src[np.isin(geo["point_cell"][src], rows)]
         step = max(1, int(np.ceil(len(inside) / max_points)))
         points = geo["lonlat"][inside[::step]]
         return {
@@ -767,6 +780,118 @@ class Engine:
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")} | {"scale": scale_label(graph, pid)} for pid in pids
         }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
+
+    # ponytail: PoC (the map as a window on the graph), derived on read per commit for one upload's levels; production
+    # would derive the table insights' places at commit (derive_spatial), so IN_REGION, zones and the scale chain see them
+    def _point_rows(self, batch: dict[str, Any], n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
+        """Source rows of a pattern's covered rows: a geo level's rows are cells, whose points its ``point_cell`` names; a
+        table's rows are source rows when it holds as many rows as the map has points. None: the rows do not match."""
+        geo = self.ws.load_geo(batch["dataset_id"], ("point_cell",))
+        if geo is not None:
+            cells_of = geo["point_cell"]
+            return (lambda rows: np.flatnonzero(np.isin(cells_of, rows))) if len(cells_of) == n_points else None
+        return (lambda rows: rows) if (batch.get("profile") or {}).get("rows") == n_points else None
+
+    def _projection(self, dataset_id: str) -> dict[str, Any]:
+        """Every intact insight of the dataset's upload on the dataset's cells, derived once per commit: an insight of the
+        dataset keeps its cells, any other (the table's, another level's) the ``footprint`` of its member points.
+        ``patterns``: id -> (cell rows, their points, the level it was found at); ``per_cell``: points; ``centres``."""
+        graph = self.graph()
+        if (key := ("projection", dataset_id)) in graph.memo:
+            return graph.memo[key]
+        geo = self._geo(dataset_id, ("cells", "point_cell"))
+        point_cell = geo["point_cell"]
+        per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
+        ready = [b for b in self.ws.list_batches() if b.get("status") == "READY"]
+        upload = next((b.get("upload_id") for b in ready if b["dataset_id"] == dataset_id), None)
+        patterns: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
+        for b in ready:
+            own = b["dataset_id"] == dataset_id
+            if not own and (upload is None or b.get("upload_id") != upload):
+                continue
+            members = None if own else self._point_rows(b, len(point_cell))
+            if not own and members is None:
+                continue
+            level = "table" if b.get("level") == "table" else f"res {b.get('level')}"
+            for pid, rows in self.ws.load_covers(b["dataset_id"]).items():
+                node = graph.nodes.get(pid)
+                if node is None or node["props"].get("integrity") == "mismatch":
+                    continue
+                patterns[pid] = (rows, per_cell[rows], level) if own else (*footprint(point_cell, members(rows)), level)
+        out = {"patterns": patterns, "per_cell": per_cell, "centres": cell_centres(geo["cells"])}
+        graph.memo[key] = out
+        return out
+
+    @_healthy
+    def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
+        """The insights of the dataset's upload found at another level (the table, another resolution) drawn on its cells
+        as ``geo_cells`` draws its own: the rows of their ``footprint``, their scope and shift."""
+        proj, graph = self._projection(dataset_id), self.graph()
+        out = []
+        for pid, (rows, counts, level) in proj["patterns"].items():
+            if graph.nodes[pid]["props"]["dataset_id"] == dataset_id:
+                continue
+            ins = graph.insight(pid)
+            out.append(
+                {
+                    "id": pid,
+                    "rows": rows.tolist(),
+                    "scope": [f"{c.attribute} = {c.value}" for c in ins.conditions],
+                    "target": ins.target,
+                    "effect_size": ins.effect_size,
+                    "phenomenon_type": ins.phenomenon_type,
+                    "support": ins.support,
+                    "weight": ins.weight,
+                    "level": level,
+                    "spatial": {"footprint_share": GEO_FOOTPRINT_SHARE, "footprint_points": int(counts.sum())},
+                }
+            )
+        return out
+
+    @_healthy
+    def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
+        """The map as a window on the graph: the insights of the dataset's upload with at least ``WINDOW_MIN_POINTS`` of their
+        points in the cells whose centres lie in ``bbox`` ("west,south,east,north"), under their theme (strongest
+        ACTIVATES). ``lift``: an insight's share of the view's points over its share of the map's, so the insights
+        characteristic of the view come first; themes by their best insight, then by their points in view."""
+        try:
+            w, s, e, n = (float(x) for x in bbox.split(","))
+        except ValueError:
+            raise PipelineError("invalid_options", f"bbox {bbox!r} is not west,south,east,north") from None
+        proj, graph = self._projection(dataset_id), self.graph()
+        lon, lat = proj["centres"].T
+        view = (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)
+        total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
+        themes: dict[str | None, dict[str, Any]] = {}
+        for pid, (rows, counts, level) in proj["patterns"].items():
+            inside = view[rows]
+            points = int(counts[inside].sum())
+            if points < WINDOW_MIN_POINTS:
+                continue
+            ins = graph.insight(pid)
+            anchor = max((x for x in graph.out[pid] if x["type"] == "ACTIVATES"), key=lambda x: x["weight"], default=None)
+            aid = anchor["target"] if anchor else None
+            theme = themes.setdefault(aid, {"id": aid, "label": graph.nodes[aid]["label"] if aid else "no theme", "insights": []})
+            theme["insights"].append(
+                {
+                    "id": pid,
+                    "label": graph.nodes[pid]["label"],
+                    "level": level,
+                    "scope": [c.expr for c in ins.conditions],
+                    "target": ins.target,
+                    "effect": round(ins.effect_size, 3),
+                    "ptype": ins.phenomenon_type,
+                    "weight": round(ins.weight, 3),
+                    "points": points,
+                    "share": round(points / int(counts.sum()), 3),
+                    "cells": int(inside.sum()),
+                    "lift": round(points / here / (int(counts.sum()) / total), 2),
+                }
+            )
+        for t in themes.values():
+            t["insights"].sort(key=lambda i: (-i["lift"], -i["weight"]))
+        order = sorted(themes.values(), key=lambda t: (-t["insights"][0]["lift"], -sum(i["points"] for i in t["insights"])))
+        return {"cells": int(view.sum()), "points": here, "insights": sum(len(t["insights"]) for t in order), "themes": order}
 
     @_healthy
     def export_geosparql(self) -> str:
