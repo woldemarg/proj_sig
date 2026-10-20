@@ -28,7 +28,7 @@ def _wait_ready(client):
 
 def stack(engine):
     """The graph service and the narrator on one local port, as the console reaches them."""
-    from conftest import free_port
+    from scratch import free_port
 
     port = free_port()
     narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())

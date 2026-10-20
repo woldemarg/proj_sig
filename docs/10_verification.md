@@ -236,7 +236,7 @@ Measured on 2026-10-20 with `google/gemma-4-26b-a4b-it` behind the broker, seed 
 
 ## 10.4 Measurement scripts
 
-The measurement scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j off and save their results to `.scratch/results/<name>_<label>.json`. The benchmark, grounding and live-answer numbers of [7.7](07_question_answering.md#77-measured-behaviour) and [10.3](#103-hypothesis-benchmark) come from them. `scripts/scratch.py` holds the shared helpers (`scratch_dir`, `write_demo_csv`, `settings`, `build_engine`, `ingest_ready`, `demo_engine`, `save_result`); a script imports it first (it puts the repository on `sys.path`), and it loads `.env` like the services do when it builds an engine (`settings`), never at import, so the tests that import the scripts never read the repository's `.env`.
+The measurement scripts build throwaway workspaces under `.scratch/` (never `workspace/`), switch Neo4j off and save their results to `.scratch/results/<name>_<label>.json`. The benchmark, grounding and live-answer numbers of [7.7](07_question_answering.md#77-measured-behaviour) and [10.3](#103-hypothesis-benchmark) come from them. `scripts/scratch.py` holds the shared helpers (`scratch_dir`, `write_demo_csv`, `settings`, `build_engine`, `ingest_ready`, `demo_engine`, `save_result`, and `serve` / `free_port`, which run an app on a local port for `perf_benchmark.py --browser` and the tests); a script imports it first (it puts the repository on `sys.path`), and it loads `.env` like the services do when it builds an engine (`settings`), never at import, so the tests that import the scripts never read the repository's `.env`.
 
 | Script | Measures |
 |---|---|

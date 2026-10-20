@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import sys
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -73,3 +78,27 @@ def save_result(name: str, label: str, payload: Any) -> Path:
     path = scratch_dir("results") / f"{name}_{label}.json"
     path.write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
     return path
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@contextmanager
+def serve(app, port: int | None = None) -> Iterator[str]:
+    """Run an ASGI app on a local port (a free one by default) in a background thread; yields its base URL."""
+    import uvicorn
+
+    port = port or free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        while not server.started:
+            time.sleep(0.05)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
