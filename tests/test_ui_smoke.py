@@ -246,6 +246,10 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
         page.evaluate("loadOverlay(G.ds)")
         assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
+        page.evaluate("loadProjected('ds-unknown')")  # the other levels that cannot be read say so, not an upload without them
+        assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Insights of other levels unavailable")
+        page.evaluate("loadProjected(G.ds)")
+        assert page.is_hidden("#map-projected-error")
         assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")
@@ -268,6 +272,12 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
+        forged = """(pid) => { const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" };
+            renderCard(G.patterns[pid], null, null); const html = $("map-card-body").innerHTML;
+            if (t) G.overlay.patterns[pid] = t; else delete G.overlay.patterns[pid];
+            renderCard(G.patterns[pid], null, null); return html; }"""
+        assert "integrity mismatch" not in page.inner_text("#map-card-body")  # a record that fails its digest is labelled on the card
+        assert "integrity mismatch" in page.evaluate(forged, page.evaluate("G.focusId"))
         opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
         page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
         first = page.evaluate(opacity)
@@ -284,9 +294,13 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
             page.click("#mw-fold")
         turns, row = page.evaluate("S.chat.length"), page.locator("#map-window .mw-i").first
         pid = row.get_attribute("data-pid")
+        assert all(re.fullmatch(r"table|res \d+", i["level"]) for t in page.evaluate("W.data.themes") for i in t["insights"])  # never "res None"
         row.click()
         page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
         assert page.locator(".msg-bot").last.locator(".insight-card").count() == 1 and page.is_visible(f"#map-window .mw-i.on[data-pid='{pid}']")
+        forged = """() => { const t = S.chat.at(-1), node = t.insight.node;  // the card's numbers are the journal record's: say when it fails its digest
+            return insightCard({ ...t, insight: { ...t.insight, node: { ...node, props: { ...node.props, integrity: "mismatch" } } } }); }"""
+        assert "integrity mismatch" not in page.locator(".msg-bot").last.inner_text() and "integrity mismatch" in page.evaluate(forged)
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")

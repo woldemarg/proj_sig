@@ -162,7 +162,7 @@ function insightCard(turn) {
   const links = Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
-    `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
+    `<div class="ic-tags">${w ? chip("", w.level) : ""}${p.integrity === "mismatch" ? chip(INTEGRITY.mismatch[0], "integrity mismatch", INTEGRITY.mismatch[1]) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and "))}</b></p><p>${lead}</p>` +
     `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
     (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
