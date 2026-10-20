@@ -231,13 +231,14 @@ def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[
     }
     weight = {p: g.insight(p).weight for p in ids}
     by_weight = sorted(ids, key=lambda p: -weight[p])
+    documents = dict(zip(ids, engine.encoder.embedder.embed([g.canonical_document(p) for p in ids])))  # the naive baseline's
     rankers = {
         name: (lambda s, gr=gr: [r.node_id for r in traverse(gr, [SeedMatch(s, 1.0, {})], wide).patterns if r.node_id != s])
         for name, gr in graphs.items()
     }
     rankers |= {
         "vector_nn": lambda s: _cosine_rank(s, state.frame.patterns),
-        "text_nn": lambda s: _cosine_rank(s, {p: state.frame.documents[p] for p in ids}),
+        "text_nn": lambda s: _cosine_rank(s, documents),
         "weight_only": lambda s: [p for p in by_weight if p != s],
     }
     rows = []

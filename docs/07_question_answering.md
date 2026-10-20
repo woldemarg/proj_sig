@@ -270,7 +270,7 @@ The language split is deliberate: the prompt (machine-to-machine) stays English,
 
 ## 7.6 Baselines
 
-`search.compute_baselines` stores, with every search, what simpler retrieval would have returned: `structural_only` (a BFS from the seeds over the walk's lattice edge types — no SIBLING — in either direction, up to `TRAVERSAL_MAX_DEPTH` hops), `naive_nearest` (the top 12 patterns by `cos(E_query(question), E(canonical document))` — plain text RAG), and the set differences `transversal_only`, `not_in_naive_topk`, `not_structurally_reachable`; a zone without text has no naive baseline (nothing to embed), and `not_in_naive_topk` stays empty. The naive baseline compares the question with document vectors embedded once at ingest and stored beside the journal rows (`journal/blocks/<batch>.npz`, read into the committed frame), so an answer embeds only the question and no canonical document, and does not compete with an ingest for the model. A pattern without a stored document vector is embedded once, when the committed state is built (`Engine._committed_state`): the vector stays on the committed frame and, in a writer process, is saved into that batch's blocks file. A caller of the library alone gets no back-fill: `compute_baselines` leaves a pattern without a document vector out of the naive ranking. The same vectors serve the `text_nn` ranker of the benchmark. For the demo question: the structural closure holds 23 patterns, and 7 of the 13 retrieved patterns are not in the naive top 12. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
+`search.compute_baselines` stores, with every search, what the structural lattice alone would have reached: `structural_only` (a BFS from the seeds over the walk's lattice edge types — no SIBLING — in either direction, up to `TRAVERSAL_MAX_DEPTH` hops) and the walk's findings beyond it, `transversal_only` and `not_structurally_reachable`. The naive text baseline (plain text RAG: the patterns nearest by `cos(E(canonical document))`) is a measurement, not part of an answer: the hypothesis and attractor benchmarks embed the canonical documents themselves for their `text_nn` ranker, so the service embeds no document, neither at ingest nor for a question. For the demo question the structural closure holds 23 patterns. The benchmark of [10.3](10_verification.md#103-hypothesis-benchmark) scores these rankers against planted ground truth.
 
 ## 7.7 Measured behaviour
 
@@ -292,7 +292,7 @@ The five evidence prompts hold 4,750–6,282 characters, none of them outside AS
 
 Cells are Recall@3 / Jaccard. The B3 misses all contain *маржа*, *частка повернень* or *роздріб* (above). Retrieval time per question with the model on a GPU: 70–90 ms for English and code-switched questions, 130–200 ms for a translated one (one embedding pass over its 2–4 unresolved spans).
 
-No LLM reads the canonical documents: only the naive baseline and the `text_nn` ranker use their embeddings. Retrieval for one question takes about 0.1 s with the model loaded (the benchmark's median); the literal catalog is built at the commit, so no question pays for it.
+No LLM reads the canonical documents, and the service embeds none: only the benchmarks' `text_nn` ranker does. Retrieval for one question takes about 0.1 s with the model loaded (the benchmark's median); the literal catalog is built at the commit, so no question pays for it.
 
 ## 7.8 Configuration, failure modes and limitations
 
