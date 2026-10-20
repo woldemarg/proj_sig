@@ -37,7 +37,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
 | `evidence_narrator_service/` | the chat service: `narration`, `llm_client`, `settings`, `app`; imports only `insight_contracts` |
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
-| `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js`, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
+| `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js` the shell with `datasets.js`, `graph.js`, `chat.js`, `geo.js` beside it, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
 | `compose.yaml`, `.dockerignore`, `constraints.txt` | the service suite in start order (`docs/12_architecture.md` §12.5); the exact package versions every image installs with |
 | `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
 | `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
