@@ -314,13 +314,10 @@ function renderCard(p, item, pts) {
   $("map-card-body").innerHTML =
     `<div class="mc-scope">${p.scope.map((s) => esc(human(s))).join(" · ")}</div>` +
     `<div class="mc-shift">${shiftText(p, item)}</div>` +
-    (p.level  // found at another level: drawn by the cells holding most of its points
-      ? `<div class="mc-grid"><span>found at</span><b>${esc(p.level)}</b><span>cells</span><b>${num(p.rows.length, 0)}</b>` +
-        `<span>points</span><b>${pts ? num(pts.n_points, 0) : "…"}</b><span>footprint</span><b>${num(sp.footprint_share * 100, 0)}%</b>` +
-        `<span>rows</span><b>${num(p.support, 0)}</b><span>weight</span><b>${num(p.weight)}</b></div>`
-      : `<div class="mc-grid"><span>cells</span><b>${num(p.rows.length, 0)}</b><span>compactness</span><b>${num(sp.compactness)}</b>` +
-        `<span>points</span><b>${pts ? num(pts.n_points, 0) : "…"}</b><span>n<sub>eff</sub></span><b>${num(sp.n_eff, 0)}</b>` +
-        `<span>Moran's I</span><b>${num(sp.moran_i)}</b><span>weight</span><b>${num(p.weight)}</b></div>`) +
+    `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
+      ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
+      : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
+      .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -387,7 +384,7 @@ function renderWindow() {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.insights.length}</b></button>` +
       (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
-        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}</i><span class="mw-nm">${esc(i.scope.map((c) => human(c.slice(c.indexOf("=") + 1))).join(" · "))}` +
+        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
         `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
         `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
   }).join("");

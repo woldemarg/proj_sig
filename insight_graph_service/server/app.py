@@ -208,7 +208,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)
+        return engine.geo_pattern(dataset_id, pattern_id)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:

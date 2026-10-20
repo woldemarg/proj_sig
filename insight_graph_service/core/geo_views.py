@@ -8,6 +8,7 @@ upload's insights projected on a dataset's cells, the overlay — lives in the g
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ import numpy as np
 from graph_query_engine.graph import DualGraph, primary_anchor
 from graph_query_engine.vertical import picture, regions_above, scale_label
 from graph_query_engine.vertical import resolution as pattern_resolution
+from insight_contracts import Insight
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.workspace import Workspace
@@ -76,15 +78,10 @@ def geo_profile(loaded: Any) -> dict[str, Any]:
 
 
 def place_scores(
-    graph: DualGraph,
-    zone_scores: Callable[[frozenset[str], tuple[tuple[str, int], ...]], dict[str, float]],
-    cells: list[str] | None,
-    geometry: dict[str, Any] | None,
-    resolution: int | None,
+    ws: Workspace, graph: DualGraph, cells: list[str] | None, geometry: dict[str, Any] | None, resolution: int | None
 ) -> dict[str, float] | None:
     """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
-    datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone.
-    ``zone_scores``: ``read_zone_scores`` over the workspace, cached by the engine."""
+    datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone."""
     if cells is None and geometry is None:
         return None
     levels = sorted(
@@ -98,12 +95,13 @@ def place_scores(
         zone = parse_zone(cells) if cells is not None else geometry_to_cells(geometry or {}, max((r for _, r in levels), default=0))
     except SpatialError as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    return zone_scores(zone, tuple(levels)) if levels else {}
+    return read_zone_scores(ws, zone, tuple(levels)) if levels else {}
 
 
+@functools.lru_cache(maxsize=64)
 def read_zone_scores(ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...]) -> dict[str, float]:
-    """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cacheable on its arguments, since
-    a dataset id fixes its files."""
+    """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cached on its arguments, since a
+    dataset id fixes its files."""
     out: dict[str, float] = {}
     for dataset_id, _ in levels:
         if (geo := ws.load_geo(dataset_id, ("cells",))) is not None:
@@ -135,17 +133,11 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
     bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
     covers = ws.load_covers(dataset_id)
     patterns = [
-        {
-            "id": r["id"],
-            "rows": covers[r["id"]].tolist(),
-            "scope": [f"{c['attribute']} = {c['value']}" for c in r["conditions"]],
-            "target": r["target"],
-            "effect_size": r["effect_size"],
-            "phenomenon_type": r["phenomenon_type"],
-            "support": r["support"],
-            "weight": r["weight"],
-            "spatial": {**r["provenance"].get("spatial", {}), "compactness": round(compactness(covers[r["id"]], ctx.nbr_ptr, ctx.nbr_idx), 4)},
-        }
+        _pattern_json(
+            Insight.from_record(r),
+            covers[r["id"]],
+            spatial={**r["provenance"].get("spatial", {}), "compactness": round(compactness(covers[r["id"]], ctx.nbr_ptr, ctx.nbr_idx), 4)},
+        )
         for r in ws.patterns()
         if r["dataset_id"] == dataset_id and r["id"] in covers
     ]
@@ -155,6 +147,21 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
         "bbox": bbox,
         "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
         "patterns": patterns,
+    }
+
+
+def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any]:
+    """An insight as the map lists it (``geo_cells``, ``geo_projected``): its cell rows, scope, shift, support and weight."""
+    return {
+        "id": ins.id,
+        "rows": rows.tolist(),
+        "scope": [f"{c.attribute} = {c.value}" for c in ins.conditions],
+        "target": ins.target,
+        "effect_size": ins.effect_size,
+        "phenomenon_type": ins.phenomenon_type,
+        "support": ins.support,
+        "weight": ins.weight,
+        **extra,
     }
 
 
@@ -168,7 +175,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = _member_rows(ws, batch, _upload_of(ws, dataset_id), len(geo["point_cell"])) if batch else None
+        members = _member_rows(ws, batch, ws.ready_batch_for(dataset_id)["upload_id"], len(geo["point_cell"])) if batch else None
         if members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
         rows = found[0]
@@ -204,10 +211,6 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
     return graph.memoised(("overlay", dataset_id), build)
 
 
-def _upload_of(ws: Workspace, dataset_id: str) -> str | None:
-    return next((b.get("upload_id") for b in ws.list_batches() if b.get("status") == "READY" and b["dataset_id"] == dataset_id), None)
-
-
 # ponytail: the PoC's projection, derived on read per commit for one upload's levels; #119 derives the table insights'
 # places at the commit (derive_spatial), so IN_REGION, zones and the scale chain see them too
 def _member_rows(ws: Workspace, batch: dict[str, Any], upload: str | None, n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
@@ -232,7 +235,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
         geo = _geo(ws, dataset_id, ("cells", "point_cell"))  # inside: a memo hit reads no file
         point_cell = geo["point_cell"]
         per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
-        upload = _upload_of(ws, dataset_id)
+        upload = ws.ready_batch_for(dataset_id).get("upload_id")  # READY: _geo checked it
         patterns: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
         for b in ws.list_batches():
             if b.get("status") != "READY":
@@ -260,20 +263,7 @@ def geo_projected(ws: Workspace, graph: DualGraph, dataset_id: str) -> list[dict
         ins = graph.insight(pid)
         if ins.dataset_id == dataset_id:
             continue
-        out.append(
-            {
-                "id": pid,
-                "rows": rows.tolist(),
-                "scope": [f"{c.attribute} = {c.value}" for c in ins.conditions],
-                "target": ins.target,
-                "effect_size": ins.effect_size,
-                "phenomenon_type": ins.phenomenon_type,
-                "support": ins.support,
-                "weight": ins.weight,
-                "level": level,
-                "spatial": {"footprint_share": GEO_FOOTPRINT_SHARE, "footprint_points": int(counts.sum())},
-            }
-        )
+        out.append(_pattern_json(ins, rows, level=level, spatial={"footprint_share": GEO_FOOTPRINT_SHARE, "footprint_points": int(counts.sum())}))
     return out
 
 
@@ -292,7 +282,7 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str) -> d
     total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
     themes: dict[str | None, dict[str, Any]] = {}
     for pid, (rows, counts, level) in proj["patterns"].items():
-        inside = view[rows]
+        inside, mine = view[rows], int(counts.sum())
         points = int(counts[inside].sum())
         if points < WINDOW_MIN_POINTS:
             continue
@@ -305,15 +295,15 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str) -> d
                 "id": pid,
                 "label": graph.nodes[pid]["label"],
                 "level": level,
-                "scope": [c.expr for c in ins.conditions],
+                "values": [c.value for c in ins.conditions],
                 "target": ins.target,
                 "effect": round(ins.effect_size, 3),
                 "ptype": ins.phenomenon_type,
                 "weight": round(ins.weight, 3),
                 "points": points,
-                "share": round(points / int(counts.sum()), 3),
+                "share": round(points / mine, 3),
                 "cells": int(inside.sum()),
-                "lift": round(points / here / (int(counts.sum()) / total), 2),
+                "lift": round(points / here / (mine / total), 2),
             }
         )
     for t in themes.values():

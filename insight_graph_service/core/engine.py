@@ -186,7 +186,6 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._writer = recover  # holds the writer lock: may save derived files (literal cache, document back-fill)
-        self._zone_scores = functools.lru_cache(maxsize=64)(functools.partial(geo_views.read_zone_scores, self.ws))
         self._open()
 
     def committed(self) -> CommittedState:
@@ -285,7 +284,7 @@ class Engine:
     def place_scores(
         self, state: CommittedState, cells: list[str] | None = None, geometry: dict[str, Any] | None = None, resolution: int | None = None
     ) -> dict[str, float] | None:
-        return geo_views.place_scores(state.graph, self._zone_scores, cells, geometry, resolution)
+        return geo_views.place_scores(self.ws, state.graph, cells, geometry, resolution)
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
         return LatentFrame(
@@ -628,8 +627,8 @@ class Engine:
         return out | {"status": "differs" if diff else "reproduced", "diff": diff}
 
     @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str, max_points: int = 5000) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, max_points)
+    def geo_pattern(self, dataset_id: str, pattern_id: str) -> dict[str, Any]:
+        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points)
 
     @_healthy
     def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
