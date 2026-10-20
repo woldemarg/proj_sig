@@ -165,6 +165,10 @@ def toy_insight(scope, shifts, **fields) -> Insight:
     return Insight(**{**values, **fields})
 
 
+class Crash(BaseException):
+    """The process dies mid-write: no except-handler runs (the recovery and deletion tests raise it)."""
+
+
 def make_config(workspace: Path, **overrides):
     overrides.setdefault("neo4j_enabled", False)
     return load_settings(workspace_dir=workspace, **overrides)
@@ -182,6 +186,12 @@ def ask(engine, question: str, llm=None):
     from evidence_narrator_service.narration import answer
 
     return answer(engine.evidence(question), llm)
+
+
+@pytest.fixture
+def engine(tmp_path):
+    """A fresh engine on its own workspace (hashing double)."""
+    return make_engine(make_config(tmp_path / "ws"))
 
 
 @pytest.fixture(scope="session")
