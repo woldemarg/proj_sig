@@ -187,9 +187,10 @@ class LatentOntology:
         # no pattern left: nothing for a topology to be relative to, the knowledge base starts cold again
         dropped = orphan_anchors(members, self.topology(), self.attractor_ids) if n_rows else list(self.attractor_ids)
         st.keep_concepts([a for a in self.attractor_ids if a not in dropped])
-        mass, pull = _recount(kept_activations, {a: i for i, a in enumerate(self.attractor_ids)}, l2_normalize(kept_vectors) if n_rows else None)
+        ids = self.attractor_ids  # a fresh list from the store on every access
+        mass, pull = _recount(kept_activations, {a: i for i, a in enumerate(ids)}, l2_normalize(kept_vectors) if n_rows else None)
         for i in np.flatnonzero(mass > 0):
-            if self.attractor_ids[i] in lost:
+            if ids[i] in lost:
                 st.embeddings[i] = l2_normalize(pull[i][None])[0].astype(np.float32)
         st.chunk_counts = mass
         st.next_chunk_id = n_rows

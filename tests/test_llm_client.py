@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from conftest import free_port
+from scratch import free_port
 
 from evidence_narrator_service.llm_client import OpenAICompatibleLLM
 from evidence_narrator_service.narration import SYSTEM_PROMPT, check_citations

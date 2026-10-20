@@ -28,6 +28,10 @@ class Settings:
     max_upload_mb: int = 200
     geo_max_points: int = 5000  # points per pattern sent to the map (GET /api/geo/{dataset}/patterns/{pattern})
 
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
     # admission into the graph (docs/03_insights.md §3.2, rules R4 and R7)
     min_insight_weight: float = 0.2
     max_insights_per_batch: int = 200

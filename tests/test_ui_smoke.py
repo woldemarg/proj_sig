@@ -7,7 +7,7 @@ import time
 
 import httpx
 import pytest
-from conftest import FakeLLM, make_config, make_engine, serve
+from conftest import FakeLLM, make_engine, serve
 from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
@@ -28,7 +28,7 @@ def _wait_ready(client):
 
 def stack(engine):
     """The graph service and the narrator on one local port, as the console reaches them."""
-    from conftest import free_port
+    from scratch import free_port
 
     port = free_port()
     narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())
@@ -36,8 +36,7 @@ def stack(engine):
 
 
 @pytest.fixture
-def client(tmp_path):
-    cfg = make_config(tmp_path / "ws")
+def client(cfg):
     port, app = stack(make_engine(cfg))
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as c:
         yield c
@@ -117,12 +116,11 @@ def test_upload_process_render_query(client, demo_csv):
 
 
 @pytest.mark.browser
-def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
+def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     housing = engine.process(
@@ -257,6 +255,7 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         badges = "[...[...document.querySelectorAll('.msg-bot')].at(-1).querySelectorAll('.ev .role')].map((b) => b.textContent)"
         assert {"in the asked area", "outside the asked area"} & set(page.evaluate(badges))  # each item of the zone's levels says which
+        assert page.is_visible(".msg-bot[data-turn='0'] .bot-pane[data-pane='0'] .ev")  # the first answer's open panel survives the next
         page.fill("#question", "Де найбільше households?")  # the chat box asks about the selected zone too
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
@@ -265,9 +264,22 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
+        drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
+            const row = [...document.querySelectorAll('#inspector .nb')].find((r) => r.dataset.id !== p.id && GeoMap.has(r.dataset.id));
+            if (row) { row.closest('details').open = true; return row.dataset.id; } } return null; }"""  # its group opened, as a click on it does
+        neighbour, title = page.evaluate(drawn), page.inner_text("#drawer-title")
+        page.click(f"#inspector .nb[data-id='{neighbour}'] >> nth=0")  # with the map open: the map focuses it, the drawer follows
+        page.wait_for_function(f"G.focusId === '{neighbour}' && $('drawer-title').textContent !== {title!r}", timeout=10000)
+        retail = page.evaluate(
+            f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
+        )
+        page.select_option("#dataset-filter", retail)  # a filter the next answer's evidence does not live in
+        page.wait_for_selector(f".ds.active[data-ds='{retail}']")
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
+        now = page.input_value("#dataset-filter")  # the filter moved to where the evidence lives, and the rail's active card with it
+        assert now != retail and page.evaluate("[...document.querySelectorAll('.ds.active')].map((e) => e.dataset.ds)") == ([now] if now else [])
         painted = "G.map.getSource('focus').serialize().data.features.length"  # the focused insight's cells, its own source
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()

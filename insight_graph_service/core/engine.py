@@ -16,7 +16,6 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
-import math
 import threading
 import time
 import traceback
@@ -24,7 +23,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -37,24 +36,18 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from insight_contracts import Condition, EvidencePayload, Insight, pattern_id
+from insight_contracts import EvidencePayload, Insight, Rejection
 from insight_contracts.text import RELIABILITY
-from insight_graph_service.core import geo_views
+from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
-from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, atomic_write_json, utc_now
-from subgroup_miner.discovery import NOT_RECOMPUTED, build_insights, covers_of, recompute_statistics, run_discovery
+from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
+from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import (
-    GeoDataset,
-    SpatialError,
-    derive_spatial,
-    parse_geo_levels,
-    sac_summary,
-)
+from subgroup_miner.spatial import GeoDataset, derive_spatial, sac_summary
 
 log = logging.getLogger(__name__)
 
@@ -62,61 +55,21 @@ BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside 
 
 
 SOURCE_MAX_CHARS = 120
-EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 
 
-def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarray | None, family: int) -> list[dict[str, Any]]:
-    """What of the journal record the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
-    journal, recomputed}``: its id and selector against its conditions, the rows against ``covers.npz`` and the record's
-    row hash, its target as its first shift (on a covariance insight, the stronger of its pair), a missing p only on a
-    covariance insight, its test family against its dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
-    rows = fresh["rows"]
-    out = []
+@dataclass(frozen=True)
+class _Mined:
+    """What a batch brings to its commit: the dataset as read, its discovery, the admitted insights with the rows each
+    covers, every rejection, and the insights' canonical forms and vectors."""
 
-    def differs(field: str, journal: Any, recomputed: Any) -> None:
-        out.append({"field": field, "journal": journal, "recomputed": recomputed})
-
-    if record["id"] != pattern_id(record["dataset_id"], tuple(Condition(c["attribute"], c["value"]) for c in record["conditions"])):
-        differs("id", record["id"], "another id for these conditions")
-    if fresh["expression_rows"] is None or not np.array_equal(fresh["expression_rows"], rows):
-        differs("expression", record["expression"], "selects other rows than the conditions")
-    if covers is not None and not np.array_equal(np.sort(covers), rows):
-        differs("rows", f"{len(covers)} rows in covers.npz", f"{len(rows)} rows by the conditions")
-    if record.get("row_hash") != hashlib.sha1(rows.astype(np.int64).tobytes()).hexdigest()[:16]:
-        differs("row_hash", record.get("row_hash"), hashlib.sha1(rows.astype(np.int64).tobytes()).hexdigest()[:16])
-    if record["provenance"].get("multiple_testing_family") != family:
-        differs("multiple_testing_family", record["provenance"].get("multiple_testing_family"), f"{family} for its dataset")
-    covariance = record.get("phenomenon_type") == "covariance" and bool((record.get("covariance") or {}).get("pair"))
-    if record["p_value"] is None and not covariance:
-        differs("p_value", None, fresh.get("p_value"))
-    if "shifts" not in fresh:
-        return out + [{"field": "support", "journal": record["support"], "recomputed": 0}]
-    primary = next((s for s in fresh["shifts"] if s["metric"] == record["target"]), None)
-    if primary is None:
-        differs("target", record["target"], "not among its shifts")
-        primary = fresh["shifts"][0]
-    elif not covariance and record["shifts"][0]["metric"] != record["target"]:  # its p and spatial test are of its first shift
-        differs("target", record["target"], f"not its first shift ({record['shifts'][0]['metric']}, whose test its p is)")
-    pair = [s for s in fresh["shifts"] if s["metric"] in (record.get("covariance") or {}).get("pair", [])]
-    if covariance and pair and record["target"] != (chosen := min(pair, key=lambda s: (-abs(s["robust_z"]), s["metric"]))["metric"]):
-        differs("target", record["target"], f"{chosen} (the stronger metric of its pair)")
-    pairs = [
-        ("support", record["support"], fresh["support"]),
-        ("support_fraction", record["support_fraction"], fresh["support_fraction"]),
-        ("baseline", record["baseline"], primary["global_median"]),
-        ("local", record["local"], primary["local_median"]),
-        ("effect_size", record["effect_size"], primary["robust_z"]),
-    ]
-    if record["p_value"] is not None:
-        pairs += [("p_value", record["p_value"], fresh["p_value"]), ("p_adjusted", record["p_adjusted"], fresh["p_adjusted"])]
-    for stored, again in zip(record["shifts"], fresh["shifts"], strict=True):
-        pairs += [(f"shifts.{stored['metric']}.{k}", stored[k], again[k]) for k in ("robust_z", "local_median", "global_median", "global_mad")]
-    spatial = record["provenance"].get("spatial") or {}
-    pairs += [(f"spatial.{k}", spatial[k], v) for k, v in fresh.get("spatial", {}).items() if k in spatial]
-    for name, a, b in pairs:
-        if not (a == b or (isinstance(a, int | float) and isinstance(b, int | float) and math.isclose(a, b, rel_tol=1e-9))):
-            differs(name, a, b)
-    return out
+    loaded: LoadedDataset
+    result: DiscoveryResult
+    kept: list[Insight]
+    rows: dict[str, np.ndarray]
+    rejections: list[Rejection]
+    canon: list[CanonicalInsight]
+    enc: dict[str, np.ndarray]
+    spec: EmbeddingSpec
 
 
 def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
@@ -138,22 +91,6 @@ def resolve_dataset_metadata(source: str | None, reliability: str | None, indica
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
     return options
-
-
-def resolve_levels(geo: str | None, table: bool, region_levels: tuple[int, ...], default_resolution: int) -> list[tuple[str | None, str]]:
-    """The levels one upload makes, as (``geo`` option of the level's dataset, level): each listed resolution, finest
-    first, then ``table`` (no geo) when asked. A coarser resolution must be one of ``GEO_REGION_LEVELS``."""
-    if not geo:
-        if table:
-            raise PipelineError("invalid_options", "table=true needs the geo option: a plain upload is the table level already")
-        return [(None, "table")]
-    try:
-        levels = parse_geo_levels(geo, default_resolution)
-    except SpatialError as exc:
-        raise PipelineError("invalid_options", str(exc)) from exc
-    if stray := [r for _, r in levels[1:] if r not in region_levels]:
-        raise PipelineError("invalid_options", f"coarser geo levels {stray} are not GEO_REGION_LEVELS {list(region_levels)}")
-    return [(f"{loc}@{r}", str(r)) for loc, r in levels] + ([(None, "table")] if table else [])
 
 
 def _healthy(method):
@@ -338,13 +275,13 @@ class Engine:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
         levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
-        READY (``_superseded``). Processing is a separate call."""
+        READY (``uploads.replaced_by``). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
-        supersedes = self._check_supersedes(supersedes)
+        supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
-        levels = [] if auto else resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
-        path = self.ws.save_upload(name, stream, self.settings.max_upload_mb * 1024 * 1024)  # UploadTooLarge past the cap
+        levels = [] if auto else uploads.resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
+        path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
         if auto:
             try:
@@ -358,7 +295,7 @@ class Engine:
             raise refused
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
-            levels = resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
+            levels = uploads.resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
         with path.open("rb") as stored:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
@@ -417,7 +354,7 @@ class Engine:
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
-        supersedes = self._check_supersedes(supersedes)
+        supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         path = Path(path)
         created = utc_now()
         record = {
@@ -449,6 +386,8 @@ class Engine:
         return self.process(self.submit(path)["batch_id"])
 
     def process(self, batch_id: str) -> dict[str, Any]:
+        """One batch through its stages (docs/09_operations.md §9.1): read, mined and embedded outside any transaction, then
+        committed in one whose READY record is the commit point; readers switch to its graph only after that."""
         with self._lock:
             record = self.ws.load_batch(batch_id)
             if record is None:
@@ -460,100 +399,20 @@ class Engine:
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = self._load(record)
-                    ds = record["dataset_id"] = loaded.dataset_id
+                    record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
-                    duplicate = self.ws.ready_batch_for(ds)
-                    if duplicate:
-                        return self._skip(record, duplicate)
-
+                    duplicate = self.ws.ready_batch_for(loaded.dataset_id)
+                if duplicate:
+                    return self._skip(record, duplicate)
                 with self._stage(record, "PROFILING", timings, "discover_s"):
-                    result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s), spatial=loaded.spatial)
-                    selection = record["profile"].get("geo", {}).get("levels")  # @auto's, from the upload
-                    record["profile"] = {
-                        **result.profile.to_dict(),
-                        "derived_columns": loaded.derived_columns,
-                        "bins": loaded.bins,
-                        "categorical_overrides": loaded.categories,
-                    }
-                    if loaded.spatial:
-                        record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})
-                    if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
-                        record["warnings"].append(
-                            f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped"
-                        )
-                        kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
-                        record.update({"indicators": kept} if kept else {})
-                    self.ws.save_profile(ds, record["profile"])
-
+                    result = self._discover(record, loaded)
                 with self._stage(record, "VALIDATING_INSIGHTS", timings, "select_s"):
-                    covers = covers_of(result)
-                    insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=batch_id, filename=record["filename"])
-                    selection = select_insights(insights, self.settings.miner)
-                    kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
-                    if loaded.spatial:
-                        record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
-                        self.ws.save_profile(ds, record["profile"])
-                    rejections = [*result.rejections, *selection.rejections, *refused]
-                    self.ws.save_rejections(ds, [asdict(r) for r in rejections])
-                    if not kept:
-                        raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
-
+                    kept, rows, rejections = self._select(record, loaded, result)
                 with self._stage(record, "EMBEDDING", timings, "embed_s"):
                     canon = [canonicalize(i, self.settings.topology, result.profile.rows) for i in kept]
                     enc, spec = self._encode(canon)
                     self.ws.check_representation(spec)  # validate only; recorded at commit
-
-                replaced = self._superseded(record, ("READY", None))
-                with self.ws.transaction({"batch_id": batch_id}, journal=bool(replaced)) as cp:
-                    with self._stage(record, "UPDATING_ONTOLOGY", timings, "ontology_s"):
-                        seq = record["batch_seq"] = self.ws.next_batch_seq()
-                        ontology = self.ontology()
-                        ontology.recount_mass(self.ws.activations())  # the store's inertia is the journal's summed member weights
-                        update = ontology.ingest(
-                            enc["vector"], np.array([i.weight for i in kept]), [i.id for i in kept], batch_seq=seq, batch_id=batch_id
-                        )
-
-                    with self._stage(record, "BUILDING_GRAPH", timings, "graph_s"):
-                        if update.row_ids[0] != len(self.ws.vectors()):  # the ontology numbers rows after the journal
-                            raise RuntimeError(f"ontology row {update.row_ids[0]} does not continue the journal ({len(self.ws.vectors())} rows)")
-                        patterns = pattern_records(kept, canon, update.row_ids, spec)
-                        for rec in patterns:
-                            rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
-                        self.ws.save_covers(ds, {i.id: covers[i.expression] for i in kept})
-                        self._enter(record, "PERSISTING")
-                        self._refuse_journaled(kept)
-                        blocks = {**{k: enc[k] for k in BLOCKS}, "pattern_ids": np.array([i.id for i in kept])}
-                        self.ws.append(patterns, enc["vector"], update.activations, blocks, batch_id)
-                        if loaded.spatial:  # the map's file, from the journaled patterns
-                            ctx = loaded.spatial
-                            self.ws.save_geo(
-                                ds,
-                                {
-                                    "cells": ctx.cells.astype(str),
-                                    "point_cell": ctx.point_cell,
-                                    "lonlat": ctx.lonlat,
-                                    "nbr_ptr": ctx.nbr_ptr,
-                                    "nbr_idx": ctx.nbr_idx,
-                                },
-                            )
-                            atomic_write_json(self.ws.geo_cells_path(ds), geo_views.geo_cells(self.ws, ds, loaded))
-                        if replaced:  # after the new version joined its anchors: those it shares keep their ids
-                            record["superseded"] = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed")
-                        ontology.save()
-                        self.ws.record_representation(spec)
-                        self.ws.commit_batch_seq(seq)
-                        record["metadata_digest"] = metadata_digest(record)  # what the graph reads of the dataset, signed
-                        snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
-                        if state.catalog is None:
-                            record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
-
-                    record["metrics"] = batch_metrics(result, kept, rejections, update, spec, snapshot, timings, t0)
-                    if replaced:  # the anchors left after the old version went
-                        record["metrics"]["attractors_total"] = len(ontology.attractor_ids)
-                    record["status"] = "READY"
-                    record["stage_times"]["READY"] = utc_now()
-                    self._publishing = batch_id  # set before READY is on disk: a poll reads PERSISTING until _publish
-                    self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
+                snapshot, state = self._commit(record, _Mined(loaded, result, kept, rows, rejections, canon, enc, spec), timings, t0)
             except Exception as exc:  # failures before READY were rolled back by the transaction
                 return self._fail(record, exc, t0)
             start = time.perf_counter()
@@ -563,6 +422,93 @@ class Engine:
                 record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
             self.ws.save_batch(record)
             return record
+
+    def _discover(self, record: dict[str, Any], loaded: LoadedDataset) -> DiscoveryResult:
+        """PROFILING → DISCOVERING: the miner over the dataset as read, its profile on the record (with ``@auto``'s level
+        selection kept) and an indicator for a metric the dataset lacks dropped with a warning."""
+        result = run_discovery(loaded.frame, self.settings.miner, on_stage=lambda s: self._enter(record, s), spatial=loaded.spatial)
+        selection = record["profile"].get("geo", {}).get("levels")  # @auto's, from the upload
+        record["profile"] = {
+            **asdict(result.profile),
+            "derived_columns": loaded.derived_columns,
+            "bins": loaded.bins,
+            "categorical_overrides": loaded.categories,
+        }
+        if loaded.spatial:
+            record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})
+        if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
+            record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
+            kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
+            record.update({"indicators": kept} if kept else {})
+        self.ws.save_profile(record["dataset_id"], record["profile"])
+        return result
+
+    def _select(
+        self, record: dict[str, Any], loaded: LoadedDataset, result: DiscoveryResult
+    ) -> tuple[list[Insight], dict[str, np.ndarray], list[Rejection]]:
+        """VALIDATING_INSIGHTS: the insights built, selected and admitted, with the rows each covers and every rejection;
+        ``no_viable_insights`` when none is admitted."""
+        ds, covers = record["dataset_id"], covers_of(result)
+        insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=record["batch_id"], filename=record["filename"])
+        selection = select_insights(insights, self.settings.miner)
+        kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
+        if loaded.spatial:
+            record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
+            self.ws.save_profile(ds, record["profile"])
+        rejections = [*result.rejections, *selection.rejections, *refused]
+        self.ws.save_rejections(ds, [asdict(r) for r in rejections])
+        if not kept:
+            raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
+        return kept, {i.id: covers[i.expression] for i in kept}, rejections
+
+    def _commit(self, record: dict[str, Any], mined: _Mined, timings: dict[str, float], t0: float) -> tuple[dict[str, Any], CommittedState]:
+        """The transaction of one batch (docs/06_graph_and_storage.md §6.4): the ontology, the records, the journal and the
+        files, a version it replaces removed, the snapshot and the read state derived — then the READY record, the commit
+        point, as its last write. Returns what ``_publish`` switches readers to."""
+        ds, batch_id = record["dataset_id"], record["batch_id"]
+        replaced = uploads.replaced_by(record, self.ws.list_batches(), ("READY", None))
+        with self.ws.transaction({"batch_id": batch_id}, journal=bool(replaced)) as cp:
+            with self._stage(record, "UPDATING_ONTOLOGY", timings, "ontology_s"):
+                seq = record["batch_seq"] = self.ws.next_batch_seq()
+                ontology = self.ontology()
+                ontology.recount_mass(self.ws.activations())  # the store's inertia is the journal's summed member weights
+                update = ontology.ingest(
+                    mined.enc["vector"], np.array([i.weight for i in mined.kept]), [i.id for i in mined.kept], batch_seq=seq, batch_id=batch_id
+                )
+
+            with self._stage(record, "BUILDING_GRAPH", timings, "graph_s"):
+                if update.row_ids[0] != len(self.ws.vectors()):  # the ontology numbers rows after the journal
+                    raise RuntimeError(f"ontology row {update.row_ids[0]} does not continue the journal ({len(self.ws.vectors())} rows)")
+                patterns = pattern_records(mined.kept, mined.canon, update.row_ids, mined.spec)
+                for rec in patterns:
+                    rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
+                self.ws.save_covers(ds, mined.rows)
+
+            with self._stage(record, "PERSISTING", timings, "persist_s"):
+                self._refuse_journaled(mined.kept)
+                blocks = {**{k: mined.enc[k] for k in BLOCKS}, "pattern_ids": np.array([i.id for i in mined.kept])}
+                self.ws.append(patterns, mined.enc["vector"], update.activations, blocks, batch_id)
+                if mined.loaded.spatial:  # the map's files, from the journaled patterns
+                    self.ws.save_geo(ds, mined.loaded.spatial)
+                    self.ws.save_geo_cells(ds, geo_views.geo_cells(self.ws, ds, mined.loaded))
+                if replaced:  # after the new version joined its anchors: those it shares keep their ids
+                    record["superseded"] = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed")
+                ontology.save()
+                self.ws.record_representation(mined.spec)
+                self.ws.commit_batch_seq(seq)
+                record["metadata_digest"] = metadata_digest(record)  # what the graph reads of the dataset, signed
+                snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
+                if state.catalog is None:
+                    record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
+
+            record["metrics"] = batch_metrics(mined.result, mined.kept, mined.rejections, update, mined.spec, snapshot, timings, t0)
+            if replaced:  # the anchors left after the old version went
+                record["metrics"]["attractors_total"] = len(ontology.attractor_ids)
+            record["status"] = "READY"
+            record["stage_times"]["READY"] = utc_now()
+            self._publishing = batch_id  # set before READY is on disk: a poll reads PERSISTING until _publish
+            self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
+        return snapshot, state
 
     # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
 
@@ -586,45 +532,6 @@ class Engine:
             strict=record.get("strict", True),
             locator=record.get("locator"),
         )
-
-    @_healthy
-    def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
-        """``pattern_id`` recomputed from its stored upload (docs/06_graph_and_storage.md §6.7): ``reproduced`` when its rows
-        and every recomputed number match the journal, ``differs`` with what does not, ``source_changed`` when the file
-        read with its options (under the current miner settings) no longer gives the dataset id, ``source_missing`` when
-        it is gone. Reads only, without the writer lock: a file removed meanwhile is ``source_missing``."""
-        records = self.ws.patterns()
-        record = next((r for r in records if r["id"] == pattern_id), None)
-        if record is None:
-            raise PipelineError("unknown_pattern", pattern_id)
-        ds = record["dataset_id"]
-        batch = self.ws.ready_batch_for(ds)
-        out = {"pattern_id": pattern_id, "dataset_id": ds, "diff": [], "not_checked": list(NOT_RECOMPUTED)}
-        try:
-            loaded = self._load(batch) if batch else None
-        except IngestionError as exc:  # unreadable now, or refused by the current settings
-            return out | {"status": "source_missing" if exc.code == "unsupported_file" else "source_changed", "detail": str(exc)}
-        if loaded is None:
-            return out | {"status": "source_missing"}
-        if loaded.dataset_id != ds:
-            return out | {"status": "source_changed", "detail": f"the file read with its options now gives {loaded.dataset_id}"}
-        family = Counter(r["provenance"].get("multiple_testing_family") for r in records if r["dataset_id"] == ds).most_common(1)[0][0]
-        fresh = recompute_statistics(
-            loaded.frame,
-            [(c["attribute"], c["value"]) for c in record["conditions"]],
-            record["expression"],
-            [s["metric"] for s in record["shifts"]],
-            loaded.spatial,
-            family,
-        )
-        try:
-            covers = self.ws.load_covers(ds).get(pattern_id)
-        except (OSError, ValueError):  # rewritten meanwhile: the conditions decide the rows
-            covers = None
-        if covers is None:
-            out["not_checked"].append("its rows in covers.npz (none stored)")
-        diff = verify_diff(record, fresh, covers, family)
-        return out | {"status": "differs" if diff else "reproduced", "diff": diff}
 
     @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str) -> dict[str, Any]:
@@ -699,10 +606,7 @@ class Engine:
         record["status"] = "FAILED"
         record["failed_stage"] = list(record["stage_times"])[-1]
         record["error"] = {"code": code, "message": str(exc)}
-        levels = record["profile"].get("geo", {}).get("levels") or {}
-        if code in EMPTY_LEVEL and levels.get("capped") and str(levels["chosen"][0]) == str(record.get("level")):  # @auto's finest
-            finer = f"{record['geo'].partition('@')[0]}@{min(levels['capped'])}"  # the nearest level the cap left out
-            record["error"]["message"] += f"; @auto left {finer} out for GEO_AUTO_MAX_CELLS alone, try it"
+        record["error"]["message"] += uploads.auto_level_hint(record, code)
         if code == "internal_error":
             record["error"]["trace"] = traceback.format_exc(limit=6)
         record["metrics"]["processing_duration_s"] = time.perf_counter() - t0
@@ -711,6 +615,11 @@ class Engine:
         self.ws.save_batch(record)
         log.warning("[%s] FAILED %s: %s", record["batch_id"], code, exc)
         return record
+
+    @_healthy
+    def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
+        """``pattern_id`` recomputed from its stored upload (``verify.verify_pattern``, docs/06_graph_and_storage.md §6.7)."""
+        return verify.verify_pattern(self.ws, pattern_id, self._load)
 
     def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
         """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and
@@ -736,7 +645,7 @@ class Engine:
         the same transaction (docs/06_graph_and_storage.md §6.8)."""
         changes = resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
-            changes["supersedes"] = self._check_supersedes(supersedes) or None
+            changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._lock:
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
@@ -754,7 +663,7 @@ class Engine:
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
-            replaced = self._targets(record, own) if changes.get("supersedes") else None
+            replaced = uploads.targets(record, self.ws.list_batches(), own) if changes.get("supersedes") else None
             ontology = self.ontology()
             # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
             with self.ws.transaction({"dataset_id": dataset_id}, journal=bool(replaced)) as cp:
@@ -774,63 +683,16 @@ class Engine:
                 "neo4j": self._publish(state, snapshot),
             }
 
-    def _check_supersedes(self, target: str | None) -> str | None:
-        """``target`` stripped (None when empty), refused unless it names a READY dataset or an upload with batches."""
-        target = (target or "").strip() or None
-        if target and not any(
-            target in (b.get("dataset_id"), b.get("upload_id")) and b["status"] in ("READY", "SKIPPED") for b in self.ws.list_batches()
-        ):
-            raise PipelineError("invalid_options", f"supersedes {target}: no READY dataset or upload has this id")
-        return target
-
-    def _superseded(self, record: dict[str, Any], outcome: tuple[str, str | None]) -> tuple[set[str], list[dict[str, Any]]] | None:
-        """What ``record``'s batch replaces now (``_targets``), its own ``outcome`` (status, error code) given: its
-        ``supersedes`` once every level of the same upload call (one stored file) is done, one holds insights and none
-        failed but for having nothing to mine (``EMPTY_LEVEL``), so the last level applies it; otherwise the old version
-        stays, with a warning."""
-        if not record.get("supersedes"):
-            return None
-        levels = [b for b in self.ws.list_batches() if b["batch_id"] != record["batch_id"] and b.get("source_path") == record["source_path"]]
-        if any(b["status"] not in TERMINAL for b in levels):
-            return None
-        done = [outcome, *((b["status"], (b.get("error") or {}).get("code")) for b in levels)]
-        if any(status == "FAILED" and code not in EMPTY_LEVEL for status, code in done) or all(status == "FAILED" for status, _ in done):
-            record["warnings"].append(
-                f"supersedes {record['supersedes']} not applied: a level of this upload failed or none holds insights; the old version stays"
-            )
-            return None
-        try:
-            return self._targets(record, {b.get("dataset_id") for b in levels})
-        except PipelineError as exc:  # busy: the batch commits, the old version stays
-            record["warnings"].append(f"supersedes {record['supersedes']} not applied: {exc}")
-            return None
-
     def _supersede_alone(self, record: dict[str, Any], outcome: tuple[str, str | None]) -> None:
         """``supersedes`` applied by a last level that commits nothing (SKIPPED, or no insight): a deletion of its own."""
         try:
-            if replaced := self._superseded(record, outcome):
+            if replaced := uploads.replaced_by(record, self.ws.list_batches(), outcome):
                 chosen = {b["batch_id"] for b in replaced[1]}
                 # not a batch intent: recover rolls an unfinished removal back whatever the record's status
                 removed = self._delete(lambda b: b["batch_id"] in chosen, {"superseded_by": record["batch_id"]}, "unknown_dataset")
                 record["neo4j"], record["superseded"] = removed.pop("neo4j"), removed
         except Exception as exc:  # the batch's own outcome stands; the old version stays
             record["warnings"].append(f"supersedes {record['supersedes']} not applied: {type(exc).__name__}: {exc}")
-
-    def _targets(self, record: dict[str, Any], own: set[str | None]) -> tuple[set[str], list[dict[str, Any]]] | None:
-        """The datasets named by ``record['supersedes']`` (a dataset id, or every dataset of an upload id) and all their
-        batches, never ``record``'s own dataset nor those in ``own``; None, with a warning, when none is left; ``busy`` while
-        one of those batches is still to run."""
-        target = record["supersedes"]
-        every = [b for b in self.ws.list_batches() if b["batch_id"] != record["batch_id"]]
-        ids = {b["dataset_id"] for b in every if target in (b.get("dataset_id"), b.get("upload_id")) and b.get("dataset_id")}
-        ids -= own | {record.get("dataset_id")}
-        if not ids:
-            record["warnings"].append(f"supersedes {target}: nothing left to replace")
-            return None
-        batches = [b for b in every if b.get("dataset_id") in ids or b.get("upload_id") == target]
-        if any(b["status"] not in TERMINAL for b in batches):
-            raise PipelineError("busy", f"supersedes {target}: a batch of it is still to run")
-        return ids, batches
 
     @_healthy
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:

@@ -21,8 +21,10 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from attractor_topology.encoder import model_folder
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
+from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import PROJECT_ROOT, Settings
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
@@ -157,8 +159,7 @@ def create_app(engine: Engine) -> FastAPI:
         table: bool = Form(False),
         supersedes: str = Form(""),
     ) -> JSONResponse:
-        cap = engine.settings.max_upload_mb * 1024 * 1024
-        if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
+        if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
         name = Path(file.filename or "upload.csv").name
@@ -275,12 +276,9 @@ def log_gpu_headroom() -> None:
 def ready_app(settings: Settings) -> FastAPI:
     """The app as a service start needs it (also used by scripts/dev.py): the model files checked before anything
     touches the workspace, then the engine opened and the model warmed up."""
-    from attractor_topology.encoder import model_folder
-    from insight_graph_service.core.model_store import problems
-
     folder = model_folder(settings.topology.model_dir)
     missing = problems(folder, hashes=False)
-    if missing:  # before torch loads anything: a clear message instead of a stack trace
+    if missing:  # before the engine opens: a clear message instead of a stack trace
         log.error("embedding model in %s is incomplete (%s): run python -m insight_graph_service.core.model_store", folder, "; ".join(missing))
         raise SystemExit(3)
     try:

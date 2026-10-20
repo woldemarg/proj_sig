@@ -105,8 +105,7 @@ class Insight:
         data["shifts"] = tuple(Shift(**s) for s in data["shifts"])
         data["drivers"] = tuple(data.get("drivers", ()))
         data["aliases"] = tuple(data.get("aliases", ()))
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass(frozen=True)

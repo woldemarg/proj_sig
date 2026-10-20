@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.traversal import LATENT, PathStep, TraversalResult
-from graph_query_engine.vertical import ScaleChain, picture, rank_zones, resolution, scale_chain, upload_of
+from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
+from graph_query_engine.vertical import ScaleChain, picture, rank_zones, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
@@ -107,8 +108,24 @@ class Evidence:
         return asdict(self)
 
     def to_prompt(self) -> str:
-        p = self.parsed
+        """The evidence as the LLM reads it: its sections in the order of docs/07_question_answering.md §7.4."""
         plain = self.plain_language()
+        sections = (
+            self._head(),
+            self._dataset_lines(),
+            self._plain_lines(plain),
+            self._baseline_lines(),
+            self._anchor_lines(),
+            self._evidence_lines(plain),
+            self._chain_lines(),
+            self._zone_lines(),
+            self._note_lines(),
+        )
+        return "\n".join(line for section in sections for line in section)
+
+    def _head(self) -> list[str]:
+        """QUESTION, PARSED, the asked AREA and the UNITS."""
+        p = self.parsed
         lines = [f"QUESTION: {self.query or '(no text: the map area below is the question)'}"]
         parsed_bits = []
         if p.get("targets"):
@@ -133,96 +150,119 @@ class Evidence:
         lines.append(
             "UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset."
         )
-        lines.append("")
-        lines.append("DATASETS:")
+        return lines
+
+    def _dataset_lines(self) -> list[str]:
+        lines = ["", "DATASETS:"]
         for d in self.datasets:
             trust = f" source={json.dumps(d['source'], ensure_ascii=False)}" if d.get("source") else ""  # quoted: free text
             if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
                 trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
             lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
-        if plain:
-            lines.append("")
-            lines.append("PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):")
-            lines.extend(f"- {meaning}" for _, meaning in plain)
-        lines.append("")
-        lines.append("METRIC BASELINES (whole dataset):")
+        return lines
+
+    @staticmethod
+    def _plain_lines(plain: list[tuple[str, str]]) -> list[str]:
+        if not plain:
+            return []
+        return [
+            "",
+            "PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):",
+            *(f"- {meaning}" for _, meaning in plain),
+        ]
+
+    def _baseline_lines(self) -> list[str]:
+        lines = ["", "METRIC BASELINES (whole dataset):"]
         for m in self.metrics:
             parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
             meaning = f" ({', '.join(parts)})" if parts else ""
             lines.append(
                 f"- {self.reword(humanize(m['metric']))}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}"
             )
-        if self.attractors:
-            lines.append("")
-            lines.append("LATENT ANCHORS VISITED (recurring phenomena learned across patterns):")
-            for a in self.attractors:
-                rel = ", ".join(f"{r['id']} ({self._links(r)})" for r in a["related"])
-                twin = next((r for r in a["related"] if r["id"] == a.get("same_as")), {})
-                same = (
-                    f" (same description as {a['same_as']}; "
-                    + (f"shares {_members(twin['shared'])} with it)" if twin.get("shared") else "a separate anchor with no shared members)")
-                    if a.get("same_as")
-                    else ""
-                )
-                lines.append(
-                    f'- {a["id"]} "{a["description"]}"{same}: {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes;'
-                    f" related: {rel or 'none'}"
-                )
-        lines.append("")
+        return lines
+
+    def _anchor_lines(self) -> list[str]:
+        if not self.attractors:
+            return []
+        lines = ["", "LATENT ANCHORS VISITED (recurring phenomena learned across patterns):"]
+        for a in self.attractors:
+            rel = ", ".join(f"{r['id']} ({self._links(r)})" for r in a["related"])
+            twin = next((r for r in a["related"] if r["id"] == a.get("same_as")), {})
+            same = (
+                f" (same description as {a['same_as']}; "
+                + (f"shares {_members(twin['shared'])} with it)" if twin.get("shared") else "a separate anchor with no shared members)")
+                if a.get("same_as")
+                else ""
+            )
+            lines.append(
+                f'- {a["id"]} "{a["description"]}"{same}: {a["n_patterns"]} patterns over {a["distinct_scopes"]} distinct scopes;'
+                f" related: {rel or 'none'}"
+            )
+        return lines
+
+    def _evidence_lines(self, plain: list[tuple[str, str]]) -> list[str]:
         trusted = any(it.trust for it in self.items)
-        lines.append(
-            f"EVIDENCE (statistical findings computed from the uploaded data;{' trust is given per item;' if trusted else ''} cite as [P#]):"
-        )
+        lines = [
+            "",
+            f"EVIDENCE (statistical findings computed from the uploaded data;{' trust is given per item;' if trusted else ''} cite as [P#]):",
+        ]
         for it in self.items:
-            if it.folded_into:  # restated on its host's scale line
-                continue
-            s = it.statistics
-            scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
-            area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
-            lines.append(f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})")
-            lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
-            if it.relationship:
-                lines.append(f"     relationship: {self.reword(it.relationship)} (divergence {s['emm_score']:.2f})")
+            if not it.folded_into:  # a folded item is restated on its host's scale line
+                lines += self._item_lines(it, plain)
+        return lines
+
+    def _item_lines(self, it: EvidenceItem, plain: list[tuple[str, str]]) -> list[str]:
+        s = it.statistics
+        scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
+        area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
+        lines = [f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})"]
+        lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
+        if it.relationship:
+            lines.append(f"     relationship: {self.reword(it.relationship)} (divergence {s['emm_score']:.2f})")
+        lines.append(
+            f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
+            f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
+        )
+        if it.trust:
+            lines.append(f"     trust: {it.trust}")
+        spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
+        if spatial and spatial.cells is not None and spatial.resolution is not None:
+            compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
+            n_eff = f" (effective n {format_value(spatial.n_eff)})" if spatial.n_eff is not None else ""
             lines.append(
-                f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
-                f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
+                f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}){compactness}"
+                f" | significance corrected for spatial autocorrelation{n_eff}"
             )
-            if it.trust:
-                lines.append(f"     trust: {it.trust}")
-            spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
-            if spatial and spatial.cells is not None and spatial.resolution is not None:
-                compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
-                n_eff = f" (effective n {format_value(spatial.n_eff)})" if spatial.n_eff is not None else ""
-                lines.append(
-                    f"     place: {spatial.cells:,} H3 cells (resolution {spatial.resolution}){compactness}"
-                    f" | significance corrected for spatial autocorrelation{n_eff}"
-                )
-            if it.scale in SCALE_TEXT:
-                also = "".join(f"; also at {self._level(f)} [{f.key}]: {self._shift(f, it.target)}" for f in self.items if f.key in it.also)
-                lines.append(f"     scale: {SCALE_TEXT[it.scale]}{also}")
-            tag = " [scope-disjoint from seeds: no shared condition]" if it.transversal_only else LOCATION_TAG.get(it.located, "")
-            lines.append(f"     retrieved via: {it.path_text}{tag}")
+        if it.scale in SCALE_TEXT:
+            also = "".join(f"; also at {self._level(f)} [{f.key}]: {self._shift(f, it.target)}" for f in self.items if f.key in it.also)
+            lines.append(f"     scale: {SCALE_TEXT[it.scale]}{also}")
+        tag = " [scope-disjoint from seeds: no shared condition]" if it.transversal_only else LOCATION_TAG.get(it.located, "")
+        lines.append(f"     retrieved via: {it.path_text}{tag}")
+        return lines
+
+    def _chain_lines(self) -> list[str]:
         chains, regions = [c for c in self.scale_chains if c["up"] or c["down"]], self._regions()
-        if chains or regions:
-            lines.append("")
-            lines.append("SCALE CHAIN (one phenomenon at finer and coarser levels: a shared anchor and region; then the regions above it):")
-            lines.extend(f"- {self._chain_text(c)}" for c in chains)
-            lines.extend(regions)
-        if self.zones:
-            keys = self._keys()
-            lines.append("")
-            lines.append(
-                "ZONES (where the evidence lies on the map: the regions of one level holding most of it; with a direction, only findings shifting that way count):"
-            )
-            lines.extend(
+        if not (chains or regions):
+            return []
+        head = "SCALE CHAIN (one phenomenon at finer and coarser levels: a shared anchor and region; then the regions above it):"
+        return ["", head, *(f"- {self._chain_text(c)}" for c in chains), *regions]
+
+    def _zone_lines(self) -> list[str]:
+        if not self.zones:
+            return []
+        keys = self._keys()
+        return [
+            "",
+            "ZONES (where the evidence lies on the map: the regions of one level holding most of it; with a direction, only findings shifting that way count):",
+            *(
                 f"- Z{n} = {z['id']} (res {z['resolution']}): contains {', '.join(keys[p] for p in z['holds'])}; score {z['score']:.2f};"
                 f" {z['patterns']} patterns over {z['datasets']} datasets, {z['themes']} themes{self._weakest(z)}"
                 for n, z in enumerate(self.zones, start=1)
-            )
-        if self.notes:
-            lines.append("")
-            lines.extend(f"NOTE: {n}" for n in self.notes)
-        return "\n".join(lines)
+            ),
+        ]
+
+    def _note_lines(self) -> list[str]:
+        return ["", *(f"NOTE: {n}" for n in self.notes)] if self.notes else []
 
     @staticmethod
     def _links(related: dict[str, Any]) -> str:
@@ -285,25 +325,26 @@ class Evidence:
             for rid in shown
         ]
 
-    def _glossary(self) -> dict[str, str]:
+    @cached_property
+    def _glossary(self) -> dict[str, str]:  # read by every reword of one rendering: merged once
         return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
 
     def reword(self, text: str) -> str:
         """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning."""
-        for col, meaning in sorted(self._glossary().items(), key=lambda kv: -len(kv[0])):
+        for col, meaning in sorted(self._glossary.items(), key=lambda kv: -len(kv[0])):
             if "=" not in col:
                 text = text.replace(humanize(col), meaning).replace(col, meaning)
         return text
 
     def reword_condition(self, condition: str) -> str:
         """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>'."""
-        glossary = self._glossary()
+        glossary = self._glossary
         attribute, _, value = condition.partition("=")
         return glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
 
     def plain_language(self) -> list[tuple[str, str]]:
         """(column, meaning) for the derived columns the evidence names, from the datasets' glossaries."""
-        glossary = self._glossary()
+        glossary = self._glossary
         named: list[str] = []
         for it in self.items:
             named += [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]]
@@ -381,14 +422,18 @@ def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -
     return f"credibility {level} ({words}{': ' + detail if detail else ''})"
 
 
-def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
-    """Each item's trust line (source reliability | credibility | integrity) once the graph has a declared source or
-    reliability, or two uploads (the levels of one upload are one); otherwise the evidence stays as it was without sources."""
+def _trust_applies(graph: DualGraph) -> bool:
+    """Whether the items carry a trust line (docs/07_question_answering.md §7.4): once the graph has a declared source or
+    reliability, a dataset whose metadata failed its check, or two uploads (the levels of one upload are one); otherwise
+    the evidence stays as it was without sources."""
     datasets = [d["props"] for d in graph.of_kind("Dataset")]
     uploads = {d.get("upload_id") or d["dataset_id"] for d in datasets}
     declared = any(d.get("source") or d.get("reliability", "F") != "F" or d.get("integrity") == "mismatch" for d in datasets)
-    if not (len(uploads) >= 2 or declared):
-        return
+    return len(uploads) >= 2 or declared
+
+
+def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
+    """Each item's trust line: source reliability | credibility | integrity (when ``_trust_applies``)."""
     keys = {it.pattern_id: it.key for it in items}
     for it in items:
         props = graph.nodes.get(dataset_node_id(it.provenance["dataset_id"]), {"props": {}})["props"]
@@ -404,7 +449,6 @@ def _add_trust(items: list[EvidenceItem], graph: DualGraph) -> None:
             parts.append(_credibility_text(it.credibility, it.credibility_basis, keys))
         parts.append(f"integrity {graph.nodes[it.pattern_id]['props'].get('integrity', 'unverified')}")
         it.trust = " | ".join(parts)
-        it.validation = it.validation.removesuffix("; integrity unverified")  # the trust line says it
 
 
 def _members(n: int, kind: str = "") -> str:
@@ -421,7 +465,7 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
-def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> list[dict[str, Any]]:
+def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool) -> list[dict[str, Any]]:
     """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
     (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
     the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
@@ -435,17 +479,18 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, item: Any) -> lis
             continue
         hosts.add(chain.pattern_id)
         host.scale = chain.scale
-        upload = upload_of(graph, chain.pattern_id)
+        upload = graph.facts(chain.pattern_id).upload
         for steps in (chain.up, chain.down):
             agrees = True
             for step in steps:
                 other = by_id.get(step.pattern_id)
                 if other is None:
                     path_text = f"vertical {step.direction} from {by_id[step.origin].key} through {step.attractor} in {step.region}"
-                    other = by_id[step.pattern_id] = item(f"P{len(items) + 1}", step.pattern_id, f"vertical_{step.direction}", [], path_text)
+                    key, role = f"P{len(items) + 1}", f"vertical_{step.direction}"
+                    other = by_id[step.pattern_id] = _item(graph, config, trusted, key, step.pattern_id, role, [], path_text)
                     items.append(other)
                 agrees = agrees and step.relation == "corresponds"
-                if agrees and upload is not None and upload_of(graph, step.pattern_id) == upload:
+                if agrees and upload is not None and graph.facts(step.pattern_id).upload == upload:
                     host.also.append(other.key)
                     if step.direction == "down" and host.scale == "insufficient":  # a finer level holds: the group is regional
                         host.scale = "regional"
@@ -469,7 +514,7 @@ def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, conf
 
     if query.conditions:
         return []
-    geo = [it.pattern_id for it in items if not it.folded_into and resolution(graph, it.pattern_id) is not None]
+    geo = [it.pattern_id for it in items if not it.folded_into and graph.facts(it.pattern_id).resolution is not None]
     return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
@@ -478,65 +523,69 @@ def chain_dict(chain: ScaleChain, graph: DualGraph) -> dict[str, Any]:
     return asdict(chain) | {"regions": [{"id": r, **picture(graph, r)} for r in chain.regions]}
 
 
-def build_evidence(
-    query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig, place_scores: dict[str, float] | None = None
-) -> Evidence:
-    items: list[EvidenceItem] = []
-    chosen, forged = result.patterns[:EVIDENCE_MAX_PATTERNS], result.excluded  # the walk ranks intact patterns only
+def _item(
+    graph: DualGraph,
+    config: QueryConfig,
+    trusted: bool,
+    key: str,
+    pid: str,
+    role: str,
+    path: list[PathStep],
+    path_text: str,
+    transversal_only: bool = False,
+    located: str = "",
+) -> EvidenceItem:
+    """One evidence item: the pattern's statistics, its phrases, how it was reached and its trust fields."""
+    node = graph.nodes[pid]
+    ins = graph.insight(pid)
+    material = config.thresholds.has_material_covariance(ins)
+    acts = [
+        {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
+        for e, _ in graph.incident(pid, ["ACTIVATES"])
+        if e["source"] == pid
+    ]
+    unverified = not trusted and node["props"].get("integrity") == "unverified"  # with a trust line, the line says it
+    return EvidenceItem(
+        key=key,
+        pattern_id=pid,
+        role=role,
+        headline=node["label"],
+        scope=[c.expr for c in ins.conditions],
+        target=ins.target,
+        phenomenon_type=ins.phenomenon_type,
+        statistics={
+            "support": ins.support,
+            "support_fraction": ins.support_fraction,
+            "baseline": ins.baseline,
+            "local": ins.local,
+            "effect_size": ins.effect_size,
+            "shifts": [asdict(s) for s in ins.shifts],
+            "emm_score": ins.emm_score,
+            "stability": ins.stability,
+            "p_value": ins.p_value,
+            "p_adjusted": ins.p_adjusted,
+            "weight": ins.weight,
+            "drivers": list(ins.drivers),
+            "covariance": ins.covariance,
+            "compactness": node["props"].get("compactness"),
+        },
+        scope_text=describe_scope(ins.conditions),
+        shift_text=[describe_shift(s) for s in config.thresholds.phenomenon_shifts(ins)],
+        relationship=describe_covariance(ins.covariance) if material else "",
+        path=[asdict(st) for st in path],
+        path_text=path_text,
+        validation=describe_validation(ins, config.thresholds) + ("; integrity unverified" if unverified else ""),
+        attractors=acts,
+        transversal_only=transversal_only,
+        located=located,
+        credibility=node["props"].get("credibility"),
+        credibility_basis=node["props"].get("credibility_basis", {}),
+        provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
+    )
 
-    def item(key: str, pid: str, role: str, path: list[PathStep], path_text: str, transversal_only: bool = False, located: str = "") -> EvidenceItem:
-        node = graph.nodes[pid]
-        ins = graph.insight(pid)
-        material = config.thresholds.has_material_covariance(ins)
-        acts = [
-            {"attractor": e["target"], "alignment": round(e["weight"], 3), "label": graph.nodes[e["target"]]["label"]}
-            for e, _ in graph.incident(pid, ["ACTIVATES"])
-            if e["source"] == pid
-        ]
-        return EvidenceItem(
-            key=key,
-            pattern_id=pid,
-            role=role,
-            headline=node["label"],
-            scope=[c.expr for c in ins.conditions],
-            target=ins.target,
-            phenomenon_type=ins.phenomenon_type,
-            statistics={
-                "support": ins.support,
-                "support_fraction": ins.support_fraction,
-                "baseline": ins.baseline,
-                "local": ins.local,
-                "effect_size": ins.effect_size,
-                "shifts": [asdict(s) for s in ins.shifts],
-                "emm_score": ins.emm_score,
-                "stability": ins.stability,
-                "p_value": ins.p_value,
-                "p_adjusted": ins.p_adjusted,
-                "weight": ins.weight,
-                "drivers": list(ins.drivers),
-                "covariance": ins.covariance,
-                "compactness": node["props"].get("compactness"),
-            },
-            scope_text=describe_scope(ins.conditions),
-            shift_text=[describe_shift(s) for s in config.thresholds.phenomenon_shifts(ins)],
-            relationship=describe_covariance(ins.covariance) if material else "",
-            path=[asdict(st) for st in path],
-            path_text=path_text,
-            validation=describe_validation(ins, config.thresholds)
-            + ("; integrity unverified" if node["props"].get("integrity") == "unverified" else ""),
-            attractors=acts,
-            transversal_only=transversal_only,
-            located=located,
-            credibility=node["props"].get("credibility"),
-            credibility_basis=node["props"].get("credibility_basis", {}),
-            provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
-        )
 
-    for idx, r in enumerate(chosen, start=1):
-        items.append(item(f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located))
-    chains = _add_vertical(items, graph, item)
-    _add_trust(items, graph)
-
+def _anchor_section(result: TraversalResult, graph: DualGraph) -> list[dict[str, Any]]:
+    """The anchors the walk visited, each with its description and its latent neighbours (``LATENT ANCHORS VISITED``)."""
     attractors, described = [], {}
     for a in result.attractors:
         node = graph.nodes[a.node_id]
@@ -562,11 +611,13 @@ def build_evidence(
             | ({"same_as": described[description]} if description in described else {})
         )
         described.setdefault(description, a.node_id)
+    return attractors
 
-    ds_ids = sorted({it.provenance["dataset_id"] for it in items})
+
+def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
+    """The items' datasets (``DATASETS``): file, rows, batch, the declared trust and the glossary."""
     datasets = []
-    metrics: dict[tuple[str, str], dict[str, Any]] = {}
-    for ds in ds_ids:
+    for ds in sorted({it.provenance["dataset_id"] for it in items}):
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
         batch = next((it.provenance["batch_id"] for it in items if it.provenance["dataset_id"] == ds), None)
         props = dnode["props"]
@@ -576,7 +627,13 @@ def build_evidence(
         )
         if dnode["props"].get("glossary"):
             datasets[-1]["glossary"] = dnode["props"]["glossary"]
-    for it in items:  # baselines of the metrics the prompt actually mentions
+    return datasets
+
+
+def _baselines(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig) -> list[dict[str, Any]]:
+    """The whole-dataset median and MAD of every metric the prompt mentions (``METRIC BASELINES``)."""
+    metrics: dict[tuple[str, str], dict[str, Any]] = {}
+    for it in items:
         ins = graph.insight(it.pattern_id)
         named = [s.metric for s in config.thresholds.phenomenon_shifts(ins)]
         if config.thresholds.has_material_covariance(ins):
@@ -591,6 +648,11 @@ def build_evidence(
                     "global_median": mp["global_median"],
                     "global_mad": mp["global_mad"],
                 } | {k: mp[k] for k in ("indicator", "unit") if k in mp}
+    return list(metrics.values())
+
+
+def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: list[Retrieved], place_scores: dict[str, float] | None) -> list[str]:
+    """The NOTEs: how the items were reached, what is missing, what was excluded or ignored."""
     notes = []
     located = [it.key for it in items if it.located]
     if located:
@@ -621,17 +683,35 @@ def build_evidence(
     ]
     if not items and not forged:
         notes.append("No pattern in the graph matched the question.")
+    return notes
+
+
+def build_evidence(
+    query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig, place_scores: dict[str, float] | None = None
+) -> Evidence:
+    """The walk's patterns as citable evidence: the items (with the vertical zoom's and the trust lines), the anchors
+    visited, the datasets and their baselines, the notes, the zones or the asked area."""
+    chosen, forged = result.patterns[:EVIDENCE_MAX_PATTERNS], result.excluded  # the walk ranks intact patterns only
+    trusted = _trust_applies(graph)
+    items = [
+        _item(graph, config, trusted, f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located)
+        for idx, r in enumerate(chosen, start=1)
+    ]
+    chains = _add_vertical(items, graph, config, trusted)
+    if trusted:
+        _add_trust(items, graph)
+    datasets = _datasets(items, graph)
     return Evidence(
         query=query.text,
         parsed=query.to_dict(),
         seed_patterns=[it.key for it in items if it.role == "seed"],
         items=items,
-        attractors=attractors,
+        attractors=_anchor_section(result, graph),
         paths=[it.path_text for it in items],
-        metrics=list(metrics.values()),
+        metrics=_baselines(items, graph, config),
         datasets=datasets,
         provenance=[{"key": it.key, **it.provenance} for it in items],
-        notes=notes,
+        notes=_notes(items, datasets, forged, place_scores),
         scale_chains=chains,
         zones=[] if place_scores else _zones(query, items, graph, config),  # an asked area is the question's place: no second one
         area={it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores} if place_scores else None,

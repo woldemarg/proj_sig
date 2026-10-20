@@ -24,23 +24,20 @@ by construction.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scratch import demo_engine, save_result
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from graph_query_engine.search import CommittedState  # noqa: E402
-from graph_query_engine.seeds import SeedMatch  # noqa: E402
-from graph_query_engine.traversal import structural_closure, traverse  # noqa: E402
-from insight_contracts import Insight  # noqa: E402
-from insight_graph_service.core.demo import GROUND_TRUTH  # noqa: E402
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.workspace import utc_now  # noqa: E402
+from graph_query_engine.search import CommittedState
+from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.traversal import structural_closure, traverse
+from insight_contracts import Insight
+from insight_graph_service.core.demo import GROUND_TRUTH
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.workspace import utc_now
 
 Truth = dict[str, list[dict[str, str]]]  # mechanism -> planted scopes
 
@@ -62,11 +59,15 @@ class Case:
     analogues: set[str]
 
 
-def phenomenon_of(ins: Insight, truth: Truth) -> str | None:
-    """Planted mechanism whose scope contains the pattern's scope; None if none or ambiguous."""
-    conds = {(c.attribute, c.value) for c in ins.conditions}
+def label_of(conds: set[tuple[str, str]], truth: Truth) -> str | None:
+    """The planted mechanism one of whose scopes the conditions contain; None if none or ambiguous (the benchmarks' label)."""
     hits = [name for name, scopes in truth.items() if any(set(s.items()) <= conds for s in scopes)]
     return hits[0] if len(hits) == 1 else None
+
+
+def phenomenon_of(ins: Insight, truth: Truth) -> str | None:
+    """Planted mechanism whose scope contains the pattern's scope; None if none or ambiguous."""
+    return label_of({(c.attribute, c.value) for c in ins.conditions}, truth)
 
 
 def build_cases(state: CommittedState, truth: Truth) -> list[Case]:
@@ -84,12 +85,12 @@ def build_cases(state: CommittedState, truth: Truth) -> list[Case]:
     return cases
 
 
-def _cosine_rank(seed: str, vecs: dict[str, np.ndarray]) -> list[str]:
+def cosine_rank(seed: str, vecs: dict[str, np.ndarray]) -> list[str]:
     q = vecs[seed]
     return [pid for pid, _ in sorted(((p, float(v @ q)) for p, v in vecs.items() if p != seed), key=lambda x: -x[1])]
 
 
-def _score(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
+def rank_scores(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
     top = ranked[:k]
     hits = sum(1 for p in top if p in relevant)
     first = next((i for i, p in enumerate(ranked, start=1) if p in relevant), None)
@@ -115,8 +116,8 @@ def run_experiment(engine: Engine, *, k: int = 5) -> dict[str, Any]:
                 ((p, h) for p, h in structural_closure(g, [s], cfg.traversal_max_depth).items() if p != s), key=lambda x: (x[1], -weight[x[0]])
             )
         ],
-        "text_nn": lambda s: _cosine_rank(s, text),
-        "vector_nn": lambda s: _cosine_rank(s, vec_nn),
+        "text_nn": lambda s: cosine_rank(s, text),
+        "vector_nn": lambda s: cosine_rank(s, vec_nn),
     }
     per_case = []
     totals = {m: {"recall": 0.0, "precision": 0.0, "mrr": 0.0} for m in methods}
@@ -128,7 +129,7 @@ def run_experiment(engine: Engine, *, k: int = 5) -> dict[str, Any]:
             "analogues": sorted(case.analogues),
         }
         for name, fn in methods.items():
-            sc = _score(fn(case.seed), case.analogues, k)
+            sc = rank_scores(fn(case.seed), case.analogues, k)
             row[name] = sc
             for key, val in sc.items():
                 totals[name][key] += val
@@ -160,8 +161,6 @@ def format_summary(result: dict[str, Any]) -> str:
 def main() -> int:
     """The hypothesis benchmark on a scratch workspace holding the synthetic demo; the result is saved under .scratch/results."""
     import argparse
-
-    from scratch import demo_engine, save_result
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--k", type=int, default=5)

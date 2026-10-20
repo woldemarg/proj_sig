@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -62,15 +61,14 @@ from typing import Any
 import h3
 import numpy as np
 import pandas as pd
+from perf_benchmark import EPOCH
+from scratch import build_engine, save_result, scratch_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from perf_benchmark import EPOCH  # noqa: E402
-
-from graph_query_engine.seeds import SeedMatch  # noqa: E402
-from graph_query_engine.traversal import traverse  # noqa: E402
-from graph_query_engine.vertical import scale_chain  # noqa: E402
-from insight_graph_service.core.engine import Engine  # noqa: E402
+from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.traversal import traverse
+from graph_query_engine.vertical import scale_chain
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.geo_views import member_rows
 
 FINE, REGION = 8, 5
 RADIUS = 3  # a focus: the ring-3 disk, 37 cells
@@ -264,15 +262,18 @@ def generate(name: str, seed: int) -> Scenario:
 
 
 def _patterns(engine: Engine, record: dict[str, Any], upload: Upload) -> dict[str, tuple[dict[str, Any], np.ndarray]]:
-    """pattern id -> (record, mask over the upload's rows: the events inside its extent)."""
-    ds = record["dataset_id"]
+    """pattern id -> (record, mask over the upload's rows: the events inside its extent, as the map counts them)."""
+    ds, n = record["dataset_id"], len(upload.frame)
     covers = engine.ws.load_covers(ds)
-    geo = engine.ws.load_geo(ds)
+    members = member_rows(engine.ws, record, record.get("upload_id"), n)
+    if members is None:
+        raise SystemExit(f"{upload.name} {record.get('level')}: its rows do not index the upload's points")
     out = {}
     for p in engine.ws.patterns():
         if p["dataset_id"] == ds:
-            rows = covers[p["id"]]
-            out[p["id"]] = (p, np.isin(geo["point_cell"], rows) if geo else np.isin(np.arange(len(upload.frame)), rows))
+            mask = np.zeros(n, dtype=bool)
+            mask[members(covers[p["id"]])] = True
+            out[p["id"]] = (p, mask)
     return out
 
 
@@ -423,7 +424,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
                     "patterns": len(patterns),
                     "found": found,
                     "seconds": round(metrics["processing_duration_s"], 2),
-                    "graph_seconds": round(metrics["timings"].get("graph_s", 0.0), 2),
+                    "graph_seconds": round(metrics["timings"].get("graph_s", 0.0) + metrics["timings"].get("persist_s", 0.0), 2),
                 }
             )
     foci = [f["pattern"] if f["found"] else None for f in files[0]["found"].values()] if len(files) == 1 else []
@@ -438,24 +439,7 @@ def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> d
 
 
 def format_table(results: list[dict[str, Any]]) -> str:
-    head = (
-        "encoder",
-        "scenario",
-        "found",
-        "recall@k",
-        "reached",
-        "rank",
-        "shared",
-        "x-coloc",
-        "scale",
-        "zone",
-        "place",
-        "supersede",
-        "cred",
-        "visited",
-        "prompt",
-        "sec",
-    )
+    head = "encoder scenario found recall@k reached rank shared x-coloc scale zone place supersede cred visited prompt sec".split()
     short = {"regional": "reg", "scale-dependent": "dep", "not_found_coarser": "nfc", "insufficient": "ins"}
     lines = [" ".join(f"{h:>9}" for h in head)]
     for r in results:
@@ -482,11 +466,9 @@ def format_table(results: list[dict[str, Any]]) -> str:
 
 
 def main() -> int:
-    from scratch import build_engine, save_result, scratch_dir
-
     from attractor_topology.encoder import model_folder
     from insight_graph_service.core.model_store import problems
-    from insight_graph_service.core.settings import load_settings
+    from insight_graph_service.core.settings import load_env_file, load_settings
     from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -496,6 +478,7 @@ def main() -> int:
     parser.add_argument("--encoder", choices=("hashing", "model", "both"), default="both")
     parser.add_argument("--label", default="baseline")
     args = parser.parse_args()
+    load_env_file()  # the configured settings (.env), as the service reads them: the model check below reads MODEL_DIR
     encoders = ["hashing", "model"] if args.encoder == "both" else [args.encoder]
     if "model" in encoders and problems(model_folder(load_settings().topology.model_dir), hashes=False):
         print("the embedding model is missing: the model run is skipped")

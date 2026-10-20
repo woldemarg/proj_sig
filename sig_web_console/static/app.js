@@ -70,6 +70,16 @@ const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const human = (s) => String(s || "").replace(/_/g, " ");
 const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
+const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
+  root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
+const scopeText = (p) => p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and ");
+function insightLead(p, tail = "") {
+  /* an insight in one sentence (docs/08_interface.md §8.5): its target's shift, or its correlation change */
+  const cov = p.covariance && p.covariance.pair ? p.covariance : null;
+  return p.phenomenon_type === "covariance" && cov
+    ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>${tail}.`
+    : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
+}
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
 const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
@@ -170,7 +180,7 @@ function init() {
     if (b.dataset.key === "region") runLayout();
   }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
-  $("dataset-filter").addEventListener("change", setFilter);
+  $("dataset-filter").addEventListener("change", () => refreshBatches());  // the filter is part of its key
   $("fit-btn").addEventListener("click", () => {
     const gd = S.view === "sphere" && sphereDiv();
     if (gd) Plotly.relayout(gd, { "scene.camera.eye": { x: 1.1, y: 1.1, z: 1.1 }, "scene.camera.center": { x: 0, y: 0, z: 0 } });
@@ -187,6 +197,25 @@ function init() {
   document.querySelectorAll("#ins-table th").forEach((th) => th.addEventListener("click", () => {
     S.sort = { k: th.dataset.k, asc: S.sort.k === th.dataset.k ? !S.sort.asc : false }; renderTable();
   }));
+  // what the views render, clicked: bound once on their containers, so a render only writes HTML
+  const thread = $("thread");
+  on(thread, ".chip-q", (c) => ask(c.textContent));
+  on(thread, "a.cite", (a) => reveal(a.dataset.pid));
+  on(thread, ".ev", (el) => { const turn = turnOf(el), item = turn.qa.view.evidence.items[Number(el.dataset.i)]; reveal(item.pattern_id, { isolate: { turn, item, el } }); });
+  on(thread, ".bot-tabs button", toggleTab);
+  on(thread, ".insight-card .nb", (el) => reveal(el.dataset.id, { walk: true }));
+  on(thread, ".insight-card .ic-theme", (el) => inspect(el.dataset.id));
+  on(thread, ".insight-card .ic-ask", (el) => ask(askAbout(turnOf(el).insight.node.props)));
+  on(thread, ".insight-card .ic-graph", (el) => { setView("graph"); reveal(turnOf(el).insight.node.props.id); });
+  on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
+  on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
+  on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
+  on($("inspector"), ".nb", (el) => {  // the drawer follows the row; the map focuses it when it draws it, else the graph
+    if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.focusPattern(el.dataset.id); else focusNodes([el.dataset.id]);
+    inspect(el.dataset.id);
+  });
+  on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });
+  on($("mw-body"), ".mw-i", (b) => GeoMap.pick(b.dataset.pid));
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);

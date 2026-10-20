@@ -41,7 +41,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 import numpy as np
 
@@ -49,6 +49,9 @@ from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION,
 from insight_graph_service.core.chunk_journal import ChunkJournal
 from insight_graph_service.core.fileio import replace_file
 from insight_graph_service.core.settings import Settings
+
+if TYPE_CHECKING:
+    from subgroup_miner.spatial import SpatialContext
 
 log = logging.getLogger(__name__)
 
@@ -179,14 +182,18 @@ class Workspace:
         return copy.deepcopy(self._batches.get(batch_id))
 
     def list_batches(self) -> list[dict[str, Any]]:
-        return sorted(copy.deepcopy(list(self._batches.values())), key=lambda b: b.get("created_at", ""))
+        """Every batch record, oldest first: the cached records themselves, to read (``load_batch`` gives a copy to edit). A
+        record is replaced whole when it is saved, never edited in place, so a reader holds a consistent one."""
+        return sorted(self._batches.values(), key=lambda b: b.get("created_at", ""))
 
     def ready_batch_for(self, dataset_id: str) -> dict[str, Any] | None:
-        return next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
+        """A copy of the dataset's READY record (a caller may edit it and save it)."""
+        found = next((b for b in self.list_batches() if b["dataset_id"] == dataset_id and b["status"] == "READY"), None)
+        return copy.deepcopy(found)
 
     def unfinished_batches(self) -> list[dict[str, Any]]:
-        """Batches not yet READY, FAILED or SKIPPED (queued or running)."""
-        return [b for b in self.list_batches() if b["status"] not in TERMINAL]
+        """Copies of the batches not yet READY, FAILED or SKIPPED (queued or running): recovery edits and saves them."""
+        return [copy.deepcopy(b) for b in self.list_batches() if b["status"] not in TERMINAL]
 
     def next_batch_seq(self) -> int:
         state = read_json(self.state_dir / "sig_state.json", {"next_batch_seq": 0})
@@ -237,12 +244,23 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, geo: dict[str, np.ndarray]) -> None:
-        """A geo dataset's spatial context (``cells``, ``point_cell``, ``lonlat``, ``nbr_ptr``, ``nbr_idx``)."""
-        np.savez_compressed(self.dataset_dir(dataset_id) / "geo.npz", **geo)
+    def save_geo(self, dataset_id: str, spatial: SpatialContext) -> None:
+        """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph."""
+        np.savez_compressed(
+            self.dataset_dir(dataset_id) / "geo.npz",
+            cells=spatial.cells.astype(str),
+            point_cell=spatial.point_cell,
+            lonlat=spatial.lonlat,
+            nbr_ptr=spatial.nbr_ptr,
+            nbr_idx=spatial.nbr_idx,
+        )
+
+    def save_geo_cells(self, dataset_id: str, payload: dict[str, Any]) -> None:
+        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch."""
+        atomic_write_json(self.geo_cells_path(dataset_id), payload)
 
     def geo_cells_path(self, dataset_id: str) -> Path:
-        """The map's GeoJSON of a geo dataset (``Engine.geo_cells``), written with its batch; absent for any other dataset."""
+        """The map's GeoJSON of a geo dataset (``save_geo_cells``); absent for any other dataset."""
         return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any] | None:
@@ -327,7 +345,9 @@ class Workspace:
         ``intent`` and the checkpoint. An error in the body rolls back; a crash leaves the marker for ``recover``.
         A rollback that fails itself leaves the marker too, and no transaction starts again until ``recover`` ran."""
         if self.pending_path.exists():
-            raise RollbackPending("an earlier write was not rolled back; restart the service to recover, or reset the workspace (POST /api/reset)")
+            raise RollbackPending(
+                "an earlier write was not finished; restart the service to finish it (POST /api/reset deletes the workspace instead)"
+            )
         cp = self.checkpoint(journal=journal)
         atomic_write_json(self.pending_path, {**intent, "checkpoint": cp})
         try:
@@ -338,9 +358,12 @@ class Workspace:
             except Exception:
                 log.exception("rollback of %s failed; the next writer start retries it", intent)
             else:
-                self._close(cp)
+                self._finish(cp, intent)  # the body's error is the one to raise; recover rolls back again
             raise
-        self._close(cp)
+        if "batch_id" in intent:  # a batch committed at its READY record, the body's last write: nothing after it may undo it
+            self._finish(cp, intent)
+        else:  # a deletion or a metadata change commits when its marker goes: a marker that stays fails the write
+            self._close(cp)
 
     def recover(self) -> dict[str, Any] | None:
         """Finish an interrupted transaction (writer start: no other writer alive). A batch whose READY record was
@@ -359,6 +382,15 @@ class Workspace:
     def _close(self, cp: dict[str, Any]) -> None:
         self.pending_path.unlink()
         shutil.rmtree(cp["dir"], ignore_errors=True)
+
+    def _finish(self, cp: dict[str, Any], intent: dict[str, Any]) -> None:
+        """Close the marker of a batch that committed, or of a body that was rolled back. A marker that cannot be removed (a file
+        another process holds open) is logged and left: ``recover`` at the next writer start closes it after a READY batch and
+        rolls back anything else again; until then writes are refused (``rollback_pending``)."""
+        try:
+            self._close(cp)
+        except OSError:
+            log.exception("marker of %s not removed; the next writer start closes it", intent)
 
     def checkpoint(self, *, journal: bool = False) -> dict[str, Any]:
         """Copy ``state/`` and the snapshot aside (and, for a rewrite that may shrink the journal, ``journal/``);

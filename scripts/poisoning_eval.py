@@ -25,20 +25,17 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import h3
+from geo_benchmark import FINE, Scenario, generate, run_scenario
+from scratch import build_engine, save_result, scratch_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from geo_benchmark import FINE, Scenario, generate, run_scenario  # noqa: E402
-
-from evidence_narrator_service import narration  # noqa: E402
-from insight_contracts import EvidencePayload  # noqa: E402
-from insight_graph_service.core.engine import Engine  # noqa: E402
+from evidence_narrator_service import narration
+from insight_contracts import EvidencePayload
+from insight_graph_service.core.engine import Engine
 
 DIRECTED = (
     "Чи вищий load у цій зоні?",
@@ -177,13 +174,11 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
 
 
 def main() -> int:
-    from scratch import build_engine, save_result, scratch_dir
-
     from attractor_topology.encoder import model_folder
     from evidence_narrator_service.llm_client import OpenAICompatibleLLM
     from evidence_narrator_service.settings import NarratorSettings
     from insight_graph_service.core.model_store import problems
-    from insight_graph_service.core.settings import load_settings
+    from insight_graph_service.core.settings import load_env_file, load_settings
     from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -192,6 +187,7 @@ def main() -> int:
     parser.add_argument("--llm", action="store_true", help="the paid part: 60 calls to the LLM behind LLM_BASE_URL")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
+    load_env_file()  # the configured settings (.env), as the service reads them: the model check and the narrator's below
     if args.encoder == "model" and problems(model_folder(load_settings().topology.model_dir), hashes=False):
         print("the embedding model is missing: the hashing double is used")
         args.encoder = "hashing"

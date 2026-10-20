@@ -21,8 +21,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
-import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -30,14 +28,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from fastapi.testclient import TestClient
+from scratch import build_engine, free_port, save_result, scratch_dir, serve
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.settings import PROJECT_ROOT  # noqa: E402
-from insight_graph_service.server.app import create_app  # noqa: E402
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.server.app import create_app
 
 TERMINAL = {"READY", "FAILED", "SKIPPED"}
 POLL_S = 0.9  # the console's batch poll
@@ -203,50 +199,39 @@ def browser(engine: Engine) -> dict[str, Any] | str:
         return "skipped: playwright is not installed"
     if (exe := chromium()) is None:
         return "skipped: no local Chromium"
-    import uvicorn
-
     from evidence_narrator_service.app import create_app as create_narrator
     from evidence_narrator_service.settings import NarratorSettings
 
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
+    port = free_port()  # the narrator asks the graph service on the same port
     narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"))
-    server = uvicorn.Server(uvicorn.Config(compose(create_app(engine), narrator), host="127.0.0.1", port=port, log_level="warning"))
-    threading.Thread(target=server.run, daemon=True).start()
-    while not server.started:
-        time.sleep(0.05)
     idle_after = "(z) => new Promise((done) => { const t = performance.now(); G.map.once('idle', () => done(performance.now() - t)); G.map.jumpTo({ zoom: z }); })"
     fps = """() => new Promise((done) => { let frames = 0; const tick = () => { frames++; if (G.map.isMoving()) requestAnimationFrame(tick); };
       G.map.once('moveend', () => done(frames / 2.5)); G.map.zoomTo(G.map.getZoom() + 2, { duration: 2500 }); requestAnimationFrame(tick); })"""
     out: dict[str, Any] = {}
-    try:
-        with sync_playwright() as p:
-            page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
-            page.add_init_script(
-                "window.__long = []; new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__long.push(e.duration))).observe({ type: 'longtask', buffered: true });"
-            )
-            start = time.perf_counter()
-            page.goto(f"http://127.0.0.1:{port}/")
-            page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=120000)
-            out["graph_s"] = round(time.perf_counter() - start, 2)
-            if not engine.geo_datasets():
-                return out | {"map": "no geo dataset"}
-            page.wait_for_function("!document.getElementById('map-tab').hidden", timeout=600000)  # after the geo list loads
-            start = time.perf_counter()
-            page.click("#view-switch button[data-view='map']")
-            page.wait_for_function("G.data && G.map && G.map.loaded() && !G.map.isMoving()", timeout=120000)
-            out["map_s"] = round(time.perf_counter() - start, 2)
-            out["zoom_idle_ms"], markers = {}, []
-            for z in ZOOMS:
-                out["zoom_idle_ms"][z] = round(page.evaluate(idle_after, z))
-                markers.append(page.evaluate("document.querySelectorAll('.maplibregl-marker').length"))
-            out["dom_markers_max"] = max(markers)
-            out["fps_zoom_in"] = round(page.evaluate(fps), 1)
-            long = page.evaluate("window.__long")
-            out["long_tasks"] = {"n": len(long), "max_ms": round(max(long, default=0)), "total_ms": round(sum(long))}
-    finally:
-        server.should_exit = True
+    with serve(compose(create_app(engine), narrator), port) as url, sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script(
+            "window.__long = []; new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__long.push(e.duration))).observe({ type: 'longtask', buffered: true });"
+        )
+        start = time.perf_counter()
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=120000)
+        out["graph_s"] = round(time.perf_counter() - start, 2)
+        if not engine.geo_datasets():
+            return out | {"map": "no geo dataset"}
+        page.wait_for_function("!document.getElementById('map-tab').hidden", timeout=600000)  # after the geo list loads
+        start = time.perf_counter()
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.data && G.map && G.map.loaded() && !G.map.isMoving()", timeout=120000)
+        out["map_s"] = round(time.perf_counter() - start, 2)
+        out["zoom_idle_ms"], markers = {}, []
+        for z in ZOOMS:
+            out["zoom_idle_ms"][z] = round(page.evaluate(idle_after, z))
+            markers.append(page.evaluate("document.querySelectorAll('.maplibregl-marker').length"))
+        out["dom_markers_max"] = max(markers)
+        out["fps_zoom_in"] = round(page.evaluate(fps), 1)
+        long = page.evaluate("window.__long")
+        out["long_tasks"] = {"n": len(long), "max_ms": round(max(long, default=0)), "total_ms": round(sum(long))}
     return out
 
 
@@ -279,7 +264,6 @@ def main() -> int:
     parser.add_argument("--browser", action="store_true", help="the console in headless Chromium afterwards")
     parser.add_argument("--label", default="baseline")
     args = parser.parse_args()
-    from scratch import build_engine, save_result, scratch_dir  # loads .env, as the services do
 
     root = scratch_dir(f"perf_benchmark_{args.label}", fresh=True)
     demo = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"

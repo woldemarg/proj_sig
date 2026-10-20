@@ -34,7 +34,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `subgroup_miner/` | table → validated, weighted insights: `ingestion`, `spatial` (the geo option: points → H3 cells, LISA, extents; the only module that imports `h3`), `discovery` (the EDA adapter), `selection` (validity rules, weight), `lattice`, `describe`, `config`; **vendored** `vendor/eda/main_upd.py` (divergences in `vendor/PROVENANCE.md`) |
 | `attractor_topology/` | insights → vectors → latent attractors: `canonical`, `encoder` (Qwen3 only), `ontology` (the lac adapter), `models`, `config`; **vendored** `vendor/lac/` (`vendor/PROVENANCE.md`) |
 | `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `vertical`, `evidence`, `search`, `ports`, `config` |
-| `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
+| `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `uploads`, `verify`, `geo_views`, `errors`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
 | `evidence_narrator_service/` | the chat service: `narration`, `llm_client`, `settings`, `app`; imports only `insight_contracts` |
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
 | `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js` the shell with `datasets.js`, `graph.js`, `chat.js`, `geo.js` beside it, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
@@ -140,7 +140,7 @@ Code surface → doc owner:
 | `insight_contracts/insight.py`, `subgroup_miner/selection.py`, admission (`core/batch.py`) | `03_insights.md` |
 | `attractor_topology/canonical.py`, `encoder.py`, `models.py`, `insight_contracts/text.py` | `04_representation.md` |
 | `attractor_topology/ontology.py`, `vendor/lac/`, the anchor descriptions in `core/snapshot.py` | `05_latent_anchors.md`, `PROVENANCE.md` |
-| `subgroup_miner/lattice.py`, `core/snapshot.py`, `core/workspace.py`, `fileio.py`, `neo4j_mirror.py`, `cypher/` | `06_graph_and_storage.md` |
+| `subgroup_miner/lattice.py`, `core/snapshot.py`, `core/workspace.py`, `core/uploads.py`, `core/verify.py`, `fileio.py`, `neo4j_mirror.py`, `cypher/` | `06_graph_and_storage.md` |
 | `graph_query_engine/`, `evidence_narrator_service/` | `07_question_answering.md` |
 | `sig_web_console/`, `insight_graph_service/server/` | `08_interface.md` |
 | `core/engine.py`, `core/settings.py`, `core/model_store.py` | `09_operations.md` (+ `11_reference.md` §11.3 for fields) |

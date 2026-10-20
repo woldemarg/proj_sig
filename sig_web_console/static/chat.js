@@ -71,9 +71,9 @@ function botCard(turn) {
   const cross = items.filter((i) => i.transversal_only).length;
   const model = String(llm.model || "").split("/").pop();
   const meta = [
-    qa.answer_mode === "llm" ? `<span class="chip">✨ ${esc(model)} · ${num(llm.latency_s, 1)} s</span>` : `<span class="chip warn">Evidence only</span>`,
-    cit.grounded ? `<span class="chip ok">✓ ${(cit.cited || []).length} sources cited</span>` : `<span class="chip warn">No citations</span>`,
-    cross ? `<span class="chip run" title="Reached only through a theme, in a different part of the data">⤳ ${cross} cross-segment</span>` : "",
+    qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} s`) : chip("warn", "Evidence only"),
+    cit.grounded ? chip("ok", `✓ ${(cit.cited || []).length} sources cited`) : chip("warn", "No citations"),
+    cross ? chip("run", `⤳ ${cross} cross-segment`, "Reached only through a theme, in a different part of the data") : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
@@ -103,8 +103,8 @@ function botCard(turn) {
   ].filter(Boolean);
   return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>${understood}` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="false">${esc(t)}${c}</button>`).join("")}</div>` +
-    panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}" hidden>${body}</div>`).join("") +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
+    panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}"${String(i) === turn.pane ? "" : " hidden"}>${body}</div>`).join("") +
     `</div>`;
 }
 
@@ -154,16 +154,13 @@ function askAbout(p) {
 }
 
 function insightCard(turn) {
-  const d = turn.insight, p = d.node.props, w = turn.view, cov = p.covariance && p.covariance.pair ? p.covariance : null;
-  const lead = p.phenomenon_type === "covariance" && cov
-    ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>.`
-    : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
+  const d = turn.insight, p = d.node.props, w = turn.view;
   const theme = (d.neighbors.ACTIVATES || []).find((it) => !(it.props && it.props.weak)), seen = new Set([p.id]);  // primary_anchor: not a weak membership
   const links = Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
     `<div class="ic-tags">${w ? chip("", w.level) : ""}${p.integrity === "mismatch" ? chip(INTEGRITY.mismatch[0], "integrity mismatch", INTEGRITY.mismatch[1]) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
-    `<p><b>${esc(p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and "))}</b></p><p>${lead}</p>` +
+    `<p><b>${esc(scopeText(p))}</b></p><p>${insightLead(p)}</p>` +
     `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
     (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
     (links.length ? `<h4>Walk on</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
@@ -180,12 +177,21 @@ function botTurn(turn, isLast) {
   return botCard(turn) + (next.length ? `<div class="followups">${chipButtons(next)}</div>` : "");
 }
 
+const turnOf = (el) => S.chat[Number(el.closest(".msg-bot").dataset.turn)];  // the turn a clicked element of the thread belongs to
+
+function toggleTab(tab) {
+  /* an answer's panel tab: opens its pane, or closes it when it is the open one */
+  const box = tab.closest(".msg-bot"), open = !tab.classList.contains("active");
+  turnOf(tab).pane = open ? tab.dataset.pane : null;  // on the turn: the thread's next render keeps it open
+  box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); });
+  box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
+}
+
 function renderThread() {
+  /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
   if (!S.chat.length) {
-    const chips = suggestions(), key = chips.join("\n");
-    if (t.dataset.chips === key && t.querySelector(".welcome")) return;  // rendered on every poll tick: only a change rebuilds the chips
-    t.dataset.chips = key;
+    const chips = suggestions();
     t.innerHTML = `<div class="welcome"><div class="art"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 4z"/></svg></div>` +
       `<h3>Ask about your data</h3><p>Answers are built only from validated insights in the graph, with every claim linked to its source.</p>` +
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
@@ -193,35 +199,6 @@ function renderThread() {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на карті</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
-  t.querySelectorAll(".chip-q").forEach((c) => c.addEventListener("click", () => ask(c.textContent)));
-  t.querySelectorAll(".insight-card").forEach((card) => {
-    const p = S.chat[Number(card.closest(".msg-bot").dataset.turn)].insight.node.props;
-    card.querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => {
-      if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.pick(el.dataset.id, true); else { focusNodes([el.dataset.id]); inspect(el.dataset.id); }
-    }));
-    card.querySelector(".ic-theme")?.addEventListener("click", (e) => inspect(e.currentTarget.dataset.id));
-    card.querySelector(".ic-ask").addEventListener("click", () => ask(askAbout(p)));
-    card.querySelector(".ic-graph").addEventListener("click", () => { setView("graph"); focusNodes([p.id]); inspect(p.id); });
-  });
-  t.querySelectorAll(".msg-bot[data-turn]").forEach((box) => {
-    const turn = S.chat[Number(box.dataset.turn)];
-    if (!turn || !turn.qa) return;
-    const items = turn.qa.view.evidence.items || [];
-    box.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", () => {
-      if (S.view === "map" && GeoMap.has(a.dataset.pid)) { GeoMap.focusPattern(a.dataset.pid); return; }
-      if (S.view === "table") setView("graph"); focusNodes([a.dataset.pid]); inspect(a.dataset.pid);
-    }));
-    box.querySelectorAll(".ev").forEach((el) => el.addEventListener("click", () => {
-      const item = items[Number(el.dataset.i)];
-      if (S.view === "map" && GeoMap.has(item.pattern_id)) { GeoMap.focusPattern(item.pattern_id); return; }
-      highlightPath(turn, item, el);
-    }));
-    box.querySelectorAll(".bot-tabs button").forEach((tab) => tab.addEventListener("click", () => {
-      const open = !tab.classList.contains("active");  // a click on the open panel closes it
-      box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); });
-      box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
-    }));
-  });
   t.scrollTop = t.scrollHeight;
 }
 
@@ -240,7 +217,7 @@ async function ask(question, zone = null) {
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);
     if ($("dataset-filter").value && evDatasets.length && !evDatasets.includes($("dataset-filter").value)) {
       $("dataset-filter").value = evDatasets.length === 1 ? evDatasets[0] : "";  // show where the evidence lives
-      await loadGraph();
+      await refreshBatches();  // every view, the map and the rail's active card follow the filter
     }
     renderThread();
     highlight(S.hl);

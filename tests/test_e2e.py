@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeLLM, ask, make_config, make_engine
+from fastapi.testclient import TestClient
+
+from insight_graph_service.server.app import create_app
 
 QUESTION = "Why is margin lower for phones in the US?"
 EROSION_ANALOGUES = {
@@ -83,7 +86,7 @@ def test_hypothesis_apparatus(model_engine):
     assert s["transversal"]["recall"] > s["text_nn"]["recall"]
 
 
-def test_attractor_benchmark_apparatus(tmp_path):
+def test_attractor_benchmark_apparatus(engine, tmp_path):
     from attractor_benchmark import analyse, build_cases, generate, holm, rank_cases
 
     frame, truth = generate(1)
@@ -91,7 +94,6 @@ def test_attractor_benchmark_apparatus(tmp_path):
     assert all(not (set(a.items()) & set(b.items())) for scopes in truth.values() for a in scopes for b in scopes if a is not b)
     csv = tmp_path / "planted.csv"
     frame.to_csv(csv, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
     record = engine.ingest_file(csv)
     assert record["status"] == "READY", record.get("error")
     cases = build_cases(engine, {record["batch_id"]: truth}, {record["batch_id"]: 1})
@@ -105,13 +107,13 @@ def test_attractor_benchmark_apparatus(tmp_path):
     assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
 
 
-def test_geo_benchmark_apparatus(tmp_path):
+def test_geo_benchmark_apparatus(engine, tmp_path):
     import h3
     import numpy as np
     import pandas as pd
+    from conftest import geo_frame
     from geo_benchmark import BROAD, FINE, REGION, SIZE_BOX, generate, run_scenario
     from perf_benchmark import CALIFORNIA, EPOCH
-    from test_spatial import geo_frame
 
     scenario = generate("S-regional", 1)
     (upload,) = scenario.uploads
@@ -124,27 +126,26 @@ def test_geo_benchmark_apparatus(tmp_path):
         assert (pd.to_datetime(frame["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
     for lat0, lon0, dlat, dlon in (BROAD, SIZE_BOX):  # the other scenarios' boxes; the focus scenarios share S-regional's area
         assert CALIFORNIA[0] <= lat0 and lat0 + dlat <= CALIFORNIA[2] and CALIFORNIA[1] <= lon0 and lon0 + dlon <= CALIFORNIA[3]
-    result = run_scenario(scenario, tmp_path, make_engine(make_config(tmp_path / "ws")), k=5)
+    result = run_scenario(scenario, tmp_path, engine, k=5)
     found = result["files"][0]["found"]
     assert len({f["pattern"] for f in found.values()}) == 3 and all(f["coverage"] >= 0.9 for f in found.values())  # one insight per focus
     assert result["recall"]["cases"] == 3 and 0.0 <= result["recall"]["recall"] <= 1.0
     assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
 
 
-def test_geo_coverage_apparatus(tmp_path):
+def test_geo_coverage_apparatus(engine, tmp_path):
     """The geo coverage measurement (docs/10_verification.md §10.4) on ``geo_frame`` with rows that have no point: every
     group gets the three coverages and the four rules on each region level; C_members is 1 for an insight of located rows
     and 0 for one of rows without a point; an insight of the whole map has lift 1 in every region. On two regions of 60
     and 40 events, each rule links what its formula says, and k50 / k80 count the regions holding half and 80 %."""
     import numpy as np
     import pandas as pd
+    from conftest import geo_frame
     from geo_coverage import RULES, level_stats, measure, run, upload_insights
-    from test_spatial import geo_frame
 
     frame = geo_frame()
     blank = frame.head(60).assign(latitude=np.nan, longitude=np.nan)
     pd.concat([frame, blank], ignore_index=True).to_csv(path := tmp_path / "points.csv", index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
     result = run(engine, path, "latitude,longitude@auto")
     assert result["map"]["rows"] == len(frame) + 60 and result["map"]["events"] == len(frame) and result["region_levels"] == [7, 5, 3, 1]
     base = result["groups"]["base"]
@@ -167,18 +168,16 @@ def test_geo_coverage_apparatus(tmp_path):
     assert {rule: links.tolist() for rule, links in split["links"].items()} == {"S": [0, 1], "E": [], "F": [0], "L": []}  # x < 30
 
 
-def test_perf_benchmark_apparatus(tmp_path, caplog):
+def test_perf_benchmark_apparatus(engine, tmp_path, caplog):
     """The performance benchmark (docs/10_verification.md §10.4): its synthetic deliveries are the same for one seed and
     keep to their own territory and calendar; one upload through the API reports each level's stages, the Neo4j sync's
     included, then the console's reads cold and warm and three questions; the service logs every request's time."""
     import logging
 
     import pandas as pd
-    from fastapi.testclient import TestClient
     from perf_benchmark import CALIFORNIA, EPOCH, reads_after, run_upload, write_synthetic_points
 
     from insight_graph_service.core.settings import PROJECT_ROOT
-    from insight_graph_service.server.app import create_app
 
     (tmp_path / "again").mkdir()
     path = write_synthetic_points(tmp_path, n=3000, seed=1)
@@ -187,7 +186,6 @@ def test_perf_benchmark_apparatus(tmp_path, caplog):
     assert list(frame.columns) == "lat lon ordered_at segment channel area vehicle refunded basket items wait_min rating".split()
     assert frame["lat"].between(south, north).all() and frame["lon"].between(west, east).all()
     assert (pd.to_datetime(frame["ordered_at"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 59).all()
-    engine = make_engine(make_config(tmp_path / "ws"))
     app = create_app(engine)
     with caplog.at_level(logging.INFO, logger="insight_graph_service.server.app"), TestClient(app) as client:
         upload = run_upload(client, app, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "auto@5", False, True)
@@ -256,11 +254,10 @@ def test_llm_failure_keeps_knowledge(hashed_engine):
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
 
-def test_answering_embeds_the_question_not_the_corpus(tmp_path, demo_csv, monkeypatch):
+def test_answering_embeds_the_question_not_the_corpus(engine, demo_csv, monkeypatch):
     """A batch embeds each insight's three blocks and no canonical document (the naive text baseline is a measurement of
     scripts/experiment.py, docs/07_question_answering.md §7.6); an answer embeds the question, never a document, and
     carries the structural baselines only."""
-    engine = make_engine(make_config(tmp_path / "ws"))
     embedder, seen = engine.encoder.embedder, []
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)

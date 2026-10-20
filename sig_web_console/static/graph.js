@@ -338,7 +338,6 @@ function renderTable() {
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">${S.nodes.length ? "No insight matches the filter." : "No insights yet."}</td></tr>`;
   $("table-summary").textContent = S.nodes.length ? `${rows.length} of ${S.nodes.length}` : "";
-  $("ins-table").querySelectorAll("tbody tr[data-id]").forEach((tr) => tr.addEventListener("click", () => inspect(tr.dataset.id)));
 }
 
 // highlighting
@@ -385,6 +384,17 @@ function focusNodes(ids) {
   if (els.nonempty()) cy.animate({ fit: { eles: els, padding: 90 } }, { duration: 350 });
 }
 
+function reveal(id, { isolate = null, walk = false } = {}) {
+  /* one insight shown where the user is looking (docs/08_interface.md §8.2, §8.7): on the map when it draws it (a Walk on
+     link picks it there, adding its card), otherwise in the graph, the table giving way: its isolated evidence path, or
+     the node and its details */
+  if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
+  if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
+  if (S.view === "table") setView("graph");
+  focusNodes([id]);
+  inspect(id);
+}
+
 // details drawer
 function closeDrawer() { $("drawer").hidden = true; if (S.cy) S.cy.$(":selected").unselect(); }
 
@@ -417,7 +427,7 @@ async function verifyPattern(id) {
     const r = await api(`/api/patterns/${encodeURIComponent(id)}/verify`, { method: "POST" });
     const [cls, label, words] = VERIFIED[r.status] || ["warn", r.status, ""];
     const rows = (r.diff || []).map((d) => `<div class="shift-row"><span class="mono">${esc(d.field)}</span><span class="muted">${esc(String(d.journal))} → ${esc(String(d.recomputed))}</span></div>`).join("");
-    html = `<span class="chip ${cls}">${esc(label)}</span> ${esc(words)}${rows}<div class="muted">Not recomputed: ${esc(r.not_checked.join(", "))}</div>`;
+    html = `${chip(cls, label)} ${esc(words)}${rows}<div class="muted">Not recomputed: ${esc(r.not_checked.join(", "))}</div>`;
   } catch (e) { html = esc(`Re-check failed: ${e.message}`); }
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
@@ -447,21 +457,21 @@ function scaleRows(c, labels) {
     c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
 }
 
+const CONNECTIONS = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
+  "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions", "IN_REGION (in)": "Insights in this region", "PARENT_OF": "Parent region", "PARENT_OF (in)": "Sub-regions",
+  "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };  // the drawer's connection groups, by edge type and direction
+const NODE_KINDS = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
+
 async function inspect(id) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
-  const kinds = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
-  $("drawer-kind").textContent = kinds[n.kind] || n.kind;
+  $("drawer-kind").textContent = NODE_KINDS[n.kind] || n.kind;
   let html = "";
   if (n.kind === "Pattern") {
-    const scope = p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and ");
-    $("drawer-title").textContent = scope;
+    $("drawer-title").textContent = scopeText(p);
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;
-    const lead = p.phenomenon_type === "covariance" && cov
-      ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b> in this subgroup.`
-      : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
-    html += `<p class="lead">${lead}</p>`;
+    html += `<p class="lead">${insightLead(p, " in this subgroup")}</p>`;
     html += p.phenomenon_type === "covariance" ? `<h4>Median differences (not validated)</h4>${shiftRows(p.shifts)}` : `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
     html += `<h4>Evidence</h4>` + kv([
       ["Rows", `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% of data)`],
@@ -502,15 +512,11 @@ async function inspect(id) {
   }
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
-    const friendly = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
-      "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions", "IN_REGION (in)": "Insights in this region", "PARENT_OF": "Parent region", "PARENT_OF (in)": "Sub-regions",
-      "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(friendly[type] || type)} <span class="muted">(${items.length})</span></summary>` +
+      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(CONNECTIONS[type] || type)} <span class="muted">(${items.length})</span></summary>` +
       items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;
-  $("inspector").querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => { focusNodes([el.dataset.id]); inspect(el.dataset.id); }));
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));
   $("drawer").hidden = false;
   if (S.cy) { S.cy.$(":selected").unselect(); S.cy.getElementById(id).select(); }

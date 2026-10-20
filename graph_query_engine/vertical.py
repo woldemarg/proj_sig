@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from graph_query_engine.graph import DualGraph
-from insight_contracts import SpatialProvenance, dataset_node_id
+from insight_contracts import dataset_node_id
 
 VERTICAL_MAX_PER_PATTERN = 3  # steps up and steps down from one pattern
 VERTICAL_MAX_TOTAL = 10  # vertical patterns over every chain of one question
@@ -40,55 +40,11 @@ class ScaleChain:
     scale: str = ""  # regional | scale-dependent | not_found_coarser | insufficient; "" outside an upload
 
 
-@dataclass(frozen=True)
-class _Facts:
-    """What the zoom reads of one pattern. A broad pattern at resolution 8 lies in thousands of regions, and a step
-    meets every pattern of each of them: re-deriving these per meeting made one step take a minute."""
-
-    resolution: int | None
-    upload: str | None
-    regions: dict[str, float]  # IN_REGION target -> share (read only)
-    finest: frozenset[str]  # its regions at its finest level
-    anchors: dict[str, float]  # non-weak ACTIVATES target -> alignment (read only)
-
-
-def _facts(graph: DualGraph, pid: str) -> _Facts:
-    """``pid``'s facts, derived once per committed graph (``DualGraph.memoised``)."""
-
-    def build() -> _Facts:
-        out, ins = graph.out.get(pid, []), graph.insight(pid)
-        spatial = SpatialProvenance.from_dict(ins.provenance.get("spatial"))
-        regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
-        levels = {r: graph.nodes[r]["props"]["resolution"] for r in regions}
-        top = max(levels.values(), default=None)
-        return _Facts(
-            resolution=spatial.resolution if spatial else None,
-            upload=graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
-            regions=regions,
-            finest=frozenset(r for r, lv in levels.items() if lv == top),
-            anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
-        )
-
-    return graph.memoised(("vertical", pid), build)
-
-
-def resolution(graph: DualGraph, pid: str) -> int | None:
-    return _facts(graph, pid).resolution
-
-
-def upload_of(graph: DualGraph, pid: str) -> str | None:
-    return _facts(graph, pid).upload
-
-
-def _regions(graph: DualGraph, pid: str) -> dict[str, float]:
-    return _facts(graph, pid).regions
-
-
 def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     """The regions coarser than each pattern's finest region level that it lies in, with their ancestors that hold an
     intact pattern: what the console draws (a region at that level, the pattern's own or the next coarser, is one of its
     cells or a handful of them, hundreds per dataset; a region holding tampered patterns only holds nothing)."""
-    found = {r for pid in pattern_ids for r in _regions(graph, pid).keys() - _finest(graph, pid)}
+    found = {r for pid in pattern_ids for r in graph.facts(pid).regions.keys() - graph.facts(pid).finest}
     frontier = set(found)
     while frontier:
         frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
@@ -102,36 +58,21 @@ def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     region its last step up met in, or from its home region when it has none: level 7 for cells at 8; never one at the
     top pattern's own level, which is one of its cells), so the map holds each region a SCALE CHAIN names; a region
     holding tampered patterns only is none."""
-    intact = [pid for pid in pattern_ids if graph.nodes[pid]["props"].get("integrity") != "mismatch"]
+    intact = [pid for pid in pattern_ids if not graph.tampered(pid)]
     return regions_above(graph, pattern_ids) | _held(graph, {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions})
 
 
 def _held(graph: DualGraph, regions: set[str]) -> set[str]:
     """The regions that hold an intact pattern: an ancestor no intact pattern reaches, or a region of tampered patterns
     only, holds nothing."""
-    tampered = Counter(
-        e["target"]
-        for pid in graph.insights
-        if graph.nodes[pid]["props"].get("integrity") == "mismatch"
-        for e in graph.out.get(pid, [])
-        if e["type"] == "IN_REGION"
-    )
+    tampered = Counter(e["target"] for pid in graph.insights if graph.tampered(pid) for e in graph.out.get(pid, []) if e["type"] == "IN_REGION")
     return {r for r in regions if graph.nodes[r]["props"]["patterns"] > tampered[r]}
-
-
-def _finest(graph: DualGraph, pid: str) -> frozenset[str]:
-    """The pattern's regions at its finest level (its own resolution when that is a region level): a broad pattern has many."""
-    return _facts(graph, pid).finest
 
 
 def _home(graph: DualGraph, pid: str) -> str | None:
     """One finest region of the pattern, the largest share first (where the regions above a chain start)."""
-    regions = _regions(graph, pid)
-    return min(_finest(graph, pid), key=lambda r: (-regions[r], r), default=None)
-
-
-def _anchors(graph: DualGraph, pid: str) -> dict[str, float]:
-    return _facts(graph, pid).anchors
+    facts = graph.facts(pid)
+    return min(facts.finest, key=lambda r: (-facts.regions[r], r), default=None)
 
 
 def _relation(graph: DualGraph, a: str, b: str) -> tuple[str, str] | None:
@@ -154,26 +95,27 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
     """The coarser (up) or finer (down) pattern of the same phenomenon in a region the two share: one of the same upload
     first, then the nearest level (no level skipped), then the closest scope (the pattern's own subgroup before another
     pattern of the region), then the score."""
-    res, anchors, upload, own = resolution(graph, pid), _anchors(graph, pid), upload_of(graph, pid), _finest(graph, pid)
+    facts = graph.facts(pid)
+    res, anchors, upload, own = facts.resolution, facts.anchors, facts.upload, facts.finest
     kin = {e["source"] for a in anchors for e in graph.inc.get(a, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak")}
     best: tuple[tuple[bool, int, float, float], VerticalStep] | None = None
-    for region, share in _regions(graph, pid).items():
+    for region, share in graph.facts(pid).regions.items():
         for e in graph.inc.get(region, []):
             other = e["source"]  # only a pattern of the same phenomenon (a shared non-weak anchor) can be a step
-            if e["type"] != "IN_REGION" or other in seen or other not in kin or graph.nodes[other]["props"].get("integrity") == "mismatch":
+            if e["type"] != "IN_REGION" or other in seen or other not in kin or graph.tampered(other):
                 continue
-            if (other_res := resolution(graph, other)) is None:
+            if (other_res := graph.facts(other).resolution) is None:
                 continue
             coarser, finer_share = (other_res < res, share) if direction == "up" else (other_res > res, e["weight"])
-            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in (_finest(graph, other) if direction == "up" else own):
+            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in (graph.facts(other).finest if direction == "up" else own):
                 continue
-            shared = [(anchors[a] * w * finer_share, a) for a, w in _anchors(graph, other).items() if a in anchors]
+            shared = [(anchors[a] * w * finer_share, a) for a, w in graph.facts(other).anchors.items() if a in anchors]
             relation = _relation(graph, pid, other)
             if not shared or relation is None:
                 continue
             score, anchor = max(shared)
             step = VerticalStep(other, pid, direction, relation[0], relation[1], region, anchor, round(score, 4))
-            key = (upload is not None and upload_of(graph, other) == upload, -abs(other_res - res), _affinity(graph, pid, other), score)
+            key = (upload is not None and graph.facts(other).upload == upload, -abs(other_res - res), _affinity(graph, pid, other), score)
             if best is None or key > best[0]:
                 best = (key, step)
     return best[1] if best else None
@@ -186,7 +128,7 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
     with its first step up, budget or not."""
     chains, reached = [], set()
     for pid in pattern_ids:
-        if resolution(graph, pid) is None or not _regions(graph, pid):
+        if graph.facts(pid).resolution is None or not graph.facts(pid).regions:
             continue
         chain, seen = ScaleChain(pid), {pid}
         nearest = _step(graph, pid, "up", seen)
@@ -198,7 +140,7 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
                 reached.add(step.pattern_id)
                 step = _step(graph, step.pattern_id, direction, seen) if len(steps) < VERTICAL_MAX_PER_PATTERN else None
         top = chain.up[-1].pattern_id if chain.up else pid
-        region, top_res = (chain.up[-1].region if chain.up else _home(graph, pid)), resolution(graph, top)
+        region, top_res = (chain.up[-1].region if chain.up else _home(graph, pid)), graph.facts(top).resolution
         while region:
             if graph.nodes[region]["props"]["resolution"] < top_res:
                 chain.regions.append(region)
@@ -211,19 +153,19 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
 def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
     """The pattern against its nearest coarser level of the same upload: ``nearest`` is its first step up, which ranks
     the same upload and the nearest level first, so a reversal at the next level is never hidden by a farther one."""
-    upload = upload_of(graph, pid)
+    upload = graph.facts(pid).upload
     if upload is None:
         return ""
-    if nearest and upload_of(graph, nearest.pattern_id) == upload:
+    if nearest and graph.facts(nearest.pattern_id).upload == upload:
         return "regional" if nearest.relation == "corresponds" else "scale-dependent"
     planned = graph.nodes[dataset_node_id(graph.insight(pid).dataset_id)]["props"].get("upload_levels", [])
-    coarser = [lv for lv in planned if lv.isdigit() and int(lv) < resolution(graph, pid)]  # mined, even if it found nothing
+    coarser = [lv for lv in planned if lv.isdigit() and int(lv) < graph.facts(pid).resolution]  # mined, even if it found nothing
     return "not_found_coarser" if coarser else "insufficient"
 
 
 def scale_label(graph: DualGraph, pid: str) -> str:
     """The ``scale`` that ``scale_chain`` gives one pattern, from its first step up alone (the map labels every pattern)."""
-    if resolution(graph, pid) is None or not _regions(graph, pid):
+    if graph.facts(pid).resolution is None or not graph.facts(pid).regions:
         return ""
     return _scale(graph, pid, _step(graph, pid, "up", {pid}))
 
@@ -231,15 +173,11 @@ def scale_label(graph: DualGraph, pid: str) -> str:
 def picture(graph: DualGraph, region: str) -> dict[str, int]:
     """What a region holds: its intact IN_REGION patterns over every dataset (a tampered one counts for nothing), and how
     many datasets and anchors (themes) they span."""
-    members = [
-        e["source"]
-        for e in graph.inc.get(region, [])
-        if e["type"] == "IN_REGION" and graph.nodes[e["source"]]["props"].get("integrity") != "mismatch"
-    ]
+    members = [e["source"] for e in graph.inc.get(region, []) if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     return {
         "patterns": len(members),
         "datasets": len({graph.insight(p).dataset_id for p in members}),
-        "themes": len({a for p in members for a in _anchors(graph, p)}),
+        "themes": len({a for p in members for a in graph.facts(p).anchors}),
     }
 
 
@@ -256,7 +194,7 @@ def rank_zones(graph: DualGraph, geo_ids: list[str], answer_ids: list[str]) -> l
     score: dict[str, float] = defaultdict(float)
     answers = set(answer_ids)
     for pid in geo_ids:
-        for region, share in _regions(graph, pid).items():
+        for region, share in graph.facts(pid).regions.items():
             if share >= VERTICAL_MIN_SHARE:
                 held[graph.nodes[region]["props"]["resolution"]][region].append(pid)
                 if pid in answers:

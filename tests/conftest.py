@@ -7,47 +7,22 @@
 
 from __future__ import annotations
 
+import json
 import re
-import socket
-import threading
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 from doubles import HashingEmbedder
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from scratch import serve
 
 from evidence_narrator_service.llm_client import LLMResponse
 from insight_contracts import Condition, Insight
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.settings import load_settings
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@contextmanager
-def serve(app, port: int | None = None) -> Iterator[str]:
-    """Run an ASGI app on a local port (a free one by default) in a background thread; yields its base URL."""
-    import uvicorn
-
-    port = port or free_port()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    try:
-        while not server.started:
-            time.sleep(0.05)
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
 
 
 @pytest.fixture
@@ -121,6 +96,55 @@ class FakeLLM:
         )
 
 
+HOT = (36.5, -119.25)  # the planted cluster: many points, mostly by phone, late in the period
+EPOCH = np.datetime64("2019-03-04")  # the synthetic territory and epoch of scripts/perf_benchmark.py (CALIFORNIA, EPOCH)
+
+
+def geo_frame(seed: int = 3) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    n_bg, n_hot = 3000, 3000
+    lat = np.concatenate([rng.uniform(36.25, 36.75, n_bg), rng.normal(HOT[0], 0.05, n_hot)])
+    lon = np.concatenate([rng.uniform(-119.5, -119.0, n_bg), rng.normal(HOT[1], 0.07, n_hot)])
+    hot = np.r_[np.zeros(n_bg, bool), np.ones(n_hot, bool)]
+    days = np.where(hot, rng.integers(15, 31, len(hot)), rng.integers(0, 31, len(hot)))
+    return pd.DataFrame(
+        {
+            "event_id": [f"e{i}" for i in range(len(hot))],
+            "latitude": lat,
+            "longitude": lon,
+            "when": EPOCH + days.astype("timedelta64[D]"),
+            "channel": np.where(rng.random(len(hot)) < np.where(hot, 0.8, 0.2), "phone", "web"),
+            "sector": np.where(lat > 36.5, "north", "south"),
+            "load": rng.normal(10, 2, len(hot)) + 4 * hot,
+        }
+    )
+
+
+@pytest.fixture
+def points_csv(tmp_path) -> Path:
+    """``geo_frame()`` as ``points.csv``: the geo tests' upload."""
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    return path
+
+
+def upload_levels(engine, path: Path, **options) -> list[dict]:
+    """``Engine.upload`` of ``path`` with ``options`` (``geo``, ``table``, ...), every level processed in turn as the service's
+    worker does."""
+    with path.open("rb") as f:
+        return [engine.process(r["batch_id"]) for r in engine.upload(path.name, f, **options)]
+
+
+def rewrite_patterns(engine, rows: list[dict]) -> None:
+    """Rewrite the journal's pattern records as an attacker editing the file would (``rows`` the records, edited)."""
+    engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+
+def stale_snapshot(engine) -> None:
+    """Mark the saved snapshot as of another version, so the next start rebuilds it from the journal."""
+    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+
+
 @pytest.fixture(scope="session")
 def demo_df():
     return generate_retail_dataset(5000, seed=7)
@@ -189,9 +213,15 @@ def ask(engine, question: str, llm=None):
 
 
 @pytest.fixture
-def engine(tmp_path):
+def cfg(tmp_path):
+    """The settings of a fresh workspace (``make_config``): what a test restarts an engine with."""
+    return make_config(tmp_path / "ws")
+
+
+@pytest.fixture
+def engine(cfg):
     """A fresh engine on its own workspace (hashing double)."""
-    return make_engine(make_config(tmp_path / "ws"))
+    return make_engine(cfg)
 
 
 @pytest.fixture(scope="session")

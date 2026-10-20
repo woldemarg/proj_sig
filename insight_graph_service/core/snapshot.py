@@ -15,6 +15,7 @@ import hashlib
 import itertools
 import json
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -410,12 +411,17 @@ def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], struc
     return edges
 
 
-def compute_integrity(record: dict[str, Any]) -> str:
-    """``ok`` when the record's statistics match its stored digest, ``mismatch`` when they do not, ``unverified`` for a
-    record journaled before digests."""
-    if "record_digest" not in record:
+def _checked(record: dict[str, Any], key: str, digest: Callable[[dict[str, Any]], str]) -> str:
+    """``ok`` when ``record[key]`` matches the digest of the record, ``mismatch`` when it does not, ``unverified`` for a
+    record stored before digests."""
+    if key not in record:
         return "unverified"
-    return "ok" if record["record_digest"] == record_digest(record) else "mismatch"
+    return "ok" if record[key] == digest(record) else "mismatch"
+
+
+def compute_integrity(record: dict[str, Any]) -> str:
+    """A pattern's ``integrity``: its journal record against its ``record_digest``."""
+    return _checked(record, "record_digest", record_digest)
 
 
 BATCH_DIGEST_FIELDS = ("dataset_id", "upload_id", "level", "filename", "source", "reliability", "indicators", "supersedes", "profile")
@@ -430,9 +436,7 @@ def metadata_digest(batch: dict[str, Any]) -> str:
 
 def compute_metadata_integrity(batch: dict[str, Any]) -> str:
     """``ok`` / ``mismatch`` / ``unverified`` for a batch record's ``metadata_digest``, as ``compute_integrity`` for a pattern."""
-    if "metadata_digest" not in batch:
-        return "unverified"
-    return "ok" if batch["metadata_digest"] == metadata_digest(batch) else "mismatch"
+    return _checked(batch, "metadata_digest", metadata_digest)
 
 
 def _distrust(batch: dict[str, Any]) -> dict[str, Any]:

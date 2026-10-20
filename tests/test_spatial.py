@@ -10,13 +10,15 @@ import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import make_config, make_engine
+from conftest import HOT, geo_frame, make_engine, upload_levels
+from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
 from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset
@@ -31,29 +33,6 @@ from subgroup_miner.spatial import (
     select_levels,
     subgroup_moran,
 )
-
-HOT = (36.5, -119.25)  # the planted cluster: many points, mostly by phone, late in the period
-EPOCH = np.datetime64("2019-03-04")  # the synthetic territory and epoch of scripts/perf_benchmark.py (CALIFORNIA, EPOCH)
-
-
-def geo_frame(seed: int = 3) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n_bg, n_hot = 3000, 3000
-    lat = np.concatenate([rng.uniform(36.25, 36.75, n_bg), rng.normal(HOT[0], 0.05, n_hot)])
-    lon = np.concatenate([rng.uniform(-119.5, -119.0, n_bg), rng.normal(HOT[1], 0.07, n_hot)])
-    hot = np.r_[np.zeros(n_bg, bool), np.ones(n_hot, bool)]
-    days = np.where(hot, rng.integers(15, 31, len(hot)), rng.integers(0, 31, len(hot)))
-    return pd.DataFrame(
-        {
-            "event_id": [f"e{i}" for i in range(len(hot))],
-            "latitude": lat,
-            "longitude": lon,
-            "when": EPOCH + days.astype("timedelta64[D]"),
-            "channel": np.where(rng.random(len(hot)) < np.where(hot, 0.8, 0.2), "phone", "web"),
-            "sector": np.where(lat > 36.5, "north", "south"),
-            "load": rng.normal(10, 2, len(hot)) + 4 * hot,
-        }
-    )
 
 
 def cells_of(frame: pd.DataFrame, **kw):
@@ -121,7 +100,7 @@ def test_subgroup_moran_sees_a_block_not_scattered_cells():
     assert subgroup_moran(table["points"].to_numpy(float)[block], block, ctx) > 0.0
     scattered = []
     for i in range(len(ctx.cells)):  # no two of them neighbours
-        if not np.isin(ctx.neighbours(i), scattered).any():
+        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], scattered).any():
             scattered.append(i)
     scattered = np.array(scattered)
     assert subgroup_moran(table["points"].to_numpy(float)[scattered], scattered, ctx) == 0.0
@@ -175,24 +154,19 @@ def test_validation_never_reports_a_restated_metric_as_a_hidden_shift():
     assert not any("points" in d for d in drivers(frozenset({"points"})))  # a cohort whose condition is computed from it: never
 
 
-def test_geo_option_is_strict_and_changes_the_dataset_id(tmp_path):
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    plain = load_dataset(path, MinerConfig())
-    cells = load_dataset(path, MinerConfig(), geo="auto")
+def test_geo_option_is_strict_and_changes_the_dataset_id(points_csv):
+    plain = load_dataset(points_csv, MinerConfig())
+    cells = load_dataset(points_csv, MinerConfig(), geo="auto")
     assert plain.spatial is None and plain.geo is None and len(plain.frame) == 6000
     assert cells.spatial is not None and cells.geo == "auto@7" and cells.dataset_id != plain.dataset_id
     assert "neighbours_points_band" in cells.frame.columns and "neighbours_points" not in cells.frame.columns
     with pytest.raises(IngestionError) as err:
-        load_dataset(path, MinerConfig(), geo="nowhere")
+        load_dataset(points_csv, MinerConfig(), geo="nowhere")
     assert err.value.code == "invalid_options"
 
 
-def test_geo_batch_end_to_end(tmp_path):
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    record = engine.process(engine.submit(path, geo="auto")["batch_id"])
+def test_geo_batch_end_to_end(engine, points_csv):
+    record = engine.process(engine.submit(points_csv, geo="auto")["batch_id"])
     assert record["status"] == "READY", record.get("error")
     geo = record["profile"]["geo"]
     assert geo["resolution"] == 7 and geo["sac"]["significant_corrected"] <= geo["sac"]["significant_iid"]
@@ -218,11 +192,8 @@ def test_geo_batch_end_to_end(tmp_path):
         engine.geo_cells_file(record["dataset_id"])
 
 
-def test_geo_evidence_speaks_plain_language(tmp_path):
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    record = engine.process(engine.submit(path, geo="auto")["batch_id"])
+def test_geo_evidence_speaks_plain_language(engine, points_csv):
+    record = engine.process(engine.submit(points_csv, geo="auto")["batch_id"])
     glossary = record["profile"]["geo"]["glossary"]
     assert glossary["lisa_points=hot spot"].startswith("a hot spot") and "busiest" in glossary["neighbours_points_band=q4"]
     prompt = engine.evidence("Що відрізняє зони hot spot від решти?").evidence_prompt
@@ -332,14 +303,11 @@ def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
     assert not any(p == "P-s" and r == f"R:7:{home}" for p, r, _ in out.in_region)
 
 
-def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(tmp_path):
+def test_a_geo_dataset_ingested_before_the_spatial_plane_gets_it_at_the_rebuild(cfg, points_csv):
     """The spatial plane is derived from geo.npz and covers.npz: a snapshot of an older version is rebuilt with it,
     no upload again."""
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
-    assert engine.process(engine.submit(path, geo="auto")["batch_id"])["status"] == "READY"
+    assert engine.process(engine.submit(points_csv, geo="auto")["batch_id"])["status"] == "READY"
     old = engine.ws.load_graph()
     old["nodes"] = [n for n in old["nodes"] if n["kind"] != "Region"]
     old["edges"] = [e for e in old["edges"] if e["type"] not in ("IN_REGION", "PARENT_OF", "CO_LOCATED")]
@@ -355,30 +323,22 @@ def test_footprint_keeps_the_busiest_cells_up_to_the_share():
     assert footprint(point_cell, np.array([10]))[0].tolist() == []
 
 
-def test_one_upload_makes_one_dataset_per_level(tmp_path):
+def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     """``geo=<loc>@<r1>,<r2>`` and ``table`` make ordinary datasets under one ``upload_id``: each geo level with the id
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    with path.open("rb") as f:
-        done = [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4", table=True)]
+    done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
     assert len({r["upload_id"] for r in done}) == len({r["source_path"] for r in done}) == 1  # one file, one upload id
     separate = [
-        load_dataset(path, engine.settings.miner, geo=g, bins=b, locator=loc).dataset_id
+        load_dataset(points_csv, engine.settings.miner, geo=g, bins=b, locator=loc).dataset_id
         for g, b, loc in (("auto@8", "points:4", None), ("auto", "points:4", None), (None, "", "auto"))
     ]
     assert [r["dataset_id"] for r in done] == separate  # the table level skips the cell column it lacks
     first = {r["dataset_id"]: next(p["id"] for p in engine.ws.patterns() if p["dataset_id"] == r["dataset_id"]) for r in done}
     assert all(engine.verify_pattern(pid)["status"] == "reproduced" for pid in first.values())  # each level from the shared file
-    assert done[2]["dataset_id"] != load_dataset(path, engine.settings.miner, bins="").dataset_id  # not a plain upload
+    assert done[2]["dataset_id"] != load_dataset(points_csv, engine.settings.miner, bins="").dataset_id  # not a plain upload
     assert not {"latitude", "longitude"} & set(done[2]["profile"]["numerics"])  # its point columns left out
     patterns = engine.graph().of_kind("Pattern")  # a mixed snapshot: every level carries the rule that gave it; one upload, one source
     rule = {n["props"]["dataset_id"]: n["props"]["credibility_basis"]["rule"] for n in patterns}
@@ -389,7 +349,7 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     }
     assert any("points" in w for w in done[2]["warnings"]) and any("left out of the table level" in w for w in done[2]["warnings"])
     with pytest.raises(IngestionError, match="pointz"):  # a name in neither the file nor the cells fails the geo levels
-        load_dataset(path, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
+        load_dataset(points_csv, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
     graph, table = engine.graph(), done[2]["dataset_id"]
     assert graph.nodes[f"DS:{table}"]["props"]["level"] == "table"
     assert not any(graph.insight(e["source"]).dataset_id == table for e in graph.edges if e["type"] in ("IN_REGION", "CO_LOCATED"))
@@ -410,7 +370,7 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
-    plain = engine.ingest_file(path)  # the same file as a plain table: as many rows as the map has points, but no upload
+    plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
     plain_ids = {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == plain["dataset_id"]}
     assert plain["status"] == "READY" and plain_ids and not plain_ids & {p["id"] for p in engine.geo_projected(fine)}
     engine.delete_dataset(plain["dataset_id"])
@@ -418,7 +378,7 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
     with TestClient(create_app(engine)) as client:
         listed = client.get("/api/batches", params={"upload_id": upload_id}).json()
         assert sorted(b["batch_id"] for b in listed) == sorted(r["batch_id"] for r in done)
-        with path.open("rb") as f:  # the same upload again: every level SKIPPED, and the 202 names each level's batch
+        with points_csv.open("rb") as f:  # the same upload again: every level SKIPPED, and the 202 names each level's batch
             data = {"geo": "auto@8,7", "bins": "points:4", "table": True}
             accepted = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data=data).json()
         assert list(accepted["levels"]) == ["8", "7", "table"] and accepted["batch_id"] == accepted["levels"]["8"]
@@ -435,30 +395,25 @@ def test_one_upload_makes_one_dataset_per_level(tmp_path):
         assert not engine.ws.list_batches() and not Path(done[0]["source_path"]).exists()
         assert client.delete(f"/api/uploads/{upload_id}").status_code == 404
         for geo, table_level in (("auto@8,6", False), ("auto@7,7", False), ("auto@8,,7", False), ("auto@7,", False), ("", True)):
-            with path.open("rb") as f:
+            with points_csv.open("rb") as f:
                 refused = client.post("/api/upload", files={"file": ("p.csv", f, "text/csv")}, data={"geo": geo, "table": table_level})
             assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
     assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
-    with path.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
+    with points_csv.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
         assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
 
 
-def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
+def test_the_scale_reads_the_levels_the_upload_has(engine, points_csv):
     """The coarser levels a scale label compares with are the levels the upload's batches stand for now: one added later
     by an upload of the same file counts, one deleted alone does not."""
-    from graph_query_engine.vertical import resolution, scale_chain
-
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
+    from graph_query_engine.vertical import scale_chain
 
     def upload(geo: str) -> list[dict]:
-        with path.open("rb") as f:
-            return [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo=geo)]
+        return upload_levels(engine, points_csv, geo=geo)
 
     def levels_and_scales() -> tuple[list[str], set[str]]:
         graph = engine.graph()
-        fine = [p for p in graph.insights if resolution(graph, p) == 8]
+        fine = [p for p in graph.insights if graph.facts(p).resolution == 8]
         return graph.nodes[f"DS:{fine_ds}"]["props"]["upload_levels"], {c.scale for c in scale_chain(graph, fine)}
 
     fine_ds = upload("auto@8")[0]["dataset_id"]
@@ -470,7 +425,7 @@ def test_the_scale_reads_the_levels_the_upload_has(tmp_path):
     assert levels_and_scales() == (["8"], {"insufficient"})  # no coarser level left: nothing was "not found" there
 
 
-def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
+def test_auto_picks_the_levels_from_the_points(points_csv, engine, tmp_path, monkeypatch):
     """``@auto``: the finest resolution with enough cells, enough of them dense and few enough at its region level (its
     own below the finest region level), then the coarser region levels; the same file the same levels; a denser file
     a finer level; an upload with ``@auto`` is the upload of its levels."""
@@ -509,30 +464,26 @@ def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
         assert candidate["cells"] == len({h3.latlng_to_cell(a, b, int(res)) for a, b in zip(lat, lon)})
     assert 5 not in picked["chosen"] and picked["candidates"]["5"]["cells"] == 49
 
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    with path.open("rb") as f:
+    with points_csv.open("rb") as f:
         record, table = engine.upload("points.csv", f, geo="auto@auto", table=True)
     assert record["profile"]["geo"]["levels"]["chosen"] == [7]  # where the selection stays, whatever the batch's end
     done = engine.process(record["batch_id"])
     assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7] and "geo_levels" not in done
     assert table["level"] == "table" and not table["profile"]  # the selection is the geo levels' alone
-    assert done["dataset_id"] == load_dataset(path, engine.settings.miner, geo="auto@7").dataset_id
+    assert done["dataset_id"] == load_dataset(points_csv, engine.settings.miner, geo="auto@7").dataset_id
     pd.DataFrame({"lat": [36.5] * 60, "lon": [-119.2] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
         engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
     assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
 
 
-def test_an_auto_level_with_nothing_names_the_level_the_cap_left_out(tmp_path, monkeypatch):
+def test_an_auto_level_with_nothing_names_the_level_the_cap_left_out(engine, tmp_path, monkeypatch):
     """``@auto``'s finest level that finds nothing while finer ones were left out by ``GEO_AUTO_MAX_CELLS`` alone: the
     batch's error names the nearest of them as the explicit option to try."""
     rng = np.random.default_rng(0)
     lat, lon = 36 + rng.random(40_000) * 0.5, -120 + rng.random(40_000) * 0.5
     frame = pd.DataFrame({"latitude": lat, "longitude": lon, "sector": np.where(lat > 36.25, "north", "south"), "load": rng.normal(10, 2, 40_000)})
     frame.to_csv(path := tmp_path / "noise.csv", index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
     monkeypatch.setattr("subgroup_miner.spatial.GEO_AUTO_MAX_CELLS", 400)  # 8 (3,200 cells) and 7 (500) over it, 6 under
     with path.open("rb") as f:
         (record,) = engine.upload("noise.csv", f, geo="latitude,longitude@auto")
@@ -598,19 +549,10 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
 
 
-def test_a_zone_from_the_map_is_the_same_question(tmp_path):
+def test_a_zone_from_the_map_is_the_same_question(engine, points_csv):
     """A zone weighs the seeds of the ordinary search: the question's seed stays first and gets the same scale chain, a
     zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
-    from fastapi.testclient import TestClient
-
-    from graph_query_engine.vertical import resolution
-    from insight_graph_service.server.app import create_app
-
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    with path.open("rb") as f:
-        assert [engine.process(r["batch_id"])["status"] for r in engine.upload("points.csv", f, geo="auto@8,7")] == ["READY", "READY"]
+    assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     question = "Where is load higher?"
     text = engine.search(question)
     seed = text.seeds[0].pattern_id
@@ -634,9 +576,9 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
     assert [(s.pattern_id, s.score) for s in polygon.seeds] == [(s.pattern_id, s.score) for s in alone.seeds]
     graph = engine.graph()
     coarse = engine.place_scores(engine.committed(), cells=zone, resolution=7)
-    assert coarse and {resolution(graph, p) for p in coarse} == {7} and {resolution(graph, p) for p in place} == {7, 8}
+    assert coarse and {graph.facts(p).resolution for p in coarse} == {7} and {graph.facts(p).resolution for p in place} == {7, 8}
     area = engine.search(question, cells=zone, resolution=7).evidence
-    assert {it.key for it in area.items if resolution(graph, it.pattern_id) == 7} == set(area.area)  # level 8: neither in nor out
+    assert {it.key for it in area.items if graph.facts(it.pattern_id).resolution == 7} == set(area.area)  # level 8: neither in nor out
 
     with TestClient(create_app(engine)) as client:
         assert client.post("/api/search", json={"cells": zone}).json()["evidence_prompt"] == alone.payload().evidence_prompt
@@ -646,21 +588,14 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path):
         assert client.post("/api/search", json={"question": " "}).status_code == 400
 
 
-def test_the_graph_exports_as_geosparql(tmp_path):
+def test_the_graph_exports_as_geosparql(engine, points_csv):
     """``GET /api/export/geosparql.ttl``: Turtle that rdflib parses and the GeoSPARQL 1.1 validator accepts; a SPARQL
     query for the insights inside a region returns its IN_REGION members; CO_LOCATED keeps its relation; the trust axes
     and the provenance chain are there."""
     import rdflib
-    from fastapi.testclient import TestClient
     from pyshacl import validate
 
-    from insight_graph_service.server.app import create_app
-
-    path = tmp_path / "points.csv"
-    geo_frame().to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    with path.open("rb") as f:
-        done = [engine.process(r["batch_id"]) for r in engine.upload("points.csv", f, geo="auto@8,7", source="sensor net", reliability="B")]
+    done = upload_levels(engine, points_csv, geo="auto@8,7", source="sensor net", reliability="B")
     assert [r["status"] for r in done] == ["READY", "READY"]
     response = TestClient(create_app(engine=engine)).get("/api/export/geosparql.ttl")
     assert response.status_code == 200 and response.headers["content-type"].startswith("text/turtle")

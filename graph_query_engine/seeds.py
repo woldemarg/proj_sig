@@ -99,7 +99,7 @@ def resolve_seeds(
         (
             score_pattern(ins, query, qvec, pattern_vectors.get(pid), config, None if place_scores is None else place_scores.get(pid, 0.0))
             for pid, ins in graph.insights.items()
-            if graph.nodes[pid]["props"].get("integrity") != "mismatch"  # a tampered pattern never starts a walk
+            if not graph.tampered(pid)  # a tampered pattern never starts a walk
         ),
         key=lambda s: -s.score,
     )
