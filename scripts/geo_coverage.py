@@ -28,20 +28,18 @@ A real export prints aggregates only; its result stays in ``.scratch/results/geo
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 from typing import Any
 
 import h3
 import numpy as np
 from scipy.stats import false_discovery_control, hypergeom
+from scratch import build_engine, save_result, scratch_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.geo_views import member_rows  # noqa: E402
-from insight_graph_service.core.settings import PROJECT_ROOT  # noqa: E402
-from subgroup_miner.spatial import footprint  # noqa: E402
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.geo_views import member_rows
+from insight_graph_service.core.settings import PROJECT_ROOT
+from subgroup_miner.spatial import footprint
 
 GEO_LOCATED_MIN = 0.5  # #119: a base insight with fewer of its events located gets no link
 SHARE_MIN = 0.2  # rules S, E, F
@@ -245,7 +243,6 @@ def _fmt(v: float | None) -> str:
 
 def main() -> int:
     from perf_benchmark import write_synthetic_points
-    from scratch import build_engine, save_result, scratch_dir  # loads .env, as the services do
 
     from tests.doubles import HashingEmbedder
 

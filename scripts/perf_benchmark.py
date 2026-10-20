@@ -22,7 +22,6 @@ import argparse
 import gzip
 import json
 import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -30,14 +29,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from fastapi.testclient import TestClient
+from scratch import build_engine, save_result, scratch_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.settings import PROJECT_ROOT  # noqa: E402
-from insight_graph_service.server.app import create_app  # noqa: E402
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.server.app import create_app
 
 TERMINAL = {"READY", "FAILED", "SKIPPED"}
 POLL_S = 0.9  # the console's batch poll
@@ -279,7 +276,6 @@ def main() -> int:
     parser.add_argument("--browser", action="store_true", help="the console in headless Chromium afterwards")
     parser.add_argument("--label", default="baseline")
     args = parser.parse_args()
-    from scratch import build_engine, save_result, scratch_dir  # loads .env, as the services do
 
     root = scratch_dir(f"perf_benchmark_{args.label}", fresh=True)
     demo = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"

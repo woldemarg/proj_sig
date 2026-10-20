@@ -28,25 +28,24 @@ from __future__ import annotations
 import argparse
 import itertools
 import re
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from experiment import Truth, cosine_rank, label_of, rank_scores
+from scratch import build_engine, ingest_ready, save_result, scratch_dir
 from sklearn.cluster import KMeans
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-import insight_graph_service.core.snapshot as snapshot_module  # noqa: E402
-from attractor_topology.ontology import Attractor  # noqa: E402
-from attractor_topology.vendor.lac import ontology_engine as eng  # noqa: E402
-from graph_query_engine.graph import DualGraph  # noqa: E402
-from graph_query_engine.seeds import SeedMatch  # noqa: E402
-from graph_query_engine.traversal import traverse  # noqa: E402
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.snapshot import build_snapshot  # noqa: E402
+import insight_graph_service.core.snapshot as snapshot_module
+from attractor_topology.ontology import Attractor
+from attractor_topology.vendor.lac import ontology_engine as eng
+from graph_query_engine.graph import DualGraph
+from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.traversal import traverse
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.snapshot import build_snapshot
 
 DIMENSIONS = {
     "region": ["EU", "US", "APAC", "LATAM"],
@@ -56,7 +55,6 @@ DIMENSIONS = {
 }
 # driver column -> (shift up, shift down); the base relations below turn a driver shift into an outcome shift
 SHIFTS = {"discount": (9.0, -6.0), "delivery_days": (3.0, -1.2), "wait_minutes": (15.0, -8.0), "price_index": (15.0, -10.0)}
-Truth = dict[str, list[dict[str, str]]]  # mechanism -> its planted scopes
 
 
 def draw_scopes(rng: np.random.Generator, mechanisms: int, per: int, tries: int = 20000) -> list[list[dict[str, str]]]:
@@ -127,8 +125,7 @@ def build_cases(engine: Engine, truth_by_batch: dict[str, Truth], seed_by_batch:
     conds = {r["id"]: {(c["attribute"], c["value"]) for c in r["conditions"]} for r in records}
     label: dict[str, str | None] = {}
     for r in records:
-        hits = [m for m, scopes in truth_by_batch[r["batch_id"]].items() if any(set(sc.items()) <= conds[r["id"]] for sc in scopes)]
-        label[r["id"]] = hits[0] if len(hits) == 1 else None
+        label[r["id"]] = label_of(conds[r["id"]], truth_by_batch[r["batch_id"]])
     batch_of = {r["id"]: r["batch_id"] for r in records}
     cases = []
     for pid, ph in label.items():
@@ -201,18 +198,6 @@ def static_graph(engine: Engine, assign: np.ndarray, centroids: np.ndarray, *, c
     return DualGraph(snapshot)
 
 
-def _cosine_rank(seed: str, vecs: dict[str, np.ndarray]) -> list[str]:
-    q = vecs[seed]
-    return [pid for pid, _ in sorted(((p, float(v @ q)) for p, v in vecs.items() if p != seed), key=lambda x: -x[1])]
-
-
-def _score(ranked: list[str], relevant: set[str], k: int) -> dict[str, float]:
-    top = ranked[:k]
-    hits = sum(1 for p in top if p in relevant)
-    first = next((i for i, p in enumerate(ranked, start=1) if p in relevant), None)
-    return {"recall": hits / len(relevant), "precision": hits / min(k, len(relevant)), "mrr": 1.0 / first if first else 0.0}
-
-
 def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[dict[str, Any]]:
     """Every ranker's scores per case, on the engine's committed state."""
     state = engine.committed()
@@ -237,8 +222,8 @@ def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[
         for name, gr in graphs.items()
     }
     rankers |= {
-        "vector_nn": lambda s: _cosine_rank(s, state.frame.patterns),
-        "text_nn": lambda s: _cosine_rank(s, documents),
+        "vector_nn": lambda s: cosine_rank(s, state.frame.patterns),
+        "text_nn": lambda s: cosine_rank(s, documents),
         "weight_only": lambda s: [p for p in by_weight if p != s],
     }
     rows = []
@@ -253,7 +238,7 @@ def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[
         }
         for name, fn in rankers.items():
             ranked = fn(case.seed)
-            row[name] = _score(ranked, case.analogues, k) | {"reached": sum(1 for p in ranked if p in case.analogues) / len(case.analogues)}
+            row[name] = rank_scores(ranked, case.analogues, k) | {"reached": sum(1 for p in ranked if p in case.analogues) / len(case.analogues)}
         rows.append(row)
     return rows
 
@@ -303,15 +288,11 @@ def run_benchmark(
     seeds: list[int], *, per_workspace: int, k: int, overrides: dict[str, Any], scratch: Path, embedder: Any = None
 ) -> list[dict[str, Any]]:
     """Ingest the planted datasets, ``per_workspace`` consecutive seeds per fresh scratch workspace, and rank every case."""
-    from scratch import ingest_ready, scratch_dir  # the script helpers, importable when run from scripts/
-
     rows = []
     for start in range(0, len(seeds), per_workspace):
         group = seeds[start : start + per_workspace]
         root = scratch_dir(f"{scratch}/ws_{group[0]}", fresh=True)
-        from insight_graph_service.core.settings import load_settings
-
-        engine = Engine(load_settings(workspace_dir=root / "ws", neo4j_enabled=False, **overrides), embedder=embedder)
+        engine = build_engine(root / "ws", embedder=embedder, **overrides)
         embedder = engine.encoder.embedder
         truth_by_batch: dict[str, Truth] = {}
         seed_by_batch: dict[str, int] = {}
@@ -340,8 +321,6 @@ def format_summary(result: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    from scratch import save_result
-
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seeds", default="201-230", help="dataset seeds, a range a-b or a list a,b,c")
     parser.add_argument("--per-workspace", type=int, default=5)

@@ -1,5 +1,8 @@
 """Shared helpers for the measurement scripts: throwaway workspaces under ``sig/.scratch/``.
 
+A script imports it first: it puts the repository on ``sys.path`` (scripts run from ``scripts/``, the packages are not
+installed). The configured settings (``.env``, as the service reads them) are loaded when a helper builds an engine
+(``settings``), never at import, so the tests that import the scripts never load the repository's ``.env``.
 Never touches ``workspace/`` (the user's knowledge base). Neo4j publishing is always off here.
 """
 
@@ -16,10 +19,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from insight_graph_service.core.demo import generate_retail_dataset  # noqa: E402
 from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.settings import PROJECT_ROOT, load_env_file, load_settings  # noqa: E402
+from insight_graph_service.core.settings import PROJECT_ROOT, Settings, load_env_file, load_settings  # noqa: E402
 
-load_env_file()  # the measurements use the configured settings (.env), like the service
 SCRATCH = PROJECT_ROOT / ".scratch"
+
+
+def settings(**overrides: Any) -> Settings:
+    """The configured settings (``.env`` loaded first, as the service does) with Neo4j off and ``overrides`` applied."""
+    load_env_file()
+    return load_settings(neo4j_enabled=False, **overrides)
 
 
 def scratch_dir(name: str, *, fresh: bool = False) -> Path:
@@ -39,9 +47,9 @@ def write_demo_csv(folder: Path) -> Path:
     return path
 
 
-def build_engine(workspace: Path, *, embedder: Any = None) -> Engine:
-    """Engine on a scratch workspace; ``embedder`` reuses a loaded model."""
-    return Engine(load_settings(workspace_dir=workspace, neo4j_enabled=False), embedder=embedder)
+def build_engine(workspace: Path, *, embedder: Any = None, **overrides: Any) -> Engine:
+    """Engine on a scratch workspace; ``embedder`` reuses a loaded model; ``overrides`` are settings fields."""
+    return Engine(settings(workspace_dir=workspace, **overrides), embedder=embedder)
 
 
 def ingest_ready(engine: Engine, path: Path) -> dict[str, Any]:

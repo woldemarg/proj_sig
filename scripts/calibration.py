@@ -7,15 +7,10 @@ anchors before and after, the warnings; then every anchor with its patterns, sco
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from scratch import build_engine, ingest_ready, scratch_dir, write_demo_csv
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from scratch import build_engine, ingest_ready, scratch_dir, write_demo_csv  # noqa: E402
-
-from insight_graph_service.core.demo import generate_retail_dataset  # noqa: E402
-from insight_graph_service.core.settings import PROJECT_ROOT  # noqa: E402
+from insight_graph_service.core.demo import generate_retail_dataset
+from insight_graph_service.core.settings import PROJECT_ROOT
 
 HOUSING_BINS = "median_income:4,housing_median_age:4"  # housing.csv has one native categorical: the docs' bands (docs/02_discovery.md)
 
