@@ -174,8 +174,7 @@ def test_b1_b2_code_switched_questions_seed_identically(hashed_engine):
         assert seeds(hashed_engine, en) == seeds(hashed_engine, uk), uk
 
 
-def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
-    cfg = make_config(tmp_path / "ws")
+def test_catalog_is_persisted_and_reloaded(cfg, demo_csv):
     writer = make_engine(cfg)
     assert writer.ingest_file(demo_csv)["status"] == "READY"
     built = writer.committed().catalog  # the commit embeds the literals and saves their vectors
@@ -209,20 +208,20 @@ def test_b3_translated_question_parses_like_english(model_engine):
 
 
 @pytest.mark.model
-def test_b4_inflected_ukrainian_value(tmp_path):
+def test_b4_inflected_ukrainian_value(cfg, tmp_path):
     df = generate_retail_dataset(5000, 7)
     df["region"] = df["region"].map({"EU": "Львів", "US": "Харків", "APAC": "Київ", "LATAM": "Одеса"})
     df["category"] = df["category"].map({"laptops": "ноутбуки", "phones": "телефони", "tablets": "планшети", "accessories": "аксесуари"})
     path = tmp_path / "uk.csv"
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"), embedder=None)
+    engine = make_engine(cfg, embedder=None)
     assert engine.ingest_file(path)["status"] == "READY"
     p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.committed().catalog)
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 
 
-def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch):
+def test_neo4j_mirror_does_not_change_retrieval(cfg, demo_csv, monkeypatch):
     """The document's falsification step 6: identical seed scores with the mirror on (fake driver) and off."""
     from dataclasses import replace
 
@@ -230,7 +229,6 @@ def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch)
 
     from insight_graph_service.core import neo4j_mirror
 
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     question = "Чому margin нижчий для phones у US?"

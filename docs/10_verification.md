@@ -43,6 +43,7 @@
 - **No database.** `conftest.make_config` sets `neo4j_enabled=False`, so no test writes to a real database; the Neo4j tests use a fake driver.
 - **No live LLM.** The LLM is a deterministic fake (`conftest.FakeLLM`) or a local OpenAI-compatible stub (`conftest.llm_stub`).
 - **The test embedder.** It is the hashing double `tests/doubles.py::HashingEmbedder`, word and character-trigram hashing into 384-d blocks (the production block width). `conftest.make_engine` injects it; `embedder=None` loads the bundled Qwen3.
+- **Shared setup.** The fixtures `cfg` (a fresh workspace's settings) and `engine` (an engine on it; a restart is `make_engine(engine.settings)`); the geo table `geo_frame()`, its upload `points_csv` and `upload_levels(engine, path, **options)` (every level of one upload processed); the tamper moves `rewrite_patterns(engine, rows)` and `stale_snapshot(engine)`.
 - **Answers in-process.** `conftest.ask(engine, question, llm)` composes an answer in-process as the two services compose it over HTTP: `narration.answer(engine.evidence(question), llm)`.
 
 **Markers.**

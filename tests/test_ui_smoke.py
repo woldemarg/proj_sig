@@ -7,7 +7,7 @@ import time
 
 import httpx
 import pytest
-from conftest import FakeLLM, make_config, make_engine, serve
+from conftest import FakeLLM, make_engine, serve
 from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
@@ -36,8 +36,7 @@ def stack(engine):
 
 
 @pytest.fixture
-def client(tmp_path):
-    cfg = make_config(tmp_path / "ws")
+def client(cfg):
     port, app = stack(make_engine(cfg))
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as c:
         yield c
@@ -117,12 +116,11 @@ def test_upload_process_render_query(client, demo_csv):
 
 
 @pytest.mark.browser
-def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
+def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     housing = engine.process(

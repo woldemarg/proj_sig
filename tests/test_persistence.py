@@ -10,7 +10,7 @@ from conftest import Crash, make_config, make_engine
 from insight_graph_service.core import engine as engine_mod
 
 
-def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
+def test_write_reload_and_idempotency(engine, demo_csv):
     rec = engine.ingest_file(demo_csv)
     assert rec["status"] == "READY"
     ws = engine.ws
@@ -27,7 +27,7 @@ def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
         assert (ws.root / rel).is_file(), rel
 
     # reload from disk in a fresh engine -> identical graph; rebuild reproduces it
-    again = make_engine(make_config(tmp_path / "ws"))
+    again = make_engine(engine.settings)
 
     def ids(snap):
         return sorted(n["id"] for n in snap["nodes"]), sorted(e["id"] for e in snap["edges"])
@@ -160,7 +160,7 @@ def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     assert other.ws.literals_path.read_bytes() == literals
 
 
-def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv, tmp_path):
+def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv):
     """The literal catalog is built when the state is loaded; if the model fails there, the engine still starts, not degraded."""
     from doubles import HashingEmbedder
 
@@ -170,7 +170,7 @@ def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv, 
 
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     engine.ws.literals_path.unlink()  # the start must embed the literals
-    broken = make_engine(make_config(tmp_path / "ws"), embedder=Broken())
+    broken = make_engine(engine.settings, embedder=Broken())
     assert broken.problem is None and broken.graph().insights and broken.committed().catalog is None
 
 
@@ -181,7 +181,7 @@ def test_a_catalog_failure_at_the_commit_is_a_batch_warning(engine, demo_csv, mo
     assert engine.committed().catalog is None and engine.search("Why is margin lower for phones in the US?").evidence.items  # built on the question
 
 
-def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch):
+def test_interrupted_batch_is_recovered(engine, demo_csv, monkeypatch):
     """A batch that dies after writing its journal leaves the transaction marker; the next writer start rolls
     it back and fails the batch, and the same upload then commits."""
     monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(Crash()))
@@ -189,14 +189,14 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch)
         engine.ingest_file(demo_csv)
     monkeypatch.undo()
     assert engine.ws.patterns() and engine.ws.pending_path.exists()  # half written
-    fresh = make_engine(make_config(tmp_path / "ws"))
+    fresh = make_engine(engine.settings)
     (after,) = fresh.ws.list_batches()
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists() and fresh.ontology().store.is_empty
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_path, monkeypatch):
+def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, monkeypatch):
     """A rollback that fails keeps its marker and checkpoint: no later write may overwrite them, and the next
     writer start finishes the rollback."""
     monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph failure")))
@@ -206,7 +206,7 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_p
     monkeypatch.undo()
     assert engine.ws.pending_path.exists() and engine.ws.patterns()  # the evidence stays
     assert engine.ingest_file(demo_csv)["error"]["code"] == "rollback_pending"
-    fresh = make_engine(make_config(tmp_path / "ws"))
+    fresh = make_engine(engine.settings)
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists()
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
@@ -241,7 +241,7 @@ def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
     assert not engine.graph().insights and not engine.frame().patterns and not engine.ws.list_batches()
 
 
-def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
+def test_a_second_writer_process_is_refused(cfg, demo_csv):
     """One writer per workspace: a second writer started while the service holds the lock is refused
     and leaves the service's queued upload alone; readers stay allowed."""
     import os
@@ -251,7 +251,6 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     from insight_graph_service.core.settings import PROJECT_ROOT
     from insight_graph_service.core.workspace import WorkspaceBusy
 
-    cfg = make_config(tmp_path / "ws")
     queued = make_engine(cfg, recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
     holder = subprocess.Popen(  # the web app: another process holding the writer lock
         [
@@ -280,12 +279,11 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
 
 
-def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo_csv):
+def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv):
     """Journals of another canonical version cannot be served: the engine starts on the empty state with the
     reason, refuses writes and questions, never touches the Neo4j mirror, and a reset makes it usable again."""
     from insight_graph_service.core.workspace import atomic_write_json
 
-    cfg = make_config(tmp_path / "ws")
     old = make_engine(cfg)
     assert old.ingest_file(demo_csv)["status"] == "READY"
     atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
@@ -304,12 +302,11 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
-def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_csv, monkeypatch):
+def test_a_failed_recovery_starts_degraded_and_reset_still_works(cfg, demo_csv, monkeypatch):
     """A rollback that cannot finish leaves the queued uploads failed (no process runs them), so the reset that
     recovers is never refused as busy."""
     from insight_graph_service.core.workspace import Workspace
 
-    cfg = make_config(tmp_path / "ws")
     queued = make_engine(cfg).submit(demo_csv)  # left UPLOADED by a process that died
     monkeypatch.setattr(Workspace, "recover", lambda self: (_ for _ in ()).throw(OSError("disk gone")))
     engine = make_engine(cfg)
@@ -322,9 +319,8 @@ def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_
     assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_an_unreadable_snapshot_is_rebuilt_at_start(tmp_path, demo_csv):
+def test_an_unreadable_snapshot_is_rebuilt_at_start(cfg, demo_csv):
     """The snapshot is derived: a start rebuilds it from the journals whatever the file holds."""
-    cfg = make_config(tmp_path / "ws")
     first = make_engine(cfg)
     assert first.ingest_file(demo_csv)["status"] == "READY"
     (cfg.workspace_dir / "graph" / "snapshot.json").write_text("{not json", encoding="utf-8")

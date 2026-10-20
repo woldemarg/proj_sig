@@ -3,16 +3,15 @@ and indicators, credibility by anchor and by place (docs/06_graph_and_storage.md
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
-from conftest import make_config, make_engine
+from conftest import make_engine, rewrite_patterns, stale_snapshot
 
 from insight_contracts import EdgeType, GraphEdge, record_digest
 
 
-def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
+def test_a_pattern_is_recomputed_from_its_stored_upload(cfg, tmp_path, demo_csv):
     """``verify_pattern`` (docs/06_graph_and_storage.md §6.7): every demo pattern recomputes as journaled; forged with
     their digests recomputed, so that they pass the integrity check, a p-value, a test family, a dropped p, a selector and a
     target each differ, field by field, as does a shift order whose first shift is not the target, its p recomputed for
@@ -26,7 +25,6 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
 
     own = tmp_path / "demo.csv"  # ingest_file keeps the path it is given: this test changes and removes the file
     shutil.copy(demo_csv, own)
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     ds = engine.ingest_file(own)["dataset_id"]
     rows = engine.ws.patterns()
@@ -56,8 +54,8 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     shift["shifts"] = shift["shifts"][:1]
     for r in (forged, family, dropped, selector, target, shift, reordered):
         r["record_digest"] = record_digest(r)  # a writer who recomputes the digest
-    engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    rewrite_patterns(engine, rows)
+    stale_snapshot(engine)
     engine = make_engine(cfg)
     assert engine.graph().nodes[forged["id"]]["props"]["integrity"] == "ok"
     checked = engine.verify_pattern(forged["id"])
@@ -87,7 +85,7 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(tmp_path, demo_csv):
     assert refused.value.code == "unknown_pattern"
 
 
-def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, demo_csv):
+def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv):
     """The READY record signs what the graph reads of its dataset, as stored, and a PATCH signs it again (``ok``); a rating
     edited in the record is ``mismatch`` after the rebuild: its source, rating and registry are ignored, the evidence says
     so on the trust line, in the summary and in a NOTE, and a PATCH refuses to sign it; a record without a digest is
@@ -98,7 +96,6 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
     from insight_graph_service.core.snapshot import metadata_digest
     from insight_graph_service.server.views import cytoscape_elements
 
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     ds = engine.ingest_file(demo_csv)["dataset_id"]
     record = engine.ws.ready_batch_for(ds)
@@ -126,7 +123,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
 
     record = engine.ws.ready_batch_for(ds)
     engine.ws.save_batch({k: v for k, v in record.items() if k != "metadata_digest"})  # journaled before digests
-    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    stale_snapshot(engine)
     engine = make_engine(cfg)
     assert engine.problem is None and engine.graph().nodes[f"DS:{ds}"]["props"]["integrity"] == "unverified"
     trust = engine.search("Why is margin lower for phones in the US?").evidence.items[0].trust
@@ -134,10 +131,9 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(tmp_path, dem
     assert metadata_digest({"profile": {"n": np.int64(3), 7: "x"}}) == metadata_digest({"profile": {"n": "3", "7": "x"}})  # as stored
 
 
-def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unverified(tmp_path, demo_csv):
+def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unverified(cfg, demo_csv):
     """A p-value edited in the journal no longer matches its digest: after the rebuild the pattern is ``mismatch`` and
     left out of the evidence. A record without a digest (journaled before digests) reads ``unverified``, not degraded."""
-    cfg = make_config(tmp_path / "ws")
     first = make_engine(cfg)
     assert first.ingest_file(demo_csv)["status"] == "READY"
     question = "Why is margin lower for phones in the US?"
@@ -158,7 +154,7 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
             r["p_adjusted"] = 0.5
         if r["id"] == old:
             del r["record_digest"]
-    first.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    rewrite_patterns(first, rows)
     snapshot = first.ws.load_graph()  # its trust edited too: a start serves the journal's, never the file's
     for node in snapshot["nodes"]:
         if node["id"] == forged:
