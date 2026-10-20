@@ -53,21 +53,23 @@ class _Facts:
 
 
 def _facts(graph: DualGraph, pid: str) -> _Facts:
-    """``pid``'s facts, derived once per committed graph (``DualGraph.memo``)."""
-    if (key := ("vertical", pid)) not in graph.memo:
+    """``pid``'s facts, derived once per committed graph (``DualGraph.memoised``)."""
+
+    def build() -> _Facts:
         out, ins = graph.out.get(pid, []), graph.insight(pid)
         spatial = SpatialProvenance.from_dict(ins.provenance.get("spatial"))
         regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
         levels = {r: graph.nodes[r]["props"]["resolution"] for r in regions}
         top = max(levels.values(), default=None)
-        graph.memo[key] = _Facts(
+        return _Facts(
             resolution=spatial.resolution if spatial else None,
             upload=graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
             regions=regions,
             finest=frozenset(r for r, lv in levels.items() if lv == top),
             anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
         )
-    return graph.memo[key]
+
+    return graph.memoised(("vertical", pid), build)
 
 
 def resolution(graph: DualGraph, pid: str) -> int | None:

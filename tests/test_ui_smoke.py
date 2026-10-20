@@ -283,6 +283,16 @@ def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
         assert page.evaluate(opacity) != first
         page.keyboard.press("Escape")
         assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0
+        # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
+        page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
+        if page.evaluate("W.folded"):  # a narrow map starts with the list folded
+            page.click("#mw-fold")
+        turns, row = page.evaluate("S.chat.length"), page.locator("#map-window .mw-i").first
+        pid = row.get_attribute("data-pid")
+        row.click()
+        page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
+        assert page.locator(".msg-bot").last.locator(".insight-card").count() == 1 and page.is_visible(f"#map-window .mw-i.on[data-pid='{pid}']")
+        page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}

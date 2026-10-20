@@ -860,7 +860,42 @@ function suggestions() {
   return out;
 }
 
+// ponytail: PoC — an insight picked on the map (GeoMap.pick): its description in the chat and its graph links to walk on
+const WALK = { CONTRASTS: "contrasts with", "CONTRASTS (in)": "contrasts with", "SPECIALIZES": "narrower version of", "SPECIALIZES (in)": "broader than",
+  SIBLING: "sibling", "SIBLING (in)": "sibling", CO_LOCATED: "same place", "CO_LOCATED (in)": "same place" };
+
+async function pickInsight(pid, view) {
+  let d;
+  try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
+  S.chat.push({ question: d.node.label, picked: true, insight: d, view });
+  renderThread();
+}
+
+function askAbout(p) {
+  const where = p.conditions.map((c) => c.value).join(" ");
+  return p.phenomenon_type === "covariance" && p.covariance && p.covariance.pair
+    ? `Як пов'язані ${p.covariance.pair.map(human).join(" і ")} для ${where}?` : `Розкажи про ${human(p.target)} для ${where}`;
+}
+
+function insightCard(turn) {
+  const d = turn.insight, p = d.node.props, w = turn.view, cov = p.covariance && p.covariance.pair ? p.covariance : null;
+  const lead = p.phenomenon_type === "covariance" && cov
+    ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>.`
+    : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
+  const theme = (d.neighbors.ACTIVATES || []).find((it) => !(it.props && it.props.weak)), seen = new Set([p.id]);  // primary_anchor: not a weak membership
+  const links = Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))
+    .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
+  return `<div class="bot-card insight-card"><div class="answer-box">` +
+    `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
+    `<p><b>${esc(p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and "))}</b></p><p>${lead}</p>` +
+    `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
+    (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
+    (links.length ? `<h4>Walk on</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
+    `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph">Показати в графі</button></div></div>`;
+}
+
 function botTurn(turn, isLast) {
+  if (turn.insight) return insightCard(turn);
   if (turn.pending) {
     return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Searching the graph${$("use-llm").checked ? " and writing an answer" : ""}…</span></div></div>`;
   }
@@ -880,9 +915,18 @@ function renderThread() {
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на карті</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   t.querySelectorAll(".chip-q").forEach((c) => c.addEventListener("click", () => ask(c.textContent)));
+  t.querySelectorAll(".insight-card").forEach((card) => {
+    const p = S.chat[Number(card.closest(".msg-bot").dataset.turn)].insight.node.props;
+    card.querySelectorAll(".nb").forEach((el) => el.addEventListener("click", () => {
+      if (S.view === "map" && GeoMap.has(el.dataset.id)) GeoMap.pick(el.dataset.id, true); else { focusNodes([el.dataset.id]); inspect(el.dataset.id); }
+    }));
+    card.querySelector(".ic-theme")?.addEventListener("click", (e) => inspect(e.currentTarget.dataset.id));
+    card.querySelector(".ic-ask").addEventListener("click", () => ask(askAbout(p)));
+    card.querySelector(".ic-graph").addEventListener("click", () => { setView("graph"); focusNodes([p.id]); inspect(p.id); });
+  });
   t.querySelectorAll(".msg-bot[data-turn]").forEach((box) => {
     const turn = S.chat[Number(box.dataset.turn)];
     if (!turn || !turn.qa) return;

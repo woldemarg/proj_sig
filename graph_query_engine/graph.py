@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,6 +53,18 @@ class DualGraph:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
         self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
+        self._memo_lock = threading.RLock()
+
+    def memoised(self, key: tuple[str, str], build: Callable[[], Any]) -> Any:
+        """``build()`` kept under ``key``: computed once per graph even when readers on several threads ask at once (a
+        projection takes seconds on a large upload). Reentrant, since one build may read another's facts."""
+        # ponytail: one lock per graph serialises the first builds of different keys; per-key locks if readers ever queue
+        if key in self.memo:
+            return self.memo[key]
+        with self._memo_lock:
+            if key not in self.memo:
+                self.memo[key] = build()
+            return self.memo[key]
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]
@@ -76,3 +89,10 @@ class DualGraph:
         found = [(e, e["target"]) for e in self.out.get(node_id, []) if e["type"] in wanted]
         found += [(e, e["source"]) for e in self.inc.get(node_id, []) if e["type"] in wanted]
         return found
+
+
+def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
+    """The pattern's strongest non-weak ACTIVATES edge: the theme it is shown and walked under (a weak membership counts
+    for coverage only, docs/06_graph_and_storage.md §6.2); None when it has none."""
+    acts = (e for e in graph.out.get(pattern_id, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak"))
+    return max(acts, key=lambda e: e["weight"], default=None)
