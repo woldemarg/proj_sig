@@ -245,7 +245,8 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
             members = None if own else member_rows(ws, b, upload, len(point_cell))
             if not own and members is None:
                 continue
-            level = "table" if b.get("level") == "table" else f"res {b.get('level')}"
+            res = ((b.get("profile") or {}).get("geo") or {}).get("resolution", b.get("level"))  # also without upload levels
+            level = "table" if b.get("level") == "table" else f"res {res}"
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
                 node = graph.nodes.get(pid)
                 if node is None or node["props"].get("integrity") == "mismatch":

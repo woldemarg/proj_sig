@@ -232,7 +232,10 @@ async function loadDataset(ds) {
 
 async function loadProjected(ds) {
   /* the upload's insights found at another level (the table, another resolution) on this map's cells, by their footprint */
-  G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch(() => []);
+  let failed = "";
+  G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
+  $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read
+  $("map-projected-error").textContent = failed && `Insights of other levels unavailable: ${failed}`;
   G.patterns = Object.fromEntries([...G.data.patterns, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
@@ -347,7 +350,7 @@ function renderCard(p, item, pts) {
       ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
       : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
+    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "") + mismatchTag(p.id);
   $("map-card").hidden = false;
 }
 
@@ -358,8 +361,11 @@ function trustTags(pid) {
   const [cls, words] = cred(t.credibility);
   return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
     (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "") +
-    (t.integrity === "mismatch" ? `<i class="pp-tag bad">integrity mismatch</i>` : "");
+    mismatchTag(pid);
 }
+
+const mismatchTag = (pid) =>  // a record that fails its digest: labelled wherever the map shows the insight, never painted silently
+  G.overlay?.patterns[pid]?.integrity === "mismatch" ? `<i class="pp-tag bad" title="${esc(INTEGRITY.mismatch[1])}">integrity mismatch</i>` : "";
 
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row;
