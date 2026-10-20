@@ -212,7 +212,7 @@ async function loadDataset(ds) {
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
   const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
-  G.ds = ds; G.data = data; G.focus = []; G.evidence = [];
+  G.ds = ds; G.data = data; G.evidence = [];
   await loadProjected(ds);
   G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
   G.map.getSource("cells").setData(data);
@@ -228,7 +228,7 @@ async function loadDataset(ds) {
   $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
     (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
   G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
-  $("map-card").hidden = true; paintZone();
+  paintZone();
 }
 
 async function loadProjected(ds) {

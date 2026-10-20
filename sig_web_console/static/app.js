@@ -87,6 +87,8 @@ function setTheme(t) {
   renderSphere();  // same palette in 3D
 }
 
+const CPU_HINT = "Embeddings run on the CPU: slower ingests. On a Mac run the graph service on the host, where it uses the GPU (MPS; README, Mac: GPU); with an NVIDIA GPU start the stack with compose.gpu.yaml.";
+
 async function refreshHealth() {
   try {
     const [h, chat] = await Promise.all([api("/api/health"), api("/api/chat/health").catch(() => ({}))]);
@@ -94,13 +96,12 @@ async function refreshHealth() {
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
     const llmTxt = llm.reachable ? (llm.model_available ? model : `${model} not found`) : `${model} offline`;
+    const cpu = h.embedding_device === "cpu";  // amber: on a Mac, Docker sees no GPU (README, Mac: GPU)
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `embeddings · ${h.embedding_device}`;
     $("health").innerHTML =
       `<span class="pill ${llmCls}" title="Language model · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
       `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Graph database mirror"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j off"}</span>` +
-      (h.embedding_device === "cpu"  // a warning: on a Mac, Docker sees no GPU (README, Mac: GPU)
-        ? `<span class="pill warn opt" title="Embeddings run on the CPU: slower ingests. On a Mac run the graph service on the host, where it uses the GPU (MPS; README, Mac: GPU); with an NVIDIA GPU start the stack with compose.gpu.yaml."><i class="dot"></i>${esc(emb)}</span>`
-        : `<span class="pill opt" title="Embedding model and device"><i class="dot"></i>${esc(emb)}</span>`);
+      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Embedding model and device"}"><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `${model} explanation`;
     $("reset-btn").hidden = !h.problem;  // a degraded workspace: only a reset makes it usable again
     if (h.problem) setUploadMsg(`The workspace can’t be used: ${h.problem}`, true);

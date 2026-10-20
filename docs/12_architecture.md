@@ -191,7 +191,7 @@ Neo4j mirrors the graph for people and other applications. The narrator is state
 - **The narrator's query log:** logger `evidence_narrator_service.queries`, one JSON line with the time, the question, the mode, the metrics, the cited evidence (the manifest's pattern ids) and the citation check.
 - **Per-answer metrics:** the `metrics` of every answer.
 
-**The graph service** logs one line per HTTP request (`server/app.py::RequestTimer`): method, path, status and wall time, a streamed file until its last byte; a request slower than `SLOW_REQUEST_S` (2 s) is a warning. The batch record's `timings` carry each stage and the Neo4j sync (`neo4j_s`).
+**The graph service** logs one line per HTTP request (`server/app.py::RequestTimer`): method, path, status and wall time, a streamed file until its last byte; a request slower than `SLOW_REQUEST_S` (2 s) is a warning. It replaces uvicorn's access log in `python -m insight_graph_service.server`. The batch record's `timings` carry each stage and the Neo4j sync (`neo4j_s`).
 
 **The broker** logs one line per completion: model, messages, prompt and completion tokens, and latency. It never logs the prompt itself.
 
