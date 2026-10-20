@@ -108,7 +108,10 @@ def test_attractor_benchmark_apparatus(tmp_path):
 def test_geo_benchmark_apparatus(tmp_path):
     import h3
     import numpy as np
+    import pandas as pd
     from geo_benchmark import FINE, REGION, generate, run_scenario
+    from perf_benchmark import CALIFORNIA, EPOCH
+    from test_spatial import geo_frame
 
     scenario = generate("S-regional", 1)
     (upload,) = scenario.uploads
@@ -116,6 +119,9 @@ def test_geo_benchmark_apparatus(tmp_path):
     planted = upload.frame[np.logical_or.reduce(list(upload.parts.values()))]
     cells = {h3.latlng_to_cell(a, b, FINE) for a, b in zip(planted["lat"], planted["lon"], strict=True)}
     assert len(cells) == 3 * 37 and {h3.cell_to_parent(c, REGION) for c in cells} == {scenario.truth["region"]}  # three foci, one region
+    for frame in (upload.frame, geo_frame().rename(columns={"latitude": "lat", "longitude": "lon"})):  # one territory, one epoch
+        assert frame["lat"].between(CALIFORNIA[0], CALIFORNIA[2]).all() and frame["lon"].between(CALIFORNIA[1], CALIFORNIA[3]).all()
+        assert (pd.to_datetime(frame["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
     result = run_scenario(scenario, tmp_path, make_engine(make_config(tmp_path / "ws")), k=5)
     found = result["files"][0]["found"]
     assert len({f["pattern"] for f in found.values()}) == 3 and all(f["coverage"] >= 0.9 for f in found.values())  # one insight per focus

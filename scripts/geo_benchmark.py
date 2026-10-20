@@ -65,6 +65,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
 
+from perf_benchmark import EPOCH  # noqa: E402
+
 from graph_query_engine.seeds import SeedMatch  # noqa: E402
 from graph_query_engine.traversal import traverse  # noqa: E402
 from graph_query_engine.vertical import scale_chain  # noqa: E402
@@ -73,9 +75,9 @@ from insight_graph_service.core.engine import Engine  # noqa: E402
 FINE, REGION = 8, 5
 RADIUS = 3  # a focus: the ring-3 disk, 37 cells
 LIFT = 4.0  # load is N(10, 2) everywhere, +LIFT on the planted events
-CENTRE = (48.45, 35.3)  # lat, lon of the focus scenarios' region cell
-BROAD = (47.0, 33.0, 2.4, 3.4)  # lat0, lon0, dlat, dlon of S-levels and S-parts: about 270 cells at resolution 5
-SIZE_BOX = (48.0, 34.6, 0.8, 1.2)  # about 10⁴ cells at FINE
+CENTRE = (36.45, -119.3)  # lat, lon of the focus scenarios' region cell, inside perf_benchmark's CALIFORNIA
+BROAD = (CENTRE[0] - 1.45, CENTRE[1] - 1.9, 2.4, 2.8)  # lat0, lon0, dlat, dlon of S-levels and S-parts: about 270 cells at resolution 5
+SIZE_BOX = (CENTRE[0] - 0.45, CENTRE[1] - 0.58, 0.8, 1.0)  # about 10⁴ cells at FINE
 SCENARIOS = ("S-regional", "S-control", "S-local", "S-levels", "S-parts", "S-parts-v2", "S-two-sources", "S-poison", "S-size")
 QUESTION = "Where is load higher?"
 FOUND = 0.5  # share of a part's events its patterns must hold for the part to count as found
@@ -119,7 +121,7 @@ def _events(
         "lon": lon.round(6),
         "district": _district(lat, lon, box, grid),
         "kind": rng.choice(["a", "b", "c"], size=len(lat), p=[0.5, 0.3, 0.2]),
-        "when": np.datetime64("2026-08-01") + rng.integers(0, 31, len(lat)).astype("timedelta64[D]"),
+        "when": np.datetime64(EPOCH) + rng.integers(0, 31, len(lat)).astype("timedelta64[D]"),
         "load": (rng.normal(10.0, 2.0, len(lat)) + LIFT * planted).round(2),
     }
     own = np.full(len(lat), -1) if own is None else own

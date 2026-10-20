@@ -32,25 +32,25 @@ from subgroup_miner.spatial import (
     subgroup_moran,
 )
 
-HOT = (48.5, 35.25)  # the planted cluster: many points, mostly at night, late in the period
+HOT = (36.5, -119.25)  # the planted cluster: many points, mostly by phone, late in the period
+EPOCH = np.datetime64("2019-03-04")  # the synthetic territory and epoch of scripts/perf_benchmark.py (CALIFORNIA, EPOCH)
 
 
 def geo_frame(seed: int = 3) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     n_bg, n_hot = 3000, 3000
-    lat = np.concatenate([rng.uniform(48.25, 48.75, n_bg), rng.normal(HOT[0], 0.05, n_hot)])
-    lon = np.concatenate([rng.uniform(35.0, 35.5, n_bg), rng.normal(HOT[1], 0.07, n_hot)])
+    lat = np.concatenate([rng.uniform(36.25, 36.75, n_bg), rng.normal(HOT[0], 0.05, n_hot)])
+    lon = np.concatenate([rng.uniform(-119.5, -119.0, n_bg), rng.normal(HOT[1], 0.07, n_hot)])
     hot = np.r_[np.zeros(n_bg, bool), np.ones(n_hot, bool)]
-    start = np.datetime64("2026-08-01")
     days = np.where(hot, rng.integers(15, 31, len(hot)), rng.integers(0, 31, len(hot)))
     return pd.DataFrame(
         {
             "event_id": [f"e{i}" for i in range(len(hot))],
             "latitude": lat,
             "longitude": lon,
-            "when": start + days.astype("timedelta64[D]"),
-            "shift": np.where(rng.random(len(hot)) < np.where(hot, 0.8, 0.2), "night", "day"),
-            "sector": np.where(lat > 48.5, "north", "south"),
+            "when": EPOCH + days.astype("timedelta64[D]"),
+            "channel": np.where(rng.random(len(hot)) < np.where(hot, 0.8, 0.2), "phone", "web"),
+            "sector": np.where(lat > 36.5, "north", "south"),
             "load": rng.normal(10, 2, len(hot)) + 4 * hot,
         }
     )
@@ -66,8 +66,8 @@ def test_parse_geo_and_points():
     assert parse_geo(" lat,lon @ 8", 7) == ("lat,lon", 8)
     with pytest.raises(ValueError):
         parse_geo("auto@99", 7)
-    lat, lon = parse_points(pd.Series(['{"coordinates":[33.77,47.04],"type":"Point"}', "POINT (30.5 50.45)", "nowhere", None]))
-    assert lat[:2].tolist() == [47.04, 50.45] and lon[:2].tolist() == [33.77, 30.5]
+    lat, lon = parse_points(pd.Series(['{"coordinates":[-118.25,34.05],"type":"Point"}', "POINT (-122.42 37.77)", "nowhere", None]))
+    assert lat[:2].tolist() == [34.05, 37.77] and lon[:2].tolist() == [-118.25, -122.42]
     assert np.isnan(lat[2:]).all()
     frame = geo_frame()  # columns named longitude then latitude: the names give the roles, in range either way
     swapped, ordered = locate_points(frame, "longitude,latitude"), locate_points(frame, "latitude,longitude")
@@ -80,7 +80,7 @@ def test_cell_table_roles_follow_dtypes():
     assert ctx.location == "latitude,longitude" and len(table) == len(ctx.cells)
     assert table["points"].sum() == len(frame)  # every point lands in exactly one cell
     assert (ctx.point_cell >= 0).all()
-    assert {"when_active_days", "when_late_share", "load_median", "share_shift_night", "sector_mode", "lisa_points"} <= set(table.columns)
+    assert {"when_active_days", "when_late_share", "load_median", "share_channel_phone", "sector_mode", "lisa_points"} <= set(table.columns)
     assert "event_id" not in table.columns and any("event_id" in w for w in warnings)  # an identifier is not aggregated
     sparse = table["points"] < 5
     assert sparse.any() and table.loc[sparse, "load_median"].isna().all()  # intensive metrics need MIN_CELL_POINTS
@@ -207,7 +207,7 @@ def test_geo_batch_end_to_end(tmp_path):
         if any(c["attribute"] in ("lisa_points", "neighbours_points_band") for c in p["conditions"]):
             assert p["target"] not in ("points", "when_active_days")
     hot = [p for p in patterns if {"attribute": "lisa_points", "value": "hot spot"} in p["conditions"] and p["effect_size"] > 0]
-    assert any(p["target"] in ("share_shift_night", "load_median", "when_late_share") for p in hot)  # the planted effects
+    assert any(p["target"] in ("share_channel_phone", "load_median", "when_late_share") for p in hot)  # the planted effects
     cells = json.loads(engine.geo_cells_file(record["dataset_id"]).read_text(encoding="utf-8"))  # written with the batch
     assert len(cells["features"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
     one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
@@ -253,7 +253,7 @@ def _geo_dataset(name, cells, covers):
 def test_derive_spatial_relations_regions_and_the_partner_cap():
     from subgroup_miner.spatial import derive_spatial
 
-    c = h3.latlng_to_cell(48.5, 35.3, 8)
+    c = h3.latlng_to_cell(36.5, -119.2, 8)
     touching = h3.grid_ring(c, 7)[0]  # two radius-3 disks seven cells apart touch without overlapping
     region = h3.cell_to_parent(c, 5)
     kids = set(h3.cell_to_children(region, 8))
@@ -262,10 +262,10 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     y = max(inside, key=lambda k: h3.grid_distance(x, k))  # far apart in one resolution-5 region
     near, far = h3.grid_disk(x, 2), h3.grid_disk(y, 2)
     coarse = [h3.cell_to_parent(k, 7) for k in near]
-    elsewhere = h3.latlng_to_cell(40.0, 30.0, 8)
+    elsewhere = h3.latlng_to_cell(39.5, -122.5, 8)
     crowd = {f"P-q{i}": h3.grid_disk(elsewhere, 2) for i in range(5)}
     shifted = h3.grid_ring(elsewhere, 2)[0]
-    lone = h3.latlng_to_cell(45.0, 20.0, 8)
+    lone = h3.latlng_to_cell(34.0, -116.5, 8)
     apart = h3.grid_ring(lone, 8)[0]  # radius-4 disks eight cells apart share their midpoint cells only
     spatial = derive_spatial(
         [
@@ -299,7 +299,7 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert region in spatial.occupied["coarse"][5] and spatial.occupied["one"][8].isdisjoint(spatial.occupied["dot"][8])
     centre = {lv: frozenset(h3.latlng_to_cell(*h3.cell_to_latlng(k), lv) for k in coarse) for lv in (5, 3, 1)}  # where each cell lies
     assert spatial.places["P-z"] == {7: frozenset(coarse), **centre}
-    fine = "871e4985bffffff"  # its centre lies in another resolution-5 cell than its H3 parent
+    fine = "8729aab49ffffff"  # its centre lies in another resolution-5 cell than its H3 parent
     holder = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5)
     assert holder != h3.cell_to_parent(fine, 5)
     edge = derive_spatial([_geo_dataset("fine", [fine], {"P-fine": [fine]}), _geo_dataset("coarse", [holder], {"P-holder": [holder]})], (7, 5, 3, 1))
@@ -318,8 +318,8 @@ def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
 
     monkeypatch.setattr(spatial, "GEO_COLOCATION_MIN", 0.66667)
     monkeypatch.setattr(spatial, "GEO_REGION_MIN_SHARE", 0.66667)
-    apart = h3.grid_ring(h3.latlng_to_cell(48.5, 35.3, 8), 10)[::3][:4]  # no two neighbours: the dilation adds nothing
-    home = h3.latlng_to_cell(40.0, 30.0, 7)
+    apart = h3.grid_ring(h3.latlng_to_cell(36.5, -119.2, 8), 10)[::3][:4]  # no two neighbours: the dilation adds nothing
+    home = h3.latlng_to_cell(39.5, -122.5, 7)
     kids, away = sorted(h3.cell_to_children(home, 8))[:3], h3.cell_to_center_child(h3.grid_ring(home, 2)[0], 8)
     out = spatial.derive_spatial(
         [
@@ -518,7 +518,7 @@ def test_auto_picks_the_levels_from_the_points(tmp_path, monkeypatch):
     assert done["level"] == "7" and done["profile"]["geo"]["levels"]["chosen"] == [7] and "geo_levels" not in done
     assert table["level"] == "table" and not table["profile"]  # the selection is the geo levels' alone
     assert done["dataset_id"] == load_dataset(path, engine.settings.miner, geo="auto@7").dataset_id
-    pd.DataFrame({"lat": [48.5] * 60, "lon": [35.3] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
+    pd.DataFrame({"lat": [36.5] * 60, "lon": [-119.2] * 60, "x": range(60)}).to_csv(tiny := tmp_path / "tiny.csv", index=False)
     with tiny.open("rb") as f, pytest.raises(PipelineError) as exc:
         engine.upload("tiny.csv", f, geo="auto@auto")  # one cell at every resolution
     assert exc.value.code == "invalid_options" and len(list(engine.ws.uploads_dir.glob("*"))) == 1  # not kept
@@ -590,7 +590,7 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     below = {str(c) for c in cells if h3.latlng_to_cell(*h3.cell_to_latlng(str(c)), 6) == coarse}  # a coarser cell: the centres it holds
     hit = len(below & set(h3.grid_disk(centre, 1)))
     assert zone_overlap(cells, covers, frozenset([coarse]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
-    fine = "871e4985bffffff"  # its centre lies in another resolution-5 cell than its H3 parent
+    fine = "8729aab49ffffff"  # its centre lies in another resolution-5 cell than its H3 parent
     holder, parent = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5), h3.cell_to_parent(fine, 5)
     assert holder != parent
     assert zone_overlap(np.array([holder, parent]), {"holder": [0], "parent": [1]}, frozenset([fine])) == {"holder": 1.0, "parent": 0.0}
