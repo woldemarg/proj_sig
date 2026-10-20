@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 from conftest import FakeLLM, make_config, make_engine, serve
-from dev import compose
+from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
 from evidence_narrator_service.settings import NarratorSettings
@@ -114,21 +111,10 @@ def test_upload_process_render_query(client, demo_csv):
     assert client.post("/api/reset").json()["status"] == "reset"
 
 
-def _chromium() -> str | None:
-    """The newest Chromium in Playwright's browser cache, whichever revision this Playwright pins."""
-    cache = {"win32": Path(os.environ.get("LOCALAPPDATA", "")), "darwin": Path.home() / "Library" / "Caches"}.get(
-        sys.platform, Path.home() / ".cache"
-    )
-    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or cache / "ms-playwright")
-    patterns = ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-linux*/chrome", "chromium-*/chrome-mac*/*.app/Contents/MacOS/*")
-    found = [exe for pattern in patterns for exe in root.glob(pattern)]
-    return str(max(found, key=lambda exe: int(exe.relative_to(root).parts[0].removeprefix("chromium-")))) if found else None
-
-
 @pytest.mark.browser
 def test_browser_renders_graph_and_highlights_path(tmp_path, demo_csv):
     sync_api = pytest.importorskip("playwright.sync_api")
-    exe = _chromium()
+    exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     cfg = make_config(tmp_path / "ws")

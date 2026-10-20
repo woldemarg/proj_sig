@@ -11,6 +11,7 @@ Reads the repository's .env like the services; the GPU is used when EMBEDDING_DE
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,18 @@ def compose(graph_service: Any, narrator: Any) -> Any:
         await target(scope, receive, send)
 
     return app
+
+
+def chromium() -> str | None:
+    """The newest Chromium in Playwright's browser cache, whichever revision this Playwright pins (the browser test and
+    the performance benchmark drive it); None without one."""
+    cache = {"win32": Path(os.environ.get("LOCALAPPDATA", "")), "darwin": Path.home() / "Library" / "Caches"}.get(
+        sys.platform, Path.home() / ".cache"
+    )
+    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or cache / "ms-playwright")
+    patterns = ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-linux*/chrome", "chromium-*/chrome-mac*/*.app/Contents/MacOS/*")
+    found = [exe for pattern in patterns for exe in root.glob(pattern)]
+    return str(max(found, key=lambda exe: int(exe.relative_to(root).parts[0].removeprefix("chromium-")))) if found else None
 
 
 def main() -> None:

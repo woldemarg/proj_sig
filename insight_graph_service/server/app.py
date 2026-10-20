@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -34,6 +35,33 @@ STATUS = {
     "unknown_pattern": 404,
     "invalid_options": 400,
 }  # every other refusal is 409: busy, degraded, mismatch, rollback
+
+
+SLOW_REQUEST_S = 2.0  # a request slower than this is logged as a warning (docs/12_architecture.md §12.7)
+
+
+class RequestTimer:
+    """ASGI middleware: every request's method, path, status and wall time in the service log (a streamed file until its
+    last byte); a slow one as a warning."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        start, status = time.perf_counter(), [None]
+
+        async def sent(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                status[0] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, sent)
+        finally:
+            seconds = time.perf_counter() - start
+            (log.warning if seconds > SLOW_REQUEST_S else log.info)("%s %s %s %.3f s", scope["method"], scope["path"], status[0], seconds)
 
 
 class SearchIn(BaseModel):
@@ -65,6 +93,7 @@ def create_app(engine: Engine) -> FastAPI:
         worker.shutdown(wait=False, cancel_futures=True)  # a queued batch stays UPLOADED and fails at the next start
 
     app = FastAPI(title="SIG insight graph service", lifespan=lifespan)
+    app.add_middleware(RequestTimer)
 
     async def refused(_: Request, exc: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=STATUS.get(exc.code, 409))

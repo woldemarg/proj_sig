@@ -123,6 +123,52 @@ def test_geo_benchmark_apparatus(tmp_path):
     assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
 
 
+def test_perf_benchmark_apparatus(tmp_path, caplog):
+    """The performance benchmark (docs/10_verification.md §10.4): its synthetic deliveries are the same for one seed and
+    keep to their own territory and calendar; one upload through the API reports each level's stages, the Neo4j sync's
+    included, then the console's reads cold and warm and three questions; the service logs every request's time."""
+    import logging
+
+    import pandas as pd
+    from fastapi.testclient import TestClient
+    from perf_benchmark import CALIFORNIA, EPOCH, reads_after, run_upload, write_synthetic_points
+
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from insight_graph_service.server.app import create_app
+
+    (tmp_path / "again").mkdir()
+    path = write_synthetic_points(tmp_path, n=3000, seed=1)
+    assert path.read_bytes() == write_synthetic_points(tmp_path / "again", n=3000, seed=1).read_bytes()
+    frame, (south, west, north, east) = pd.read_csv(path), CALIFORNIA
+    assert list(frame.columns) == [
+        "lat",
+        "lon",
+        "ordered_at",
+        "segment",
+        "channel",
+        "area",
+        "vehicle",
+        "refunded",
+        "basket",
+        "items",
+        "wait_min",
+        "rating",
+    ]
+    assert frame["lat"].between(south, north).all() and frame["lon"].between(west, east).all()
+    assert (pd.to_datetime(frame["ordered_at"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 59).all()
+    engine = make_engine(make_config(tmp_path / "ws"))
+    app = create_app(engine)
+    with caplog.at_level(logging.INFO, logger="insight_graph_service.server.app"), TestClient(app) as client:
+        upload = run_upload(client, app, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "auto@5", False, True)
+        reads = reads_after(client, tmp_path / "ws")
+    (level,) = upload["levels"]
+    assert level["status"] == "READY" and {"validate_s", "discover_s", "embed_s", "graph_s", "neo4j_s"} <= set(level["timings"])
+    paths = {r["path"].rsplit("/", 1)[-1] for r in reads["cold"]}
+    assert {"graph", "cells", "overlay", "projected", "window"} <= paths and all(r["status"] == 200 for r in reads["cold"] + reads["warm"])
+    assert len(reads["questions"]) == 3 and all(q["status"] == 200 for q in reads["questions"]) and "graph/snapshot.json" in reads["bytes"]
+    assert any(r.getMessage().startswith("GET /api/geo") and r.getMessage().endswith(" s") for r in caplog.records)
+
+
 def test_poisoning_eval_apparatus(tmp_path):
     """The deterministic red team (docs/10_verification.md §10.3): the spot planted in an unreliable source only is never
     confirmed and says so on its trust line in the evidence of every question, the opposite shifts of two sources are both

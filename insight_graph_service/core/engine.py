@@ -558,7 +558,9 @@ class Engine:
                     self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
             except Exception as exc:  # failures before READY were rolled back by the transaction
                 return self._fail(record, exc, t0)
+            start = time.perf_counter()
             record["neo4j"] = self._publish(state, snapshot)  # committed: nothing below may turn READY into FAILED
+            record["metrics"]["timings"]["neo4j_s"] = time.perf_counter() - start
             if record["neo4j"]["status"] == "failed":
                 record["warnings"].append(f"graph persistence (Neo4j) failed: {record['neo4j']['error']}")
             self.ws.save_batch(record)
