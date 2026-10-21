@@ -33,7 +33,8 @@ const GeoMap = {
     await ensureMap();
     G.map.resize();
     if (G.stale) {  // what changed while another tab was open; a failed load is tried again on the next open
-      try { await GeoMap.refresh(); G.stale = false; } catch (e) { console.error("map load failed", e); }
+      G.stale = false;  // a pass asked meanwhile sets it again
+      try { await GeoMap.refresh(); } catch (e) { G.stale = true; console.error("map load failed", e); }
     }
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
     else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
