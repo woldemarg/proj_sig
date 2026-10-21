@@ -172,6 +172,9 @@ def test_geo_coverage_apparatus(engine, tmp_path):
         "L": [],
         "P": [0],
     }  # x < 30; P: S below 12 regions where lift >= 1 (region 1: 0.83)
+    pad = np.zeros(11, int)  # eleven regions holding no event: P switches on the regions with events, as the graph's placement
+    sparse = level_stats(np.r_[np.zeros(20, int), np.ones(10, int)], np.array([0]), regions, np.r_[n_r, pad], np.r_[occupied, pad + 1], 100)
+    assert sparse["links"]["P"].tolist() == [0]
 
 
 def test_perf_benchmark_apparatus(engine, tmp_path, caplog):

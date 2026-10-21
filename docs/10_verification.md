@@ -205,7 +205,7 @@ Measured on 2026-10-16, against the phase-A rules of credibility (anchors, [#7](
 - `C_insights` per rule and level: the share of base insights with `C_members ≥ 0.5` and at least one link; the 60–80 % aimed at for base-insight places is a target for this share, not a threshold for one link;
 - `C_map`: the share of the finest level's cells and located points inside the union of the base footprints (`GEO_FOOTPRINT_SHARE`), descriptive.
 
-The rules weighed, with x the insight's events in region R, n_R the map's and N all located: S `x / |P_loc| ≥ 0.2`; E `x / min(|P_loc|, n_R) ≥ 0.2`, x ≥ 30 (IN_REGION's rule counted in events); F IN_REGION's rule on the footprint's cells; L the binomial tail `P(X ≥ x | n_R, |P_loc| / N)` (where small, never below the exact hypergeometric one), under Benjamini-Hochberg at 0.05 over the level's regions, lift ≥ 1.5, x ≥ 30. The geo levels' own insights are measured alike, beside their IN_REGION edges at each level.
+The rules weighed, with x the insight's events in region R, n_R the map's and N all located: S `x / |P_loc| ≥ 0.2`; E `x / min(|P_loc|, n_R) ≥ 0.2`, x ≥ 30 (IN_REGION's rule counted in events); F IN_REGION's rule on the footprint's cells; L the binomial tail `P(X ≥ x | n_R, |P_loc| / N)` (where small, never below the exact hypergeometric one), under Benjamini-Hochberg at 0.05 over the level's regions holding a located event, lift ≥ 1.5, x ≥ 30 (rule P switches between L and S on the count of those regions, as the graph's placement does). The geo levels' own insights are measured alike, beside their IN_REGION edges at each level.
 
 | | California, `auto@auto` (5) + table, income in quartiles | synthetic deliveries, 300,000 points, `lat,lon@auto` (6, 5) + table |
 |---|---|---|
