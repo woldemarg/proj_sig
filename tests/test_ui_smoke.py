@@ -259,8 +259,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
         page.evaluate("loadOverlay('ds-unknown')")  # an overlay that cannot be read says so, not an empty map of regions
         assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
+        assert not page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")  # no trust read: none of this level's insights is drawn
+        assert page.evaluate("GeoMap.offMap(G.data.patterns[0].id)").startswith("Not drawn on this map: its trust could not be read")
         page.evaluate("loadOverlay(G.ds)")
         assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
+        assert page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")
         page.evaluate("loadProjected('ds-unknown')")  # the other levels that cannot be read say so, not an upload without them
         assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Insights of other levels unavailable")
         page.evaluate("loadProjected(G.ds)")
@@ -287,6 +290,31 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         neighbour, title = page.evaluate(drawn), page.inner_text("#drawer-title")
         page.click(f"#inspector .nb[data-id='{neighbour}'] >> nth=0")  # with the map open: the map focuses it, the drawer follows
         page.wait_for_function(f"G.focusId === '{neighbour}' && $('drawer-title').textContent !== {title!r}", timeout=10000)
+        # an insight the map does not draw, from a citation or a drawer row alike: the focus goes, the drawer says why
+        off = page.evaluate("api('/api/graph').then((g) => g.nodes.map((n) => n.data).find((d) => d.kind === 'Pattern' && !GeoMap.has(d.id)).id)")
+        page.evaluate(f"reveal('{off}')")  # what a click on its citation does
+        page.wait_for_function("!G.focusId && document.querySelector('#inspector .drawer-note')", timeout=10000)
+        assert page.inner_text("#inspector .drawer-note").startswith("Not on this map")
+        before = page.evaluate("S.chat.length")
+        page.evaluate(f"GeoMap.focusPattern('{neighbour}'); GeoMap.pick('{off}')")  # picked, as an IN VIEW row, but not drawn here
+        page.wait_for_function(f"S.chat.length === {before + 1}")
+        assert page.evaluate("G.focusId") is None  # no other insight stays painted beside its card
+        page.evaluate(f"GeoMap.focusPattern('{neighbour}')")
+        row = page.evaluate("""(() => { const r = [...document.querySelectorAll('#inspector .nb')].find((x) => x.dataset.id.startsWith('P-'));
+            const g = r.closest('details'); if (g) g.open = true; return r.dataset.id; })()""")
+        title = page.inner_text("#drawer-title")
+        page.click(f"#inspector .nb[data-id='{row}'] >> nth=0")
+        page.wait_for_function(
+            f"!G.focusId && $('drawer-title').textContent !== {title!r} && document.querySelector('#inspector .drawer-note')", timeout=10000
+        )
+        page.evaluate("GeoMap.toggleZone(G.data.features[0].properties.h3)")  # a zone selected for other questions
+        turns = page.evaluate("S.chat.length")
+        page.evaluate(f"pickInsight('{off}', null)")  # the card of an insight this map does not draw: it has no place here
+        page.wait_for_function(f"S.chat.length === {turns + 1}")
+        page.locator(".msg-bot").last.locator(".ic-ask").click()
+        page.wait_for_function(f"S.chat.length === {turns + 2} && !S.busy", timeout=30000)
+        assert page.evaluate("S.chat.at(-1).zone") == 0  # asked without a zone, never with the one selected
+        page.evaluate("GeoMap.clearZone()")
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )
@@ -301,12 +329,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
-        forged = """(pid) => { const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" };
-            renderCard(G.patterns[pid], null, null); const html = $("map-card-body").innerHTML;
-            if (t) G.overlay.patterns[pid] = t; else delete G.overlay.patterns[pid];
-            renderCard(G.patterns[pid], null, null); return html; }"""
-        assert "integrity mismatch" not in page.inner_text("#map-card-body")  # a record that fails its digest is labelled on the card
-        assert "integrity mismatch" in page.evaluate(forged, page.evaluate("G.focusId"))
+        forged = """(pid) => { const was = G.focusId, ev = G.evidence; GeoMap.focusPattern(pid, false);  // focused when a commit marks it
+            const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" }; mergePatterns();
+            const drawn = [GeoMap.has(pid), G.byRow.some((r) => r.includes(pid)), G.focusId];
+            G.overlay.patterns[pid] = t; mergePatterns(); G.evidence = ev; GeoMap.focusPattern(was); return [...drawn, GeoMap.has(pid)]; }"""
+        own = page.evaluate("G.data.patterns.find((p) => GeoMap.has(p.id)).id")  # a record that fails its digest is never drawn
+        assert page.evaluate(forged, own) == [False, False, None, True]  # and its focus goes
         opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
         page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
         first = page.evaluate(opacity)
@@ -320,6 +348,62 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         page.evaluate("loadDataset(G.ds)")  # a dataset loaded again, or another one: no cell of the old focus stays painted
         assert page.evaluate("G.focusId") is None and page.evaluate(painted) == 0
+        # two loads at once: the later call wins, and while it loads nothing of the old dataset is drawable on its cells
+        real = page.evaluate("G.ds")
+
+        def pack(*xs):  # the cell package of square cells 0.4° wide at these longitudes, as /cells serves it
+            rings = [[x, 0, 40000, 0, 40000, 40000, 0, 40000] for x in xs]
+            columns = {"h3": ["85754e67fffffff"] * len(xs), "points": [3] * len(xs)}
+            return {"columns": columns, "rings": rings, "scale": 5, "bbox": [min(xs), 0, max(xs) + 0.4, 0.4], "patterns": []}
+
+        stub = {
+            "cells": pack(0),
+            "projected": [],
+            "overlay": {"type": "FeatureCollection", "features": [], "patterns": {}},
+            "window": {"cells": 1, "points": 3, "first": "map", "insights": 0, "themes": []},
+        }
+        page.route("**/api/geo/ds-stub/**", lambda r: r.fulfill(json=stub[r.request.url.split("/")[6].split("?")[0]]))
+        race = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms)), slow = {
+              [`/${real}/cells`]: 800, [`/${stub}/cells`]: 300, [`/${stub}/projected`]: 400, [`/${real}/overlay`]: 600, [`/${real}/projected`]: 600 };
+            api = async (path, o) => { const ms = Object.entries(slow).find(([k]) => path.endsWith(k)); if (ms) await wait(ms[1]); return orig(path, o); };
+            try { const a = loadDataset(real), b = loadDataset(stub);
+              await wait(100); GeoMap.focusPattern(own, false); const note = GeoMap.offMap(own);  // a focus made during the load
+              loadOverlay(real); loadProjected(real);  // a refresh pass's re-reads of the dataset still on the map, during the load
+              while (G.ds !== stub) await wait(5);
+              const mid = Object.keys(G.patterns).length;
+              await Promise.all([a, b]); await wait(700);  // the old dataset's re-reads land after the switch
+              return [mid, G.ds, G.data.features.length, Object.keys(G.patterns).length, G.loading, G.overlay.features.length, G.focusId, note]; } finally { api = orig; } }"""
+        assert page.evaluate(race, [real, "ds-stub", own]) == [0, "ds-stub", 1, 0, False, 0, None, "Not drawn yet: the map is still loading."]
+        page.unroute("**/api/geo/ds-stub/**")
+        across = {**stub, "cells": pack(179.0, -179.6)}  # its bbox the points' min and max: a band around the globe
+        page.route("**/api/geo/ds-dateline/**", lambda r: r.fulfill(json=across[r.request.url.split("/")[6].split("?")[0]]))
+        width = "loadDataset('ds-dateline').then(() => { const b = G.map.getBounds(); return b.getEast() - b.getWest(); })"
+        assert page.evaluate(width) < 20  # cells either side of ±180°: the map opens on them, not on a band around the globe
+        page.unroute("**/api/geo/ds-dateline/**")
+        page.evaluate(f"loadDataset('{real}')")
+        page.route("**/api/geo/ds-stub/**", lambda r: r.fulfill(json=stub[r.request.url.split("/")[6].split("?")[0]]))
+        pick = """async ([real, stub]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
+            try { const a = loadDataset(stub); await wait(50);  // the map still shows real
+              $("dataset-filter").value = real; await GeoMap.refresh(); await a;  // the filter picks it while the other loads
+              return [G.ds, G.loading]; } finally { api = orig; $("dataset-filter").value = ""; } }"""
+        assert page.evaluate(pick, [real, "ds-stub"]) == [real, False]  # the filter's choice wins over the load in flight
+        listed = page.evaluate("G.datasets")  # the stub listed as a geo dataset, as an answer's other dataset is
+        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, {**listed[0], "dataset_id": "ds-stub", "filename": "stub"}]))
+        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
+            try { const a = loadDataset(stub); await wait(50);  // an answer's load in flight
+              $("dataset-filter").value = ""; await GeoMap.refresh(); await a;  // a refresh with no filter keeps to it
+              const kept = G.ds;
+              await loadDataset(real);
+              const b = loadDataset(stub); await wait(50);  // an answer on the map still shown arrives during a load: it wins
+              GeoMap.onAnswer({ view: { evidence: { items: [{ pattern_id: own, provenance: { dataset_id: real }, statistics: {} }] } } });
+              await b; await wait(800);
+              return [kept, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
+        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", real, [own]]
+        page.unroute("**/api/geo")
+        page.unroute("**/api/geo/ds-stub/**")
+        page.evaluate("GeoMap.refresh()")
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
         if page.evaluate("W.folded"):  # a narrow map starts with the list folded
@@ -330,9 +414,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         row.click()
         page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
         assert page.locator(".msg-bot").last.locator(".insight-card").count() == 1 and page.is_visible(f"#map-window .mw-i.on[data-pid='{pid}']")
-        forged = """() => { const t = S.chat.at(-1), node = t.insight.node;  // the card's numbers are the journal record's: say when it fails its digest
-            return insightCard({ ...t, insight: { ...t.insight, node: { ...node, props: { ...node.props, integrity: "mismatch" } } } }); }"""
-        assert "integrity mismatch" not in page.locator(".msg-bot").last.inner_text() and "integrity mismatch" in page.evaluate(forged)
+        walk = """() => { const t = S.chat.at(-1), n = t.insight.neighbors, chain = t.insight.scale_chain || { up: [], down: [] };
+            const steps = new Set([...chain.up, ...chain.down].map((s) => s.pattern_id)), free = (it) => !steps.has(it.id);
+            const k = Object.keys(WALK).find((k) => (n[k] || []).some(free)), id = n[k].find(free).id, has = (d) => insightCard(d).includes(`data-id="${id}"`);
+            return [has(t), has({ ...t, insight: { ...t.insight, neighbors: { ...n, [k]: n[k].map((it) => (it.id === id ? { ...it, integrity: "mismatch" } : it)) } } })]; }"""
+        assert page.evaluate(walk) == [True, False]  # Walk on offers intact insights only
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")

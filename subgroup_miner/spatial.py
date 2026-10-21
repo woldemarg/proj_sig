@@ -579,7 +579,7 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
             share = x / n
             lift = np.divide(share, n_r / len(located), out=np.zeros(len(regions)), where=occupied)
             q = np.ones(len(regions))
-            # the binomial tail of R's events falling in P: where small, never below the exact hypergeometric one, and fast
+            # the binomial tail of R's events falling in P: where small and x >= 5 (a link's least), never below the exact hypergeometric one, and fast
             q[occupied] = false_discovery_control(np.where(x > 0, binom.sf(x - 1, n_r, n / len(located)), 1.0)[occupied])
             rule = "lift" if occupied.sum() >= GEO_LIFT_MIN_REGIONS else "share"
             hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if rule == "lift" else (share >= GEO_REGION_MIN_SHARE) & (lift >= 1)

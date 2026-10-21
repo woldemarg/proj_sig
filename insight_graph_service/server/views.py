@@ -105,8 +105,16 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
     for e in graph.out.get(node_id, []) + graph.inc.get(node_id, []):
         other = e["target"] if e["source"] == node_id else e["source"]
         key = e["type"] + ("" if e["source"] == node_id else " (in)")
+        on = graph.nodes[other]  # its integrity: Walk on offers intact insights only (docs/08_interface.md §8.7)
         neighbors.setdefault(key, []).append(
-            {"id": other, "label": graph.nodes[other]["label"], "kind": graph.nodes[other]["kind"], "weight": e["weight"], "props": e["props"]}
+            {
+                "id": other,
+                "label": on["label"],
+                "kind": on["kind"],
+                "weight": e["weight"],
+                "props": e["props"],
+                "integrity": on["props"].get("integrity"),
+            }
         )
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
         items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))

@@ -20,17 +20,16 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     S   x / |P_loc| >= SHARE_MIN                                  R holds a fifth of P
     E   x / min(|P_loc|, n_R) >= SHARE_MIN, x >= EVENTS_MIN       IN_REGION's rule, counted in events
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
-    L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small, never below the exact hypergeometric one), under BH at FDR_Q over the level's
-        regions, lift >= LIFT_MIN, x >= EVENTS_MIN
-    P   the placement of #119: L on a level of at least LIFT_MIN_REGIONS regions, S with lift >= 1 below, at x >= min(EVENTS_MIN,
-        max(5, ceil(0.05 |P_loc|)))
+    L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small and x >= 5, never below the exact hypergeometric one), under BH at FDR_Q over the level's
+        regions holding a located event, lift >= LIFT_MIN, x >= EVENTS_MIN
+    P   the placement of #119 (place_table): L on a level of at least LIFT_MIN_REGIONS regions holding a located event, S with
+        lift >= 1 below, at x >= link_min_events(|P_loc|)
 A real export prints aggregates only; its result stays in ``.scratch/results/geo_coverage_<label>.json``.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +45,7 @@ from subgroup_miner.spatial import GEO_LIFT_MIN as LIFT_MIN  # the rules' bounds
 from subgroup_miner.spatial import GEO_LIFT_MIN_REGIONS as LIFT_MIN_REGIONS
 from subgroup_miner.spatial import GEO_LINK_FDR as FDR_Q
 from subgroup_miner.spatial import GEO_LINK_MIN_EVENTS as EVENTS_MIN
-from subgroup_miner.spatial import GEO_LOCATED_MIN, event_regions, footprint
+from subgroup_miner.spatial import GEO_LOCATED_MIN, event_regions, footprint, link_min_events
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE as SHARE_MIN
 
 RULES = ("S", "E", "F", "L", "P")
@@ -86,14 +85,9 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
     return finest, groups
 
 
-def region_index(cells: np.ndarray, levels: list[int]) -> dict[int, np.ndarray]:
-    """Per level, each finest cell's region as an index: the region cell holding its centre (contract 1)."""
-    return {lv: np.unique(names, return_inverse=True)[1] for lv, names in event_regions(cells, tuple(levels)).items()}
-
-
 def measure(point_cell: np.ndarray, cells: np.ndarray, insights: dict[str, np.ndarray], levels: list[int]) -> dict[str, Any]:
     """Every insight's coverage, distribution and rule links per level; ``map``: the located events and cells."""
-    regions = region_index(cells, levels)
+    regions = {lv: np.unique(names, return_inverse=True)[1] for lv, names in event_regions(cells, tuple(levels)).items()}  # by centre
     located = point_cell[point_cell >= 0]
     n_map = len(located)
     per_level = {lv: (np.bincount(idx[located]), np.bincount(idx)) for lv, idx in regions.items()}  # n_R, occupied cells
@@ -113,18 +107,20 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
     x = np.bincount(idx[cell_rows], minlength=len(n_r))
     n_loc = len(cell_rows)
     share = x / n_loc
-    lift = share / (n_r / n_map)
+    with_events = n_r > 0  # the regions holding a located event: the graph's placement switches and adjusts over these
+    lift = np.divide(share, n_r / n_map, out=np.zeros(len(n_r)), where=with_events)
     held = np.cumsum(np.sort(x)[::-1])
-    pv = np.where(x > 0, binom.sf(x - 1, n_r, n_loc / n_map), 1.0)  # as the graph's placement: conservative where small
+    pv = np.where(x > 0, binom.sf(x - 1, n_r, n_loc / n_map), 1.0)  # as the graph's placement (place_table)
     fp_in = np.bincount(idx[fp], minlength=len(n_r))
-    q = false_discovery_control(pv)
-    x_min = min(EVENTS_MIN, max(5, math.ceil(0.05 * n_loc)))
+    q = np.ones(len(n_r))
+    q[with_events] = false_discovery_control(pv[with_events])
+    x_min = link_min_events(n_loc)
     links = {
         "S": share >= SHARE_MIN,
         "E": (x / np.minimum(n_loc, n_r) >= SHARE_MIN) & (x >= EVENTS_MIN),
         "F": fp_in / np.minimum(len(fp), occupied) >= SHARE_MIN,
         "L": (q <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
-        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if len(n_r) >= LIFT_MIN_REGIONS else (share >= SHARE_MIN) & (lift >= 1)) & (x >= x_min),
+        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if with_events.sum() >= LIFT_MIN_REGIONS else (share >= SHARE_MIN) & (lift >= 1)) & (x >= x_min),
     }
     strong = (lift >= 2) & (x >= EVENTS_MIN)
     return {
