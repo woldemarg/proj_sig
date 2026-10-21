@@ -112,7 +112,7 @@ class SentenceTransformerEmbedder:
                 # the checkpoint dtype (bf16) on a GPU, float32 on the CPU (no fast bf16 kernels); recorded as spec.compute_dtype
                 model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
                 if model.device.type == "cpu":
-                    model.float()  # torch's own thread count: the cores the process may use
+                    model.float()
                 self.dim = int(model.get_embedding_dimension())
                 self._model = model  # last: the lock-free path above sees a model ready to use
             return self._model
