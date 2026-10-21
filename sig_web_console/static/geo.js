@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -69,7 +69,7 @@ const GeoMap = {
     if (!G.map || S.view !== "map") { G.pending = qa; G.want = geoDs; return; }  // the map opens on the answer's dataset
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
     const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => G.patterns[i.pattern_id]); };
-    if (geoDs !== G.ds) loadDataset(geoDs).then(apply); else apply();
+    if (geoDs !== G.ds) loadDataset(geoDs).then((done) => done && apply()); else apply();  // a later load drops this one
   },
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
@@ -119,7 +119,7 @@ const GeoMap = {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (!G.datasets.length) { G.loadSeq++; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value;
   const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
@@ -265,17 +265,22 @@ function cellFeatures(pack) {
 }
 
 async function loadDataset(ds) {
+  /* the latest call wins (whether the map ends on ``ds``): an earlier one stops at its next step and writes nothing */
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
+  const seq = ++G.loadSeq;
   G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
     const data = cellFeatures(await api(`/api/geo/${encodeURIComponent(ds)}/cells`));
+    if (seq !== G.loadSeq) return false;
     G.ds = G.want = ds; G.data = data; G.evidence = [];
+    G.projected = []; G.overlay = null; mergePatterns();  // nothing of the old dataset indexes the new cells
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
+    if (seq !== G.loadSeq) return false;
     const info = G.datasets.find((d) => d.dataset_id === ds) || {};
     const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
     if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
@@ -287,24 +292,34 @@ async function loadDataset(ds) {
       (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
     G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: viewPadding(), duration: 0 });
     paintZone();
-  } finally { G.loading = false; scheduleWindow(); }
+    return true;
+  } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
 }
 
-async function loadProjected(ds) {
+async function loadProjected(ds, seq = G.loadSeq) {
   /* the upload's insights found at another level (the table, another resolution) on this map's cells, as /projected draws them */
   let failed = "";
-  G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
+  const projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
+  if (seq !== G.loadSeq) return;  // a dataset loaded since: these rows index other cells
+  G.projected = projected;
   $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read
   $("map-projected-error").textContent = failed && `Insights of other levels unavailable: ${failed}`;
+  mergePatterns();
+}
+
+function mergePatterns() {
+  /* what the map draws: its own level's insights and the other levels' (/projected), each row's insights for the popup */
   G.patterns = Object.fromEntries([...G.data.patterns, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
 }
 
-async function loadOverlay(ds) {
+async function loadOverlay(ds, seq = G.loadSeq) {
   /* the graph's regions, trust and scale over the map: they change with every commit, the cells never */
   let failed = "";
-  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  const overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  if (seq !== G.loadSeq) return;  // a dataset loaded since
+  G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
   $("map-overlay-error").textContent = failed && `Regions and trust unavailable: ${failed}`;
   const regions = (G.overlay || empty()).features;

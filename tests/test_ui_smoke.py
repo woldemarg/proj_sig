@@ -320,6 +320,31 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         page.evaluate("loadDataset(G.ds)")  # a dataset loaded again, or another one: no cell of the old focus stays painted
         assert page.evaluate("G.focusId") is None and page.evaluate(painted) == 0
+        # two loads at once: the later call wins, and while it loads nothing of the old dataset is drawable on its cells
+        real = page.evaluate("G.ds")
+
+        def pack(*xs):  # the cell package of square cells 0.4° wide at these longitudes, as /cells serves it
+            rings = [[x, 0, 40000, 0, 40000, 40000, 0, 40000] for x in xs]
+            columns = {"h3": ["85754e67fffffff"] * len(xs), "points": [3] * len(xs)}
+            return {"columns": columns, "rings": rings, "scale": 5, "bbox": [min(xs), 0, max(xs) + 0.4, 0.4], "patterns": []}
+
+        stub = {
+            "cells": pack(0),
+            "projected": [],
+            "overlay": {"type": "FeatureCollection", "features": [], "patterns": {}},
+            "window": {"cells": 1, "points": 3, "first": "map", "insights": 0, "themes": []},
+        }
+        page.route("**/api/geo/ds-stub/**", lambda r: r.fulfill(json=stub[r.request.url.split("/")[6].split("?")[0]]))
+        race = """async ([real, stub]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            api = async (path, o) => { if (path.endsWith(`/${real}/cells`)) await wait(800); if (path.endsWith(`/${stub}/projected`)) await wait(400); return orig(path, o); };
+            try { const a = loadDataset(real), b = loadDataset(stub);
+              while (G.ds !== stub) await wait(5);
+              const mid = Object.keys(G.patterns).length;
+              await Promise.all([a, b]);
+              return [mid, G.ds, G.data.features.length, Object.keys(G.patterns).length, G.loading]; } finally { api = orig; } }"""
+        assert page.evaluate(race, [real, "ds-stub"]) == [0, "ds-stub", 1, 0, False]
+        page.unroute("**/api/geo/ds-stub/**")
+        page.evaluate(f"loadDataset('{real}')")
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
         if page.evaluate("W.folded"):  # a narrow map starts with the list folded
