@@ -739,9 +739,15 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
             return geometry_to_cells(geometry["geometry"], resolution)
         if kind not in ("Polygon", "MultiPolygon"):
             raise SpatialError(f"geometry type {kind!r} is not a Polygon, MultiPolygon, Feature, FeatureCollection, center or bbox")
+        # a longitude past ±180 (a map ring, cell_boundary) back in range: H3 reads a crossing by the jump of its edge
+        polygons = [geometry["coordinates"]] if kind == "Polygon" else geometry["coordinates"]
+        geometry = {
+            "type": "MultiPolygon",
+            "coordinates": [[[[x if -180 <= x <= 180 else (x + 180) % 360 - 180, y] for x, y, *_ in ring] for ring in poly] for poly in polygons],
+        }
         cells = set(h3.geo_to_cells(geometry, resolution))
         if not cells:
-            rings = geometry["coordinates"] if kind == "Polygon" else [r for poly in geometry["coordinates"] for r in poly]
+            rings = [r for poly in geometry["coordinates"] for r in poly]
             cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
         return frozenset(cells)
     except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError

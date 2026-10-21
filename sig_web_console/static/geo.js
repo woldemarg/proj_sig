@@ -22,6 +22,7 @@ const GeoMap = {
 
   clearZone() { G.zone.clear(); paintZone(); },
 
+  refreshing: () => G.refreshing,  // the pass in flight, if any
   refresh() {  // one pass at a time; a call during a pass runs one more pass after it, which reads the filter then
     if (G.refreshing) { G.dirty = true; return G.refreshing; }
     G.refreshing = (async () => {
@@ -290,7 +291,7 @@ async function loadDataset(ds) {
     for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
-    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on (the file's bbox is the points' min and max)
+    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on: its cells, as they are drawn
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);

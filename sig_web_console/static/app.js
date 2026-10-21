@@ -231,12 +231,13 @@ function init() {
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
   on($("inspector"), ".nb", async (el) => {  // the drawer follows the row; on the map an insight is focused there when drawn, as reveal does
     const id = el.dataset.id, onMap = S.view === "map" && id.startsWith("P-");
-    inspect(id, onMap && !GeoMap.has(id) ? GeoMap.offMap(id) : undefined);
-    if (onMap) return GeoMap.has(id) ? GeoMap.focusPattern(id) : GeoMap.unfocus();
     if (S.view === "graph" && id.startsWith("R:") && !layerState().region) {  // a region asked for: the Map regions switch goes on
-      document.querySelector('.toggle[data-key="region"]').classList.add("on");
-      await toggleRegions();
+      const sw = document.querySelector('.toggle[data-key="region"]');
+      sw.classList.add("on"); await toggleRegions();
+      if (S.cy.getElementById(id).empty()) { sw.classList.remove("on"); await toggleRegions(); }  // one this view does not draw: as it was
     }
+    inspect(id, onMap && !GeoMap.has(id) ? GeoMap.offMap(id) : undefined);  // after the regions: it selects the node
+    if (onMap) return GeoMap.has(id) ? GeoMap.focusPattern(id) : GeoMap.unfocus();
     focusNodes([id]);
   });
   on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });

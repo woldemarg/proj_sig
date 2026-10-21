@@ -230,14 +230,22 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert len(set(map(tuple, spots))) == len(spots) == counted  # in rows, none on another
         page.click("#legend .toggle[data-key='region']")
         page.select_option("#layout", "dual")
-        regional = """async () => { for (const n of S.nodes) { await inspect(n.id);  // an insight's drawer with a region row
-            const row = document.querySelector("#inspector .nb[data-id^='R:']");
+        regional = """async () => { const drawn = new Set(S.cy.nodes('[kind="Region"]').map((n) => n.id()));  // loaded by the switch above
+            for (const n of S.nodes) { await inspect(n.id);  // an insight's drawer with a row of a region the graph draws
+            const row = [...document.querySelectorAll("#inspector .nb[data-id^='R:']")].find((r) => drawn.has(r.dataset.id));
             if (row) { const g = row.closest("details"); if (g) g.open = true; return row.dataset.id; } } return null; }"""
         rid = page.evaluate(regional)
         assert rid and not page.evaluate("layerState().region")
         page.click(f"#inspector .nb[data-id='{rid}'] >> nth=0")  # a region asked for with the switch off: it goes on (M10-F07)
         page.wait_for_function(f"layerState().region && S.regionsIn && S.cy.getElementById('{rid}').visible()", timeout=10000)
+        assert page.evaluate(f"S.cy.getElementById('{rid}').selected()")  # and it is the selected node
         page.click("#legend .toggle[data-key='region']")
+        undrawn = page.evaluate(regional.replace("drawn.has(r.dataset.id)", "!drawn.has(r.dataset.id)"))  # one this view does not draw
+        assert undrawn and not page.evaluate("layerState().region")
+        title = page.inner_text("#drawer-title")
+        page.click(f"#inspector .nb[data-id='{undrawn}'] >> nth=0")
+        page.wait_for_function(f"$('drawer-title').textContent !== {title!r}", timeout=10000)
+        assert not page.evaluate("layerState().region")  # the drawer follows; the switch stays as it was
         # the column borders can be dragged
         handle = page.locator(".rail .col-resize").bounding_box()
         before = page.evaluate("document.querySelector('.rail').getBoundingClientRect().width")
@@ -323,10 +331,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(f"S.chat.length === {turns + 2} && !S.busy", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 0  # asked without a zone, never with the one selected
         page.evaluate("GeoMap.clearZone()")
-        adopted = """async () => { const orig = GeoMap.refresh; let done = false;  // ask's await refreshBatches() waits for the map
-            GeoMap.refresh = () => new Promise((r) => setTimeout(() => { done = true; r(); }, 300));
-            try { S.lastReady = null; await refreshBatches(); return done; } finally { GeoMap.refresh = orig; } }"""
-        assert page.evaluate(adopted)  # it returns the map's refresh, which its await adopts: onAnswer runs after it (M10-F03)
+        adopted = """async () => { const orig = GeoMap.refresh, inflight = GeoMap.refreshing, done = { map: true }, poll = { pass: true };
+            GeoMap.refresh = () => new Promise((r) => setTimeout(() => r(done), 300));  // ask's await refreshBatches() gives the map's
+            try { S.lastReady = null; const first = (await refreshBatches()) === done;
+              GeoMap.refreshing = () => Promise.resolve(poll);  // the key unchanged: a pass a poll began for it is what ask waits for
+              return [first, (await refreshBatches()) === poll]; } finally { GeoMap.refresh = orig; GeoMap.refreshing = inflight; } }"""
+        assert page.evaluate(adopted) == [True, True]  # onAnswer runs after the map's refresh, its own or a poll's (M10-F03)
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )

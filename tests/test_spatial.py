@@ -843,8 +843,10 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
     anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
     by its centre, also where the centre lies outside its H3 parent."""
-    from subgroup_miner.spatial import geometry_to_cells, parse_zone, zone_overlap
+    from subgroup_miner.spatial import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
 
+    crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
+    assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
     centre = h3.latlng_to_cell(*HOT, 7)
     disk = set(h3.grid_disk(centre, 2))
     shape = h3.h3shape_to_geo(h3.cells_to_h3shape(list(disk)))
