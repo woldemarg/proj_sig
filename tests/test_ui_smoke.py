@@ -315,6 +315,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(f"S.chat.length === {turns + 2} && !S.busy", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 0  # asked without a zone, never with the one selected
         page.evaluate("GeoMap.clearZone()")
+        adopted = """async () => { const orig = GeoMap.refresh; let done = false;  // ask's await refreshBatches() waits for the map
+            GeoMap.refresh = () => new Promise((r) => setTimeout(() => { done = true; r(); }, 300));
+            try { S.lastReady = null; await refreshBatches(); return done; } finally { GeoMap.refresh = orig; } }"""
+        assert page.evaluate(adopted)  # it returns the map's refresh, which its await adopts: onAnswer runs after it (M10-F03)
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )
