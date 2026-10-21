@@ -229,8 +229,8 @@ function init() {
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat = []; clearAnswer(); renderThread(); });
-  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a field keeps its own
-    if (e.key !== "Escape" || e.target.closest("input, textarea, select")) return;
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
+    if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
     if (GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
     closeDrawer();

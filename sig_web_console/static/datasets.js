@@ -7,7 +7,7 @@ function datasetName(b) {
   return res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · table` : b.filename;
 }
 
-function datasetCard(b, busy) {
+function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
   const running = !TERMINAL.has(b.status);
   const m = b.metrics || {}, p = b.profile || {};
   const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id, name = datasetName(b);
@@ -23,7 +23,7 @@ function datasetCard(b, busy) {
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>rows</span></div></div>` +
       `<div class="ds-note">${num(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, 0)} columns · ${num(m.candidate_patterns, 0)} subgroups tested · ${num(m.pruned_total, 0)} filtered out · ${num(m.processing_duration_s, 1)} s</div>` +
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
-  } else if (emptyLevel(b)) {  // a normal result of a level, not an error: the other levels stand
+  } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
     body = `<div class="ds-note">Nothing significant at this level.</div><div class="ds-note mono">${esc(b.error.message)}</div>`;
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Processing failed", b.error.message, ""];
@@ -32,7 +32,7 @@ function datasetCard(b, busy) {
   } else if (b.status === "SKIPPED") {
     body = `<div class="ds-note">Already analysed — nothing new to add.</div>`;
   }
-  const status = running ? chip("run", "Processing") : b.status === "READY" ? chip("ok", "Ready") : emptyLevel(b) ? chip("", "No findings") : b.status === "FAILED" ? chip("bad", "Failed") : chip("", "Skipped");
+  const status = running ? chip("run", "Processing") : b.status === "READY" ? chip("ok", "Ready") : neutral ? chip("", "No findings") : b.status === "FAILED" ? chip("bad", "Failed") : chip("", "Skipped");
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
   const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
     (busy ? `disabled title="A batch is running: a deletion waits for it, so it is offered once processing ends">` : `title="Remove this dataset and its insights from the knowledge base">`) +
@@ -46,7 +46,7 @@ function datasetCard(b, busy) {
 
 const geoLevel = (b) => /^\d+$/.test(b.level || "");
 const EMPTY_LEVEL = new Set(["invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"]);  // uploads.EMPTY_LEVEL
-const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && (geoLevel(b) || Boolean(b.locator));  // a level with nothing to mine
+const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && geoLevel(b);  // a geo level with nothing to mine
 const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
 
 function uploadGroups(cards) {
@@ -57,11 +57,11 @@ function uploadGroups(cards) {
 }
 
 function uploadGroup(cards, busy) {
-  if (cards.length === 1) return datasetCard(cards[0], busy);
-  const ready = cards.filter((b) => b.status === "READY").length, empty = cards.filter(emptyLevel).length;
+  if (cards.length === 1) return datasetCard(cards[0], busy);  // a level alone that finds nothing failed, as its upload did
+  const ready = cards.filter((b) => b.status === "READY").length, empty = ready ? cards.filter(emptyLevel).length : 0;
   const failed = cards.filter((b) => b.status === "FAILED").length - empty;
   return `<div class="ds-group" data-upload="${esc(cards[0].upload_id)}"><div class="ds-group-head">${esc(cards[0].filename)} · ${ready} of ${cards.length} levels ready` +
-    (empty ? ` · ${empty} without findings` : "") + (failed ? ` · <b>${failed} failed</b>, the others stand on their own` : "") + `</div>${cards.map((b) => datasetCard(b, busy)).join("")}</div>`;
+    (empty ? ` · ${empty} without findings` : "") + (failed ? ` · <b>${failed} failed</b>, the others stand on their own` : "") + `</div>${cards.map((b) => datasetCard(b, busy, ready > 0 && emptyLevel(b))).join("")}</div>`;
 }
 
 function datasetTrust(t) {

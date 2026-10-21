@@ -529,6 +529,12 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         assert page.inner_text(f"{group} .ds-group-head") == "points.csv · 2 of 3 levels ready · 1 without findings"
         card = page.locator(f"{group} .ds", has_text="H3 r5")
         assert card.locator(".chip").inner_text() == "No findings" and not card.locator(".chip.bad, .ds-error").count()
+        # without a READY level the upload failed, as the backend reads it; a table level that finds nothing failed too
+        level = "(lv, st, code) => ({ batch_id: lv, upload_id: 'u', filename: 'f.csv', level: lv, status: st, locator: lv === 'table' ? 'auto' : null, error: code && { code, message: code } })"
+        bad = f"(cards) => (uploadGroup(cards.map((c) => ({level})(...c)), false).match(/chip bad/g) || []).length"
+        assert page.evaluate(bad, [["8", "FAILED", "no_viable_insights"], ["5", "FAILED", "no_candidates"]]) == 2
+        assert page.evaluate(bad, [["7", "FAILED", "no_viable_insights"]]) == 1
+        assert page.evaluate(bad, [["8", "READY", None], ["table", "FAILED", "no_candidates"]]) == 1
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.map.loaded()", timeout=30000)
         busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
@@ -544,9 +550,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         layers = "[document.querySelectorAll('.sig-pop').length, GeoMap.focused(), !$('drawer').hidden]"
         assert page.evaluate(layers) == [1, True, True]
         page.focus("#question")
-        page.keyboard.press("Escape")  # a field keeps its Esc
+        page.keyboard.press("Escape")  # a text field keeps its Esc
         assert page.evaluate(layers) == [1, True, True]
-        page.evaluate("document.activeElement.blur()")
+        page.focus("#lyr-cells")  # a checkbox does not
         for left in ([0, True, True], [0, False, True], [0, False, False]):
             page.keyboard.press("Escape")
             assert page.evaluate(layers) == left
@@ -555,3 +561,12 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         assert page.locator(".sig-pop").count() == 0
         browser.close()
         assert not errors, errors
+
+
+def test_the_console_knows_the_empty_level_codes():
+    """The rail's neutral card reads ``uploads.EMPTY_LEVEL``, copied into ``datasets.js``: the two stay one set."""
+    from insight_graph_service.core.uploads import EMPTY_LEVEL
+
+    js = (PROJECT_ROOT / "sig_web_console" / "static" / "datasets.js").read_text(encoding="utf-8")
+    copied = re.search(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js).group(1)
+    assert set(re.findall(r'"(\w+)"', copied)) == EMPTY_LEVEL
