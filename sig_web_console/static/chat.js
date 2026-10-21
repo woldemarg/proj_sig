@@ -174,9 +174,10 @@ function insightCard(turn) {
 function botTurn(turn, isLast) {
   if (turn.insight) return insightCard(turn);
   if (turn.pending) {
-    return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Searching the graph${$("use-llm").checked ? " and writing an answer" : ""}…</span></div></div>`;
+    return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Searching the graph${$("use-llm").checked ? " and writing an answer" : ""}… <span class="ds-elapsed" data-since="${turn.since}"></span></span>` +
+      `<button type="button" class="linkish ask-cancel">Cancel</button></div></div>`;
   }
-  if (turn.error) return `<div class="bot-card error"><div class="answer-box">${esc(turn.error)}</div></div>`;
+  if (turn.error) return `<div class="bot-card${turn.cancelled ? "" : " error"}"><div class="answer-box">${esc(turn.error)}</div></div>`;
   const next = isLast ? followUps(turn) : [];
   return botCard(turn) + (next.length ? `<div class="followups">${chipButtons(next)}</div>` : "");
 }
@@ -203,6 +204,7 @@ function renderThread() {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на карті</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
+  tick(t);
   t.scrollTop = t.scrollHeight;
 }
 
@@ -212,24 +214,32 @@ async function ask(question, zone = null) {
   if ((!question && !zone) || S.busy) return;
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();
-  const turn = { question, zone: zone ? zone.cells.length : 0, pending: true };
+  const turn = { question, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
+  const live = () => S.chat.includes(turn);  // New chat drops the turn: its late answer paints nothing
+  const timer = setTimeout(() => turn.ctl.abort("timeout"), CHAT_TIMEOUT_S * 1000);
   S.chat.push(turn); renderThread();
   try {
-    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, use_llm: $("use-llm").checked }) });
+    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);
     if ($("dataset-filter").value && evDatasets.length && !evDatasets.includes($("dataset-filter").value)) {
       $("dataset-filter").value = evDatasets.length === 1 ? evDatasets[0] : "";  // show where the evidence lives
       await refreshBatches();  // every view, the map and the rail's active card follow the filter
+      if (!live()) return;
     }
     renderThread();
     highlight(S.hl);
     try { GeoMap.onAnswer(qa); } catch (err) { console.error("map highlight failed", err); }  // the map never breaks an answer
     if (S.view === "graph") focusNodes([...(qa.view.highlight.traversed || [])]);
     renderSphere();
-  } catch (e) { Object.assign(turn, { pending: false, error: e.message }); renderThread(); }
-  S.busy = false; $("ask-btn").disabled = !$("question").value.trim();
+  } catch (e) {
+    const why = turn.ctl.signal.reason, late = why === "timeout" || e.status === 504;
+    if (live()) { Object.assign(turn, { pending: false, cancelled: why === "cancel", error: why === "cancel" ? "Cancelled." : late ? ERROR_HELP.chat_timeout.join(" ") : e.message }); renderThread(); }
+  } finally {
+    clearTimeout(timer);
+    S.busy = false; $("ask-btn").disabled = !$("question").value.trim();
+  }
 }
 
 function autosize() { const q = $("question"); q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 140) + "px"; $("ask-btn").disabled = S.busy || !q.value.trim(); }

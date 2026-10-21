@@ -20,7 +20,9 @@ const ERROR_HELP = {
   representation_mismatch: ["Workspace mismatch", "This workspace was built with a different embedding setup.", "Reset the workspace to change the embedding model or weights."],
   duplicate_patterns: ["Already ingested", "These insights are already in the graph.", ""],
   interrupted: ["Interrupted", "Processing stopped before finishing; nothing partial was kept.", "Upload the file again."],
+  chat_timeout: ["No answer in time.", "The graph and the language model did not answer within the time limit.", "Ask about one dataset or a smaller zone, or turn the explanation off to get the evidence alone."],
 };
+const CHAT_TIMEOUT_S = 800;  // a little over nginx's 780 s for /api/chat/
 // chat content is Ukrainian; data literals (column names, values) stay exactly as the data holds them.
 // The welcome card's questions per demo dataset (by filename); any other geo dataset gets GeoMap.suggestions().
 const SUGGESTIONS = {
@@ -87,7 +89,7 @@ const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets,
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText);
+  if (!res.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText), { status: res.status });
   return body;
 }
 
@@ -209,6 +211,7 @@ function init() {
   // what the views render, clicked: bound once on their containers, so a render only writes HTML
   const thread = $("thread");
   on(thread, ".chip-q", (c) => ask(c.textContent));
+  on(thread, ".ask-cancel", (el) => turnOf(el).ctl.abort("cancel"));
   on(thread, "a.cite", (a) => reveal(a.dataset.pid));
   on(thread, ".ev", (el) => { const turn = turnOf(el), item = turn.qa.view.evidence.items[Number(el.dataset.i)]; reveal(item.pattern_id, { isolate: { turn, item, el } }); });
   on(thread, ".bot-tabs button", toggleTab);
@@ -237,7 +240,7 @@ function init() {
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat = []; clearAnswer(); renderThread(); });
+  $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
     if (GeoMap.closePopup()) return;
@@ -248,7 +251,7 @@ function init() {
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
-  setInterval(tickElapsed, 1000);  // a running stage's time, between polls
+  setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders
 }
 
 document.addEventListener("DOMContentLoaded", init);

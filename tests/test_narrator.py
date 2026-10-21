@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import pytest
 from conftest import serve
@@ -80,6 +81,19 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert zone.status_code == 400 and zone.json() == bad_zone and bodies[-1] == {"question": "", "cells": ["nope"], "resolution": 7}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
+
+
+def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):
+    stub = FastAPI()
+
+    @stub.post("/api/search")
+    def search(body: dict):
+        time.sleep(1)
+        return recorded
+
+    with serve(stub) as graph_url, TestClient(create_app(NarratorSettings(insight_graph_url=graph_url, insight_graph_timeout_s=0.2))) as client:
+        late = client.post("/api/chat/query", json={"question": QUESTION})
+        assert late.status_code == 504 and late.json()["detail"] == "graph service did not answer within 0.2 s"
 
 
 def test_health_answers_without_its_dependencies():

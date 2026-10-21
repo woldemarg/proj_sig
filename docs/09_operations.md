@@ -135,7 +135,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | question |
 
-Over HTTP every refusal is `{detail, code}` with the status of [12.4](12_architecture.md#124-services-and-contracts). The console maps the batch codes a person can act on to a plain-language title, cause and tip (`ERROR_HELP` in `app.js`); any other code shows a generic title and the raw message.
+Over HTTP every refusal is `{detail, code}` with the status of [12.4](12_architecture.md#124-services-and-contracts). The console maps the batch codes a person can act on to a plain-language title, cause and tip (`ERROR_HELP` in `app.js`); any other code shows a generic title and the raw message. `ERROR_HELP` also holds the console's own `chat_timeout`, the text of a question without an answer in time ([8.2](08_interface.md#82-the-single-page-ui)).
 
 ## 9.5 Batch metrics
 

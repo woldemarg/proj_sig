@@ -85,7 +85,6 @@ async function deleteDataset(id, name) {
 
 const elapsed = (iso) => { const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
 const tick = (root) => root.querySelectorAll("[data-since]").forEach((el) => { el.textContent = elapsed(el.dataset.since); });
-function tickElapsed() { tick($("batches")); }
 
 function swapChanged(el, to) {  // a group of levels swaps its changed cards one by one
   if (el.isEqualNode(to)) return;
