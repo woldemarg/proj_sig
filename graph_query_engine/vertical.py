@@ -41,38 +41,54 @@ class ScaleChain:
     scale: str = ""  # regional | scale-dependent | not_found_coarser | insufficient; "" outside an upload
 
 
-def places(graph: DualGraph, pid: str, level: int | None = None) -> list[tuple[str, float]]:
-    """A pattern's places (docs/07_question_answering.md §7.4), of either IN_REGION basis: at most ``ZONES_MAX`` regions at
-    ``level``, by default the coarsest where it lies in three or more (else its finest), each with its key, the edge's
-    ``lift`` where it has one (a base pattern's), else its share; ranked by key, then share, then id."""
+def lies_in(edge: dict[str, Any]) -> bool:
+    """Whether an IN_REGION edge makes its pattern lie in the region (a place, a zone's member): a base pattern's always,
+    its placement rule decided that; a geo pattern's at a share of at least ``VERTICAL_MIN_SHARE``, as an edge needs
+    only ``GEO_REGION_MIN_SHARE`` (docs/07_question_answering.md §7.4)."""
+    return edge["props"].get("basis") == "events" or edge["weight"] >= VERTICAL_MIN_SHARE
 
-    def build() -> list[tuple[str, float]]:
+
+def place_key(edge: dict[str, Any]) -> tuple[float, float]:
+    """How strongly a pattern lies in an IN_REGION edge's region: a base edge by its lift, then its share; a geo edge by
+    its share, then its cells there (``n``), since a geo pattern covers many regions whole."""
+    props = edge["props"]
+    return (float(props["lift"]), edge["weight"]) if props.get("basis") == "events" else (edge["weight"], float(props.get("n", 0)))
+
+
+def _places(graph: DualGraph, pid: str) -> dict[int, tuple[int, list[tuple[str, float]]]]:
+    """Per level: how many regions the pattern lies in (``lies_in``), and its at most ``ZONES_MAX`` strongest of them
+    with their key, ranked by ``place_key``, then id; derived once per graph."""
+
+    def build() -> dict[int, tuple[int, list[tuple[str, float]]]]:
         by_level: defaultdict[int, list[dict[str, Any]]] = defaultdict(list)
         for e in graph.out.get(pid, []):
-            if e["type"] == "IN_REGION":
+            if e["type"] == "IN_REGION" and lies_in(e):
                 by_level[graph.nodes[e["target"]]["props"]["resolution"]].append(e)
-        if not by_level:
-            return []
-        lv = level if level is not None else next((x for x in sorted(by_level) if len(by_level[x]) >= 3), max(by_level))
-        keyed = [(e["target"], float(e["props"].get("lift", e["weight"])), e["weight"]) for e in by_level.get(lv, [])]
-        return [(r, key) for r, key, _ in sorted(keyed, key=lambda t: (-t[1], -t[2], t[0]))[:ZONES_MAX]]
+        ranked = {lv: sorted(edges, key=lambda e: (*(-k for k in place_key(e)), e["target"])) for lv, edges in by_level.items()}
+        return {lv: (len(edges), [(e["target"], place_key(e)[0]) for e in edges[:ZONES_MAX]]) for lv, edges in ranked.items()}
 
-    return graph.memoised(("places", f"{pid}@{level}"), build)
+    return graph.memoised(("places", pid), build)
+
+
+def places(graph: DualGraph, pid: str, level: int | None = None) -> list[tuple[str, float]]:
+    """A pattern's places (docs/07_question_answering.md §7.4): at ``level``, by default the coarsest where it lies in
+    three or more regions (else its finest), its at most ``ZONES_MAX`` strongest regions there with their key (a base
+    edge's lift, a geo edge's share)."""
+    by_level = _places(graph, pid)
+    if not by_level:
+        return []
+    if level is None:
+        level = next((lv for lv in sorted(by_level) if by_level[lv][0] >= 3), max(by_level))
+    return by_level.get(level, (0, []))[1]
 
 
 def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
-    """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions): one bound for all of
-    them (epic #114, contract 5): every region an intact pattern's scale chain names (the regions coarser than its top
-    pattern, walked up from the region its last step up met in, or from its home region when it has none) and its
-    ``places`` with their PARENT_OF ancestors, so the map holds each region a SCALE CHAIN or the ZONES name; a region
-    holding tampered patterns only is none."""
+    """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions; docs/08_interface.md
+    §8.7): every intact pattern's places at each level it lies at, so the map holds each region the ZONES name, and the
+    regions its scale chain names; a region holding tampered patterns only is none."""
     intact = [pid for pid in pattern_ids if not graph.tampered(pid)]
-    placed = {r for pid in intact for r, _ in places(graph, pid)}
-    found, frontier = placed | {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions}, set(placed)
-    while frontier:
-        frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found
-        found |= frontier
-    return _held(graph, found)
+    placed = {r for pid in intact for _, top in _places(graph, pid).values() for r, _ in top}
+    return _held(graph, placed | {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions})
 
 
 def _held(graph: DualGraph, regions: set[str]) -> set[str]:
@@ -195,16 +211,13 @@ def picture(graph: DualGraph, region: str) -> dict[str, int]:
 
 
 def rank_zones(graph: DualGraph, geo_ids: list[str], answer_ids: list[str]) -> list[dict[str, Any]]:
-    """The ZONES of a question (docs/07_question_answering.md §7.4). At each level a pattern lies in its ``places`` there.
-    The level is the coarsest where the evidence's placed patterns lie in three or more regions and one holds an
-    answering pattern (else the finest that holds one); its regions holding answering patterns rank by the sum of each
-    one's insight weight times its share of that pattern's place keys at the level, so both IN_REGION bases weigh on one
-    scale; at most ``ZONES_MAX``, each with its ``picture``. Which patterns answer is the caller's to say."""
+    """The ZONES of a question (docs/07_question_answering.md §7.4): a region holds a pattern it is a place of, at its
+    level; the level of the zones and their score as that section says. Which patterns answer is the caller's to say."""
     held: dict[int, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     answers = set(answer_ids)
     for pid in geo_ids:
-        for lv in sorted({graph.nodes[r]["props"]["resolution"] for r in graph.facts(pid).regions}):
-            for region, _ in places(graph, pid, lv):
+        for lv, (_, top) in _places(graph, pid).items():
+            for region, _ in top:
                 held[lv][region].append(pid)
     answered = [lv for lv in sorted(held) if any(p in answers for ps in held[lv].values() for p in ps)]
     if not answered:
@@ -215,7 +228,7 @@ def rank_zones(graph: DualGraph, geo_ids: list[str], answer_ids: list[str]) -> l
         placed = places(graph, pid, level)
         total = sum(key for _, key in placed)
         for region, key in placed:
-            score[region] += graph.insight(pid).weight * key / total if total else 0.0
+            score[region] += graph.insight(pid).weight * key / total
     ranked = sorted(score, key=lambda r: (-score[r], r))[:ZONES_MAX]
     return [
         {"id": r, "resolution": level, "score": round(score[r], 4), "holds": [p for p in held[level][r] if p in answers], **picture(graph, r)}

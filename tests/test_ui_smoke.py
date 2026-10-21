@@ -12,6 +12,7 @@ from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
 from evidence_narrator_service.settings import NarratorSettings
+from graph_query_engine.vertical import ZONES_MAX
 from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 
@@ -91,7 +92,7 @@ def test_upload_process_render_query(client, demo_csv):
     overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # its insights' places and the regions above, their trust and scale
     assert overlay["features"] and all(f["properties"]["resolution"] <= 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
     own = [f for f in overlay["features"] if f["properties"]["resolution"] == 5]
-    assert len(own) <= 5 * len(overlay["patterns"]) < 884  # at most five places each, not every cell of every insight
+    assert len(own) <= ZONES_MAX * len(overlay["patterns"]) < 884  # at most five places each, not every cell of every insight
     assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}

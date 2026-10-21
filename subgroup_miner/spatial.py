@@ -512,7 +512,7 @@ class GeoDataset:
 @dataclass
 class TableDataset:
     """What ``derive_spatial`` reads of a table level: its patterns' file rows (``covers``), and the cells and point -> cell
-    row of the finest READY geo level of its upload that holds one row per point (``placed_by``; epic #114, contract 6)."""
+    row of the finest READY geo level of its upload that holds one row per point (``placed_by``; docs/06_graph_and_storage.md §6.1)."""
 
     dataset_id: str
     placed_by: str
@@ -532,7 +532,7 @@ class SpatialStructure:
     compactness: dict[str, float] = field(default_factory=dict)
     places: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # pattern -> resolution -> its cells or their parents
     occupied: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # dataset -> resolution -> the same, of all its cells
-    events: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # (base pattern, region) -> its IN_REGION props
+    edge_props: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # (pattern, region) -> its IN_REGION props
     partial: set[str] = field(default_factory=set)  # base patterns with fewer than GEO_LOCATED_MIN of their events located
 
 
@@ -540,7 +540,8 @@ RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
 
 
 def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.ndarray]:
-    """Each cell's region at every listed level not finer than its own: the cell holding its centre (epic #114, contract 1)."""
+    """Each cell's region at every listed level not finer than its own: the cell holding its centre (docs/06_graph_and_storage.md
+    §6.1), as the points were indexed."""
     names = [str(c) for c in cells]
     res = h3.get_resolution(names[0])
     return {lv: np.array(names if lv == res else [h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in levels if lv <= res}
@@ -596,8 +597,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
     strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
-    either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``, props in
-    ``events``): never CO_LOCATED, in ``places`` or in ``occupied``."""
+    either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``): never
+    CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
     raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
@@ -612,7 +613,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
         occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
         # the places credibility compares across resolutions: each cell where its centre lies, as the points were indexed
         # (H3 children do not tile their parent, so about 6 % of cells have another parent)
-        grid = {res: np.array(names)} | {lv: np.array([h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in own if lv < res}
+        grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
         out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
         extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
         union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
@@ -636,6 +637,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
                     if share >= GEO_REGION_MIN_SHARE:  # the threshold reads the exact share, the edge stores it rounded
                         share = round(share, 4)
                         out.in_region.append((pid, rid, share))
+                        out.edge_props[(pid, rid)] = {"basis": "cells", "share": share, "n": int(n)}  # n: its cells there
                         shares[(pid, rid)] = share
                         _add_region(out, levels, lv, str(cell))
     for table in tables:
@@ -643,7 +645,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
         out.partial |= partial
         for pid, rid, share, props in placed:
             out.in_region.append((pid, rid, share))
-            out.events[(pid, rid)] = props
+            out.edge_props[(pid, rid)] = props
             _, lv, cell = rid.split(":")  # R:<level>:<h3>
             _add_region(out, levels, int(lv), cell)
     members = Counter(rid for _, rid, _ in out.in_region)
@@ -790,15 +792,13 @@ def cell_boundary(cell: str) -> list[list[float]]:
 
 
 def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any]]:
-    """GeoJSON features of regions (``R:<res>:<h3>``), each with the rows of ``cells`` (one dataset's cells) whose centre
-    it holds, as ``event_regions`` places a base pattern's events and ``zone_overlap`` a zone (epic #114, contract 1)."""
-    held: dict[int, np.ndarray] = {}
+    """GeoJSON features of regions (``R:<res>:<h3>``, none finer than ``cells``, one dataset's), each with the rows of the
+    cells whose centre it holds (``event_regions``), as a base pattern's events and a zone are placed."""
+    held = event_regions(cells, tuple({int(rid.split(":")[1]) for rid in regions})) if len(cells) else {}
     out = []
     for rid in regions:
         _, res, cell = rid.split(":")
         lv = int(res)
-        if lv not in held:
-            held[lv] = np.array([c if h3.get_resolution(c) == lv else h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in map(str, cells)])
         rows = np.flatnonzero(held[lv] == cell).tolist()
         out.append(
             {

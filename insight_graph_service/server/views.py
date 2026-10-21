@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import primary_anchor
-from graph_query_engine.vertical import picture, places, scale_chain, shown_regions
+from graph_query_engine.vertical import picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
@@ -107,11 +107,11 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
         neighbors.setdefault(key, []).append(
             {"id": other, "label": graph.nodes[other]["label"], "kind": graph.nodes[other]["kind"], "weight": e["weight"], "props": e["props"]}
         )
-    for items in neighbors.values():
-        items.sort(key=lambda x: (-float(x["props"].get("lift", x["weight"])), -float(x["weight"])))
-    if "IN_REGION" in neighbors:  # a broad pattern lies in hundreds of regions: its strongest, as its places rank them
+    for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
+        items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
+    out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}
+    if "IN_REGION" in neighbors:  # a broad pattern lies in hundreds of regions: its strongest, the count beside them
         neighbors["IN_REGION"] = neighbors["IN_REGION"][:IN_REGION_SHOWN]
-    out: dict[str, Any] = {"node": node, "neighbors": neighbors}
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}

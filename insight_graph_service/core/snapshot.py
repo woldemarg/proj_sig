@@ -404,11 +404,7 @@ def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], struc
     for pid in spatial.partial & nodes.keys():  # a base pattern too little located to be placed
         nodes[pid].props["geo"] = "partial"
     linked = {frozenset((e.source, e.target)) for e in structural}
-    edges = [
-        GraphEdge(p, r, EdgeType.IN_REGION, share, spatial.events.get((p, r), {"basis": "cells", "share": share}))
-        for p, r, share in spatial.in_region
-        if p in nodes
-    ]
+    edges = [GraphEdge(p, r, EdgeType.IN_REGION, share, spatial.edge_props[(p, r)]) for p, r, share in spatial.in_region if p in nodes]
     edges += [GraphEdge(child, parent, EdgeType.PARENT_OF) for child, parent in spatial.parent_of]
     edges += [
         GraphEdge(a, b, EdgeType.CO_LOCATED, weight, {"relation": relation})

@@ -520,7 +520,7 @@ async function inspect(id) {
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(CONNECTIONS[type] || type)} <span class="muted">(${items.length})</span></summary>` +
+      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(CONNECTIONS[type] || type)} <span class="muted">(${(d.neighbor_counts || {})[type] > items.length ? `${items.length} of ${num(d.neighbor_counts[type], 0)}` : items.length})</span></summary>` +
       items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;

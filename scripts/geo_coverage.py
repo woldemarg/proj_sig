@@ -1,6 +1,6 @@
 """How far an upload's base insights find their place through their events (docs/10_verification.md §10.3), on a scratch
 workspace: one upload with ``--geo <locator>@auto`` and its table level, then every insight's events projected on the
-regions of ``GEO_REGION_LEVELS`` (epic #114, contracts 1 and 2).
+regions of ``GEO_REGION_LEVELS`` as docs/06_graph_and_storage.md §6.1 places them.
 
     python scripts/geo_coverage.py <file | synthetic | california> --geo <locator>@auto [--bins SPEC] [--encoder hashing|model]
         [--label NAME]
