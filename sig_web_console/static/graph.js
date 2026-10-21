@@ -81,17 +81,10 @@ function dualPlanePositions(cy) {
     });
     x += width + 50;
   }
-  let y = maxY + 150;
   const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
-  for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
-    const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
-      const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter((n) => pos[n.id()]);
-      return [r, below.length ? below.reduce((a, n) => a + pos[n.id()].x, 0) / below.length : 0];
-    }).sort((a, b) => a[1] - b[1]);
-    let last = -Infinity;
-    for (const [r, at] of row) { last = Math.max(at, last + 70); pos[r.id()] = { x: last, y }; }
-    y += 90;
-  }
+  const rows = regionRows(regions, (n) => pos[n.id()], maxY + 150);
+  Object.assign(pos, rows.pos);
+  const y = rows.y;
   const bottom = cy.nodes('[kind="Dimension"], [kind="Metric"]');
   const span = Math.max(x - 50, 400);
   bottom.forEach((n, i) => { pos[n.id()] = { x: (i + 0.5) * span / Math.max(bottom.length, 1), y: regions.length ? y + 60 : maxY + 170 }; });
@@ -131,13 +124,29 @@ async function toggleRegions() {
   if ($("layout").value === "dual") runLayout(); else placeRegions(S.cy);
 }
 
+function regionRows(regions, placed, top) {
+  /* the regions in rows by level from y = top, finest first, each at the mean x of the insights (or finer regions) it
+     holds and kept 70 px from the one before; ``placed`` gives a node's position, or none */
+  const pos = {}, at = (n) => pos[n.id()] || placed(n);
+  let y = top;
+  for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
+    const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
+      const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter(at);
+      return [r, below.length ? below.reduce((a, n) => a + at(n).x, 0) / below.length : 0];
+    }).sort((a, b) => a[1] - b[1]);
+    let last = -Infinity;
+    for (const [r, x] of row) { last = Math.max(x, last + 70); pos[r.id()] = { x: last, y }; }
+    y += 90;
+  }
+  return { pos, y };
+}
+
 function placeRegions(cy) {
-  /* each region below the insights (or finer regions) it holds, finest first: no region takes part in the force layout */
-  const regions = cy.nodes('[kind="Region"]').sort((a, b) => b.data("resolution") - a.data("resolution"));
-  regions.forEach((r) => {
-    const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter((n) => n.visible());
-    if (below.length) r.position({ x: below.reduce((a, n) => a + n.position("x"), 0) / below.length, y: Math.max(...below.map((n) => n.position("y"))) + 80 });
-  });
+  /* the regions in rows under the force layout's nodes, which they take no part in */
+  const shown = cy.nodes(":visible").not('[kind="Region"], [kind="PlaneLabel"]');
+  if (!shown.length) return;
+  const { pos } = regionRows(cy.nodes('[kind="Region"]'), (n) => (n.data("kind") !== "Region" && n.visible() ? n.position() : null), shown.boundingBox().y2 + 120);
+  cy.nodes('[kind="Region"]').forEach((r) => { if (pos[r.id()]) r.position(pos[r.id()]); });
 }
 
 function runLayout() {
@@ -305,6 +314,7 @@ async function loadGraph() {
   if (S.hl) highlight(S.hl);
   renderTable();
   renderSphere();
+  if (layerState().region && !S.regionsIn) toggleRegions();  // switched on while this graph loaded without them
 }
 
 // views

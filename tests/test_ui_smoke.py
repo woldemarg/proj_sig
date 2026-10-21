@@ -226,6 +226,8 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.click("#legend .toggle[data-key='region']")  # fetched with the switch, placed under what they hold: the force layout stays
         page.wait_for_function(f"S.cy.nodes('[kind=\"Region\"]').not('.hidden').length === {counted}", timeout=10000)
         assert page.evaluate(placed) == before and int(page.inner_text("[data-n='region']")) == counted
+        spots = page.evaluate("S.cy.nodes('[kind=\"Region\"]').map((n) => [Math.round(n.position('x')), Math.round(n.position('y'))])")
+        assert len(set(map(tuple, spots))) == len(spots) == counted  # in rows, none on another
         page.click("#legend .toggle[data-key='region']")
         page.select_option("#layout", "dual")
         # the column borders can be dragged
@@ -391,7 +393,7 @@ _SLOW_API = """() => { const real = api;
   window.__net = { slow: [], pending: 0, hits: [] };
   window.api = (path, opts) => {
     __net.hits.push(path);
-    if (!__net.slow.some((s) => path.includes(s))) return real(path, opts);
+    if (!__net.slow.some((s) => path.includes(s)) || (__net.fast || []).some((f) => path.includes(f))) return real(path, opts);
     __net.pending++;
     return new Promise((r) => setTimeout(r, 1200)).then(() => real(path, opts)).finally(() => __net.pending--);
   }; }"""
@@ -426,6 +428,15 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         page.select_option("#dataset-filter", geo)
         page.wait_for_function(settled, timeout=10000)
         assert {n["id"] for n in page.evaluate("S.nodes")} == {pid for pid, ins in graph.insights.items() if ins.dataset_id == geo}
+        # the regions switched on while the plain graph loads, their own request answering first: the graph keeps them
+        page.evaluate(
+            f"__net.slow = ['/api/graph?dataset={geo}']; __net.fast = ['regions=1']; loadGraph(); true"
+        )  # not awaited: the switch comes during the load
+        page.click("#legend .toggle[data-key='region']")
+        page.wait_for_function(
+            f"{settled} && S.regionsIn && S.regionCount > 0 && S.cy.nodes('[kind=\"Region\"]').not('.hidden').length === S.regionCount", timeout=10000
+        )
+        page.click("#legend .toggle[data-key='region']")
         # two insights clicked in a row on the map: the first one's points answer last
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded()", timeout=30000)
