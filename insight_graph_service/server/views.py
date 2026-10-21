@@ -30,12 +30,13 @@ def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> st
     return f"{scope}\n{humanize(ins.target)} {ins.effect_size:+.2f} sd"
 
 
-def cytoscape_elements(graph: DualGraph, dataset: str | None = None) -> dict[str, Any]:
-    """The graph view of one dataset (or all), derived once per commit."""
-    return graph.memoised(("cytoscape", dataset or ""), lambda: _elements(graph, dataset))
+def cytoscape_elements(graph: DualGraph, dataset: str | None = None, regions: bool = False) -> dict[str, Any]:
+    """The graph view of one dataset (or all), derived once per commit: without its Region nodes and their edges unless
+    ``regions`` (docs/08_interface.md §8.2), their count given either way."""
+    return graph.memoised(("cytoscape", dataset or "", regions), lambda: _elements(graph, dataset, regions))
 
 
-def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
+def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict[str, Any]:
     keep: set[str] = set()
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
@@ -43,7 +44,7 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
     regions = {r for r in shown_regions(graph, list(pids)) if members[r]}
     for n in graph.nodes.values():
         p = n["props"]
-        if n["kind"] == "Region" and n["id"] not in regions:
+        if n["kind"] == "Region" and (not with_regions or n["id"] not in regions):
             continue
         if dataset and n["kind"] in {"Pattern", "Dimension", "Metric", "Dataset"} and p.get("dataset_id") != dataset:
             continue
@@ -90,7 +91,7 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
         n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust, whatever the filter
-    return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {}), "datasets": trust}
+    return {"nodes": nodes, "edges": edges, "regions": len(regions), "stats": graph.snapshot.get("stats", {}), "datasets": trust}
 
 
 IN_REGION_SHOWN = 25  # a pattern's regions in its panel

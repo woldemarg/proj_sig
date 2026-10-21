@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
+const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGE_TEXT = {
   UPLOADED: "Queued", VALIDATING: "Reading the file", PROFILING: "Profiling columns", DISCOVERING: "Searching subgroups",
   VALIDATING_INSIGHTS: "Validating insights", EMBEDDING: "Embedding insights", UPDATING_ONTOLOGY: "Learning themes",
@@ -184,8 +184,9 @@ function init() {
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
-    b.classList.toggle("on"); applyVisibility(); highlight(S.hl);
-    if (b.dataset.key === "region") runLayout();
+    b.classList.toggle("on");
+    if (b.dataset.key === "region") return toggleRegions();
+    applyVisibility(); highlight(S.hl);
   }));
   $("layout").addEventListener("change", () => { applyVisibility(); runLayout(); });
   $("dataset-filter").addEventListener("change", () => refreshBatches());  // the filter is part of its key

@@ -81,17 +81,10 @@ function dualPlanePositions(cy) {
     });
     x += width + 50;
   }
-  let y = maxY + 150;
   const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
-  for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
-    const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
-      const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter((n) => pos[n.id()]);
-      return [r, below.length ? below.reduce((a, n) => a + pos[n.id()].x, 0) / below.length : 0];
-    }).sort((a, b) => a[1] - b[1]);
-    let last = -Infinity;
-    for (const [r, at] of row) { last = Math.max(at, last + 70); pos[r.id()] = { x: last, y }; }
-    y += 90;
-  }
+  const rows = regionRows(regions, (n) => pos[n.id()], maxY + 150);
+  Object.assign(pos, rows.pos);
+  const y = rows.y;
   const bottom = cy.nodes('[kind="Dimension"], [kind="Metric"]');
   const span = Math.max(x - 50, 400);
   bottom.forEach((n, i) => { pos[n.id()] = { x: (i + 0.5) * span / Math.max(bottom.length, 1), y: regions.length ? y + 60 : maxY + 170 }; });
@@ -107,6 +100,55 @@ function arcLatentEdges(cy, dual) {
   });
 }
 
+const graphUrl = (ds, regions) => "/api/graph?" + new URLSearchParams({ ...(ds ? { dataset: ds } : {}), ...(regions ? { regions: 1 } : {}) });
+
+function countLegend() {
+  /* what each entry marks (nodes for an entry with nodes, else its edges); the regions not loaded yet, as many as the
+     graph would add */
+  setCounts(Object.fromEntries(Object.entries(MARKS).map(([k, sel]) => {
+    const m = S.cy.$(sel); return [k, k === "region" && !S.regionsIn ? S.regionCount : m.nodes().length || m.length];
+  })));
+}
+
+async function toggleRegions() {
+  /* the regions switch: they are fetched once per graph and placed by the insights they hold, so the switch never
+     re-runs the force layout */
+  if (layerState().region && !S.regionsIn) {
+    const seq = S.graphSeq;
+    const g = await api(graphUrl($("dataset-filter").value, true)).catch(() => null);
+    if (!g || seq !== S.graphSeq) return;  // a newer graph loads its own
+    S.cy.add([...g.nodes, ...g.edges].filter((el) => S.cy.getElementById(el.data.id).empty()));
+    S.regionsIn = true; countLegend();
+  }
+  applyVisibility(); highlight(S.hl);
+  if ($("layout").value === "dual") runLayout(); else placeRegions(S.cy);
+}
+
+function regionRows(regions, placed, top) {
+  /* the regions in rows by level from y = top, finest first, each at the mean x of the insights (or finer regions) it
+     holds and kept 70 px from the one before; ``placed`` gives a node's position, or none */
+  const pos = {}, at = (n) => pos[n.id()] || placed(n);
+  let y = top;
+  for (const res of [...new Set(regions.map((r) => r.data("resolution")))].sort((a, b) => b - a)) {
+    const row = regions.filter((r) => r.data("resolution") === res).map((r) => {
+      const below = r.incomers('edge[type="IN_REGION"], edge[type="PARENT_OF"]').sources().filter(at);
+      return [r, below.length ? below.reduce((a, n) => a + at(n).x, 0) / below.length : 0];
+    }).sort((a, b) => a[1] - b[1]);
+    let last = -Infinity;
+    for (const [r, x] of row) { last = Math.max(x, last + 70); pos[r.id()] = { x: last, y }; }
+    y += 90;
+  }
+  return { pos, y };
+}
+
+function placeRegions(cy) {
+  /* the regions in rows under the force layout's nodes, which they take no part in */
+  const shown = cy.nodes(":visible").not('[kind="Region"], [kind="PlaneLabel"]');
+  if (!shown.length) return;
+  const { pos } = regionRows(cy.nodes('[kind="Region"]'), (n) => (n.data("kind") !== "Region" && n.visible() ? n.position() : null), shown.boundingBox().y2 + 120);
+  cy.nodes('[kind="Region"]').forEach((r) => { if (pos[r.id()]) r.position(pos[r.id()]); });
+}
+
 function runLayout() {
   const cy = S.cy; if (!cy || !cy.nodes().length) return;
   if ($("layout").value === "dual") {
@@ -115,8 +157,10 @@ function runLayout() {
     arcLatentEdges(cy, true);
     cy.fit(cy.elements(":visible"), 40);
   } else {
+    const regions = cy.nodes('[kind="Region"]');
     cy.layout({ name: "cose", animate: false, idealEdgeLength: 90, nodeRepulsion: 9000, randomize: true, fit: true, padding: 40,
-      eles: cy.elements(":visible").not('[kind="PlaneLabel"]') }).run();
+      eles: cy.elements(":visible").not('[kind="PlaneLabel"]').not(regions).not(regions.connectedEdges()) }).run();
+    placeRegions(cy);
     arcLatentEdges(cy, false);
   }
 }
@@ -243,8 +287,10 @@ async function loadGraph() {
   const ds = $("dataset-filter").value, seq = ++S.graphSeq;
   let g;
   S.sphere = null;  // the graph changed (or is unknown): project again
-  try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
+  const regions = layerState().region;  // the regions come with their switch alone
+  try { g = await api(graphUrl(ds, regions)); } catch (e) { return; }
   if (seq !== S.graphSeq) return;  // a later filter or commit asked again
+  S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
@@ -263,12 +309,12 @@ async function loadGraph() {
   } else {
     S.cy.elements().remove(); S.cy.add(els);
   }
-  // legend counts: what each entry marks (nodes for an entry with nodes, else its edges)
-  setCounts(Object.fromEntries(Object.entries(MARKS).map(([k, sel]) => { const m = S.cy.$(sel); return [k, m.nodes().length || m.length]; })));
+  countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);
   renderTable();
   renderSphere();
+  if (layerState().region && !S.regionsIn) toggleRegions();  // switched on while this graph loaded without them
 }
 
 // views
