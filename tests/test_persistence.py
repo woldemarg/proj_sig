@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter
 
 import pytest
@@ -219,10 +220,16 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, monke
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
-    """A reset during a batch answers ``busy`` at once instead of waiting for the batch lock (the web request
-    would hang for the whole batch); readers keep the committed state meanwhile and the batch still commits."""
+def test_writes_are_refused_while_a_batch_runs(engine, demo_csv, demo_df, tmp_path, monkeypatch):
+    """A reset, a deletion and a PATCH of another dataset during a batch answer ``busy`` at once instead of waiting
+    for the batch lock (the web request would hang for the whole batch); readers keep the committed state meanwhile
+    and the batch still commits."""
     import threading
+
+    shuffled = tmp_path / "shuffled.csv"
+    demo_df.sample(frac=1, random_state=1).to_csv(shuffled, index=False)
+    ready = engine.ingest_file(shuffled)["dataset_id"]
+    before = len(engine.graph().insights)
 
     started, release = threading.Event(), threading.Event()
     discover = engine_mod.run_discovery
@@ -238,13 +245,16 @@ def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
     worker.start()
     try:
         assert started.wait(timeout=30)
-        with pytest.raises(engine_mod.PipelineError, match="is running") as refused:
-            engine.reset()
-        assert refused.value.code == "busy" and not engine.graph().insights  # the committed (empty) state, read without a lock
+        for write in (engine.reset, lambda: engine.delete_dataset(ready), lambda: engine.update_dataset_metadata(ready, source="x")):
+            t0 = time.perf_counter()
+            with pytest.raises(engine_mod.PipelineError, match="is running") as refused:
+                write()
+            assert refused.value.code == "busy" and time.perf_counter() - t0 < 1
+        assert len(engine.graph().insights) == before  # the committed state, read without a lock
     finally:
         release.set()
         worker.join(timeout=120)
-    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.graph().insights
+    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.ws.ready_batch_for(ready)
     engine.reset()
     assert not engine.graph().insights and not engine.frame().patterns and not engine.ws.list_batches()
 
