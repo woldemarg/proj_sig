@@ -445,6 +445,8 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     footprint_cells = [str(cells[r]) for r in {p["id"]: p for p in engine.geo_projected(fine)}[pid]["rows"]]
     assert engine.place_scores(engine.committed(), cells=footprint_cells)[pid] > 0
     assert any(s.pattern_id == pid and s.matched["place"] > 0 for s in engine.search("", cells=footprint_cells).seeds)
+    asked = TestClient(create_app(engine)).post("/api/search", json={"question": "", "cells": footprint_cells}).json()  # as the card asks
+    assert "AREA:" in asked["evidence_prompt"] and pid in asked["view"]["highlight"]["seeds"]
     found = engine.search("Where is load median higher?")
     zones = found.evidence.zones
     assert zones and all(set(z["holds"]) <= set(base) for z in zones)

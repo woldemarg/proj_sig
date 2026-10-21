@@ -388,9 +388,10 @@ function focusNodes(ids) {
 
 function reveal(id, { isolate = null, walk = false } = {}) {
   /* one insight shown where the user is looking (docs/08_interface.md §8.2, §8.7): on the map when it draws it (a Walk on
-     link picks it there, adding its card), otherwise in the graph, the table giving way: its isolated evidence path, or
-     the node and its details */
+     link picks it there, adding its card; one it does not draw clears the focus and opens the drawer), otherwise in the
+     graph, the table giving way: its isolated evidence path, or the node and its details */
   if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
+  if (S.view === "map" && walk) { GeoMap.unfocus(); return inspect(id, "Not on this map: its level draws nowhere here."); }  // the old focus goes
   if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
   if (S.view === "table") setView("graph");
   focusNodes([id]);
@@ -470,12 +471,12 @@ const CONNECTIONS = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member
   "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };  // the drawer's connection groups, by edge type and direction
 const NODE_KINDS = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
 
-async function inspect(id) {
+async function inspect(id, note = "") {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
   $("drawer-kind").textContent = NODE_KINDS[n.kind] || n.kind;
-  let html = "";
+  let html = note ? `<p class="hint drawer-note">${esc(note)}</p>` : "";
   if (n.kind === "Pattern") {
     $("drawer-title").textContent = scopeText(p);
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;

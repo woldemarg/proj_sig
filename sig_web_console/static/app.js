@@ -212,9 +212,16 @@ function init() {
   on(thread, ".ev", (el) => { const turn = turnOf(el), item = turn.qa.view.evidence.items[Number(el.dataset.i)]; reveal(item.pattern_id, { isolate: { turn, item, el } }); });
   on(thread, ".bot-tabs button", toggleTab);
   on(thread, ".insight-card .nb", (el) => reveal(el.dataset.id, { walk: true }));
-  on(thread, ".insight-card .ic-theme", (el) => inspect(el.dataset.id));
-  on(thread, ".insight-card .ic-ask", (el) => ask(askAbout(turnOf(el).insight.node.props)));
-  on(thread, ".insight-card .ic-graph", (el) => { setView("graph"); reveal(turnOf(el).insight.node.props.id); });
+  on(thread, ".insight-card .ic-theme", (el) => { inspect(el.dataset.id); GeoMap.openTheme(el.dataset.id); });
+  on(thread, ".insight-card .ic-ask", (el) => {  // asked with its place: the cells it is drawn by on the open map, as a zone
+    const p = turnOf(el).insight.node.props, cells = GeoMap.placeOf(p.id);
+    ask(askAbout(p), cells.length ? { cells } : null);
+  });
+  on(thread, ".insight-card .ic-graph", async (el) => {  // a filter on another dataset would hide its node
+    const p = turnOf(el).insight.node.props, sel = $("dataset-filter");
+    if (sel.value && sel.value !== p.dataset_id) { sel.value = ""; await refreshBatches(); }
+    setView("graph"); reveal(p.id);
+  });
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));

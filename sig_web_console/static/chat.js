@@ -136,7 +136,7 @@ function suggestions() {
   return out;
 }
 
-// ponytail: PoC — an insight picked on the map (GeoMap.pick): its description in the chat and its graph links to walk on
+// an insight picked on the map (GeoMap.pick): its card in the chat, with its place to ask about and its graph links to walk on
 const WALK = { CONTRASTS: "contrasts with", "CONTRASTS (in)": "contrasts with", "SPECIALIZES": "narrower version of", "SPECIALIZES (in)": "broader than",
   SIBLING: "sibling", "SIBLING (in)": "sibling", CO_LOCATED: "same place", "CO_LOCATED (in)": "same place" };
 
@@ -155,8 +155,11 @@ function askAbout(p) {
 
 function insightCard(turn) {
   const d = turn.insight, p = d.node.props, w = turn.view;
-  const theme = (d.neighbors.ACTIVATES || []).find((it) => !(it.props && it.props.weak)), seen = new Set([p.id]);  // primary_anchor: not a weak membership
-  const links = Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))
+  const theme = d.theme, seen = new Set([p.id]);  // primary_anchor, as the map's list shows it: never a weak membership
+  const chain = d.scale_chain || { up: [], down: [] }, level = (id) => (d.levels[id] != null ? `res ${d.levels[id]}` : "another level");
+  const steps = [...chain.up.map((st) => [st, "↑"]), ...chain.down.map((st) => [st, "↓"])].map(([st, arrow]) =>  // the scale chain's levels first
+    ({ id: st.pattern_id, label: `${arrow} ${level(st.pattern_id)}: ${nodeLabel(st.pattern_id, d.labels)}`, word: st.relation === "corresponds" ? "same shift" : "opposite shift" }));
+  const links = [...steps, ...Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))]
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
     `<div class="ic-tags">${w ? chip("", w.level) : ""}${p.integrity === "mismatch" ? chip(INTEGRITY.mismatch[0], "integrity mismatch", INTEGRITY.mismatch[1]) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
