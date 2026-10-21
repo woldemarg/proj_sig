@@ -369,3 +369,64 @@ def test_the_drawer_lists_where_a_base_insight_lies(cfg):
         assert f"{held} insight" in page.inner_text("#inspector .lead")  # its members of both bases
         browser.close()
         assert not errors, errors
+
+
+# every console fetch goes through api(): this wraps it to hold the named paths back and to count what is asked
+_SLOW_API = """() => { const real = api;
+  window.__net = { slow: [], pending: 0, hits: [] };
+  window.api = (path, opts) => {
+    __net.hits.push(path);
+    if (!__net.slow.some((s) => path.includes(s))) return real(path, opts);
+    __net.pending++;
+    return new Promise((r) => setTimeout(r, 1200)).then(() => real(path, opts)).finally(() => __net.pending--);
+  }; }"""
+
+
+@pytest.mark.browser
+def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
+    """A slow graph of the previous filter, slow points of the previously clicked insight and a second map refresh
+    asked during the first: the view shows what was asked last, and the second refresh is a pass of its own."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    table = engine.ingest_file(demo_csv)["dataset_id"]
+    geo = engine.process(engine.submit(PROJECT_ROOT / "data" / "demo" / "california_housing.csv", geo="auto@5")["batch_id"])["dataset_id"]
+    graph = engine.graph()
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0 && G.data", timeout=60000)
+        page.evaluate(_SLOW_API)
+        settled = "__net.pending === 0 && !G.refreshing"
+        # the filter changed twice in a row: the first one's graph answers last
+        page.evaluate(f"__net.slow = ['/api/graph?dataset={table}']")
+        page.select_option("#dataset-filter", table)
+        page.wait_for_function("__net.pending === 1")
+        page.select_option("#dataset-filter", geo)
+        page.wait_for_function(settled, timeout=10000)
+        assert {n["id"] for n in page.evaluate("S.nodes")} == {pid for pid, ins in graph.insights.items() if ins.dataset_id == geo}
+        # two insights clicked in a row on the map: the first one's points answer last
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.ds && G.map.loaded()", timeout=30000)
+        points = {
+            pid: len(httpx.get(f"{url}/api/geo/{geo}/patterns/{pid}").json()["points"]) for pid in page.evaluate("G.data.patterns.map((p) => p.id)")
+        }
+        first, second = sorted(points, key=points.get)[-1], sorted(points, key=points.get)[0]
+        assert points[first] != points[second]
+        page.evaluate(f"__net.slow = ['/patterns/{first}']; GeoMap.focusPattern('{first}'); GeoMap.focusPattern('{second}')")
+        page.wait_for_function(f"{settled} && !$('map-card-body').textContent.includes('…')", timeout=10000)
+        assert page.evaluate("G.map.getSource('pts').serialize().data.features.length") == points[second]
+        assert page.evaluate("G.focusId") == second
+        # a refresh asked while one runs: the cells are read once, the overlay again by a pass that starts after it
+        hits = "__net.hits.filter((h) => h.endsWith(`/${G.ds}/%s`)).length"
+        page.evaluate("__net.slow = []; __net.hits = []; G.data = null")
+        page.evaluate("Promise.all([GeoMap.refresh(), GeoMap.refresh()])")
+        assert page.evaluate(hits % "cells") == 1 and page.evaluate(hits % "overlay") == 2
+        browser.close()
+        assert not errors, errors

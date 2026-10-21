@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
+const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGE_TEXT = {
   UPLOADED: "Queued", VALIDATING: "Reading the file", PROFILING: "Profiling columns", DISCOVERING: "Searching subgroups",
   VALIDATING_INSIGHTS: "Validating insights", EMBEDDING: "Embedding insights", UPDATING_ONTOLOGY: "Learning themes",

@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -18,15 +18,15 @@ const GeoMap = {
 
   clearZone() { G.zone.clear(); paintZone(); },
 
-  async refresh() {
-    try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
-    $("map-tab").hidden = !G.datasets.length;
-    if (!G.datasets.length) { G.ds = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
-    const filter = $("dataset-filter").value;
-    const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.ds) || G.datasets[0];
-    if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
-    else { await loadOverlay(G.ds); await loadProjected(G.ds); scheduleWindow(); }  // a commit changes the graph over the same cells
-    if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
+  refresh() {  // one pass at a time; a call during a pass runs one more pass after it, which reads the filter then
+    if (G.refreshing) { G.dirty = true; return G.refreshing; }
+    G.refreshing = (async () => {
+      let failed;
+      do { G.dirty = false; failed = await refreshPass().then(() => null, (e) => e); } while (G.dirty);
+      G.refreshing = null;
+      if (failed) throw failed;
+    })();
+    return G.refreshing;
   },
 
   async show() {
@@ -93,11 +93,23 @@ const GeoMap = {
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
       const pts = await api(`/api/geo/${encodeURIComponent(G.ds)}/patterns/${encodeURIComponent(pid)}`);
+      if (G.focusId !== pid) return;  // another insight was focused meanwhile
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
       renderCard(p, item, pts);
     } catch (e) { /* the card stays without the point count */ }
   },
 };
+
+async function refreshPass() {
+  try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
+  $("map-tab").hidden = !G.datasets.length;
+  if (!G.datasets.length) { G.ds = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  const filter = $("dataset-filter").value;
+  const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.ds) || G.datasets[0];
+  if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
+  else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); scheduleWindow(); }  // a commit changes the graph over the same cells
+  if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
+}
 
 const empty = () => ({ type: "FeatureCollection", features: [] });
 const cellsOf = (rows) => ({ type: "FeatureCollection", features: rows.map((r) => G.data.features[r]).filter(Boolean) });
@@ -212,11 +224,10 @@ async function loadDataset(ds) {
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
   const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
   G.ds = ds; G.data = data; G.evidence = [];
-  await loadProjected(ds);
   G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
   G.map.getSource("cells").setData(data);
   G.map.getSource("pts").setData(empty());
-  await loadOverlay(ds);
+  await Promise.all([loadProjected(ds), loadOverlay(ds)]);
   const info = G.datasets.find((d) => d.dataset_id === ds) || {};
   const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
   if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
