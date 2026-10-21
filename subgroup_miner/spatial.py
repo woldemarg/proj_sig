@@ -8,8 +8,10 @@ categorical modes and neighbourhood conditions as text dimensions.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,7 +19,7 @@ import h3
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from scipy.stats import false_discovery_control, norm
+from scipy.stats import binom, false_discovery_control, norm
 
 from insight_contracts import Insight, region_node_id
 
@@ -54,6 +56,11 @@ GEO_AUTO_MAX_CELLS = 5_000  # ``@auto``: the finest level's cells at most, count
 GEO_AUTO_MIN_CELLS = 500  # ``@auto``: a coarser level's cells at least (the miner's least subgroup, 5 cells per metric, fills a smaller one)
 GEO_LEVELS_MAX = 3  # ``@auto``: levels chosen, the finest included
 GEO_FOOTPRINT_SHARE = 0.8  # an insight drawn on another level's cells: the busiest cells holding this share of its points
+GEO_LOCATED_MIN = 0.8  # a base insight with fewer of its events located is partial, without a place (docs/06 §6.1)
+GEO_LIFT_MIN = 1.5  # a base insight's region by over-representation: its share there over the map's
+GEO_LIFT_MIN_REGIONS = 12  # a level of fewer occupied regions places a base insight by share, one of more by lift
+GEO_LINK_MIN_EVENTS = 30  # a base insight's events in its region at least (a small insight: 5 % of them, 5 at least)
+GEO_LINK_FDR = 0.05  # Benjamini-Hochberg over the level's occupied regions, for the lift rule
 
 
 class SpatialError(ValueError):
@@ -503,6 +510,18 @@ class GeoDataset:
 
 
 @dataclass
+class TableDataset:
+    """What ``derive_spatial`` reads of a table level: its patterns' file rows (``covers``), and the cells and point -> cell
+    row of the finest READY geo level of its upload that holds one row per point (``placed_by``; epic #114, contract 6)."""
+
+    dataset_id: str
+    placed_by: str
+    cells: np.ndarray
+    point_cell: np.ndarray
+    covers: dict[str, np.ndarray]
+
+
+@dataclass
 class SpatialStructure:
     """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1)."""
 
@@ -513,12 +532,59 @@ class SpatialStructure:
     compactness: dict[str, float] = field(default_factory=dict)
     places: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # pattern -> resolution -> its cells or their parents
     occupied: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # dataset -> resolution -> the same, of all its cells
+    events: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # (base pattern, region) -> its IN_REGION props
+    partial: set[str] = field(default_factory=set)  # base patterns with fewer than GEO_LOCATED_MIN of their events located
 
 
 RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
 
 
-def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> SpatialStructure:
+def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.ndarray]:
+    """Each cell's region at every listed level not finer than its own: the cell holding its centre (epic #114, contract 1)."""
+    names = [str(c) for c in cells]
+    res = h3.get_resolution(names[0])
+    return {lv: np.array(names if lv == res else [h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in levels if lv <= res}
+
+
+def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tuple[str, str, float, dict[str, Any]]], set[str]]:
+    """A table level's patterns placed by their events (docs/06_graph_and_storage.md §6.1): ``(pattern, region, share,
+    props)`` per IN_REGION, and the patterns too little located to be placed. Shares and lifts are over the pattern's
+    located events; a level of at least ``GEO_LIFT_MIN_REGIONS`` occupied regions (holding a located event) places by
+    lift under BH over them, a coarser one by share where the pattern is no rarer than the map (``rule``)."""
+    point_cell = table.point_cell
+    located = point_cell[point_cell >= 0]
+    per_level = {}
+    for lv, names in event_regions(table.cells, levels).items():
+        regions, idx = np.unique(names, return_inverse=True)
+        per_level[lv] = (regions, idx, np.bincount(idx[located], minlength=len(regions)))
+    edges, partial = [], set()
+    for pid, rows in table.covers.items():
+        cells = point_cell[np.unique(np.asarray(rows, dtype=np.int64))]
+        loc = cells[cells >= 0]
+        if not len(cells) or len(loc) / len(cells) < GEO_LOCATED_MIN:
+            partial.add(pid)
+            continue
+        n = len(loc)
+        x_min = min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
+        for lv, (regions, idx, n_r) in per_level.items():
+            occupied = n_r > 0
+            x = np.bincount(idx[loc], minlength=len(regions))
+            share = x / n
+            lift = np.divide(share, n_r / len(located), out=np.zeros(len(regions)), where=occupied)
+            q = np.ones(len(regions))
+            # the binomial tail of R's events falling in P: where small, never below the exact hypergeometric one, and fast
+            q[occupied] = false_discovery_control(np.where(x > 0, binom.sf(x - 1, n_r, n / len(located)), 1.0)[occupied])
+            rule = "lift" if occupied.sum() >= GEO_LIFT_MIN_REGIONS else "share"
+            hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if rule == "lift" else (share >= GEO_REGION_MIN_SHARE) & (lift >= 1)
+            for i in np.flatnonzero(hit & (x >= x_min)):
+                props = {"basis": "events", "rule": rule, "share": round(float(share[i]), 4), "lift": round(float(lift[i]), 4), "n": int(x[i])}
+                edges.append(
+                    (pid, region_node_id(lv, str(regions[i])), props["share"], props | {"q": float(f"{q[i]:.4g}"), "placed_by": table.placed_by})
+                )
+    return edges, partial
+
+
+def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = ()) -> SpatialStructure:
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
@@ -530,7 +596,8 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
     strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
-    either side keeps is an edge."""
+    either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``, props in
+    ``events``): never CO_LOCATED, in ``places`` or in ``occupied``."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
     raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
@@ -570,9 +637,15 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
                         share = round(share, 4)
                         out.in_region.append((pid, rid, share))
                         shares[(pid, rid)] = share
-                        for up in [x for x in levels if x <= lv]:  # the region and its ancestors at the coarser listed levels
-                            up_cell = str(cell) if up == lv else h3.cell_to_parent(str(cell), up)
-                            out.regions.setdefault(region_node_id(up, up_cell), {"resolution": up, "h3": up_cell})
+                        _add_region(out, levels, lv, str(cell))
+    for table in tables:
+        placed, partial = place_table(table, levels)
+        out.partial |= partial
+        for pid, rid, share, props in placed:
+            out.in_region.append((pid, rid, share))
+            out.events[(pid, rid)] = props
+            _, lv, cell = rid.split(":")  # R:<level>:<h3>
+            _add_region(out, levels, int(lv), cell)
     members = Counter(rid for _, rid, _ in out.in_region)
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])
@@ -614,6 +687,13 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...]) -> Spati
     out.in_region.sort()
     out.parent_of.sort()
     return out
+
+
+def _add_region(out: SpatialStructure, levels: tuple[int, ...], lv: int, cell: str) -> None:
+    """The region and its ancestors at the coarser listed levels."""
+    for up in [x for x in levels if x <= lv]:
+        up_cell = cell if up == lv else h3.cell_to_parent(cell, up)
+        out.regions.setdefault(region_node_id(up, up_cell), {"resolution": up, "h3": up_cell})
 
 
 def parse_zone(cells: list[str]) -> frozenset[str]:

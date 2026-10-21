@@ -7,7 +7,8 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
                 and ``components``) and ``embedding`` (the vector contract)
 * ``Attractor`` ``attractor_id``, ``mass``, ``n_patterns``, ``distinct_scopes``, ``signature`` [{component, value}],
                 ``targets``, ``datasets``, ``dimensions``, ``dispersion``, ``centroid``
-* ``Region``    ``resolution``, ``h3``, ``cells_covered`` (patterns' cells inside it), ``patterns`` (IN_REGION members)
+* ``Region``    ``resolution``, ``h3``, ``cells_covered`` (geo patterns' cells inside it), ``patterns`` (IN_REGION members
+                of both bases)
 * ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
@@ -15,8 +16,11 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
 ``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
 ``CO_LOCATED`` (geo patterns of one resolution, any datasets) carries ``relation`` (overlaps | adjacent | same_region);
-``IN_REGION`` carries ``share`` (of the region's occupied cells the pattern covers); ``PARENT_OF`` runs from a region to
-its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, derived at the commit.
+``IN_REGION`` carries ``basis``: ``cells`` for a geo pattern, with ``share`` (of the region's occupied cells it covers),
+``events`` for a base (table-level) pattern, with ``rule`` (lift | share), ``share`` (of its located events), ``lift``,
+``n``, ``q`` and ``placed_by`` (the geo level whose points place it); the two shares do not compare. ``PARENT_OF`` runs
+from a region to its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, a base one
+``geo: partial`` when too few of its events are located, both derived at the commit.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 9  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 10  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):

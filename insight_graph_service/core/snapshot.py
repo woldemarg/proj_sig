@@ -393,15 +393,22 @@ def _attractor_nodes(
 
 
 def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], structural: list[GraphEdge]) -> list[GraphEdge]:
-    """Region nodes (added to ``nodes``), IN_REGION, PARENT_OF and CO_LOCATED edges, and each geo pattern's
-    ``compactness``; a CO_LOCATED pair the lattice already links is left out."""
+    """Region nodes (added to ``nodes``), IN_REGION (``basis`` cells for a geo pattern, events with their props for a base
+    one), PARENT_OF and CO_LOCATED edges, each geo pattern's ``compactness`` and a base pattern's ``geo: partial``; a
+    CO_LOCATED pair the lattice already links is left out."""
     for rid, props in spatial.regions.items():
         nodes[rid] = GraphNode(rid, "Region", f"res {props['resolution']} {props['h3']}", dict(props))
     for pid, value in spatial.compactness.items():
         if pid in nodes:
             nodes[pid].props["compactness"] = value
+    for pid in spatial.partial & nodes.keys():  # a base pattern too little located to be placed
+        nodes[pid].props["geo"] = "partial"
     linked = {frozenset((e.source, e.target)) for e in structural}
-    edges = [GraphEdge(p, r, EdgeType.IN_REGION, share, {"share": share}) for p, r, share in spatial.in_region if p in nodes]
+    edges = [
+        GraphEdge(p, r, EdgeType.IN_REGION, share, spatial.events.get((p, r), {"basis": "cells", "share": share}))
+        for p, r, share in spatial.in_region
+        if p in nodes
+    ]
     edges += [GraphEdge(child, parent, EdgeType.PARENT_OF) for child, parent in spatial.parent_of]
     edges += [
         GraphEdge(a, b, EdgeType.CO_LOCATED, weight, {"relation": relation})

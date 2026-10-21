@@ -20,33 +20,36 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     S   x / |P_loc| >= SHARE_MIN                                  R holds a fifth of P
     E   x / min(|P_loc|, n_R) >= SHARE_MIN, x >= EVENTS_MIN       IN_REGION's rule, counted in events
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
-    L   the hypergeometric tail P(X >= x) of |P_loc| events drawn from N with n_R in R, under BH at FDR_Q over the level's
+    L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small, never below the exact hypergeometric one), under BH at FDR_Q over the level's
         regions, lift >= LIFT_MIN, x >= EVENTS_MIN
+    P   the placement of #119: L on a level of at least LIFT_MIN_REGIONS regions, S with lift >= 1 below, at x >= min(EVENTS_MIN,
+        max(5, ceil(0.05 |P_loc|)))
 A real export prints aggregates only; its result stays in ``.scratch/results/geo_coverage_<label>.json``.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any
 
 import h3
 import numpy as np
-from scipy.stats import false_discovery_control, hypergeom
+from scipy.stats import binom, false_discovery_control
 from scratch import build_engine, save_result, scratch_dir
 
 from insight_graph_service.core.engine import Engine
 from insight_graph_service.core.geo_views import member_rows
 from insight_graph_service.core.settings import PROJECT_ROOT
-from subgroup_miner.spatial import footprint
+from subgroup_miner.spatial import GEO_LIFT_MIN as LIFT_MIN  # the rules' bounds are the graph's
+from subgroup_miner.spatial import GEO_LIFT_MIN_REGIONS as LIFT_MIN_REGIONS
+from subgroup_miner.spatial import GEO_LINK_FDR as FDR_Q
+from subgroup_miner.spatial import GEO_LINK_MIN_EVENTS as EVENTS_MIN
+from subgroup_miner.spatial import GEO_LOCATED_MIN, event_regions, footprint
+from subgroup_miner.spatial import GEO_REGION_MIN_SHARE as SHARE_MIN
 
-GEO_LOCATED_MIN = 0.5  # #119: a base insight with fewer of its events located gets no link
-SHARE_MIN = 0.2  # rules S, E, F
-EVENTS_MIN = 30  # rules E, L and the lift counts
-LIFT_MIN = 1.5  # rule L
-FDR_Q = 0.05  # rule L
-RULES = ("S", "E", "F", "L")
+RULES = ("S", "E", "F", "L", "P")
 
 
 CALIFORNIA_BINS = "median_income:4,median_income_median:4"  # the table's and the cells' median income, in quartiles
@@ -72,7 +75,7 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
     graph = engine.committed().graph
     groups: dict[str, dict[str, np.ndarray]] = {}
     for r in sorted(ready, key=lambda r: r["level"] != "table"):  # the base first
-        members = member_rows(engine.ws, r, top.get("upload_id"), len(finest["point_cell"]))
+        members = member_rows(engine.ws, r, top, len(finest["point_cell"]))
         if members is None:
             continue
         groups["base" if r["level"] == "table" else f"r{r['level']}"] = {
@@ -85,11 +88,7 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
 
 def region_index(cells: np.ndarray, levels: list[int]) -> dict[int, np.ndarray]:
     """Per level, each finest cell's region as an index: the region cell holding its centre (contract 1)."""
-    out = {}
-    for lv in levels:
-        names = [h3.latlng_to_cell(*h3.cell_to_latlng(str(c)), lv) for c in cells]
-        out[lv] = np.unique(names, return_inverse=True)[1]
-    return out
+    return {lv: np.unique(names, return_inverse=True)[1] for lv, names in event_regions(cells, tuple(levels)).items()}
 
 
 def measure(point_cell: np.ndarray, cells: np.ndarray, insights: dict[str, np.ndarray], levels: list[int]) -> dict[str, Any]:
@@ -116,13 +115,16 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
     share = x / n_loc
     lift = share / (n_r / n_map)
     held = np.cumsum(np.sort(x)[::-1])
-    pv = np.where(x > 0, hypergeom.sf(x - 1, n_map, n_r, n_loc), 1.0)  # P's |P_loc| events drawn from the map's N
+    pv = np.where(x > 0, binom.sf(x - 1, n_r, n_loc / n_map), 1.0)  # as the graph's placement: conservative where small
     fp_in = np.bincount(idx[fp], minlength=len(n_r))
+    q = false_discovery_control(pv)
+    x_min = min(EVENTS_MIN, max(5, math.ceil(0.05 * n_loc)))
     links = {
         "S": share >= SHARE_MIN,
         "E": (x / np.minimum(n_loc, n_r) >= SHARE_MIN) & (x >= EVENTS_MIN),
         "F": fp_in / np.minimum(len(fp), occupied) >= SHARE_MIN,
-        "L": (false_discovery_control(pv) <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
+        "L": (q <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
+        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if len(n_r) >= LIFT_MIN_REGIONS else (share >= SHARE_MIN) & (lift >= 1)) & (x >= x_min),
     }
     strong = (lift >= 2) & (x >= EVENTS_MIN)
     return {
@@ -195,7 +197,7 @@ def run(engine: Engine, path: Path, geo: str, bins: str | None = None) -> dict[s
     for name, insights in groups.items():
         measured = measure(point_cell, cells, insights, levels)
         out["map"]["regions"] = {lv: len(n_r) for lv, n_r in measured["n_R"].items()}
-        out["groups"][name] = summarise(measured, levels, None if name == "base" else in_region, per_cell)
+        out["groups"][name] = summarise(measured, levels, in_region, per_cell)
     return out
 
 

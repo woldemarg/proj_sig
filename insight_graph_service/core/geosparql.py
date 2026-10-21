@@ -23,6 +23,7 @@ VOCABULARY = [  # the sig: terms' relations; their meaning is in docs/06_graph_a
     "sig:Insight rdfs:subClassOf prov:Entity",
     "sig:Dataset rdfs:subClassOf prov:Entity",
     *(f"{p} rdfs:subPropertyOf sig:coLocated" for p in CO_LOCATED.values()),
+    "sig:inRegionByEvents rdfs:subPropertyOf sig:inRegion",
 ]
 
 
@@ -75,8 +76,8 @@ def build_turtle(graph: DualGraph, extents: dict[str, list[str]]) -> str:
             props += [("sig:h3Cell", literal(c)) for c in extents[n["id"]]]
             geometry = literal(cells_to_wkt(extents[n["id"]])) + "^^geo:wktLiteral"
         for e in graph.out.get(n["id"], []):
-            if e["type"] == "IN_REGION":
-                props.append(("sig:inRegion", iri(e["target"])))
+            if e["type"] == "IN_REGION":  # a base pattern's region holds its events, not its cells
+                props.append(("sig:inRegionByEvents" if e["props"].get("basis") == "events" else "sig:inRegion", iri(e["target"])))
             elif e["type"] == "ACTIVATES" and not e["props"].get("weak"):
                 props.append(("sig:activates", iri(e["target"])))
         _subject(lines, iri(n["id"]), types, props)

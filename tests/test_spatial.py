@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from unittest import mock
 
 import h3
@@ -328,6 +329,8 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
+    from graph_query_engine.vertical import picture, regions_above, scale_chain
+
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
     assert len({r["upload_id"] for r in done}) == len({r["source_path"] for r in done}) == 1  # one file, one upload id
@@ -352,7 +355,20 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
         load_dataset(points_csv, engine.settings.miner, geo="auto@8", bins="pointz:4", strict=False)
     graph, table = engine.graph(), done[2]["dataset_id"]
     assert graph.nodes[f"DS:{table}"]["props"]["level"] == "table"
-    assert not any(graph.insight(e["source"]).dataset_id == table for e in graph.edges if e["type"] in ("IN_REGION", "CO_LOCATED"))
+    placed = [e for e in graph.edges if e["type"] == "IN_REGION" and graph.insight(e["source"]).dataset_id == table]
+    assert placed and all(e["props"]["basis"] == "events" and e["weight"] == e["props"]["share"] for e in placed)  # by its events
+    assert {e["props"]["placed_by"] for e in placed} == {done[0]["dataset_id"]}  # the finest level of its upload
+    assert all(e["props"]["basis"] == "cells" for e in graph.edges if e["type"] == "IN_REGION" and e not in placed)
+    assert not any(
+        table in {graph.insight(e["source"]).dataset_id, graph.insight(e["target"]).dataset_id} for e in graph.edges if e["type"] == "CO_LOCATED"
+    )
+    geo_ids = [pid for pid in graph.insights if graph.facts(pid).resolution is not None]
+    steps = {s.pattern_id for c in scale_chain(graph, geo_ids) for s in [*c.up, *c.down]}
+    assert all(graph.facts(e["source"]).resolution is None for e in placed) and not steps & {e["source"] for e in placed}  # never a step
+    region = placed[0]["target"]  # a region's members are of both bases, as picture and its patterns count them
+    members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
+    assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
+    assert {e["props"]["basis"] for e in members} >= {"events"} and not regions_above(graph, [e["source"] for e in placed])
     # the map as a window on the graph (PoC): every other level's insights on the finest level's cells, by their footprint
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
@@ -373,6 +389,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
     plain_ids = {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == plain["dataset_id"]}
     assert plain["status"] == "READY" and plain_ids and not plain_ids & {p["id"] for p in engine.geo_projected(fine)}
+    assert not any(e["source"] in plain_ids for e in engine.graph().edges if e["type"] == "IN_REGION")  # nor is it placed
     engine.delete_dataset(plain["dataset_id"])
     upload_id = done[0]["upload_id"]
     with TestClient(create_app(engine)) as client:
@@ -401,6 +418,53 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
     with points_csv.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
         assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
+
+
+def test_a_table_level_is_placed_by_its_events(engine, points_csv):
+    """A table level's IN_REGION come from the finest geo level of its upload and point columns: deleting that level
+    places it by the next, deleting both leaves it unplaced, and another pair of coordinates of the same file never
+    places it. On a wide map a random subgroup is placed nowhere where the level places by lift,
+    and in one region where it places by share (the coarsest level); a pattern with 30 % of its rows unlocated is
+    partial and unplaced."""
+    from subgroup_miner.spatial import TableDataset, place_table
+
+    done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
+    table = done[2]["dataset_id"]
+
+    def placed_by() -> set[str]:
+        graph = engine.graph()
+        return {e["props"]["placed_by"] for e in graph.edges if e["type"] == "IN_REGION" and graph.insight(e["source"]).dataset_id == table}
+
+    assert placed_by() == {done[0]["dataset_id"]}
+    engine.delete_dataset(done[0]["dataset_id"])
+    assert placed_by() == {done[1]["dataset_id"]}
+    engine.delete_dataset(done[1]["dataset_id"])
+    assert placed_by() == set()
+    trips = geo_frame().assign(dest_lat=lambda f: f["latitude"] + 2.0, dest_lon=lambda f: f["longitude"] - 1.0)  # another pair
+    trips.to_csv(trips_csv := points_csv.with_name("trips.csv"), index=False)
+    origin = upload_levels(engine, trips_csv, geo="latitude,longitude@7", table=True)
+    table = origin[1]["dataset_id"]
+    destination = upload_levels(engine, trips_csv, geo="dest_lat,dest_lon@8")  # the same bytes, a finer map of other points
+    assert destination[0]["upload_id"] == origin[0]["upload_id"] and placed_by() == {origin[0]["dataset_id"]}
+    finer = upload_levels(engine, trips_csv, geo="auto@8")  # the same points by another name, finer: it places the table now
+    assert placed_by() == {finer[0]["dataset_id"]}
+    engine.delete_dataset(finer[0]["dataset_id"])
+    engine.delete_dataset(origin[0]["dataset_id"])
+    assert placed_by() == set()  # never by the destinations
+    rng, n = np.random.default_rng(0), 40_000
+    lat, lon = 34 + rng.random(n) * 4, -122 + rng.random(n) * 6  # 925 regions at 5, 27 at 3, 3 at 1
+    cells, point_cell = np.unique([h3.latlng_to_cell(a, b, 6) for a, b in zip(lat, lon, strict=True)], return_inverse=True)
+    random = {f"P-{f}": rng.choice(n, int(f * n), replace=False) for f in (0.05, 0.1, 0.2, 0.3, 0.5)}
+    edges, partial = place_table(TableDataset("ds-t", "ds-g", cells, point_cell, random), (7, 5, 3, 1))
+    placed = Counter((p, rid.split(":")[1]) for p, rid, _, _ in edges)  # never by lift (5 and 3), at 1 by share alone
+    assert not partial and {lv for _, lv in placed} <= {"1"} and max(placed.values(), default=0) <= 1
+    assert all(props["rule"] == "share" and props["lift"] >= 1 for *_, props in edges)
+    blank = point_cell.copy()
+    blank[: int(0.3 * n)] = -1
+    edges, partial = place_table(
+        TableDataset("ds-t", "ds-g", cells, blank, {"P-part": np.arange(n), "P-whole": np.arange(int(0.3 * n), n)}), (7, 5, 3, 1)
+    )
+    assert partial == {"P-part"} and {p for p, *_ in edges} == {"P-whole"}
 
 
 def test_the_scale_reads_the_levels_the_upload_has(engine, points_csv):

@@ -33,6 +33,7 @@ class LoadedDataset:
     warnings: list[str] = field(default_factory=list)
     geo: str | None = None  # the applied geo option, "<locator>@<resolution>"
     spatial: SpatialContext | None = None  # rows are H3 cells when set
+    points: str | None = None  # a table level's left-out point columns, as a geo level's ``location`` names them
 
 
 def parse_bins(spec: str | None) -> dict[str, int]:
@@ -209,6 +210,7 @@ def load_dataset(
         warnings=warnings,
         geo=_geo_text(geo_spec),
         spatial=spatial,
+        points=",".join(left_out) or None,
     )
 
 

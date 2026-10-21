@@ -162,10 +162,16 @@ def test_geo_coverage_apparatus(engine, tmp_path):
     regions, n_r, occupied = np.array([0, 1]), np.array([60, 40]), np.array([1, 1])  # one cell per region
     inside = level_stats(np.full(30, 1), np.array([1]), regions, n_r, occupied, 100)  # 30 events, all in region 1
     assert (inside["k50"], inside["k80"], inside["top_share"], inside["lift_max"]) == (1, 1, 1.0, pytest.approx(2.5))
-    assert {rule: links.tolist() for rule, links in inside["links"].items()} == {"S": [1], "E": [1], "F": [1], "L": [1]}
+    assert {rule: links.tolist() for rule, links in inside["links"].items()} == {"S": [1], "E": [1], "F": [1], "L": [1], "P": [1]}
     split = level_stats(np.r_[np.zeros(20, int), np.ones(10, int)], np.array([0]), regions, n_r, occupied, 100)  # 20 and 10
     assert (split["k50"], split["k80"]) == (1, 2) and split["lift_15"] == split["lift_2"] == 0
-    assert {rule: links.tolist() for rule, links in split["links"].items()} == {"S": [0, 1], "E": [], "F": [0], "L": []}  # x < 30
+    assert {rule: links.tolist() for rule, links in split["links"].items()} == {
+        "S": [0, 1],
+        "E": [],
+        "F": [0],
+        "L": [],
+        "P": [0],
+    }  # x < 30; P: S below 12 regions where lift >= 1 (region 1: 0.83)
 
 
 def test_perf_benchmark_apparatus(engine, tmp_path, caplog):

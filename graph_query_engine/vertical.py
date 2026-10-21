@@ -43,8 +43,10 @@ class ScaleChain:
 def regions_above(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     """The regions coarser than each pattern's finest region level that it lies in, with their ancestors that hold an
     intact pattern: what the console draws (a region at that level, the pattern's own or the next coarser, is one of its
-    cells or a handful of them, hundreds per dataset; a region holding tampered patterns only holds nothing)."""
-    found = {r for pid in pattern_ids for r in graph.facts(pid).regions.keys() - graph.facts(pid).finest}
+    cells or a handful of them, hundreds per dataset; a region holding tampered patterns only holds nothing). A base
+    pattern (no resolution) draws none: its regions, placed by its events, do not nest by PARENT_OF."""
+    geo = [pid for pid in pattern_ids if graph.facts(pid).resolution is not None]
+    found = {r for pid in geo for r in graph.facts(pid).regions.keys() - graph.facts(pid).finest}
     frontier = set(found)
     while frontier:
         frontier = {e["target"] for r in frontier for e in graph.out.get(r, []) if e["type"] == "PARENT_OF"} - found

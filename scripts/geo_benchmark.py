@@ -265,7 +265,7 @@ def _patterns(engine: Engine, record: dict[str, Any], upload: Upload) -> dict[st
     """pattern id -> (record, mask over the upload's rows: the events inside its extent, as the map counts them)."""
     ds, n = record["dataset_id"], len(upload.frame)
     covers = engine.ws.load_covers(ds)
-    members = member_rows(engine.ws, record, record.get("upload_id"), n)
+    members = member_rows(engine.ws, record, record, n)
     if members is None:
         raise SystemExit(f"{upload.name} {record.get('level')}: its rows do not index the upload's points")
     out = {}

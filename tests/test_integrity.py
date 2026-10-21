@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import make_engine, rewrite_patterns, stale_snapshot
+from conftest import make_engine, rewrite_patterns, stale_snapshot, upload_levels
 from fastapi.testclient import TestClient
 
 from insight_contracts import EdgeType, GraphEdge, record_digest
@@ -131,6 +131,25 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv
     trust = engine.search("Why is margin lower for phones in the US?").evidence.items[0].trust
     assert trust.startswith("source A (completely reliable), metadata unverified")  # seen, though not refused
     assert metadata_digest({"profile": {"n": np.int64(3), 7: "x"}}) == metadata_digest({"profile": {"n": "3", "7": "x"}})  # as stored
+
+
+def test_a_changed_batch_record_places_no_table_level(cfg, points_csv):
+    """A table level whose batch record fails its metadata digest (its upload id, its point columns or its row count may
+    be forged) is not placed by its events: its declarations are ignored like a forged rating. The unsigned locator of
+    the options moves nothing: the signed profile names the point columns."""
+    engine = make_engine(cfg)
+    done = upload_levels(engine, points_csv, geo="auto@7", table=True)
+
+    def base_edges(graph) -> int:
+        return sum(e["type"] == "IN_REGION" and e["props"]["basis"] == "events" for e in graph.edges)
+
+    placed = base_edges(engine.graph())
+    table = engine.ws.ready_batch_for(done[1]["dataset_id"])
+    assert placed and table["profile"]["points"] == "latitude,longitude"
+    engine.ws.save_batch({**table, "locator": "nowhere"})  # outside the digest, and read by nothing once signed
+    assert base_edges(make_engine(cfg).graph()) == placed
+    engine.ws.save_batch({**table, "upload_id": "up-000000000000"})  # past the API
+    assert base_edges(make_engine(cfg).graph()) == 0
 
 
 def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unverified(cfg, demo_csv):
