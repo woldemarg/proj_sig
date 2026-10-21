@@ -787,6 +787,34 @@ def test_the_window_leads_with_the_levels_of_its_extent(engine, points_csv):
     assert close == "map" and rows
 
 
+def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
+    """The map's cell package (docs/08_interface.md §8.1) rebuilds every vertex within half its step, which follows the
+    resolution: 1e-5° up to 12, 1e-7° finer, where a cell's edge is a metre or less."""
+    from insight_graph_service.core.geo_views import _pack
+    from subgroup_miner.spatial import cell_boundary
+
+    for res, step in ((7, 1e-5), (14, 1e-7)):
+        cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
+        features = [
+            {
+                "type": "Feature",
+                "id": i,
+                "geometry": {"type": "Polygon", "coordinates": [cell_boundary(c)]},
+                "properties": {"h3": c, "row": i, "x_band": "q1"},
+            }
+            for i, c in enumerate(cells)
+        ]
+        path = tmp_path / f"cells{res}.geojson"
+        path.write_text(
+            json.dumps({"type": "FeatureCollection", "features": features, "bbox": [0, 0, 0, 0], "meta": {"resolution": res}, "patterns": []})
+        )
+        pack = json.loads(_pack(str(path), 0))
+        assert pack["scale"] == round(-np.log10(step)) and pack["columns"] == {"h3": cells}
+        for f, r in zip(features, pack["rings"]):
+            rebuilt = [(r[0], r[1])] + [(r[0] + r[k] * step, r[1] + r[k + 1] * step) for k in range(2, len(r), 2)]
+            assert all(abs(a - b) <= step / 2 + 1e-12 for p, q in zip(rebuilt, f["geometry"]["coordinates"][0]) for a, b in zip(p, q))
+
+
 def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     """``west > east`` is a view across ±180°: the cells on both sides of it, and none elsewhere; a bbox out of range
     is refused."""

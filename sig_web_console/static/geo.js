@@ -32,7 +32,9 @@ const GeoMap = {
   async show() {
     await ensureMap();
     G.map.resize();
-    if (G.stale) { G.stale = false; await GeoMap.refresh(); }  // what changed while another tab was open
+    if (G.stale) {  // what changed while another tab was open; a failed load is tried again on the next open
+      try { await GeoMap.refresh(); G.stale = false; } catch (e) { console.error("map load failed", e); }
+    }
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
     else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
     scheduleWindow();
@@ -63,7 +65,7 @@ const GeoMap = {
     const geoDs = items.some((i) => G.patterns[i.pattern_id]) ? G.ds  // the open map draws one of them (another level of its upload too): it stays
       : items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds));
     if (!geoDs) { GeoMap.clear(); return; }
-    if (!G.map || S.view !== "map") { G.pending = qa; return; }
+    if (!G.map || S.view !== "map") { G.pending = qa; G.want = geoDs; return; }  // the map opens on the answer's dataset
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
     const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => G.patterns[i.pattern_id]); };
     if (geoDs !== G.ds) loadDataset(geoDs).then(apply); else apply();
@@ -248,17 +250,17 @@ function placeDensity() {
 
 function cellFeatures(pack) {
   /* the cell package (GET /api/geo/{ds}/cells) as a GeoJSON FeatureCollection: each ring from its first vertex and
-     integer offsets in 1e-5°, each cell's columns as its properties */
-  const names = Object.keys(pack.columns);
+     integer offsets in 10^-scale degrees, each cell's columns as its properties */
+  const names = Object.keys(pack.columns), unit = 10 ** pack.scale;
   const features = pack.rings.map((r, i) => {
     const ring = [[r[0], r[1]]];
-    for (let k = 2; k < r.length; k += 2) ring.push([r[0] + r[k] / 1e5, r[1] + r[k + 1] / 1e5]);
+    for (let k = 2; k < r.length; k += 2) ring.push([r[0] + r[k] / unit, r[1] + r[k + 1] / unit]);
     ring.push(ring[0]);
     const properties = { row: i };
     for (const n of names) properties[n] = pack.columns[n][i];
     return { type: "Feature", id: i, geometry: { type: "Polygon", coordinates: [ring] }, properties };
   });
-  return { type: "FeatureCollection", features, bbox: pack.bbox, meta: pack.meta, patterns: pack.patterns };
+  return { type: "FeatureCollection", features, bbox: pack.bbox, patterns: pack.patterns };
 }
 
 async function loadDataset(ds) {

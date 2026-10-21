@@ -149,34 +149,31 @@ def _zone_scores(
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
 
 
-def geo_cells_file(ws: Workspace, dataset_id: str) -> Path:
-    """``geo_cells`` as written with the dataset's batch (the cells, their rings and the patterns' extents never change
-    afterwards): the map reads the file on every open."""
-    if not (_geo_ready(ws, dataset_id) and ws.geo_cells_path(dataset_id).is_file()):
-        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
-    return ws.geo_cells_path(dataset_id)
-
-
 def geo_cells_pack(ws: Workspace, dataset_id: str) -> bytes:
-    """The map's cell package (docs/08_interface.md §8.7): ``cells.geojson`` as columns — each cell's ring as its first
-    vertex and integer offsets in 1e-5°, each column of the analysed table once, the ``*_band`` texts left out — with its
-    ``bbox``, ``meta`` and ``patterns``; built from the file once, as the file never changes after its batch."""
-    path = geo_cells_file(ws, dataset_id)
+    """The map's cell package (docs/08_interface.md §8.1): the dataset's ``cells.geojson`` as columns — each cell's ring
+    as its first vertex and integer offsets in ``10**-scale`` degrees, each column of the analysed table once, the
+    ``*_band`` texts left out — with its ``bbox`` and ``patterns``; built once per file, which its batch writes and
+    nothing changes afterwards."""
+    path = ws.geo_cells_path(dataset_id)
+    if not (_geo_ready(ws, dataset_id) and path.is_file()):
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
     return _pack(str(path), path.stat().st_mtime_ns)
 
 
 @functools.lru_cache(maxsize=8)
 def _pack(path: str, _mtime: int) -> bytes:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    features = payload.pop("features")
+    features = payload["features"]
+    scale = 5 if payload["meta"]["resolution"] <= 12 else 7  # a step far below a cell's edge: 1.1 m, 1.1 cm past r12
     names = [k for k in (features[0]["properties"] if features else {}) if k != "row" and not k.endswith("_band")]
     rings = []
     for f in features:
         (x0, y0), *rest = f["geometry"]["coordinates"][0][:-1]
-        x0, y0 = round(x0, 5), round(y0, 5)  # the offsets from the vertex as sent: each coordinate within 5e-6°
-        rings.append([x0, y0, *(round((c - o) * 1e5) for x, y in rest for c, o in ((x, x0), (y, y0)))])
+        x0, y0 = round(x0, scale), round(y0, scale)  # the offsets from the vertex as sent: each coordinate within half a step
+        rings.append([x0, y0, *(round((c - o) * 10**scale) for x, y in rest for c, o in ((x, x0), (y, y0)))])
     columns = {k: [f["properties"][k] for f in features] for k in names}
-    return json.dumps(payload | {"columns": columns, "rings": rings}, separators=(",", ":"), ensure_ascii=False).encode()
+    pack = {"columns": columns, "rings": rings, "scale": scale, "bbox": payload["bbox"], "patterns": payload["patterns"]}
+    return json.dumps(pack, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:

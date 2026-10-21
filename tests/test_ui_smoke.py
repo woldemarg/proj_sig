@@ -539,6 +539,18 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         assert page.evaluate(bad, [["8", "FAILED", "no_viable_insights"], ["5", "FAILED", "no_candidates"]]) == 2
         assert page.evaluate(bad, [["7", "FAILED", "no_viable_insights"]]) == 1
         assert page.evaluate(bad, [["8", "READY", None], ["table", "FAILED", "no_candidates"]]) == 1
+        turn = "{question: 'q', qa: {view: {evidence: {attractors: [], items: [{pattern_id: 'P-none', scope: [], statistics: {}, provenance: {dataset_id: GeoMap.current()}}]}}}}"
+        assert page.evaluate("GeoMap.suggestions().length") and page.evaluate(  # an answer on the map's dataset: its questions, no cell read
+            f"JSON.stringify(followUps({turn})) === JSON.stringify(GeoMap.suggestions().slice(0, 3))"
+        )
+        page.evaluate(
+            "() => { window.__api = api; window.api = (path, opts) => (path.endsWith('/cells') ? (window.__down = true, Promise.reject(new Error('down'))) : __api(path, opts)); }"
+        )
+        page.click("#view-switch button[data-view='map']")  # the cells cannot be read: the map stays stale and the next open tries again
+        page.wait_for_function("window.__down && !G.refreshing && !G.loading", timeout=30000)
+        assert page.evaluate("G.stale && !G.data")
+        page.evaluate("() => { window.api = __api; }")
+        page.click("#view-switch button[data-view='graph']")
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
         assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
