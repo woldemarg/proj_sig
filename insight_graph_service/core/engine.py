@@ -126,6 +126,17 @@ class Engine:
         self._publishing: str | None = None  # the batch past its commit point whose graph readers do not see yet
         self._open()
 
+    @contextmanager
+    def _writing(self) -> Iterator[None]:
+        """The write lock now, or ``busy``: a deletion, a PATCH or a reset never waits behind a batch (the web request
+        would hang for all of it). The batch thread re-enters it: a ``supersedes`` applied by its own commit."""
+        if not self._lock.acquire(blocking=False):
+            raise PipelineError("busy", "a batch or another write is running; try again when it ends")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
         touch the journal or a lock, so they neither race nor wait for a batch."""
@@ -672,7 +683,7 @@ class Engine:
         changes = resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
-        with self._lock:
+        with self._writing():
             record = self.ws.ready_batch_for(dataset_id)
             if record is None:
                 raise PipelineError("unknown_dataset", dataset_id)
@@ -745,7 +756,7 @@ class Engine:
         """Delete the datasets of the ``chosen`` batches with all their batches (``delete_dataset``); ``intent`` names
         what is deleted (``dataset_id`` or ``upload_id``) for the transaction marker, ``unknown`` the refusal's code."""
         key = next(iter(intent.values()))
-        with self._lock:
+        with self._writing():
             every = self.ws.list_batches()
             picked = [b for b in every if chosen(b)]
             if not picked:
@@ -784,17 +795,13 @@ class Engine:
     def reset(self) -> dict[str, Any]:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning). Refused with
         ``busy``, never queued, while a batch or a deletion runs or an upload waits. Also the way out of a degraded start."""
-        if not self._lock.acquire(blocking=False):
-            raise PipelineError("busy", "a batch or a dataset deletion is running")
-        try:
+        with self._writing():
             busy = [b["batch_id"] for b in self.ws.unfinished_batches()]
             if busy:
                 raise PipelineError("busy", f"batches in progress: {busy}")
             self.ws.reset()
             self._open()  # the empty workspace
             return {"neo4j": self.sync_neo4j({"nodes": [], "edges": []})}
-        finally:
-            self._lock.release()
 
     def startup_sync(self) -> dict[str, Any]:
         """Bring the Neo4j mirror up to the committed snapshot after a start (a commit made while it was down).
