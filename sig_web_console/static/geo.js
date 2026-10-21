@@ -117,7 +117,10 @@ const cellSource = () => ({ type: "geojson", data: empty(), maxzoom: 10 });  // 
 
 const unwrap = (x, x0) => x0 + ((x - x0 + 540) % 360) - 180;  // a longitude taken around x0: a span across ±180° stays whole
 const MW_WIDTH = 342;  // the IN VIEW list's width and right offset (.map-window)
-const viewPadding = () => ({ top: 40, bottom: 40, left: 40, right: 40 + (W.folded ?? $("map").clientWidth < 800 ? 0 : MW_WIDTH) });  // every cell clear of the open list
+const viewPadding = () => {  // every cell clear of the open list, where the map is wide enough to hold both
+  const w = $("map").clientWidth, open = !(W.folded ?? w < 800);
+  return { top: 40, bottom: 40, left: 40, right: 40 + (open && w > 2 * MW_WIDTH ? MW_WIDTH : 0) };
+};
 
 function fitRows(rows, padding) {
   if (!rows.length || !G.bounds[rows[0]]) return;
@@ -231,7 +234,7 @@ function placeDensity() {
 async function loadDataset(ds) {
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
-  G.loading = true; W.data = null; renderWindow();  // the list waits for the map to stand on the new dataset
+  G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
     const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
     G.ds = ds; G.data = data; G.evidence = [];
@@ -446,6 +449,6 @@ function renderWindow() {
       (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
         `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
         `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
-        `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
+        `<b title="lift: (its events in view + 30) / (the events its map-wide share puts here + 30)">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
   }).join("");
 }
