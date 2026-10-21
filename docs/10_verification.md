@@ -8,7 +8,7 @@
 
 ## 10.1 Test map
 
-201 collected tests in 25 files (200 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
+202 collected tests in 25 files (201 functions; the embedding contract runs for both the hashing double and the real model). `python -m pytest` from the repository root; about two minutes with the model and browser tests.
 
 | Transition or contract | File (tests) | What is asserted |
 |---|---|---|
