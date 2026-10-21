@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, popup: null };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -70,7 +70,15 @@ const GeoMap = {
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
 
+  closePopup() {  // whether a cell popup was open
+    const open = Boolean(G.popup); if (open) G.popup.remove();
+    G.popup = null; return open;
+  },
+
+  focused: () => Boolean(G.focusId),
+
   unfocus() {
+    GeoMap.closePopup();
     if (!G.map || !G.map.getSource("pts")) return;
     G.map.getSource("focus").setData(empty()); G.focus = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
@@ -407,12 +415,14 @@ function cellPopup(f, lngLat) {
     `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
     `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
-  const popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
+  GeoMap.closePopup();
+  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
+  popup.on("close", () => { if (G.popup === popup) G.popup = null; });
   const el = popup.getElement();
   el.querySelectorAll(".pp-ins").forEach((x) => x.addEventListener("click", () => GeoMap.focusPattern(x.dataset.pid)));
-  el.querySelector(".pp-zone").addEventListener("click", () => { popup.remove(); GeoMap.toggleZone(p.h3); });
+  el.querySelector(".pp-zone").addEventListener("click", () => { GeoMap.closePopup(); GeoMap.toggleZone(p.h3); });
   el.querySelector(".pp-ask").addEventListener("click", () => {  // the selected zone if it holds this cell, else the cell; the typed text, if any
-    popup.remove(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
+    GeoMap.closePopup(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
   });
 }
 

@@ -153,6 +153,11 @@ function initResize() {
 }
 
 // wiring
+function clearAnswer() {
+  /* the one "clear the answer" action: its highlight in the graph and on the sphere, the map's focus and evidence */
+  S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear();
+}
+
 function init() {
   $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop
@@ -194,7 +199,7 @@ function init() {
     k.addEventListener("mouseleave", () => spotlight(null));
   });
   $("legend-btn").addEventListener("click", () => setLegend($("legend").hidden));
-  $("clear-btn").addEventListener("click", () => { S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear(); });
+  $("clear-btn").addEventListener("click", clearAnswer);
   $("drawer-close").addEventListener("click", closeDrawer);
   $("table-search").addEventListener("input", renderTable);
   document.querySelectorAll("#ins-table th").forEach((th) => th.addEventListener("click", () => {
@@ -223,8 +228,13 @@ function init() {
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat = []; S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderThread(); renderSphere(); GeoMap.clear(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeDrawer(); if (S.view === "map") GeoMap.unfocus(); } });
+  $("new-chat").addEventListener("click", () => { S.chat = []; clearAnswer(); renderThread(); });
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
+    if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
+    if (GeoMap.closePopup()) return;
+    if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
+    closeDrawer();
+  });
   initResize();
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
   renderThread(); refreshHealth(); refreshBatches();

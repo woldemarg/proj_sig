@@ -274,6 +274,7 @@ async function loadGraph() {
 // views
 function setView(view) {
   S.view = view;
+  if (view !== "map") GeoMap.closePopup();
   document.querySelectorAll("#view-switch button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   $("cy").hidden = view !== "graph";
   $("sphere").hidden = view !== "sphere";
