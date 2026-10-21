@@ -790,15 +790,16 @@ def cell_boundary(cell: str) -> list[list[float]]:
 
 
 def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any]]:
-    """GeoJSON features of regions (``R:<res>:<h3>``), each with the rows of ``cells`` (one dataset's cells) inside it."""
-    parents: dict[int, np.ndarray] = {}
+    """GeoJSON features of regions (``R:<res>:<h3>``), each with the rows of ``cells`` (one dataset's cells) whose centre
+    it holds, as ``event_regions`` places a base pattern's events and ``zone_overlap`` a zone (epic #114, contract 1)."""
+    held: dict[int, np.ndarray] = {}
     out = []
     for rid in regions:
         _, res, cell = rid.split(":")
         lv = int(res)
-        if lv not in parents:
-            parents[lv] = np.array([h3.cell_to_parent(c, lv) for c in map(str, cells)])
-        rows = np.flatnonzero(parents[lv] == cell).tolist()
+        if lv not in held:
+            held[lv] = np.array([c if h3.get_resolution(c) == lv else h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in map(str, cells)])
+        rows = np.flatnonzero(held[lv] == cell).tolist()
         out.append(
             {
                 "type": "Feature",

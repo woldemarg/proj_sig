@@ -81,7 +81,9 @@ def place_scores(
     ws: Workspace, graph: DualGraph, cells: list[str] | None, geometry: dict[str, Any] | None, resolution: int | None
 ) -> dict[str, float] | None:
     """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
-    datasets of at most ``resolution`` (None: all); ``geometry`` becomes the cells of the finest of them. None: no zone."""
+    datasets of at most ``resolution`` (None: all), and every base pattern's by its footprint on the geo level that
+    places it (``placed_by``) when that level is one of them; ``geometry`` becomes the cells of the finest of them. None:
+    no zone."""
     if cells is None and geometry is None:
         return None
     levels = sorted(
@@ -95,18 +97,34 @@ def place_scores(
         zone = parse_zone(cells) if cells is not None else geometry_to_cells(geometry or {}, max((r for _, r in levels), default=0))
     except SpatialError as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    return read_zone_scores(ws, zone, tuple(levels)) if levels else {}
+    kept = {ds for ds, _ in levels}
+    tables = sorted(
+        {
+            (graph.insight(e["source"]).dataset_id, e["props"]["placed_by"])
+            for e in graph.edges
+            if e["type"] == "IN_REGION" and e["props"].get("placed_by") in kept
+        }
+    )
+    return read_zone_scores(ws, zone, tuple(levels), tuple(tables)) if levels else {}
 
 
 @functools.lru_cache(maxsize=64)
-def read_zone_scores(ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...]) -> dict[str, float]:
-    """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``; cached on its arguments, since a
-    dataset id fixes its files: a READY id is never mined again (its duplicate is SKIPPED), one uploaded again after its
-    deletion is mined to the same files, and a commit that adds, deletes or supersedes a geo dataset changes ``levels``."""
+def read_zone_scores(
+    ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...], tables: tuple[tuple[str, str], ...] = ()
+) -> dict[str, float]:
+    """``zone_overlap`` over the stored cells and extents of each dataset in ``levels``, and over each (table level, geo
+    level placing it) of ``tables`` by the footprints of the table's patterns on that level's cells; cached on its
+    arguments, since a dataset id fixes its files: a READY id is never mined again (its duplicate is SKIPPED), one
+    uploaded again after its deletion is mined to the same files, and a commit that adds, deletes or supersedes a geo
+    dataset changes ``levels``."""
     out: dict[str, float] = {}
     for dataset_id, _ in levels:
         if (geo := ws.load_geo(dataset_id, ("cells",))) is not None:
             out.update(zone_overlap(geo["cells"], ws.load_covers(dataset_id), zone))
+    for table, placed_by in tables:
+        if (geo := ws.load_geo(placed_by, ("cells", "point_cell"))) is not None:
+            prints = {pid: footprint(geo["point_cell"], rows)[0] for pid, rows in ws.load_covers(table).items()}  # table rows: points
+            out.update(zone_overlap(geo["cells"], prints, zone))
     return out
 
 
@@ -194,13 +212,15 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, Any]:
-    """What the graph says about a geo dataset's map: the regions drawn for its patterns (``shown_regions``) as GeoJSON, each
-    with its ``picture`` and the dataset's cell rows inside it, and each pattern's credibility, integrity and scale;
-    derived once per commit."""
+    """What the graph says about a geo dataset's map: the regions drawn for its patterns and for the base patterns of its
+    upload and points (``shown_regions``) as GeoJSON, each with its ``picture`` and the dataset's cell rows inside it,
+    and each pattern's credibility, integrity and scale; derived once per commit."""
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells",))  # inside: a memo hit reads no file
-        pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id]
+        owner = ws.ready_batch_for(dataset_id)
+        tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
+        pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
         features = region_features(geo["cells"], sorted(shown_regions(graph, pids)))
         for f in features:
             f["properties"].update(picture(graph, f["properties"]["id"]))

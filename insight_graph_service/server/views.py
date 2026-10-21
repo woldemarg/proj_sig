@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import primary_anchor
-from graph_query_engine.vertical import picture, scale_chain, shown_regions
+from graph_query_engine.vertical import picture, places, scale_chain, shown_regions
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
@@ -93,6 +93,9 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {}), "datasets": trust}
 
 
+IN_REGION_SHOWN = 25  # a pattern's regions in its panel
+
+
 def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
     node = graph.nodes.get(node_id)
     if node is None:
@@ -105,10 +108,16 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
             {"id": other, "label": graph.nodes[other]["label"], "kind": graph.nodes[other]["kind"], "weight": e["weight"], "props": e["props"]}
         )
     for items in neighbors.values():
-        items.sort(key=lambda x: -float(x["weight"]))
+        items.sort(key=lambda x: (-float(x["props"].get("lift", x["weight"])), -float(x["weight"])))
+    if "IN_REGION" in neighbors:  # a broad pattern lies in hundreds of regions: its strongest, as its places rank them
+        neighbors["IN_REGION"] = neighbors["IN_REGION"][:IN_REGION_SHOWN]
     out: dict[str, Any] = {"node": node, "neighbors": neighbors}
-    if node["kind"] == "Pattern":  # its dataset's trust and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
+    if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
+        out["places"] = [
+            {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}} for r, _ in places(graph, node_id)
+        ]
         chain = scale_chain(graph, [node_id])
         out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
         basis = node["props"].get("credibility_basis", {})

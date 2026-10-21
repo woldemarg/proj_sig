@@ -239,12 +239,11 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
     assert not chain.up and chain.scale == "regional"  # no step spent, the label still searched
 
 
-def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
-    """``regions_above`` leaves out a pattern's finest region level, its own or, at resolution 8, level 7 (a handful of its
-    cells each: hundreds per dataset), and keeps the coarser levels and their ancestors; a region holding tampered
-    patterns only is none. ``shown_regions`` adds the regions its scale chain names: with no coarser step, from its home
-    region at that finest level up."""
-    from graph_query_engine.vertical import regions_above, scale_chain, shown_regions
+def test_the_console_draws_a_patterns_places_and_the_regions_its_scale_chain_names():
+    """``shown_regions`` is one bound: a pattern's places (at most five, at the coarsest level where it lies in three or
+    more regions, else its finest) with their ancestors, and the regions its scale chain names (with no coarser step,
+    from its home region up); a region holding tampered patterns only is none."""
+    from graph_query_engine.vertical import places, scale_chain, shown_regions
 
     node = pattern("P1", ["district=north"])
     node["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
@@ -252,8 +251,9 @@ def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
     edges = [edge("P1", r, "IN_REGION", 1.0) for r in ("R:7:a", "R:7:b", "R:5:c")]
     edges += [edge("R:7:a", "R:5:c", "PARENT_OF"), edge("R:7:b", "R:5:c", "PARENT_OF"), edge("R:5:c", "R:3:d", "PARENT_OF")]
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [node, *regions], "edges": edges})
-    assert regions_above(graph, ["P1"]) == {"R:5:c", "R:3:d"}
-    assert scale_chain(graph, ["P1"])[0].regions == ["R:7:a", "R:5:c", "R:3:d"] and shown_regions(graph, ["P1"]) == {"R:7:a", "R:5:c", "R:3:d"}
+    assert places(graph, "P1") == [("R:7:a", 1.0), ("R:7:b", 1.0)]  # two regions at 7, one at 5: its finest level
+    assert scale_chain(graph, ["P1"])[0].regions == ["R:7:a", "R:5:c", "R:3:d"]
+    assert shown_regions(graph, ["P1"]) == {"R:7:a", "R:7:b", "R:5:c", "R:3:d"}
     forged = pattern("P2", ["district=south"])
     forged["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
     forged["props"]["integrity"] = "mismatch"
@@ -265,8 +265,7 @@ def test_the_console_draws_the_regions_above_a_patterns_finest_region_level():
             "edges": [*edges, edge("P2", "R:7:b", "IN_REGION", 1.0), edge("P2", "R:5:e", "IN_REGION", 1.0)],
         }
     )
-    assert regions_above(tampered, ["P1", "P2"]) == {"R:5:c", "R:3:d"}  # R:5:e holds the tampered P2 alone
-    assert shown_regions(tampered, ["P1", "P2"]) == {"R:7:a", "R:5:c", "R:3:d"}  # the tampered P2 names no region: its home R:7:b is not drawn
+    assert shown_regions(tampered, ["P1", "P2"]) == {"R:7:a", "R:5:c", "R:3:d"}  # R:5:e and R:7:b count the tampered P2 alone
 
 
 def test_a_reversal_above_a_coarser_host_keeps_the_scale_dependent_label():
@@ -338,8 +337,9 @@ def test_the_vertical_budget_counts_distinct_patterns(monkeypatch):
 
 def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     """Only findings that shift an asked target the asked way count: one shifting it the other way, or not at all, is
-    neither scored nor listed, even in a region shared with answering ones; the level is the coarsest where the geo
-    findings lie in three or more regions; a relationship question counts the correlation changes of its pair; without
+    neither scored nor listed, even in a region shared with answering ones; each adds its weight to its places in
+    proportion to their keys (D: 0.6 and 0.3 of its two); the level is the coarsest where the geo findings lie in three
+    or more regions; a relationship question counts the correlation changes of its pair; without
     a target every geo finding counts; a question with scope gets none."""
     from types import SimpleNamespace
 
@@ -374,10 +374,10 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
     items = [SimpleNamespace(pattern_id=p, folded_into="") for p in "ABCDEF"]
     zones = _zones(ParsedQuery("where is margin lower?", targets=["margin"], direction=-1), items, graph, QueryConfig())
-    assert [(z["id"], z["holds"]) for z in zones] == [("R:5:x", ["A", "B"]), ("R:5:v", ["F"]), ("R:5:z", ["D"])]  # C, E and D's 0.3 out
-    assert zones[0]["score"] == round(0.8 * 0.9 + 0.6 * 0.8, 4) and zones[0]["resolution"] == 5
+    assert [(z["id"], z["holds"]) for z in zones] == [("R:5:x", ["A", "B", "D"]), ("R:5:v", ["F"]), ("R:5:z", ["D"])]  # C and E out
+    assert zones[0]["score"] == round(0.8 + 0.6 + 0.5 * 0.3 / 0.9, 4) and zones[0]["resolution"] == 5  # each by its share of its places
     every = _zones(ParsedQuery("what is on the map?"), items, graph, QueryConfig())
-    assert ["A", "B", "C"] == every[0]["holds"] and any(z["holds"] == ["E"] for z in every)
+    assert ["A", "B", "C", "D"] == every[0]["holds"] and any(z["holds"] == ["E"] for z in every)
     graph.nodes["E"]["props"] |= {
         "phenomenon_type": "covariance",
         "covariance": {"pair": ["margin", "discount"], "local_corr": 0.1, "global_corr": -0.6, "delta": 0.7},

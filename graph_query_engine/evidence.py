@@ -501,9 +501,10 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
 
 
 def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, config: QueryConfig) -> list[dict[str, Any]]:
-    """The ZONES section, only for a question without scope: its geo items that answer it, i.e. that shift an asked
-    target (a phenomenon shift, as the prompt shows them) the asked way, or for a question about a relationship whose
-    material correlation change involves an asked target; without a target every geo item counts."""
+    """The ZONES section, only for a question without scope: its placed items (any IN_REGION, a geo pattern's or a base
+    one's) that answer it, i.e. that shift an asked target (a phenomenon shift, as the prompt shows them) the asked way,
+    or for a question about a relationship whose material correlation change involves an asked target; without a target
+    every placed item counts."""
 
     def answers(pid: str) -> bool:
         ins = graph.insight(pid)
@@ -514,7 +515,7 @@ def _zones(query: ParsedQuery, items: list[EvidenceItem], graph: DualGraph, conf
 
     if query.conditions:
         return []
-    geo = [it.pattern_id for it in items if not it.folded_into and graph.facts(it.pattern_id).resolution is not None]
+    geo = [it.pattern_id for it in items if not it.folded_into and graph.facts(it.pattern_id).regions]
     return rank_zones(graph, geo, [pid for pid in geo if answers(pid)])
 
 
