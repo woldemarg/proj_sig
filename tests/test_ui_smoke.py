@@ -358,6 +358,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               return [mid, G.ds, G.data.features.length, Object.keys(G.patterns).length, G.loading]; } finally { api = orig; } }"""
         assert page.evaluate(race, [real, "ds-stub"]) == [0, "ds-stub", 1, 0, False]
         page.unroute("**/api/geo/ds-stub/**")
+        across = {**stub, "cells": pack(179.0, -179.6)}  # its bbox the points' min and max: a band around the globe
+        page.route("**/api/geo/ds-dateline/**", lambda r: r.fulfill(json=across[r.request.url.split("/")[6].split("?")[0]]))
+        width = "loadDataset('ds-dateline').then(() => { const b = G.map.getBounds(); return b.getEast() - b.getWest(); })"
+        assert page.evaluate(width) < 20  # cells either side of ±180°: the map opens on them, not on a band around the globe
+        page.unroute("**/api/geo/ds-dateline/**")
         page.evaluate(f"loadDataset('{real}')")
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)

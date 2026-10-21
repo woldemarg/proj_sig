@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -39,7 +39,7 @@ const GeoMap = {
       try { await GeoMap.refresh(); } catch (e) { G.stale = true; console.error("map load failed", e); }
     }
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
-    else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
+    else if (G.data && !G.evidence.length) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   },
 
@@ -142,15 +142,18 @@ const viewPadding = () => {  // every cell clear of the open list, where the map
   return { top: 40, bottom: 40, left: 40, right: 40 + (open && w > 2 * MW_WIDTH ? MW_WIDTH : 0) };
 };
 
-function fitRows(rows, padding) {
-  if (!rows.length || !G.bounds[rows[0]]) return;
+function boundsOf(rows) {  // the cells' boxes, each moved next to the first one: cells across ±180° stay one box
   const x0 = G.bounds[rows[0]][0];
   const b = rows.reduce((a, r) => {
     const x = G.bounds[r]; if (!x) return a;
-    const dx = unwrap(x[0], x0) - x[0];  // each cell's box moved next to the first one
+    const dx = unwrap(x[0], x0) - x[0];
     return [Math.min(a[0], x[0] + dx), Math.min(a[1], x[1]), Math.max(a[2], x[2] + dx), Math.max(a[3], x[3])];
   }, [Infinity, 90, -Infinity, -90]);
-  G.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom: 10, duration: 900 });
+  return [[b[0], b[1]], [b[2], b[3]]];
+}
+
+function fitRows(rows, padding) {
+  if (rows.length && G.bounds[rows[0]]) G.map.fitBounds(boundsOf(rows), { padding, maxZoom: 10, duration: 900 });
 }
 
 function graticule() {
@@ -279,6 +282,7 @@ async function loadDataset(ds) {
     G.projected = []; G.overlay = null; mergePatterns();  // nothing of the old dataset indexes the new cells
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
+    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on (the file's bbox is the points' min and max)
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
@@ -292,7 +296,7 @@ async function loadDataset(ds) {
     $("map-title").textContent = info.filename || ds;
     $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
       (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
-    G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: viewPadding(), duration: 0 });
+    G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
     return true;
   } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
