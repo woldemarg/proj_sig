@@ -184,9 +184,10 @@ def _pack(path: str, _mtime: int) -> bytes:
 
 def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
     """The dataset's cells as a GeoJSON FeatureCollection with the journaled patterns' extents; properties are the columns
-    of the analysed cell table (``loaded.frame``), read once, when the batch writes the file."""
+    of the analysed cell table (``loaded.frame``) but the ``*_band`` texts no view reads, read once, when the batch writes
+    the file."""
     ctx, frame = loaded.spatial, loaded.frame
-    cols = {c: frame[c].to_numpy(dtype=float if frame[c].dtype.kind in "fiu" else str) for c in frame.columns}
+    cols = {c: frame[c].to_numpy(dtype=float if frame[c].dtype.kind in "fiu" else str) for c in frame.columns if not c.endswith("_band")}
     features = []
     for i, cell in enumerate(ctx.cells):
         props: dict[str, Any] = {"h3": str(cell), "row": i}
