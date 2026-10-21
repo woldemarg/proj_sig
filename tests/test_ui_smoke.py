@@ -12,6 +12,7 @@ from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
 from evidence_narrator_service.settings import NarratorSettings
+from graph_query_engine.vertical import ZONES_MAX
 from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 
@@ -88,14 +89,16 @@ def test_upload_process_render_query(client, demo_csv):
     cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
     assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["features"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
-    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # the regions above its insights, their trust and scale
-    assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
+    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # its insights' places and the regions above, their trust and scale
+    assert overlay["features"] and all(f["properties"]["resolution"] <= 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
+    own = [f for f in overlay["features"] if f["properties"]["resolution"] == 5]
+    assert len(own) <= ZONES_MAX * len(overlay["patterns"]) < 884  # at most five places each, not every cell of every insight
     assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
     view = client.get(f"/api/graph?dataset={geo_ds}").json()
     regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
-    assert regions and all(r["resolution"] < 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
+    assert regions and all(r["resolution"] <= 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
     geo_pid = next(iter(overlay["patterns"]))
     detail = client.get(f"/api/nodes/{geo_pid}").json()
     assert detail["dataset"]["dataset_id"] == geo_ds and "regions" in detail["scale_chain"] and "labels" in detail
@@ -329,5 +332,40 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.click("#new-chat")  # a fresh chat with no data: the welcome card offers no questions
         page.wait_for_selector(".welcome", timeout=10000)
         assert page.evaluate("document.querySelectorAll('.chip-q').length") == 0
+        browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_drawer_lists_where_a_base_insight_lies(cfg):
+    """A table level placed by its map: its insight's drawer has a Where section of its places, each a region whose
+    drawer counts it among the insights it holds."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
+        levels = engine.upload("california_housing.csv", f, geo="auto@5", table=True, bins="median_income_median:4,median_income:4")
+    done = [engine.process(r["batch_id"]) for r in levels]
+    table = next(r["dataset_id"] for r in done if r["level"] == "table")
+    graph = engine.graph()
+    pid = next(p for p, ins in graph.insights.items() if ins.dataset_id == table and graph.facts(p).regions)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=60000)
+        page.evaluate(f"inspect('{pid}')")
+        page.wait_for_function("[...document.querySelectorAll('#inspector h4')].some((h) => h.textContent === 'Where')", timeout=10000)
+        region = page.evaluate("[...document.querySelectorAll('#inspector h4')].find((h) => h.textContent === 'Where').nextElementSibling.dataset.id")
+        assert region.startswith("R:") and region in {r for r, _ in graph.facts(pid).regions.items()}
+        page.evaluate(f"inspect('{region}')")
+        page.wait_for_function(f"$('drawer-title').textContent.includes('{region.split(':')[2]}')", timeout=10000)
+        held = engine.graph().nodes[region]["props"]["patterns"]
+        assert f"{held} insight" in page.inner_text("#inspector .lead")  # its members of both bases
         browser.close()
         assert not errors, errors

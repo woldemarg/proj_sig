@@ -457,6 +457,12 @@ function scaleRows(c, labels) {
     c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
 }
 
+function whereRows(places) {
+  /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
+  const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% of it` : "", r.lift !== undefined ? `lift ${num(r.lift, 1)}` : "", r.n !== undefined ? `${num(r.n, 0)} events` : ""].filter(Boolean).join(" · ");
+  return `<h4>Where</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
+}
+
 const CONNECTIONS = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member insights", "RELATED_TO": "Related themes", "RELATED_TO (in)": "Related themes", "CO_OCCURS": "Co-occurring themes", "CO_OCCURS (in)": "Co-occurring themes",
   "SPECIALIZES": "Narrower version of", "SPECIALIZES (in)": "Narrower insights", "IN_REGION": "Map regions", "IN_REGION (in)": "Insights in this region", "PARENT_OF": "Parent region", "PARENT_OF (in)": "Sub-regions",
   "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };  // the drawer's connection groups, by edge type and direction
@@ -484,6 +490,7 @@ async function inspect(id) {
     ]);
     html += `<h4>Trust</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
+    else if ((d.places || []).length) html += whereRows(d.places);
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
     html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
@@ -513,7 +520,7 @@ async function inspect(id) {
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
     html += `<h4>Connections</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(CONNECTIONS[type] || type)} <span class="muted">(${items.length})</span></summary>` +
+      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(CONNECTIONS[type] || type)} <span class="muted">(${(d.neighbor_counts || {})[type] > items.length ? `${items.length} of ${num(d.neighbor_counts[type], 0)}` : items.length})</span></summary>` +
       items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;

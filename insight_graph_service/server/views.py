@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import primary_anchor
-from graph_query_engine.vertical import picture, scale_chain, shown_regions
+from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
@@ -84,13 +84,16 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
             }
         }
         for e in graph.edges
-        if e["source"] in keep and e["target"] in keep
-    ]
+        if e["source"] in keep and e["target"] in keep and (e["type"] != "IN_REGION" or e["target"] in drawn_regions(graph, e["source"]))
+    ]  # an insight's IN_REGION to the regions drawn for it: a broad one lies in hundreds more
     trust = {
         n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust, whatever the filter
     return {"nodes": nodes, "edges": edges, "stats": graph.snapshot.get("stats", {}), "datasets": trust}
+
+
+IN_REGION_SHOWN = 25  # a pattern's regions in its panel
 
 
 def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
@@ -104,11 +107,17 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
         neighbors.setdefault(key, []).append(
             {"id": other, "label": graph.nodes[other]["label"], "kind": graph.nodes[other]["kind"], "weight": e["weight"], "props": e["props"]}
         )
-    for items in neighbors.values():
-        items.sort(key=lambda x: -float(x["weight"]))
-    out: dict[str, Any] = {"node": node, "neighbors": neighbors}
-    if node["kind"] == "Pattern":  # its dataset's trust and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
+    for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
+        items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
+    out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}
+    if "IN_REGION" in neighbors:  # a broad pattern lies in hundreds of regions: its strongest, the count beside them
+        neighbors["IN_REGION"] = neighbors["IN_REGION"][:IN_REGION_SHOWN]
+    if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
+        out["places"] = [
+            {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}} for r, _ in places(graph, node_id)
+        ]
         chain = scale_chain(graph, [node_id])
         out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
         basis = node["props"].get("credibility_basis", {})

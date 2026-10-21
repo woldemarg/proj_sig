@@ -23,7 +23,7 @@ def point_columns(batch: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def same_points(batch: dict[str, Any], owner: dict[str, Any]) -> bool:
-    """Whether ``batch``'s rows are the events of ``owner``'s points (epic #114, contract 6): one non-empty
+    """Whether ``batch``'s rows are the events of ``owner``'s points (docs/06_graph_and_storage.md §6.1): one non-empty
     ``upload_id`` and one set of point columns, another pair of coordinates of the same file being another map; the
     columns as both signed profiles resolve them, else as both records' options name them."""
     if not owner.get("upload_id") or batch.get("upload_id") != owner["upload_id"]:

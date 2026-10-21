@@ -11,7 +11,7 @@ import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import HOT, geo_frame, make_engine, upload_levels
+from conftest import HOT, geo_frame, make_config, make_engine, upload_levels
 from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
@@ -280,7 +280,8 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     from subgroup_miner.spatial import region_features
 
     drawn = region_features(np.array(near + far), [shared, f"R:8:{x}"])  # the console's region outlines, with the cell rows inside
-    assert [f["properties"]["rows"] for f in drawn] == [list(range(len(near + far))), [near.index(x)]]
+    by_centre = [i for i, c in enumerate(near + far) if h3.latlng_to_cell(*h3.cell_to_latlng(c), 5) == region]  # as events are placed
+    assert [f["properties"]["rows"] for f in drawn] == [by_centre, [near.index(x)]] and len(by_centre) < len(near + far)
     assert drawn[0]["geometry"]["coordinates"][0][0] == drawn[0]["geometry"]["coordinates"][0][-1]
 
 
@@ -329,7 +330,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
-    from graph_query_engine.vertical import picture, regions_above, scale_chain
+    from graph_query_engine.vertical import picture, scale_chain
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
@@ -368,7 +369,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     region = placed[0]["target"]  # a region's members are of both bases, as picture and its patterns count them
     members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
-    assert {e["props"]["basis"] for e in members} >= {"events"} and not regions_above(graph, [e["source"] for e in placed])
+    assert {e["props"]["basis"] for e in members} >= {"events"}
     # the map as a window on the graph (PoC): every other level's insights on the finest level's cells, by their footprint
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
@@ -418,6 +419,54 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     assert not list(engine.ws.uploads_dir.glob("*"))  # refused before the file is kept
     with points_csv.open("rb") as f:  # geo levels alone apply their options strictly, as one upload does
         assert not any("strict" in r for r in engine.upload("points.csv", f, geo="auto@8,7", bins="points:4"))
+
+
+def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, points_csv):
+    """After the commit places a table level (docs/07_question_answering.md §7.2, §7.4): a zone drawn on a base insight's
+    footprint seeds it with a place; the ZONES of a question on it name regions it is placed in, and ZONES over geo and
+    base insights add each one's weight by its share of its place keys; every region the ZONES or a SCALE CHAIN name is
+    on the map; its panel lists its places, and a broad insight shows its 25 strongest regions."""
+    from graph_query_engine.vertical import places, rank_zones
+    from insight_graph_service.server.views import IN_REGION_SHOWN, node_details
+
+    done = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    fine, table, graph = done[0]["dataset_id"], done[2]["dataset_id"], engine.graph()
+    base = [pid for pid, ins in graph.insights.items() if ins.dataset_id == table]
+    pid = max(base, key=lambda p: graph.insight(p).weight)
+    cells = engine.ws.load_geo(fine, ("cells",))["cells"]
+    footprint_cells = [str(cells[r]) for r in {p["id"]: p for p in engine.geo_projected(fine)}[pid]["rows"]]
+    assert engine.place_scores(engine.committed(), cells=footprint_cells)[pid] > 0
+    assert any(s.pattern_id == pid and s.matched["place"] > 0 for s in engine.search("", cells=footprint_cells).seeds)
+    found = engine.search("Where is load median higher?")
+    zones = found.evidence.zones
+    assert zones and all(set(z["holds"]) <= set(base) for z in zones)
+    assert all(z["id"] in {r for r, _ in places(graph, h, z["resolution"])} for z in zones for h in z["holds"])  # placed there
+    drawn = {f["properties"]["id"] for f in engine.geo_overlay(fine)["features"]}
+    for question in ("Where is load median higher?", "What is on the map?", "Where is load higher?", "Where is the night share higher?"):
+        asked = engine.search(question).evidence  # every region the ZONES or a SCALE CHAIN name is on the map
+        assert {z["id"] for z in asked.zones} | {r["id"] for c in asked.scale_chains for r in c["regions"]} <= drawn
+    placed = {e["source"] for e in graph.edges if e["type"] == "IN_REGION" and e["props"].get("basis") == "events"}
+    assert {p for p in engine.place_scores(engine.committed(), cells=footprint_cells) if p in base} <= placed  # an unplaced one has none
+    geo = [p for p in graph.insights if graph.facts(p).resolution is not None]
+    mixed = rank_zones(graph, geo + base, geo + base)
+    assert any(set(z["holds"]) & set(geo) and set(z["holds"]) & set(base) for z in mixed)  # one region, both bases
+    for z in mixed:  # each insight's weight times its share of its place keys at the level
+        shares = [(graph.insight(h).weight, dict(places(graph, h, z["resolution"]))) for h in z["holds"]]
+        assert z["score"] == pytest.approx(sum(w * keys[z["id"]] / sum(keys.values()) for w, keys in shares), abs=1e-3)
+    panel = node_details(graph, pid)
+    assert panel["scale_chain"] is None and panel["places"] and all({"id", "share", "lift", "n"} <= set(p) for p in panel["places"])
+    broad = max(graph.insights, key=lambda p: len(graph.facts(p).regions))
+    wide = node_details(graph, broad)
+    assert len(wide["neighbors"]["IN_REGION"]) == IN_REGION_SHOWN < wide["neighbor_counts"]["IN_REGION"] == len(graph.facts(broad).regions)
+    held = [x["weight"] for x in node_details(graph, zones[0]["id"])["neighbors"]["IN_REGION (in)"]]
+    assert held == sorted(held, reverse=True)  # a region's insights by weight: a lift and a cell share do not compare
+    finer = make_engine(make_config(points_csv.parent / "ws8", geo_region_levels="8,7,5,3,1"))  # regions at 8 too
+    levels = upload_levels(finer, points_csv, geo="auto@8,7", table=True)
+    every = {n["id"] for n in finer.graph().of_kind("Region")}
+    assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7
+    with mock.patch("insight_graph_service.core.geo_views.shown_regions", return_value=every):  # were they shown
+        drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
+    assert drawn and all(f["properties"]["resolution"] <= 7 for f in drawn)  # none inside one of its cells
 
 
 def test_a_table_level_is_placed_by_its_events(engine, points_csv):
@@ -619,6 +668,7 @@ def test_a_zone_from_the_map_is_the_same_question(engine, points_csv):
     assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     question = "Where is load higher?"
     text = engine.search(question)
+    assert {z["resolution"] for z in text.evidence.zones} == {5}  # where geo findings lie, at a share of 0.5: not the 3 of the whole map
     seed = text.seeds[0].pattern_id
     ds = engine.graph().insight(seed).dataset_id
     zone = [str(c) for c in engine.ws.load_geo(ds)["cells"][engine.ws.load_covers(ds)[seed]]]

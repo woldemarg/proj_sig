@@ -262,7 +262,7 @@ class Engine:
     # (table, placed_by) belongs with the commit memo of #104
     def _table_placement(self, table: dict[str, Any], batches: dict[str, dict[str, Any]]) -> TableDataset | None:
         """A READY table level with the finest READY geo level of its upload and point columns that holds one row per
-        point (epic #114, contract 6): a matching row count alone links nothing, nor do the file's other coordinates,
+        point (docs/06_graph_and_storage.md §6.1): a matching row count alone links nothing, nor do the file's other coordinates,
         a deleted finest level passes to the next, and a batch record failing its metadata digest places nothing."""
         if table.get("status") != "READY" or table.get("level") != "table" or compute_metadata_integrity(table) == "mismatch":
             return None
