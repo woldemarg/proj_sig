@@ -833,6 +833,9 @@ def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     for bad in ("190,0,200,1", "0,5,1,4", "nan,0,1,1"):
         with pytest.raises(PipelineError, match="west,south"):
             window_view(centres, bad)
+    from insight_graph_service.core.geo_views import lon_span  # the cells file's bbox: west > east across ±180° (M10-F05)
+
+    assert lon_span(np.array([179.2, 179.6, -179.5])) == (179.2, -179.5) and lon_span(np.array([-114.3, -124.3])) == (-124.3, -114.3)
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():

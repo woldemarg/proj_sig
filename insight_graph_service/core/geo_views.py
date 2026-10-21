@@ -195,7 +195,8 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
             props[name] = (None if not np.isfinite(v) else round(float(v), 4)) if values.dtype.kind == "f" else str(v)
         features.append({"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props})
     lonlat = ctx.lonlat[ctx.point_cell >= 0]
-    bbox = [float(lonlat[:, 0].min()), float(lonlat[:, 1].min()), float(lonlat[:, 0].max()), float(lonlat[:, 1].max())]
+    west, east = lon_span(lonlat[:, 0])
+    bbox = [west, float(lonlat[:, 1].min()), east, float(lonlat[:, 1].max())]
     covers = ws.load_covers(dataset_id)
     patterns = [
         _pattern_json(
@@ -213,6 +214,17 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
         "meta": {"resolution": ctx.resolution, "location": ctx.location, "columns": list(frame.columns)},
         "patterns": patterns,
     }
+
+
+def lon_span(lons: np.ndarray) -> tuple[float, float]:
+    """West and east of the narrowest longitude interval holding every value: west > east across ±180°, as a GeoJSON
+    ``bbox`` writes it (RFC 7946 §5.2)."""
+    x = np.unique(lons)
+    gaps = np.diff(x)
+    if not len(gaps) or 360 - (x[-1] - x[0]) >= gaps.max():  # the gap round the back is the widest: no crossing
+        return float(x[0]), float(x[-1])
+    i = int(gaps.argmax())
+    return float(x[i + 1]), float(x[i])
 
 
 def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any]:
