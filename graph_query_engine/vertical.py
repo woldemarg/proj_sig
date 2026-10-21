@@ -82,13 +82,23 @@ def places(graph: DualGraph, pid: str, level: int | None = None) -> list[tuple[s
     return by_level.get(level, (0, []))[1]
 
 
+def drawn_regions(graph: DualGraph, pid: str) -> frozenset[str]:
+    """The regions drawn for one intact pattern: its places at each level it lies at, so the map holds each region the
+    ZONES name, and the regions its scale chain names; none for a tampered one. Derived once per graph."""
+
+    def build() -> frozenset[str]:
+        if graph.tampered(pid):
+            return frozenset()
+        placed = {r for _, top in _places(graph, pid).values() for r, _ in top}
+        return frozenset(placed | {r for chain in scale_chain(graph, [pid]) for r in chain.regions})
+
+    return graph.memoised(("drawn", pid), build)
+
+
 def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
     """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions; docs/08_interface.md
-    §8.7): every intact pattern's places at each level it lies at, so the map holds each region the ZONES name, and the
-    regions its scale chain names; a region holding tampered patterns only is none."""
-    intact = [pid for pid in pattern_ids if not graph.tampered(pid)]
-    placed = {r for pid in intact for _, top in _places(graph, pid).values() for r, _ in top}
-    return _held(graph, placed | {r for pid in intact for chain in scale_chain(graph, [pid]) for r in chain.regions})
+    §8.7): their ``drawn_regions``, each holding an intact pattern."""
+    return _held(graph, set().union(*(drawn_regions(graph, pid) for pid in pattern_ids)))
 
 
 def _held(graph: DualGraph, regions: set[str]) -> set[str]:

@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import primary_anchor
-from graph_query_engine.vertical import picture, place_key, places, scale_chain, shown_regions
+from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, attractor_id_of, dataset_node_id
 from insight_contracts.text import humanize
 
@@ -84,8 +84,8 @@ def _elements(graph: DualGraph, dataset: str | None) -> dict[str, Any]:
             }
         }
         for e in graph.edges
-        if e["source"] in keep and e["target"] in keep
-    ]
+        if e["source"] in keep and e["target"] in keep and (e["type"] != "IN_REGION" or e["target"] in drawn_regions(graph, e["source"]))
+    ]  # an insight's IN_REGION to the regions drawn for it: a broad one lies in hundreds more
     trust = {
         n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
         for n in graph.of_kind("Dataset")
