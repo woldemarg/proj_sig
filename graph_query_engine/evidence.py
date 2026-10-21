@@ -20,7 +20,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, describe_components
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
-from graph_query_engine.vertical import ScaleChain, picture, rank_zones, scale_chain
+from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
 from insight_contracts.text import (
     RELIABILITY,
@@ -479,9 +479,8 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
             continue
         hosts.add(chain.pattern_id)
         host.scale = chain.scale
-        upload = graph.facts(chain.pattern_id).upload
+        restates = restating(graph, chain)
         for steps in (chain.up, chain.down):
-            agrees = True
             for step in steps:
                 other = by_id.get(step.pattern_id)
                 if other is None:
@@ -489,8 +488,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
                     key, role = f"P{len(items) + 1}", f"vertical_{step.direction}"
                     other = by_id[step.pattern_id] = _item(graph, config, trusted, key, step.pattern_id, role, [], path_text)
                     items.append(other)
-                agrees = agrees and step.relation == "corresponds"
-                if agrees and upload is not None and graph.facts(step.pattern_id).upload == upload:
+                if step.pattern_id in restates:
                     host.also.append(other.key)
                     if step.direction == "down" and host.scale == "insufficient":  # a finer level holds: the group is regional
                         host.scale = "regional"

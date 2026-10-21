@@ -126,7 +126,7 @@ def _relation(graph: DualGraph, a: str, b: str) -> tuple[str, str] | None:
     return ("corresponds" if za[metric] * zb[metric] > 0 else "contrasts"), metric
 
 
-def _affinity(graph: DualGraph, a: str, b: str) -> float:
+def affinity(graph: DualGraph, a: str, b: str) -> float:
     """The Jaccard overlap of two patterns' scope conditions: 1 for the same subgroup at another level."""
     ca, cb = set(graph.insight(a).conditions), set(graph.insight(b).conditions)
     return len(ca & cb) / (len(ca | cb) or 1)
@@ -156,7 +156,7 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
                 continue
             score, anchor = max(shared)
             step = VerticalStep(other, pid, direction, relation[0], relation[1], region, anchor, round(score, 4))
-            key = (upload is not None and graph.facts(other).upload == upload, -abs(other_res - res), _affinity(graph, pid, other), score)
+            key = (upload is not None and graph.facts(other).upload == upload, -abs(other_res - res), affinity(graph, pid, other), score)
             if best is None or key > best[0]:
                 best = (key, step)
     return best[1] if best else None
@@ -189,6 +189,18 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
         chain.scale = _scale(graph, pid, nearest)
         chains.append(chain)
     return chains
+
+
+def restating(graph: DualGraph, chain: ScaleChain) -> set[str]:
+    """The levels of its upload that restate the chain's pattern (docs/07_question_answering.md §7.4)."""
+    upload, out = graph.facts(chain.pattern_id).upload, set()
+    for steps in (chain.up, chain.down):
+        for step in steps:
+            if step.relation != "corresponds":
+                break
+            if upload is not None and graph.facts(step.pattern_id).upload == upload:
+                out.add(step.pattern_id)
+    return out
 
 
 def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:

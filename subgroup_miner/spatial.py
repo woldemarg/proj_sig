@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -539,6 +539,12 @@ class SpatialStructure:
 RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
 
 
+def link_min_events(n: int) -> int:
+    """The events an insight of ``n`` located events needs in a place: ``GEO_LINK_MIN_EVENTS``, 5 % of them for a small
+    one, 5 at least (docs/06_graph_and_storage.md §6.1)."""
+    return min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
+
+
 def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.ndarray]:
     """Each cell's region at every listed level not finer than its own: the cell holding its centre (docs/06_graph_and_storage.md
     §6.1), as the points were indexed."""
@@ -566,7 +572,7 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
             partial.add(pid)
             continue
         n = len(loc)
-        x_min = min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
+        x_min = link_min_events(n)
         for lv, (regions, idx, n_r) in per_level.items():
             occupied = n_r > 0
             x = np.bincount(idx[loc], minlength=len(regions))
@@ -743,24 +749,40 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
+def cells_inside(cells: np.ndarray, area: Iterable[str]) -> np.ndarray:
+    """Which of one level's ``cells`` lie in ``area``, cells of any resolutions, through the cell centre (docs/06_graph_and_storage.md
+    §6.1): an area cell finer than them counts the cell holding its centre, a coarser one every cell whose centre it holds
+    (H3 children do not tile their parent)."""
+    inside = np.zeros(len(cells), dtype=bool)
+    by_res: defaultdict[int, list[str]] = defaultdict(list)
+    for c in area:
+        by_res[h3.get_resolution(c)].append(c)
+    for group in by_res.values():
+        if len(cells):
+            inside[build_projection(cells, np.array(group))(np.arange(len(group)))] = True
+    return inside
+
+
+def build_projection(cells: np.ndarray, other: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+    """The rows of one level's ``cells`` inside a set of rows of another level's ``other`` through the cell centre
+    (``cells_inside``), the two levels' centres matched once for every set."""
+    res, z = h3.get_resolution(str(cells[0])), h3.get_resolution(str(other[0]))
+    if z >= res:  # finer: the cell holding each of their centres
+        index = {str(c): i for i, c in enumerate(cells)}
+        holder = np.array([index.get(c, -1) for c in event_regions(other, (res,))[res]], dtype=np.int64)
+        return lambda rows: np.unique(holder[rows][holder[rows] >= 0])
+    index = {str(c): i for i, c in enumerate(other)}  # coarser: every cell whose centre one of them holds
+    parent = np.array([index.get(c, -1) for c in event_regions(cells, (z,))[z]], dtype=np.int64)
+    return lambda rows: np.flatnonzero(np.isin(parent, rows))
+
+
 def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
     """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
-    and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts the
-    dataset cell holding its centre, a coarser one every dataset cell whose centre it holds: the points were indexed by
-    location, and H3 children do not tile their parent). A focus that is the zone scores 1, as does a pattern that is; a
-    pattern far larger or smaller than the zone scores little; one outside it scores 0."""
+    and extents (``covers``), ``Z`` the dataset's cells inside the zone (``cells_inside``). A focus that is the zone
+    scores 1, as does a pattern that is; a pattern far larger or smaller than the zone scores little; one outside it 0."""
     if not len(cells):
         return {}
-    res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
-    by_res: defaultdict[int, set[str]] = defaultdict(set)
-    for c in zone:
-        by_res[h3.get_resolution(c)].add(c)
-    inside = np.zeros(len(names), dtype=bool)
-    for z, group in by_res.items():
-        if z >= res:
-            inside |= np.isin(names, [h3.latlng_to_cell(*h3.cell_to_latlng(c), res) for c in group])
-        else:
-            inside |= np.isin([h3.latlng_to_cell(*h3.cell_to_latlng(c), z) for c in names], list(group))
+    inside = cells_inside(cells, zone)
     out, size = {}, int(inside.sum())
     for pid, rows in covers.items():
         rows = np.unique(np.asarray(rows, dtype=np.int64))

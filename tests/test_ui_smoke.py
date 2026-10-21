@@ -478,6 +478,15 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
         assert page.evaluate(held) > before and page.evaluate("window.__samePage")
+        # zoomed onto the busiest cell, the list reads the view anew and leads with the map's own level
+        listing = "[W.data.first, W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()]"
+        wide = page.evaluate(listing)
+        assert wide[0] == "coarse" and wide[1]
+        page.evaluate(
+            "G.map.jumpTo({ center: centre(G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))), zoom: 13 })"
+        )
+        page.wait_for_function("W.data && W.data.first === 'map'", timeout=10000)
+        assert page.evaluate(listing)[1] != wide[1]
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
         assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · 2 of 2 levels ready"
