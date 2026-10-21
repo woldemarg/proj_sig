@@ -1,15 +1,17 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
-  offMap: (pid) => (G.overlay?.patterns[pid]?.integrity === "mismatch"  // why the drawer of an insight the map does not draw opens
-    ? "Not drawn on this map: its record fails its integrity check." : "Not on this map: its level draws nowhere here."),
+  offMap: (pid) => (G.loading ? "Not drawn yet: the map is still loading."  // why the drawer of an insight the map does not draw opens
+    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Not drawn on this map: its trust could not be read."
+    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Not drawn on this map: its record fails its integrity check."
+    : "Not on this map: its level draws nowhere here."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
@@ -44,6 +46,7 @@ const GeoMap = {
   },
 
   pick(pid, fit = false) {  // an insight chosen in the view's list (the view stays) or walked to: drawn, described in the chat
+    if (!GeoMap.has(pid)) GeoMap.unfocus();  // one the map cannot draw (no trust read): no other insight stays painted
     GeoMap.focusPattern(pid, fit);
     pickInsight(pid, windowItem(pid));
   },
@@ -126,7 +129,7 @@ async function refreshPass() {
   const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
-  else if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
+  else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
   else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); scheduleWindow(); }  // a commit changes the graph over the same cells
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
 }
@@ -273,13 +276,17 @@ async function loadDataset(ds) {
   /* the latest call wins (whether the map ends on ``ds``): an earlier one stops at its next step and writes nothing */
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
-  const seq = ++G.loadSeq;
+  let seq = ++G.loadSeq;
+  G.target = ds;
   G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
     const data = cellFeatures(await api(`/api/geo/${encodeURIComponent(ds)}/cells`));
     if (seq !== G.loadSeq) return false;
+    seq = ++G.loadSeq;  // a read of the old dataset started meanwhile (a refresh pass) is dropped too
+    GeoMap.unfocus();  // a focus or popup made during the load was the old dataset's
     G.ds = G.want = ds; G.data = data; G.evidence = [];
     G.projected = []; G.overlay = null; mergePatterns();  // nothing of the old dataset indexes the new cells
+    for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
     G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on (the file's bbox is the points' min and max)
@@ -322,6 +329,8 @@ function mergePatterns() {
   G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
+  if (G.focusId && !G.patterns[G.focusId]) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
+  G.evidence = G.evidence.filter((i) => G.patterns[i.pattern_id]);
 }
 
 async function loadOverlay(ds, seq = G.loadSeq) {
