@@ -596,9 +596,10 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
 
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
     their overlap reaches ``GEO_REGION_MIN_SHARE`` of the smaller of its cells and the region's occupied cells (a focus inside
-    a region scores 1, as does a pattern covering the region). ``places`` and ``occupied`` give each pattern's and each
-    dataset's cells at its own resolution and, at every listed level coarser, the cells holding their centres (where a
-    coarser dataset indexed the same points; the regions follow the H3 hierarchy). Two patterns of one resolution, of any
+    a region scores 1, as does a pattern covering the region); a region holds the cells whose centres it holds
+    (``event_regions``), as the events, the overlay's rows, zones and credibility place them, and PARENT_OF follows the
+    H3 hierarchy of the regions themselves. ``places`` and ``occupied`` give each pattern's and each dataset's cells at
+    its own resolution and, at every listed level coarser, the cells holding their centres. Two patterns of one resolution, of any
     datasets, are CO_LOCATED: ``overlaps`` when their one-ring-dilated extents overlap by at least ``GEO_COLOCATION_MIN``
     of the smaller, else ``adjacent`` when the extents touch or share cells, else ``same_region`` when both are
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
@@ -614,17 +615,15 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
             continue
         res = h3.get_resolution(str(d.cells[0]))
         own = [lv for lv in levels if lv <= res]
-        names = list(map(str, d.cells))
-        parents = {lv: np.array([c if lv == res else h3.cell_to_parent(c, lv) for c in names]) for lv in own}
-        occupied = {lv: dict(zip(*np.unique(parents[lv], return_counts=True), strict=True)) for lv in own}
-        # the places credibility compares across resolutions: each cell where its centre lies, as the points were indexed
-        # (H3 children do not tile their parent, so about 6 % of cells have another parent)
+        # each cell in the region holding its centre, as the points were indexed: H3 children do not tile their parent,
+        # about 6 % of cells lie in another coarse cell than their parent (docs/06_graph_and_storage.md §6.1)
         grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
+        occupied = {lv: dict(zip(*np.unique(grid[lv], return_counts=True), strict=True)) for lv in own}
         out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
         extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
         union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
         for lv in own:  # each dataset's cells inside a region that some pattern covers
-            for cell, n in zip(*np.unique(parents[lv][union], return_counts=True), strict=True):
+            for cell, n in zip(*np.unique(grid[lv][union], return_counts=True), strict=True):
                 covered[region_node_id(lv, str(cell))] += int(n)
         for pid, rows in d.covers.items():
             rows = np.unique(np.asarray(rows, dtype=np.int64))
@@ -636,7 +635,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
             ring[pid] = {n for c in raw[pid] for n in h3.grid_ring(c, 1)}
             out.compactness[pid] = round(compactness(rows, d.nbr_ptr, d.nbr_idx), 4)
             for lv in own:
-                regions, counts = np.unique(parents[lv][rows], return_counts=True)
+                regions, counts = np.unique(grid[lv][rows], return_counts=True)
                 for cell, n in zip(regions, counts, strict=True):
                     rid = region_node_id(lv, str(cell))
                     share = float(n / min(len(rows), occupied[lv][cell]))

@@ -226,7 +226,7 @@ def _geo_dataset(name, cells, covers):
 
 
 def test_derive_spatial_relations_regions_and_the_partner_cap():
-    from subgroup_miner.spatial import derive_spatial
+    from subgroup_miner.spatial import derive_spatial, region_features
 
     c = h3.latlng_to_cell(36.5, -119.2, 8)
     touching = h3.grid_ring(c, 7)[0]  # two radius-3 disks seven cells apart touch without overlapping
@@ -279,8 +279,10 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert holder != h3.cell_to_parent(fine, 5)
     edge = derive_spatial([_geo_dataset("fine", [fine], {"P-fine": [fine]}), _geo_dataset("coarse", [holder], {"P-holder": [holder]})], (7, 5, 3, 1))
     assert edge.places["P-fine"][5] == edge.places["P-holder"][5] == edge.occupied["fine"][5] == {holder}  # one place for credibility
+    lies_in = {r for p, r, _ in edge.in_region if p == "P-fine"}  # and one for IN_REGION: the region the overlay's rows put it in
+    assert f"R:5:{holder}" in lies_in and f"R:5:{h3.cell_to_parent(fine, 5)}" not in lies_in
+    assert region_features(np.array([fine]), [f"R:5:{holder}"])[0]["properties"]["rows"] == [0]
     assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
-    from subgroup_miner.spatial import region_features
 
     drawn = region_features(np.array(near + far), [shared, f"R:8:{x}"])  # the console's region outlines, with the cell rows inside
     by_centre = [i for i, c in enumerate(near + far) if h3.latlng_to_cell(*h3.cell_to_latlng(c), 5) == region]  # as events are placed
