@@ -42,12 +42,13 @@ function datasetCard(b, busy) {
     `${body}${del}</div>`;
 }
 
-const levelRank = (b) => (/^\d+$/.test(b.level || "") ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
+const geoLevel = (b) => /^\d+$/.test(b.level || "");
+const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
 
 function uploadGroups(cards) {
-  /* the cards of one file's levels together (its newest card's place), in the order the levels run */
-  const groups = new Map();
-  for (const b of cards) { const k = b.upload_id || b.batch_id; groups.set(k, [...(groups.get(k) || []), b]); }
+  /* the cards of one file's levels together (its newest card's place), in the order the levels run; a plain upload of
+     the same bytes is no level of it (docs/02_discovery.md §2.9) */
+  const groups = Map.groupBy(cards, (b) => ((geoLevel(b) || b.locator) && b.upload_id) || b.batch_id);
   return [...groups.values()].map((g) => g.sort((a, b) => levelRank(a) - levelRank(b)));
 }
 

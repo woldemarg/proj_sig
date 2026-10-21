@@ -588,6 +588,25 @@ def test_a_failed_coarse_level_leaves_the_table_placed_by_the_others(engine, poi
     assert placed == {fine["dataset_id"]}
 
 
+def test_a_failed_table_level_leaves_the_geo_levels_as_they_are(engine, points_csv, monkeypatch):
+    """The table level failing after the geo levels committed: they stay READY with their insights and regions."""
+    from insight_graph_service.core.engine import Engine
+
+    discover = Engine._discover
+
+    def failing(self, record, loaded):
+        if record["level"] == "table":
+            raise PipelineError("no_candidates", "the table level found nothing")
+        return discover(self, record, loaded)
+
+    monkeypatch.setattr(Engine, "_discover", failing)
+    fine, coarse, table = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert (fine["status"], coarse["status"], table["status"]) == ("READY", "READY", "FAILED")
+    graph = engine.graph()
+    assert {ins.dataset_id for ins in graph.insights.values()} == {fine["dataset_id"], coarse["dataset_id"]}
+    assert any(e["type"] == "IN_REGION" for e in graph.snapshot["edges"])
+
+
 def test_auto_picks_the_levels_from_the_points(points_csv, engine, tmp_path, monkeypatch):
     """``@auto``: the finest resolution with enough cells, enough of them dense and few enough at its region level (its
     own below the finest region level), then the coarser region levels; the same file the same levels; a denser file

@@ -461,6 +461,12 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.fill("#geo", "auto@auto")
         assert page.is_enabled("#table") and page.is_checked("#table")
         page.fill("#bins", f"{bins},median_income:4")  # the table's own band beside the cells'
+        page.evaluate("$('geo').value = ''; window.dispatchEvent(new PageTransitionEvent('pageshow'))")  # a form the browser restored
+        assert page.is_disabled("#table")
+        page.evaluate("$('geo').value = 'auto@auto'; window.dispatchEvent(new PageTransitionEvent('pageshow'))")
+        assert page.is_enabled("#table")
+        grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
+        assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
         held = "G.overlay.features.reduce((a, f) => a + f.properties.patterns, 0)"
