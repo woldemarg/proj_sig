@@ -549,7 +549,8 @@ def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.nd
 def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tuple[str, str, float, dict[str, Any]]], set[str]]:
     """A table level's patterns placed by their events (docs/06_graph_and_storage.md §6.1): ``(pattern, region, share,
     props)`` per IN_REGION, and the patterns too little located to be placed. Shares and lifts are over the pattern's
-    located events; a level of at least ``GEO_LIFT_MIN_REGIONS`` regions places by lift under BH, a coarser one by share."""
+    located events; a level of at least ``GEO_LIFT_MIN_REGIONS`` occupied regions (holding a located event) places by
+    lift under BH over them, a coarser one by share where the pattern is no rarer than the map (``rule``)."""
     point_cell = table.point_cell
     located = point_cell[point_cell >= 0]
     per_level = {}
@@ -566,13 +567,17 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
         n = len(loc)
         x_min = min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
         for lv, (regions, idx, n_r) in per_level.items():
+            occupied = n_r > 0
             x = np.bincount(idx[loc], minlength=len(regions))
-            share, lift = x / n, (x / n) / (n_r / len(located))
+            share = x / n
+            lift = np.divide(share, n_r / len(located), out=np.zeros(len(regions)), where=occupied)
+            q = np.ones(len(regions))
             # the binomial tail of R's events falling in P: where small, never below the exact hypergeometric one, and fast
-            q = false_discovery_control(np.where(x > 0, binom.sf(x - 1, n_r, n / len(located)), 1.0))
-            hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if len(regions) >= GEO_LIFT_MIN_REGIONS else share >= GEO_REGION_MIN_SHARE
+            q[occupied] = false_discovery_control(np.where(x > 0, binom.sf(x - 1, n_r, n / len(located)), 1.0)[occupied])
+            rule = "lift" if occupied.sum() >= GEO_LIFT_MIN_REGIONS else "share"
+            hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if rule == "lift" else (share >= GEO_REGION_MIN_SHARE) & (lift >= 1)
             for i in np.flatnonzero(hit & (x >= x_min)):
-                props = {"basis": "events", "share": round(float(share[i]), 4), "lift": round(float(lift[i]), 4), "n": int(x[i])}
+                props = {"basis": "events", "rule": rule, "share": round(float(share[i]), 4), "lift": round(float(lift[i]), 4), "n": int(x[i])}
                 edges.append(
                     (pid, region_node_id(lv, str(regions[i])), props["share"], props | {"q": float(f"{q[i]:.4g}"), "placed_by": table.placed_by})
                 )

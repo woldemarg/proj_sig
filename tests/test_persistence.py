@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 import pytest
@@ -335,22 +336,22 @@ def test_an_unreadable_snapshot_is_rebuilt_at_start(cfg, demo_csv):
     assert engine.problem is None and set(engine.graph().insights) == set(first.graph().insights) and engine.ws.load_graph()["nodes"]
 
 
-def test_a_snapshot_of_an_older_layout_is_rebuilt_with_the_base_places(cfg, points_csv):
-    """A start rebuilds a snapshot of an older layout from the journals: a table level's IN_REGION by its events (derived,
-    never journaled) come back the same."""
-    import json
-
+def test_base_places_are_rebuilt_identically_at_start(cfg, points_csv):
+    """A start derives the snapshot from the journals and the stored files, whatever the snapshot file holds: a table
+    level's IN_REGION by its events (never journaled) come back with the same props."""
     first = make_engine(cfg)
     upload_levels(first, points_csv, geo="auto@8,7", table=True)
-    placed = {(e["source"], e["target"], e["weight"]) for e in first.graph().edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"}
+
+    def placed(graph) -> list[tuple[str, str, float, str]]:
+        edges = [e for e in graph.edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"]
+        return sorted((e["source"], e["target"], e["weight"], json.dumps(e["props"], sort_keys=True)) for e in edges)
+
+    before = placed(first.graph())
     path = cfg.workspace_dir / "graph" / "snapshot.json"
     old = json.loads(path.read_text(encoding="utf-8"))
-    path.write_text(
-        json.dumps({**old, "version": old["version"] - 1, "edges": [e for e in old["edges"] if e["type"] != "IN_REGION"]}), encoding="utf-8"
-    )
+    path.write_text(json.dumps({**old, "version": old["version"] - 1, "edges": []}), encoding="utf-8")
     again = make_engine(cfg)
-    rebuilt = {(e["source"], e["target"], e["weight"]) for e in again.graph().edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"}
-    assert again.problem is None and placed and rebuilt == placed
+    assert again.problem is None and before and placed(again.graph()) == before
 
 
 def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):

@@ -12,6 +12,19 @@ from subgroup_miner.spatial import SpatialError, parse_geo_levels
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 
 
+def point_columns(batch: dict[str, Any]) -> str | None:
+    """The point columns a level's events lie at, as its options name them: a geo level's locator, the columns a table
+    level leaves out. Two levels of one file place each other's events only where these agree (epic #114, contract 6):
+    another pair of coordinates of the same file is another map."""
+    geo = batch.get("geo")
+    return (geo.partition("@")[0] if geo else batch.get("locator") or "").strip() or None
+
+
+def same_points(batch: dict[str, Any], owner: dict[str, Any]) -> bool:
+    """Whether ``batch``'s rows are the events of ``owner``'s points: one non-empty ``upload_id``, one point columns."""
+    return bool(owner.get("upload_id")) and batch.get("upload_id") == owner["upload_id"] and point_columns(batch) == point_columns(owner)
+
+
 def resolve_levels(geo: str | None, table: bool, region_levels: tuple[int, ...], default_resolution: int) -> list[tuple[str | None, str]]:
     """The levels one upload makes, as (``geo`` option of the level's dataset, level): each listed resolution, finest
     first, then ``table`` (no geo) when asked. A coarser resolution must be one of ``GEO_REGION_LEVELS``."""

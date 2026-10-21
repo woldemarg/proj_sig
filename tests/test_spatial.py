@@ -329,7 +329,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     of its own upload, the table level without its point columns; a level is deleted alone or the whole upload at once."""
     from pathlib import Path
 
-    from graph_query_engine.vertical import scale_chain
+    from graph_query_engine.vertical import picture, regions_above, scale_chain
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     assert [(r["level"], r["status"]) for r in done] == [("8", "READY"), ("7", "READY"), ("table", "READY")]
@@ -365,6 +365,10 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     geo_ids = [pid for pid in graph.insights if graph.facts(pid).resolution is not None]
     steps = {s.pattern_id for c in scale_chain(graph, geo_ids) for s in [*c.up, *c.down]}
     assert all(graph.facts(e["source"]).resolution is None for e in placed) and not steps & {e["source"] for e in placed}  # never a step
+    region = placed[0]["target"]  # a region's members are of both bases, as picture and its patterns count them
+    members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
+    assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
+    assert {e["props"]["basis"] for e in members} >= {"events"} and not regions_above(graph, [e["source"] for e in placed])
     # the map as a window on the graph (PoC): every other level's insights on the finest level's cells, by their footprint
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
@@ -417,8 +421,9 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
 
 
 def test_a_table_level_is_placed_by_its_events(engine, points_csv):
-    """A table level's IN_REGION come from the finest geo level of its upload: deleting that level places it by the next,
-    deleting both leaves it unplaced. On a wide map a random subgroup is placed nowhere where the level places by lift,
+    """A table level's IN_REGION come from the finest geo level of its upload and point columns: deleting that level
+    places it by the next, deleting both leaves it unplaced, and another pair of coordinates of the same file never
+    places it. On a wide map a random subgroup is placed nowhere where the level places by lift,
     and in one region where it places by share (the coarsest level); a pattern with 30 % of its rows unlocated is
     partial and unplaced."""
     from subgroup_miner.spatial import TableDataset, place_table
@@ -435,12 +440,25 @@ def test_a_table_level_is_placed_by_its_events(engine, points_csv):
     assert placed_by() == {done[1]["dataset_id"]}
     engine.delete_dataset(done[1]["dataset_id"])
     assert placed_by() == set()
+    trips = geo_frame().assign(dest_lat=lambda f: f["latitude"] + 2.0, dest_lon=lambda f: f["longitude"] - 1.0)  # another pair
+    trips.to_csv(trips_csv := points_csv.with_name("trips.csv"), index=False)
+    origin = upload_levels(engine, trips_csv, geo="latitude,longitude@7", table=True)
+    table = origin[1]["dataset_id"]
+    destination = upload_levels(engine, trips_csv, geo="dest_lat,dest_lon@8")  # the same bytes, a finer map of other points
+    assert destination[0]["upload_id"] == origin[0]["upload_id"] and placed_by() == {origin[0]["dataset_id"]}
+    finer = upload_levels(engine, trips_csv, geo="latitude,longitude@8")  # the same points, finer: it places the table now
+    assert placed_by() == {finer[0]["dataset_id"]}
+    engine.delete_dataset(finer[0]["dataset_id"])
+    engine.delete_dataset(origin[0]["dataset_id"])
+    assert placed_by() == set()  # never by the destinations
     rng, n = np.random.default_rng(0), 40_000
     lat, lon = 34 + rng.random(n) * 4, -122 + rng.random(n) * 6  # 925 regions at 5, 27 at 3, 3 at 1
     cells, point_cell = np.unique([h3.latlng_to_cell(a, b, 6) for a, b in zip(lat, lon, strict=True)], return_inverse=True)
     random = {f"P-{f}": rng.choice(n, int(f * n), replace=False) for f in (0.05, 0.1, 0.2, 0.3, 0.5)}
     edges, partial = place_table(TableDataset("ds-t", "ds-g", cells, point_cell, random), (7, 5, 3, 1))
-    assert not partial and Counter((p, rid.split(":")[1]) for p, rid, _, _ in edges) == {(p, "1"): 1 for p in random}
+    placed = Counter((p, rid.split(":")[1]) for p, rid, _, _ in edges)  # never by lift (5 and 3), at 1 by share alone
+    assert not partial and {lv for _, lv in placed} <= {"1"} and max(placed.values(), default=0) <= 1
+    assert all(props["rule"] == "share" and props["lift"] >= 1 for *_, props in edges)
     blank = point_cell.copy()
     blank[: int(0.3 * n)] = -1
     edges, partial = place_table(

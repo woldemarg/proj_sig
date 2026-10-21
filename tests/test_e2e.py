@@ -170,8 +170,8 @@ def test_geo_coverage_apparatus(engine, tmp_path):
         "E": [],
         "F": [0],
         "L": [],
-        "P": [0, 1],
-    }  # x < 30; P: S below 12 regions, x >= 5
+        "P": [0],
+    }  # x < 30; P: S below 12 regions where lift >= 1 (region 1: 0.83)
 
 
 def test_perf_benchmark_apparatus(engine, tmp_path, caplog):

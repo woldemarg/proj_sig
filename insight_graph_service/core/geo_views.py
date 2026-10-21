@@ -20,6 +20,7 @@ from graph_query_engine.vertical import picture, scale_label, shown_regions
 from insight_contracts import Insight
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
+from insight_graph_service.core.uploads import same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.spatial import (
     GEO_FOOTPRINT_SHARE,
@@ -175,7 +176,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = member_rows(ws, batch, ws.ready_batch_for(dataset_id)["upload_id"], len(geo["point_cell"])) if batch else None
+        members = member_rows(ws, batch, ws.ready_batch_for(dataset_id), len(geo["point_cell"])) if batch else None
         if members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
         rows = found[0]
@@ -213,11 +214,12 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
 
 # ponytail: the map draws other levels' insights by their footprint, derived on read per commit; their regions are
 # IN_REGION of the commit (derive_spatial), which the map's reads take up in #121
-def member_rows(ws: Workspace, batch: dict[str, Any], upload: str | None, n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
-    """The map's point rows of a pattern's covered rows, for a READY batch of the map's own upload: a geo level's rows are
-    cells, whose points its ``point_cell`` names; a table level's rows are the file's rows. None for another upload, or
-    when the rows do not index the map's points: a matching row count alone links nothing."""
-    if upload is None or batch.get("upload_id") != upload:
+def member_rows(ws: Workspace, batch: dict[str, Any], owner: dict[str, Any], n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
+    """The point rows of ``owner`` (the map's batch) that a pattern's covered rows name, for a READY batch of the same
+    upload and point columns (``same_points``): a geo level's rows are cells, whose points its ``point_cell`` names; a
+    table level's rows are the file's rows. None otherwise, or when the rows do not index the points: a matching row
+    count alone links nothing."""
+    if not same_points(batch, owner):
         return None
     geo = ws.load_geo(batch["dataset_id"], ("point_cell",))
     if geo is not None:
@@ -235,13 +237,13 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
         geo = _geo(ws, dataset_id, ("cells", "point_cell"))  # inside: a memo hit reads no file
         point_cell = geo["point_cell"]
         per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
-        upload = ws.ready_batch_for(dataset_id).get("upload_id")  # READY: _geo checked it
+        owner = ws.ready_batch_for(dataset_id)  # READY: _geo checked it
         patterns: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
         for b in ws.list_batches():
             if b.get("status") != "READY":
                 continue
             own = b["dataset_id"] == dataset_id
-            members = None if own else member_rows(ws, b, upload, len(point_cell))
+            members = None if own else member_rows(ws, b, owner, len(point_cell))
             if not own and members is None:
                 continue
             res = ((b.get("profile") or {}).get("geo") or {}).get("resolution", b.get("level"))  # also without upload levels

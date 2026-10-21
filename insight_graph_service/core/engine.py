@@ -258,13 +258,22 @@ class Engine:
             self.ws.save_graph(snapshot)
         return snapshot, self._committed_state(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
+    # ponytail: every commit places every table level again (0.1 s for 41 patterns of 320,000 events); a memo by
+    # (table, placed_by) belongs with the commit memo of #104
     def _table_placement(self, table: dict[str, Any], batches: dict[str, dict[str, Any]]) -> TableDataset | None:
-        """A READY table level with the finest READY geo level of its upload that holds one row per point (epic #114,
-        contract 6): a matching row count alone links nothing, and a deleted finest level passes to the next."""
-        upload = table.get("upload_id")
-        if table.get("status") != "READY" or table.get("level") != "table" or not upload:
+        """A READY table level with the finest READY geo level of its upload and point columns that holds one row per
+        point (epic #114, contract 6): a matching row count alone links nothing, nor do the file's other coordinates,
+        a deleted finest level passes to the next, and a batch record failing its metadata digest places nothing."""
+        if table.get("status") != "READY" or table.get("level") != "table" or compute_metadata_integrity(table) == "mismatch":
             return None
-        levels = [b for b in batches.values() if b.get("status") == "READY" and b.get("upload_id") == upload and (b.get("profile") or {}).get("geo")]
+        levels = [
+            b
+            for b in batches.values()
+            if b.get("status") == "READY"
+            and (b.get("profile") or {}).get("geo")
+            and uploads.same_points(b, table)
+            and compute_metadata_integrity(b) != "mismatch"
+        ]
         for b in sorted(levels, key=lambda b: -b["profile"]["geo"]["resolution"]):
             stored = self.ws.load_geo(b["dataset_id"], ("cells", "point_cell"))
             if stored is not None and table["profile"].get("rows") == len(stored["point_cell"]):

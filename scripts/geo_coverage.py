@@ -22,7 +22,7 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
     L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small, never below the exact hypergeometric one), under BH at FDR_Q over the level's
         regions, lift >= LIFT_MIN, x >= EVENTS_MIN
-    P   the placement of #119: L on a level of at least LIFT_MIN_REGIONS regions, S below, both at x >= min(EVENTS_MIN,
+    P   the placement of #119: L on a level of at least LIFT_MIN_REGIONS regions, S with lift >= 1 below, at x >= min(EVENTS_MIN,
         max(5, ceil(0.05 |P_loc|)))
 A real export prints aggregates only; its result stays in ``.scratch/results/geo_coverage_<label>.json``.
 """
@@ -75,7 +75,7 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
     graph = engine.committed().graph
     groups: dict[str, dict[str, np.ndarray]] = {}
     for r in sorted(ready, key=lambda r: r["level"] != "table"):  # the base first
-        members = member_rows(engine.ws, r, top.get("upload_id"), len(finest["point_cell"]))
+        members = member_rows(engine.ws, r, top, len(finest["point_cell"]))
         if members is None:
             continue
         groups["base" if r["level"] == "table" else f"r{r['level']}"] = {
@@ -124,7 +124,7 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
         "E": (x / np.minimum(n_loc, n_r) >= SHARE_MIN) & (x >= EVENTS_MIN),
         "F": fp_in / np.minimum(len(fp), occupied) >= SHARE_MIN,
         "L": (q <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
-        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if len(n_r) >= LIFT_MIN_REGIONS else share >= SHARE_MIN) & (x >= x_min),
+        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if len(n_r) >= LIFT_MIN_REGIONS else (share >= SHARE_MIN) & (lift >= 1)) & (x >= x_min),
     }
     strong = (lift >= 2) & (x >= EVENTS_MIN)
     return {
