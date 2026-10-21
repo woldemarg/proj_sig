@@ -8,6 +8,8 @@ const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is reposit
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
+  offMap: (pid) => (G.overlay?.patterns[pid]?.integrity === "mismatch"  // why the drawer of an insight the map does not draw opens
+    ? "Not drawn on this map: its record fails its integrity check." : "Not on this map: its level draws nowhere here."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 

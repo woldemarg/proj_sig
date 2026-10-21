@@ -289,6 +289,19 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         neighbour, title = page.evaluate(drawn), page.inner_text("#drawer-title")
         page.click(f"#inspector .nb[data-id='{neighbour}'] >> nth=0")  # with the map open: the map focuses it, the drawer follows
         page.wait_for_function(f"G.focusId === '{neighbour}' && $('drawer-title').textContent !== {title!r}", timeout=10000)
+        # an insight the map does not draw, from a citation or a drawer row alike: the focus goes, the drawer says why
+        off = page.evaluate("api('/api/graph').then((g) => g.nodes.map((n) => n.data).find((d) => d.kind === 'Pattern' && !GeoMap.has(d.id)).id)")
+        page.evaluate(f"reveal('{off}')")  # what a click on its citation does
+        page.wait_for_function("!G.focusId && document.querySelector('#inspector .drawer-note')", timeout=10000)
+        assert page.inner_text("#inspector .drawer-note").startswith("Not on this map")
+        page.evaluate(f"GeoMap.focusPattern('{neighbour}')")
+        row = page.evaluate("""(() => { const r = [...document.querySelectorAll('#inspector .nb')].find((x) => x.dataset.id.startsWith('P-'));
+            const g = r.closest('details'); if (g) g.open = true; return r.dataset.id; })()""")
+        title = page.inner_text("#drawer-title")
+        page.click(f"#inspector .nb[data-id='{row}'] >> nth=0")
+        page.wait_for_function(
+            f"!G.focusId && $('drawer-title').textContent !== {title!r} && document.querySelector('#inspector .drawer-note')", timeout=10000
+        )
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )
@@ -356,6 +369,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         row.click()
         page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
         assert page.locator(".msg-bot").last.locator(".insight-card").count() == 1 and page.is_visible(f"#map-window .mw-i.on[data-pid='{pid}']")
+        walk = """() => { const t = S.chat.at(-1), n = t.insight.neighbors, chain = t.insight.scale_chain || { up: [], down: [] };
+            const steps = new Set([...chain.up, ...chain.down].map((s) => s.pattern_id)), free = (it) => !steps.has(it.id);
+            const k = Object.keys(WALK).find((k) => (n[k] || []).some(free)), id = n[k].find(free).id, has = (d) => insightCard(d).includes(`data-id="${id}"`);
+            return [has(t), has({ ...t, insight: { ...t.insight, neighbors: { ...n, [k]: n[k].map((it) => (it.id === id ? { ...it, integrity: "mismatch" } : it)) } } })]; }"""
+        assert page.evaluate(walk) == [True, False]  # Walk on offers intact insights only
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
