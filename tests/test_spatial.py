@@ -815,6 +815,8 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
         for f, r in zip(features, pack["rings"]):
             rebuilt = [(r[0], r[1])] + [(r[0] + r[k] * step, r[1] + r[k + 1] * step) for k in range(2, len(r), 2)]
             assert all(abs(a - b) <= step / 2 + 1e-12 for p, q in zip(rebuilt, f["geometry"]["coordinates"][0]) for a, b in zip(p, q))
+    lons = [x for x, _ in cell_boundary("85f385a3fffffff")]  # an H3 cell across ±180°: one small polygon, not a band (M10-F01)
+    assert max(lons) - min(lons) < 1 and min(lons) > 179
 
 
 def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():

@@ -807,8 +807,12 @@ def cell_centres(cells: np.ndarray) -> np.ndarray:
 
 
 def cell_boundary(cell: str) -> list[list[float]]:
-    """Closed GeoJSON ring ([lon, lat] pairs) of one cell."""
-    ring = [[round(lng, 6), round(lat, 6)] for lat, lng in h3.cell_to_boundary(cell)]
+    """Closed GeoJSON ring ([lon, lat] pairs) of one cell, its longitudes taken around its first vertex: a cell across
+    ±180° stays one small polygon (a longitude past 180, which the map draws on the next copy of the world), not a band
+    around the globe."""
+    vertices = [(lng, lat) for lat, lng in h3.cell_to_boundary(cell)]
+    x0 = vertices[0][0]
+    ring = [[round(x0 + (x - x0 + 540) % 360 - 180, 6), round(y, 6)] for x, y in vertices]
     return ring + ring[:1]
 
 
