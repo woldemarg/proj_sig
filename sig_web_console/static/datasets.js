@@ -84,14 +84,25 @@ async function deleteDataset(id, name) {
 }
 
 const elapsed = (iso) => { const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
-function tickElapsed() { document.querySelectorAll("#batches [data-since]").forEach((el) => { el.textContent = elapsed(el.dataset.since); }); }
+const tick = (root) => root.querySelectorAll("[data-since]").forEach((el) => { el.textContent = elapsed(el.dataset.since); });
+function tickElapsed() { tick($("batches")); }
 
-function renderRail(parts) {
-  /* a card or group whose markup is unchanged keeps its nodes: a click on it survives the poll */
-  const box = $("batches");
-  if (box.children.length !== S.rail.length || parts.length !== S.rail.length) box.innerHTML = parts.join("");
-  else parts.forEach((h, i) => { if (h !== S.rail[i]) box.children[i].outerHTML = h; });
-  S.rail = parts; tickElapsed();
+function swapChanged(el, to) {  // a group of levels swaps its changed cards one by one
+  if (el.isEqualNode(to)) return;
+  if (el.matches(".ds-group") && el.dataset.upload === to.dataset.upload && el.children.length === to.children.length) {
+    const fresh = [...to.children];
+    [...el.children].forEach((c, i) => swapChanged(c, fresh[i]));
+  } else el.replaceWith(to);
+}
+
+function renderRail(html) {
+  /* a card whose markup is unchanged keeps its nodes: a click on it survives the poll */
+  const box = $("batches"), next = document.createElement("div");
+  next.innerHTML = html;
+  tick(box); tick(next);  // the same clock on both sides: a running card's time is no change
+  const fresh = [...next.children];
+  if (box.children.length !== fresh.length) box.replaceChildren(...fresh);
+  else [...box.children].forEach((el, i) => swapChanged(el, fresh[i]));
 }
 
 async function refreshBatches() {
@@ -121,7 +132,7 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)) : [`<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`]);  // after the graph: the cards read its trust
+  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
   return map;  // a caller that acts on the map afterwards (ask) awaits its load too; the poll does not

@@ -718,22 +718,25 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert not errors, errors
 
 
-# /api/batches with a running batch first: its stage and stage_times are what a test sets on window.__run
+# /api/batches with an upload's two levels first, r7 READY and r5 running: its stage and stage_times are what a test sets on window.__run
 _RUNNING = """() => { const real = api, ago = (s) => new Date(Date.now() - s * 1000).toISOString();
-  window.__run = { batch_id: 'B-run', dataset_id: 'D-run', filename: 'next.csv', status: 'EMBEDDING', created_at: ago(80), stage_times: { UPLOADED: ago(80), EMBEDDING: ago(72) } };
-  window.api = async (path, opts) => (path === '/api/batches' ? [__run, ...(await real(path, opts))] : real(path, opts)); }"""
+  const level = (lv, status) => ({ batch_id: `B-r${lv}`, dataset_id: `D-r${lv}`, upload_id: 'U', level: lv, filename: 'next.csv', status, created_at: ago(80), stage_times: { UPLOADED: ago(80) } });
+  window.__run = level('5', 'EMBEDDING'); __run.stage_times.EMBEDDING = ago(72);
+  const done = level('7', 'READY');
+  window.api = async (path, opts) => (path === '/api/batches' ? [__run, done, ...(await real(path, opts))] : real(path, opts)); }"""
 
 
 @pytest.mark.browser
 def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv):
-    """A poll during a batch replaces only the card whose markup changed: the READY card and the filter's options keep
-    their nodes while the running card shows its stage and how long it has run; a new READY dataset adds its option."""
+    """A poll during a batch replaces only the card whose markup changed: a READY card, alone or a level beside the running
+    one, and the filter's options keep their nodes while the running card shows its stage and how long it has run; a
+    new READY dataset adds its option."""
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     engine = make_engine(cfg)
-    engine.ingest_file(demo_csv)
+    ds = engine.ingest_file(demo_csv)["dataset_id"]
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
@@ -747,15 +750,17 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         step = "#batches .ds:not(.clickable) .ds-step"
         page.evaluate(poll)
         assert re.fullmatch(r"Embedding insights… step 6 of 10 · 1 min 1\d s", page.inner_text(step))
-        page.evaluate("() => { window.__card = document.querySelector('#batches .ds.clickable'); window.__opt = $('dataset-filter').options[1]; }")
+        kept = "[...document.querySelectorAll('#batches .ds.clickable')]"
+        assert page.evaluate(f"{kept}.map((c) => c.dataset.ds).sort().join()") == ",".join(sorted(["D-r7", ds]))
+        page.evaluate(f"() => {{ window.__cards = {kept}; window.__opt = $('dataset-filter').options[1]; }}")
         page.evaluate("() => { __run.status = 'UPDATING_ONTOLOGY'; __run.stage_times.UPDATING_ONTOLOGY = new Date().toISOString(); }")
         page.evaluate(poll)
-        assert page.evaluate("document.querySelector('#batches .ds.clickable') === __card && $('dataset-filter').options[1] === __opt")
+        assert page.evaluate(f"{kept}.every((c, i) => c === __cards[i]) && $('dataset-filter').options[1] === __opt")
         shown = page.inner_text(step)
         assert re.fullmatch(r"Learning themes… step 7 of 10 · [0-2] s", shown)
         page.wait_for_function(f"document.querySelector('{step}').innerText !== {json.dumps(shown)}", timeout=5000)  # ticks between polls
         page.evaluate("() => { __run.status = 'READY'; }")
         page.evaluate(poll)
-        assert page.evaluate("[...$('dataset-filter').options].some((o) => o.value === 'D-run')")
+        assert page.evaluate("[...$('dataset-filter').options].some((o) => o.value === 'D-r5')")
         browser.close()
         assert not errors, errors
