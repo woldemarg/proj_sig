@@ -220,7 +220,6 @@ async function ask(question, zone = null) {
   S.chat.push(turn); renderThread();
   try {
     const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
-    if (!live()) return;
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);

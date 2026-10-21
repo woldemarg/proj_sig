@@ -250,7 +250,7 @@ function init() {
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
-  setInterval(tickElapsed, 1000);  // a running stage's and a pending question's time, between renders
+  setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders
 }
 
 document.addEventListener("DOMContentLoaded", init);

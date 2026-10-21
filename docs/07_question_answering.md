@@ -205,6 +205,7 @@ Retrieval and the answer run in two services. In the graph service, `Engine.sear
 **The narrator** (`evidence_narrator_service/app.py`) serves `POST /api/chat/query` with `{question, use_llm}`. It asks the graph service for the payload and handles the outcomes:
 - an empty question is a 400;
 - a 409 is passed on as sent (`{detail, code}`);
+- a graph service that does not answer within `INSIGHT_GRAPH_TIMEOUT_S` is a 504, which the console shows as *No answer in time* ([8.2](08_interface.md#82-the-single-page-ui));
 - an unreachable graph service, any other status or a payload that breaks the contract is a 502;
 - otherwise it answers with `narration.answer(payload, llm)`, where `llm` is `None` when `use_llm` is false.
 
@@ -318,7 +319,7 @@ The retrieval parameters are fields of `QueryConfig` (`graph_query_engine/config
 | a zone that holds no finding | `AREA: … none of the findings lies in it`; the seeds are the question's, a zone alone has none (no evidence) |
 | no walkable path to an anchor | only seeds and their lattice neighbours; "empty retrieval" shows as zero transversal items |
 | LLM unavailable, HTTP error, empty completion | evidence-only summary; graph and statistics untouched |
-| representation mismatch, degraded workspace ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)); graph service unreachable, or a payload that breaks the contract | the first two are refused before retrieval and passed on by the narrator as sent, the last two give a 502 from the narrator (statuses and bodies: [12.4](12_architecture.md#124-services-and-contracts)) |
+| representation mismatch, degraded workspace ([6.5](06_graph_and_storage.md#65-versions-degraded-start-and-reset)); graph service unreachable or too slow, or a payload that breaks the contract | the first two are refused before retrieval and passed on by the narrator as sent; a graph service that does not answer in time gives a 504 from the narrator, an unreachable one or a broken payload a 502 (statuses and bodies: [12.4](12_architecture.md#124-services-and-contracts)) |
 
 Limitations worth knowing:
 * "Associated" and "linked" make a question a relationship question (direction ignored) unless they introduce a direction word (*associated with higher …*); a follow-up that reuses the model's "is associated with" without one is parsed as a relationship question.

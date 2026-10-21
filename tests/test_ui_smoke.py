@@ -766,29 +766,35 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         assert not errors, errors
 
 
-# /api/chat/query held until window.__chat.release(); it rejects on its abort only while __chat.honour, as fetch does
-_HELD_CHAT = """() => { const real = api;
-  window.__chat = { real, signals: [], release: null, honour: false };
-  window.api = (path, opts) => {
-    if (path !== '/api/chat/query') return real(path, opts);
-    __chat.signals.push(opts.signal);
+# the named paths held until window.__net.release() and rejected on their abort, as fetch is; the answer's painters counted
+_HELD = """() => { const real = api;
+  window.__net = { real, signals: [], hold: new Set(), held: [], painted: 0 };
+  __net.release = () => __net.held.splice(0).forEach((go) => go());
+  window.api = (path, opts = {}) => {
+    if (path === '/api/chat/query') __net.signals.push(opts.signal);
+    if (!__net.hold.has(path)) return real(path, opts);
     return new Promise((res, rej) => {
-      __chat.release = () => real(path, { ...opts, signal: undefined }).then(res, rej);
-      if (__chat.honour) opts.signal.addEventListener('abort', () => rej(opts.signal.reason));
+      __net.held.push(() => real(path, opts).then(res, rej));
+      if (opts.signal) opts.signal.addEventListener('abort', () => rej(opts.signal.reason));
     });
-  }; }"""
+  };
+  const counted = (f) => (...a) => { __net.painted++; return f(...a); };
+  window.focusNodes = counted(focusNodes); GeoMap.onAnswer = counted(GeoMap.onAnswer); }"""
 
 
 @pytest.mark.browser
 def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_csv):
-    """A pending question shows how long it has waited: New chat aborts it and its late answer paints nothing; Cancel
-    frees the question box at once; the client's time limit and nginx's 504 both read as a timeout."""
+    """A pending question shows how long it has waited: New chat aborts it, and an answer that has come but is still
+    moving the dataset filter paints nothing; Cancel frees the question box at once; the client's time limit and a 504
+    both read as a timeout."""
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     engine = make_engine(cfg)
     engine.ingest_file(demo_csv)
+    housing = engine.submit(PROJECT_ROOT / "data" / "demo" / "california_housing.csv", bins="median_income:4")
+    other = engine.process(housing["batch_id"])["dataset_id"]  # no margin, no phones
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
@@ -797,18 +803,28 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && !G.refreshing", timeout=60000)
-        page.evaluate(_HELD_CHAT)
+        page.evaluate(_HELD)
         question = "() => { $('use-llm').checked = false; window.__p = ask('Чому margin нижчий для phones у US?'); }"
+        dropped = "S.hl === null && !S.busy && !document.querySelector('#thread .msg-bot') && __net.painted === 0"
+        page.evaluate("() => { __net.hold.add('/api/chat/query'); }")
         page.evaluate(question)
         page.wait_for_selector(".ask-cancel")
         waited = page.inner_text(".typing .ds-elapsed")
         assert re.fullmatch(r"\d+ s", waited)
         page.wait_for_function(f"document.querySelector('.typing .ds-elapsed').textContent !== '{waited}'", timeout=3000)  # ticks between renders
         page.click("#new-chat")
-        assert page.evaluate("__chat.signals[0].aborted")
-        page.evaluate("async () => { __chat.release(); await __p; }")  # an answer that comes anyway
-        assert page.evaluate("S.hl === null && !S.busy && !document.querySelector('#thread .msg-bot')")
-        page.evaluate("() => { __chat.honour = true; }")
+        page.evaluate("async () => { await __p; }")
+        assert page.evaluate("__net.signals[0].aborted") and page.evaluate(dropped)
+        # an answer on another dataset than the filter's: New chat while it moves the filter
+        page.evaluate(
+            f"async () => {{ __net.hold.clear(); $('dataset-filter').value = '{other}'; await refreshBatches(); __net.hold.add('/api/batches'); }}"
+        )
+        page.evaluate(question)
+        page.wait_for_function("__net.held.length === 1", timeout=30000)
+        page.click("#new-chat")
+        page.evaluate("async () => { __net.hold.clear(); __net.release(); await __p; }")
+        assert page.evaluate(dropped)
+        page.evaluate("() => { __net.hold.add('/api/chat/query'); }")
         page.evaluate(question)
         page.click(".ask-cancel")
         assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Cancelled."
@@ -821,7 +837,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         )
         page.evaluate(question)
         page.wait_for_function("document.querySelector('#thread .bot-card.error')", timeout=5000)
-        page.evaluate("() => { window.setTimeout = __st; window.api = __chat.real; }")
+        page.evaluate("() => { window.setTimeout = __st; window.api = __net.real; }")
         page.route("**/api/chat/query", lambda r: r.fulfill(status=504, content_type="text/html", body="<html>504</html>"))
         page.evaluate(question)
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)

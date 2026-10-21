@@ -54,6 +54,8 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
             raise HTTPException(400, "empty question")
         try:
             resp = graph.post("/api/search", json=body.model_dump(exclude={"use_llm"}, exclude_none=True))
+        except httpx.ReadTimeout as exc:  # the console reads a 504 as no answer in time
+            raise HTTPException(504, f"graph service did not answer within {settings.insight_graph_timeout_s:g} s") from exc
         except httpx.HTTPError as exc:
             raise HTTPException(502, f"graph service unreachable: {type(exc).__name__}: {exc}") from exc
         if resp.status_code in (400, 409, 422):  # a zone it refused, a workspace that cannot answer: the reason, as sent
