@@ -159,7 +159,7 @@ def check_workflow(live_llm: bool) -> None:
     detail = f"{m.get('validated_insights')} insights, {m.get('attractors_total')} anchors in {m.get('processing_duration_s', 0):.0f} s"
     record("upload through the console committed", ok, detail if ok else str(rec.get("error") or rec["status"]))
     record("health stays responsive during the ingest", slowest < 2.0, f"slowest /api/health {slowest * 1000:.0f} ms")
-    graph = http("GET", "/api/graph")
+    graph = http("GET", "/api/graph?regions=1")  # the whole view, its regions included
     kinds = Counter(n["data"]["kind"] for n in graph["nodes"])
     mirrored, relationships = mirror_counts()
     same = mirrored == dict(kinds) and relationships == len(graph["edges"]) and rec.get("neo4j", {}).get("status") == "ok"

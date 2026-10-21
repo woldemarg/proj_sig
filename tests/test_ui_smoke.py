@@ -97,9 +97,13 @@ def test_upload_process_render_query(client, demo_csv):
     assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
-    view = client.get(f"/api/graph?dataset={geo_ds}").json()
+    plain, view = (client.get(f"/api/graph?dataset={geo_ds}{q}").json() for q in ("", "&regions=1"))  # the regions with their switch alone
     regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
     assert regions and all(r["resolution"] <= 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
+    assert plain["regions"] == view["regions"] == len(regions) and not [n for n in plain["nodes"] if n["data"]["kind"] == "Region"]
+    assert not [e for e in plain["edges"] if e["data"]["type"] in ("IN_REGION", "PARENT_OF")] and len(plain["nodes"]) == len(view["nodes"]) - len(
+        regions
+    )
     geo_pid = next(iter(overlay["patterns"]))
     detail = client.get(f"/api/nodes/{geo_pid}").json()
     assert detail["dataset"]["dataset_id"] == geo_ds and "regions" in detail["scale_chain"] and "labels" in detail
@@ -214,9 +218,18 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("S.cy.nodes('.hl-evidence').length") == 1
         page.click("#legend .toggle[data-key='contrast']")
         assert page.evaluate("S.cy.nodes('.hl-evidence').length") == 1
-        page.click("#legend .toggle[data-key='region']")  # the map regions, off by default
-        assert page.evaluate("S.cy.nodes('[kind=\"Region\"]').not('.hidden').length") == int(page.inner_text("[data-n='region']")) > 0
+        counted = int(page.inner_text("[data-n='region']"))  # the map regions, off by default: counted, not loaded
+        assert counted > 0 and page.evaluate("S.cy.nodes('[kind=\"Region\"]').length") == 0
+        page.select_option("#layout", "force")
+        placed = "S.cy.nodes('[kind=\"Pattern\"]').map((n) => [n.id(), Math.round(n.position('x')), Math.round(n.position('y'))])"
+        before = page.evaluate(placed)
+        page.click("#legend .toggle[data-key='region']")  # fetched with the switch, placed under what they hold: the force layout stays
+        page.wait_for_function(f"S.cy.nodes('[kind=\"Region\"]').not('.hidden').length === {counted}", timeout=10000)
+        assert page.evaluate(placed) == before and int(page.inner_text("[data-n='region']")) == counted
+        spots = page.evaluate("S.cy.nodes('[kind=\"Region\"]').map((n) => [Math.round(n.position('x')), Math.round(n.position('y'))])")
+        assert len(set(map(tuple, spots))) == len(spots) == counted  # in rows, none on another
         page.click("#legend .toggle[data-key='region']")
+        page.select_option("#layout", "dual")
         # the column borders can be dragged
         handle = page.locator(".rail .col-resize").bounding_box()
         before = page.evaluate("document.querySelector('.rail').getBoundingClientRect().width")
@@ -380,7 +393,7 @@ _SLOW_API = """() => { const real = api;
   window.__net = { slow: [], pending: 0, hits: [] };
   window.api = (path, opts) => {
     __net.hits.push(path);
-    if (!__net.slow.some((s) => path.includes(s))) return real(path, opts);
+    if (!__net.slow.some((s) => path.includes(s)) || (__net.fast || []).some((f) => path.includes(f))) return real(path, opts);
     __net.pending++;
     return new Promise((r) => setTimeout(r, 1200)).then(() => real(path, opts)).finally(() => __net.pending--);
   }; }"""
@@ -415,6 +428,15 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         page.select_option("#dataset-filter", geo)
         page.wait_for_function(settled, timeout=10000)
         assert {n["id"] for n in page.evaluate("S.nodes")} == {pid for pid, ins in graph.insights.items() if ins.dataset_id == geo}
+        # the regions switched on while the plain graph loads, their own request answering first: the graph keeps them
+        page.evaluate(
+            f"__net.slow = ['/api/graph?dataset={geo}']; __net.fast = ['regions=1']; loadGraph(); true"
+        )  # not awaited: the switch comes during the load
+        page.click("#legend .toggle[data-key='region']")
+        page.wait_for_function(
+            f"{settled} && S.regionsIn && S.regionCount > 0 && S.cy.nodes('[kind=\"Region\"]').not('.hidden').length === S.regionCount", timeout=10000
+        )
+        page.click("#legend .toggle[data-key='region']")
         # two insights clicked in a row on the map: the first one's points answer last
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded()", timeout=30000)

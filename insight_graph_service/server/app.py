@@ -189,8 +189,8 @@ def create_app(engine: Engine) -> FastAPI:
             return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")
-    def graph(dataset: str | None = None) -> dict[str, Any]:
-        return cytoscape_elements(engine.graph(), dataset)
+    def graph(dataset: str | None = None, regions: bool = False) -> dict[str, Any]:
+        return cytoscape_elements(engine.graph(), dataset, regions)
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
