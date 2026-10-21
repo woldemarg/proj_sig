@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 
 import pytest
-from conftest import Crash, make_config, make_engine
+from conftest import Crash, make_config, make_engine, upload_levels
 from fastapi.testclient import TestClient
 
 from insight_graph_service.core import engine as engine_mod
@@ -333,6 +333,24 @@ def test_an_unreadable_snapshot_is_rebuilt_at_start(cfg, demo_csv):
     (cfg.workspace_dir / "graph" / "snapshot.json").write_text("{not json", encoding="utf-8")
     engine = make_engine(cfg)
     assert engine.problem is None and set(engine.graph().insights) == set(first.graph().insights) and engine.ws.load_graph()["nodes"]
+
+
+def test_a_snapshot_of_an_older_layout_is_rebuilt_with_the_base_places(cfg, points_csv):
+    """A start rebuilds a snapshot of an older layout from the journals: a table level's IN_REGION by its events (derived,
+    never journaled) come back the same."""
+    import json
+
+    first = make_engine(cfg)
+    upload_levels(first, points_csv, geo="auto@8,7", table=True)
+    placed = {(e["source"], e["target"], e["weight"]) for e in first.graph().edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"}
+    path = cfg.workspace_dir / "graph" / "snapshot.json"
+    old = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(
+        json.dumps({**old, "version": old["version"] - 1, "edges": [e for e in old["edges"] if e["type"] != "IN_REGION"]}), encoding="utf-8"
+    )
+    again = make_engine(cfg)
+    rebuilt = {(e["source"], e["target"], e["weight"]) for e in again.graph().edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"}
+    assert again.problem is None and placed and rebuilt == placed
 
 
 def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):

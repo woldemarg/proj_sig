@@ -211,8 +211,8 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
     return graph.memoised(("overlay", dataset_id), build)
 
 
-# ponytail: the PoC's projection, derived on read per commit for one upload's levels; #119 derives the table insights'
-# places at the commit (derive_spatial), so IN_REGION, zones and the scale chain see them too
+# ponytail: the map draws other levels' insights by their footprint, derived on read per commit; their regions are
+# IN_REGION of the commit (derive_spatial), which the map's reads take up in #121
 def member_rows(ws: Workspace, batch: dict[str, Any], upload: str | None, n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
     """The map's point rows of a pattern's covered rows, for a READY batch of the map's own upload: a geo level's rows are
     cells, whose points its ``point_cell`` names; a table level's rows are the file's rows. None for another upload, or

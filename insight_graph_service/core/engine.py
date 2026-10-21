@@ -47,7 +47,7 @@ from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatc
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import GeoDataset, derive_spatial, sac_summary
+from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
 
 log = logging.getLogger(__name__)
 
@@ -243,6 +243,7 @@ class Engine:
             )
             if stored is not None:
                 geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
+        tables = [t for b in batches.values() if (t := self._table_placement(b, batches)) is not None]
         snapshot = build_snapshot(
             records=records,
             activations=self.ws.activations(),
@@ -251,11 +252,26 @@ class Engine:
             representation=self.ws.representation() or {},
             ontology=ontology,
             settings=self.settings,
-            spatial=derive_spatial(geo, self.settings.region_levels),
+            spatial=derive_spatial(geo, self.settings.region_levels, tables),
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
         return snapshot, self._committed_state(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
+
+    def _table_placement(self, table: dict[str, Any], batches: dict[str, dict[str, Any]]) -> TableDataset | None:
+        """A READY table level with the finest READY geo level of its upload that holds one row per point (epic #114,
+        contract 6): a matching row count alone links nothing, and a deleted finest level passes to the next."""
+        upload = table.get("upload_id")
+        if table.get("status") != "READY" or table.get("level") != "table" or not upload:
+            return None
+        levels = [b for b in batches.values() if b.get("status") == "READY" and b.get("upload_id") == upload and (b.get("profile") or {}).get("geo")]
+        for b in sorted(levels, key=lambda b: -b["profile"]["geo"]["resolution"]):
+            stored = self.ws.load_geo(b["dataset_id"], ("cells", "point_cell"))
+            if stored is not None and table["profile"].get("rows") == len(stored["point_cell"]):
+                return TableDataset(
+                    table["dataset_id"], b["dataset_id"], stored["cells"], stored["point_cell"], self.ws.load_covers(table["dataset_id"])
+                )
+        return None
 
     @_healthy
     def upload(
