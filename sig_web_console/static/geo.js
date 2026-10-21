@@ -59,8 +59,8 @@ const GeoMap = {
 
   onAnswer(qa) {
     const items = ((qa.view && qa.view.evidence && qa.view.evidence.items) || []);
-    const geoDs = items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds))
-      || (items.some((i) => G.patterns[i.pattern_id]) ? G.ds : null);  // a table insight of this upload: drawn by its footprint
+    const geoDs = items.some((i) => G.patterns[i.pattern_id]) ? G.ds  // the open map draws one of them (another level of its upload too): it stays
+      : items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds));
     if (!geoDs) { GeoMap.clear(); return; }
     if (!G.map || S.view !== "map") { G.pending = qa; return; }
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
@@ -76,6 +76,10 @@ const GeoMap = {
   },
 
   focused: () => Boolean(G.focusId),
+
+  cellsOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : []),  // H3 ids: a zone a question can carry
+
+  openTheme(aid) { W.fold[aid ?? ""] = true; renderWindow(); },  // the IN VIEW list opens the theme a card names
 
   unfocus() {
     GeoMap.closePopup();

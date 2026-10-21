@@ -570,3 +570,97 @@ def test_the_console_knows_the_empty_level_codes():
     js = (PROJECT_ROOT / "sig_web_console" / "static" / "datasets.js").read_text(encoding="utf-8")
     copied = re.search(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js).group(1)
     assert set(re.findall(r'"(\w+)"', copied)) == EMPTY_LEVEL
+
+
+@pytest.mark.browser
+def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
+    """From the IN VIEW list to the insight's card: its theme is the one the list shows it under, its Walk on holds its
+    scale chain's levels; asked from the card, the question carries the H3 cells it is drawn by, the answer has the
+    AREA line and the insight, whose citation focuses it on the same map; New chat clears the focus and the list's mark;
+    Show in graph on a base insight under a geo filter shows its node."""
+    from graph_query_engine.graph import primary_anchor
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
+        levels = engine.upload("california_housing.csv", f, geo="auto@6,5", table=True, bins="median_income_median:4,median_income:4")
+    fine, _, table = (engine.process(r["batch_id"]) for r in levels)
+    graph = engine.graph()
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
+        page.select_option("#dataset-filter", fine["dataset_id"])
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
+        page.evaluate("if (W.folded) $('mw-fold').click()")
+        # a geo insight with a coarser step: its card names its theme and walks its scale chain
+        chained = next(
+            i["id"]
+            for t in page.evaluate("W.data.themes")
+            for i in t["insights"]
+            if graph.facts(i["id"]).resolution == 6 and node_steps(graph, i["id"])
+        )
+        page.evaluate(f"GeoMap.pick('{chained}')")
+        page.wait_for_selector(".insight-card .nb", timeout=10000)
+        card = page.locator(".msg-bot").last
+        assert card.locator(".ic-theme").get_attribute("data-id") == primary_anchor(graph, chained)["target"]
+        assert any(t.startswith("↑ res 5") for t in card.locator(".insight-card .nb").all_inner_texts())
+        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
+        page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
+        card.locator(".ic-theme").click()
+        assert page.evaluate(f"W.fold[{theme!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{theme}']").count() == 1
+        page.evaluate(f"document.querySelector('.msg-bot:last-child .insight-card .nb').dataset.id = {theme!r}")  # a node this map does not draw
+        card.locator(".insight-card .nb").first.click()
+        page.wait_for_function("!$('drawer').hidden && $('inspector').textContent.includes('Not on this map')", timeout=10000)
+        assert page.evaluate("G.focusId") is None
+        # a base insight asked with its place: H3 cells as the zone, AREA in the prompt, the insight in the answer
+        base = next(i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if i["level"] == "table")
+        page.evaluate(
+            "() => { window.__asked = []; const real = api; window.api = (path, opts) => { if (path === '/api/chat/query') __asked.push(JSON.parse(opts.body)); return real(path, opts); }; }"
+        )
+        page.evaluate(f"GeoMap.pick('{base}')")
+        page.wait_for_function("S.chat.at(-1).insight && S.chat.at(-1).insight.node.id === " + repr(base), timeout=10000)
+        page.locator(".msg-bot").last.locator(".ic-ask").click()
+        page.wait_for_function("S.chat.at(-1).qa", timeout=30000)
+        (asked,) = page.evaluate("__asked")
+        assert asked["cells"] and all(isinstance(c, str) and re.fullmatch(r"[0-9a-f]{15}", c) for c in asked["cells"])
+        assert asked["cells"] == page.evaluate(f"GeoMap.cellsOf('{base}')")
+        assert "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
+        assert base in page.evaluate("S.chat.at(-1).qa.view.evidence.items.map((i) => i.pattern_id)")
+        answer = page.locator(".msg-bot").last
+        cite = answer.locator(f"a.cite[data-pid='{base}']")
+        if cite.count():  # its citation in the text, else its evidence card
+            cite.first.click()
+        else:
+            answer.locator(".bot-tabs button[data-pane='0']").click()
+            answer.locator(
+                f".ev[data-i='{page.evaluate(f'S.chat.at(-1).qa.view.evidence.items.findIndex((i) => i.pattern_id === {base!r})')}']"
+            ).click()
+        page.wait_for_function(f"G.focusId === '{base}'", timeout=10000)
+        assert page.evaluate("G.ds") == fine["dataset_id"]  # the map stays on its dataset
+        page.click("#new-chat")
+        assert page.evaluate("G.focusId") is None and page.locator("#map-window .mw-i.on").count() == 0
+        # Show in graph on a base insight under the geo filter: the filter gives way, the node is in the graph
+        page.evaluate(f"GeoMap.pick('{base}')")
+        page.wait_for_selector(".msg-bot >> nth=-1 >> .ic-graph", timeout=10000)
+        page.locator(".msg-bot").last.locator(".ic-graph").click()
+        page.wait_for_function(f"$('dataset-filter').value === '' && S.cy.getElementById('{base}').nonempty()", timeout=20000)
+        assert table["dataset_id"] == graph.insight(base).dataset_id
+        browser.close()
+        assert not errors, errors
+
+
+def node_steps(graph, pid: str) -> list:
+    """The coarser steps of a geo insight's scale chain, as its card walks them."""
+    from graph_query_engine.vertical import scale_chain
+
+    chain = scale_chain(graph, [pid])
+    return chain[0].up if chain else []

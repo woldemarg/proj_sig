@@ -470,12 +470,12 @@ const CONNECTIONS = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member
   "CONTRASTS": "Contrasts with", "CONTRASTS (in)": "Contrasts with", "CO_LOCATED": "Same place", "CO_LOCATED (in)": "Same place", "SIBLING": "Siblings", "SIBLING (in)": "Siblings", "HAS_SCOPE": "Columns", "TARGETS": "Metrics" };  // the drawer's connection groups, by edge type and direction
 const NODE_KINDS = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
 
-async function inspect(id) {
+async function inspect(id, note = "") {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
   $("drawer-kind").textContent = NODE_KINDS[n.kind] || n.kind;
-  let html = "";
+  let html = note ? `<p class="hint drawer-note">${esc(note)}</p>` : "";
   if (n.kind === "Pattern") {
     $("drawer-title").textContent = scopeText(p);
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;
