@@ -106,16 +106,13 @@ class SentenceTransformerEmbedder:
                 if not (self.local / "modules.json").is_file():
                     raise FileNotFoundError(f"embedding model not found in {self.local}: download {QWEN_MODEL} at {QWEN_REVISION} there")
                 os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                import torch
                 from sentence_transformers import SentenceTransformer
 
                 device = None if self.device_pref == "auto" else self.device_pref
                 # the checkpoint dtype (bf16) on a GPU, float32 on the CPU (no fast bf16 kernels); recorded as spec.compute_dtype
                 model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
                 if model.device.type == "cpu":
-                    model.float()
-                    # every core the process may use: nothing else in a batch runs beside the forward pass
-                    torch.set_num_threads(len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1)
+                    model.float()  # torch's own thread count: the cores the process may use
                 self.dim = int(model.get_embedding_dimension())
                 self._model = model  # last: the lock-free path above sees a model ready to use
             return self._model
@@ -125,7 +122,7 @@ class SentenceTransformerEmbedder:
         model = self._load()
         with self._memo_lock:
             got = {t: self._memo[(prompt, t)] for t in set(texts) if (prompt, t) in self._memo}
-        missing = sorted(set(texts) - got.keys())
+        missing = sorted(set(texts) - got.keys(), key=lambda t: (-len(t), t))  # chunks of similar length: little padding
         for i in range(0, len(missing), ENCODE_BATCH_SIZE):
             chunk = missing[i : i + ENCODE_BATCH_SIZE]
             with self._lock:  # released between chunks: another thread's texts go in between

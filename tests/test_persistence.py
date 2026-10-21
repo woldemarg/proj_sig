@@ -254,7 +254,7 @@ def test_writes_are_refused_while_a_batch_runs(engine, demo_csv, demo_df, tmp_pa
     finally:
         release.set()
         worker.join(timeout=120)
-    assert engine.ws.load_batch(batch["batch_id"])["status"] in {"READY", "SKIPPED"} and engine.ws.ready_batch_for(ready)
+    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.ws.ready_batch_for(ready)
     engine.reset()
     assert not engine.graph().insights and not engine.frame().patterns and not engine.ws.list_batches()
 

@@ -36,7 +36,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   const status = running ? chip("run", "Processing") : b.status === "READY" ? chip("ok", "Ready") : neutral ? chip("", "No findings") : b.status === "FAILED" ? chip("bad", "Failed") : chip("", "Skipped");
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
   const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
-    (busy ? `disabled title="A batch is running: a deletion waits for it, so it is offered once processing ends">` : `title="Remove this dataset and its insights from the knowledge base">`) +
+    (busy ? `disabled title="A batch is running: a deletion is refused until processing ends">` : `title="Remove this dataset and its insights from the knowledge base">`) +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
     `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${status}</div>` +
