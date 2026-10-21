@@ -430,3 +430,64 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         assert page.evaluate(hits % "cells") == 1 and page.evaluate(hits % "overlay") == 2
         browser.close()
         assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, demo_csv):
+    """The form's base-level box goes with a geo option alone; the same file submitted again with it skips the geo level
+    and commits the table level, whose insights reach the open map's list and overlay without a reload; the levels' cards
+    stand together; a deletion is offered only once no batch runs."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, housing, bins = make_engine(cfg), PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "median_income_median:4"
+    with housing.open("rb") as f:
+        (level,) = engine.upload(housing.name, f, geo="auto@auto", bins=bins)
+    geo = engine.process(level["batch_id"])
+    queued = engine.submit(demo_csv)  # not run until the end: a batch runs all along
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0 && G.data", timeout=60000)
+        deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
+        assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
+        page.click(".adv summary")
+        assert page.is_disabled("#table")
+        page.fill("#geo", "auto@auto")
+        assert page.is_enabled("#table") and page.is_checked("#table")
+        page.fill("#bins", f"{bins},median_income:4")  # the table's own band beside the cells'
+        page.evaluate("$('geo').value = ''; window.dispatchEvent(new PageTransitionEvent('pageshow'))")  # a form the browser restored
+        assert page.is_disabled("#table")
+        page.evaluate("$('geo').value = 'auto@auto'; window.dispatchEvent(new PageTransitionEvent('pageshow'))")
+        assert page.is_enabled("#table")
+        grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
+        assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
+        held = "G.overlay.features.reduce((a, f) => a + f.properties.patterns, 0)"
+        before = page.evaluate(held)
+        assert page.evaluate("G.projected.length") == 0
+        page.evaluate("window.__samePage = true")
+        page.set_input_files("#file", str(housing))
+        page.click("#upload-btn")
+        page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
+        page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
+        assert page.evaluate(held) > before and page.evaluate("window.__samePage")
+        levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
+        assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
+        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · 2 of 2 levels ready"
+        assert page.evaluate(
+            f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
+        ) == [
+            "california_housing.csv · H3 r5",
+            "california_housing.csv · table",
+        ]
+        engine.process(queued["batch_id"])
+        page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
+        browser.close()
+        assert not errors, errors

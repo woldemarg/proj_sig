@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import Counter
 from unittest import mock
@@ -536,6 +537,74 @@ def test_the_scale_reads_the_levels_the_upload_has(engine, points_csv):
     assert levels == ["8", "7"] and "insufficient" not in scales
     engine.delete_dataset(coarse["dataset_id"])
     assert levels_and_scales() == (["8"], {"insufficient"})  # no coarser level left: nothing was "not found" there
+
+
+def _committed_view(engine, *, structural: bool = False) -> tuple[list[str], list[str]]:
+    """The graph's nodes and edges as text, each batch id read as its dataset's and the digests and times that follow
+    from the batch left out: what two histories of the same uploads must share; ``structural`` leaves out the themes,
+    which learn from the order the batches came in."""
+    batches = {b["batch_id"]: f"batch-of-{b['dataset_id']}" for b in engine.ws.list_batches() if b["status"] == "READY"}
+
+    def text(item) -> str:
+        out = re.sub(
+            r'"(record_digest|created_at|committed_at|ingested_at|batch_seq)": ("[^"]*"|\d+)',
+            r'"\1": "-"',
+            json.dumps(item, sort_keys=True, default=str),
+        )
+        return re.sub(r"B\d{8}T\d{6}-[0-9a-f]{6}", lambda m: batches.get(m.group(0), "batch-not-ready"), out)
+
+    graph = engine.graph()
+    themes = {nid for nid, n in graph.nodes.items() if structural and n["kind"] == "Attractor"}
+    nodes = [text([nid, n["kind"], n["props"]]) for nid, n in graph.nodes.items() if nid not in themes]
+    return sorted(nodes), sorted(text(e) for e in graph.snapshot["edges"] if not {e["source"], e["target"]} & themes)
+
+
+def test_the_geo_levels_first_then_the_table_is_the_upload_of_all_levels(tmp_path, points_csv):
+    """One upload of every level and the geo levels followed by the same file with ``table``: the second upload's geo
+    levels are SKIPPED, its table placed by their events, and the two graphs are one (docs/02_discovery.md §2.9)."""
+    together, later = make_engine(make_config(tmp_path / "together")), make_engine(make_config(tmp_path / "later"))
+    all_levels = upload_levels(together, points_csv, geo="auto@8,7", bins="points:4", table=True)
+    geo_first = upload_levels(later, points_csv, geo="auto@8,7", bins="points:4")
+    with_table = upload_levels(later, points_csv, geo="auto@8,7", bins="points:4", table=True)
+    assert [(d["level"], d["status"]) for d in with_table] == [("8", "SKIPPED"), ("7", "SKIPPED"), ("table", "READY")]
+    assert [d["dataset_id"] for d in all_levels] == [d["dataset_id"] for d in geo_first + with_table[2:]]
+    assert any(e["type"] == "IN_REGION" and e["props"]["basis"] == "events" for e in later.graph().snapshot["edges"])
+    assert _committed_view(together) == _committed_view(later)
+    later.delete_dataset(with_table[2]["dataset_id"])  # a stack whose table level was deleted gets it back the same way
+    again = upload_levels(later, points_csv, geo="auto@8,7", bins="points:4", table=True)
+    assert [d["status"] for d in again] == ["SKIPPED", "SKIPPED", "READY"]
+    assert _committed_view(together, structural=True) == _committed_view(later, structural=True)
+
+
+def test_a_failed_coarse_level_leaves_the_table_placed_by_the_others(engine, points_csv):
+    """A coarse level too sparse to mine fails on its own: the table level after it is READY and placed by the levels
+    that are."""
+    fine, coarse, table = upload_levels(engine, points_csv, geo="auto@8,5", table=True)
+    assert (fine["status"], coarse["status"], table["status"]) == ("READY", "FAILED", "READY")
+    assert coarse["error"]["code"] == "invalid_schema"
+    graph = engine.graph()
+    base = {pid for pid, ins in graph.insights.items() if ins.dataset_id == table["dataset_id"]}
+    placed = {e["props"]["placed_by"] for e in graph.snapshot["edges"] if e["type"] == "IN_REGION" and e["source"] in base}
+    assert placed == {fine["dataset_id"]}
+
+
+def test_a_failed_table_level_leaves_the_geo_levels_as_they_are(engine, points_csv, monkeypatch):
+    """The table level failing after the geo levels committed: they stay READY with their insights and regions."""
+    from insight_graph_service.core.engine import Engine
+
+    discover = Engine._discover
+
+    def failing(self, record, loaded):
+        if record["level"] == "table":
+            raise PipelineError("no_candidates", "the table level found nothing")
+        return discover(self, record, loaded)
+
+    monkeypatch.setattr(Engine, "_discover", failing)
+    fine, coarse, table = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert (fine["status"], coarse["status"], table["status"]) == ("READY", "READY", "FAILED")
+    graph = engine.graph()
+    assert {ins.dataset_id for ins in graph.insights.values()} == {fine["dataset_id"], coarse["dataset_id"]}
+    assert any(e["type"] == "IN_REGION" for e in graph.snapshot["edges"])
 
 
 def test_auto_picks_the_levels_from_the_points(points_csv, engine, tmp_path, monkeypatch):

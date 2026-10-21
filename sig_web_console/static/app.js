@@ -161,6 +161,9 @@ function init() {
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
+  const syncTable = () => { $("table").disabled = !$("geo").value.trim(); };  // the base level is one of a geo upload's
+  $("geo").addEventListener("input", syncTable);
+  window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
   for (const [id, path] of [["demo-btn", "/api/demo"], ["demo-geo-btn", "/api/demo/geo"]]) {
     $(id).addEventListener("click", async () => {

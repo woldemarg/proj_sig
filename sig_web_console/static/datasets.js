@@ -7,7 +7,7 @@ function datasetName(b) {
   return res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · table` : b.filename;
 }
 
-function datasetCard(b) {
+function datasetCard(b, busy) {
   const running = !TERMINAL.has(b.status);
   const m = b.metrics || {}, p = b.profile || {};
   const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id, name = datasetName(b);
@@ -32,13 +32,31 @@ function datasetCard(b) {
   }
   const status = running ? chip("run", "Processing") : b.status === "READY" ? chip("ok", "Ready") : b.status === "FAILED" ? chip("bad", "Failed") : chip("", "Skipped");
   const when = b.created_at ? new Date(b.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
-  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" title="Remove this dataset and its insights from the knowledge base">` +
+  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
+    (busy ? `disabled title="A batch is running: a deletion waits for it, so it is offered once processing ends">` : `title="Remove this dataset and its insights from the knowledge base">`) +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
     `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${status}</div>` +
     `<div class="ds-sub">${esc(when)}</div>` +
     datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
     `${body}${del}</div>`;
+}
+
+const geoLevel = (b) => /^\d+$/.test(b.level || "");
+const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
+
+function uploadGroups(cards) {
+  /* the cards of one file's levels together (its newest card's place), in the order the levels run; a plain upload of
+     the same bytes is no level of it (docs/02_discovery.md §2.9) */
+  const groups = Map.groupBy(cards, (b) => ((geoLevel(b) || b.locator) && b.upload_id) || b.batch_id);
+  return [...groups.values()].map((g) => g.sort((a, b) => levelRank(a) - levelRank(b)));
+}
+
+function uploadGroup(cards, busy) {
+  if (cards.length === 1) return datasetCard(cards[0], busy);
+  const ready = cards.filter((b) => b.status === "READY").length, failed = cards.filter((b) => b.status === "FAILED").length;
+  return `<div class="ds-group" data-upload="${esc(cards[0].upload_id)}"><div class="ds-group-head">${esc(cards[0].filename)} · ${ready} of ${cards.length} levels ready` +
+    (failed ? ` · <b>${failed} failed</b>, the others stand on their own` : "") + `</div>${cards.map((b) => datasetCard(b, busy)).join("")}</div>`;
 }
 
 function datasetTrust(t) {
@@ -83,9 +101,10 @@ async function refreshBatches() {
     await loadGraph(); refreshHealth();
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
-  $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
+  const busy = batches.some((b) => !TERMINAL.has(b.status));
+  $("batches").innerHTML = cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
   clearTimeout(S.poll);
-  if (batches.some((b) => !TERMINAL.has(b.status))) S.poll = setTimeout(refreshBatches, 900);
+  if (busy) S.poll = setTimeout(refreshBatches, 900);
   return map;  // a caller that acts on the map afterwards (ask) awaits its load too; the poll does not
 }
 
@@ -95,6 +114,7 @@ async function upload() {
   const f = $("file").files[0]; if (!f) return;
   const fd = new FormData();
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
+  if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   setUploadMsg(`Uploading ${f.name}…`);
   $("upload-btn").disabled = true;
