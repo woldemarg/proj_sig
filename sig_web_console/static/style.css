@@ -250,6 +250,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .hypo { font-size: 13px; color: var(--ink-2); background: var(--surface-2); border-radius: var(--r-sm); padding: 8px 10px; margin-bottom: 8px; }
 .typing { display: inline-flex; align-items: center; gap: 4px; padding: 12px 14px; color: var(--muted); font-size: 13px; }
 .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite both; }
+.typing .ask-cancel { margin-left: 10px; }
 .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; } .typing span { margin-left: 6px; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 .composer { flex: none; border-top: 1px solid var(--line); padding: 12px 14px 12px; background: var(--surface); }

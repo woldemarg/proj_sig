@@ -764,3 +764,67 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         assert page.evaluate("[...$('dataset-filter').options].some((o) => o.value === 'D-r5')")
         browser.close()
         assert not errors, errors
+
+
+# /api/chat/query held until window.__chat.release(); it rejects on its abort only while __chat.honour, as fetch does
+_HELD_CHAT = """() => { const real = api;
+  window.__chat = { real, signals: [], release: null, honour: false };
+  window.api = (path, opts) => {
+    if (path !== '/api/chat/query') return real(path, opts);
+    __chat.signals.push(opts.signal);
+    return new Promise((res, rej) => {
+      __chat.release = () => real(path, { ...opts, signal: undefined }).then(res, rej);
+      if (__chat.honour) opts.signal.addEventListener('abort', () => rej(opts.signal.reason));
+    });
+  }; }"""
+
+
+@pytest.mark.browser
+def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_csv):
+    """A pending question shows how long it has waited: New chat aborts it and its late answer paints nothing; Cancel
+    frees the question box at once; the client's time limit and nginx's 504 both read as a timeout."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    engine.ingest_file(demo_csv)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && !G.refreshing", timeout=60000)
+        page.evaluate(_HELD_CHAT)
+        question = "() => { $('use-llm').checked = false; window.__p = ask('Чому margin нижчий для phones у US?'); }"
+        page.evaluate(question)
+        page.wait_for_selector(".ask-cancel")
+        waited = page.inner_text(".typing .ds-elapsed")
+        assert re.fullmatch(r"\d+ s", waited)
+        page.wait_for_function(f"document.querySelector('.typing .ds-elapsed').textContent !== '{waited}'", timeout=3000)  # ticks between renders
+        page.click("#new-chat")
+        assert page.evaluate("__chat.signals[0].aborted")
+        page.evaluate("async () => { __chat.release(); await __p; }")  # an answer that comes anyway
+        assert page.evaluate("S.hl === null && !S.busy && !document.querySelector('#thread .msg-bot')")
+        page.evaluate("() => { __chat.honour = true; }")
+        page.evaluate(question)
+        page.click(".ask-cancel")
+        assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Cancelled."
+        assert not page.locator("#thread .bot-card.error").count()
+        page.fill("#question", "x")
+        assert page.is_enabled("#ask-btn")
+        page.fill("#question", "")
+        page.evaluate(  # the client's limit, shortened
+            "() => { const st = window.__st = setTimeout; window.setTimeout = (f, ms, ...a) => st(f, ms >= CHAT_TIMEOUT_S * 1000 ? 50 : ms, ...a); }"
+        )
+        page.evaluate(question)
+        page.wait_for_function("document.querySelector('#thread .bot-card.error')", timeout=5000)
+        page.evaluate("() => { window.setTimeout = __st; window.api = __chat.real; }")
+        page.route("**/api/chat/query", lambda r: r.fulfill(status=504, content_type="text/html", body="<html>504</html>"))
+        page.evaluate(question)
+        page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
+        assert all(t.startswith("No answer in time.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
+        browser.close()
+        assert not errors, errors
