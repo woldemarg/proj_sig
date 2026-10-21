@@ -458,6 +458,7 @@ class Engine:
             "derived_columns": loaded.derived_columns,
             "bins": loaded.bins,
             "categorical_overrides": loaded.categories,
+            **({"points": loaded.points} if loaded.points else {}),  # signed with the profile: what places a table level
         }
         if loaded.spatial:
             record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})

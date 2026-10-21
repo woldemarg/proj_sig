@@ -12,17 +12,24 @@ from subgroup_miner.spatial import SpatialError, parse_geo_levels
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 
 
-def point_columns(batch: dict[str, Any]) -> str | None:
-    """The point columns a level's events lie at, as its options name them: a geo level's locator, the columns a table
-    level leaves out. Two levels of one file place each other's events only where these agree (epic #114, contract 6):
-    another pair of coordinates of the same file is another map."""
+def point_columns(batch: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The point columns a level's events lie at: as its signed profile resolves them (a geo level's ``geo.location``, a
+    table level's left-out ``points``), and as its options name them (a geo level's locator, a table level's
+    ``locator``), for a record stored without the first."""
+    profile = batch.get("profile") or {}
     geo = batch.get("geo")
-    return (geo.partition("@")[0] if geo else batch.get("locator") or "").strip() or None
+    signed = (profile.get("geo") or {}).get("location") if geo else profile.get("points")
+    return signed, (geo.partition("@")[0] if geo else batch.get("locator") or "").strip() or None
 
 
 def same_points(batch: dict[str, Any], owner: dict[str, Any]) -> bool:
-    """Whether ``batch``'s rows are the events of ``owner``'s points: one non-empty ``upload_id``, one point columns."""
-    return bool(owner.get("upload_id")) and batch.get("upload_id") == owner["upload_id"] and point_columns(batch) == point_columns(owner)
+    """Whether ``batch``'s rows are the events of ``owner``'s points (epic #114, contract 6): one non-empty
+    ``upload_id`` and one set of point columns, another pair of coordinates of the same file being another map; the
+    columns as both signed profiles resolve them, else as both records' options name them."""
+    if not owner.get("upload_id") or batch.get("upload_id") != owner["upload_id"]:
+        return False
+    (signed, named), (owner_signed, owner_named) = point_columns(batch), point_columns(owner)
+    return signed == owner_signed if signed and owner_signed else named == owner_named
 
 
 def resolve_levels(geo: str | None, table: bool, region_levels: tuple[int, ...], default_resolution: int) -> list[tuple[str | None, str]]:

@@ -135,15 +135,20 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv
 
 def test_a_changed_batch_record_places_no_table_level(cfg, points_csv):
     """A table level whose batch record fails its metadata digest (its upload id, its point columns or its row count may
-    be forged) is not placed by its events: its declarations are ignored like a forged rating."""
+    be forged) is not placed by its events: its declarations are ignored like a forged rating. The unsigned locator of
+    the options moves nothing: the signed profile names the point columns."""
     engine = make_engine(cfg)
     done = upload_levels(engine, points_csv, geo="auto@7", table=True)
 
     def base_edges(graph) -> int:
         return sum(e["type"] == "IN_REGION" and e["props"]["basis"] == "events" for e in graph.edges)
 
-    assert base_edges(engine.graph())
-    engine.ws.save_batch({**engine.ws.ready_batch_for(done[1]["dataset_id"]), "upload_id": "up-000000000000"})  # past the API
+    placed = base_edges(engine.graph())
+    table = engine.ws.ready_batch_for(done[1]["dataset_id"])
+    assert placed and table["profile"]["points"] == "latitude,longitude"
+    engine.ws.save_batch({**table, "locator": "nowhere"})  # outside the digest, and read by nothing once signed
+    assert base_edges(make_engine(cfg).graph()) == placed
+    engine.ws.save_batch({**table, "upload_id": "up-000000000000"})  # past the API
     assert base_edges(make_engine(cfg).graph()) == 0
 
 

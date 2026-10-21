@@ -446,7 +446,7 @@ def test_a_table_level_is_placed_by_its_events(engine, points_csv):
     table = origin[1]["dataset_id"]
     destination = upload_levels(engine, trips_csv, geo="dest_lat,dest_lon@8")  # the same bytes, a finer map of other points
     assert destination[0]["upload_id"] == origin[0]["upload_id"] and placed_by() == {origin[0]["dataset_id"]}
-    finer = upload_levels(engine, trips_csv, geo="latitude,longitude@8")  # the same points, finer: it places the table now
+    finer = upload_levels(engine, trips_csv, geo="auto@8")  # the same points by another name, finer: it places the table now
     assert placed_by() == {finer[0]["dataset_id"]}
     engine.delete_dataset(finer[0]["dataset_id"])
     engine.delete_dataset(origin[0]["dataset_id"])
