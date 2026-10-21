@@ -98,10 +98,7 @@ def place_scores(
             if (r := graph.facts(pid).resolution) is not None and (resolution is None or r <= resolution)
         }
     )
-    placed: defaultdict[tuple[str, str], set[str]] = defaultdict(set)  # (table level, the geo level placing it) -> its placed patterns
-    for e in graph.edges:
-        if e["type"] == "IN_REGION" and (by := e["props"].get("placed_by")):
-            placed[(graph.insight(e["source"]).dataset_id, by)].add(e["source"])
+    placed = graph.memoised(("placed_by", ""), lambda: _placed_by(graph))
     res_of = {by: ((ws.ready_batch_for(by) or {}).get("profile") or {}).get("geo", {}).get("resolution") for _, by in placed}
     tables = sorted(t for t in placed if res_of[t[1]] is not None and (resolution is None or res_of[t[1]] <= resolution))
     try:
@@ -117,6 +114,15 @@ def place_scores(
         scores = _zone_scores(ws, zone, tuple(levels), tuple(tables), strict=False)
     kept = set().union(*(placed[t] for t in tables))
     return {pid: v for pid, v in scores.items() if pid in kept or graph.facts(pid).resolution is not None}
+
+
+def _placed_by(graph: DualGraph) -> dict[tuple[str, str], set[str]]:
+    """(table level, the geo level placing it) -> its placed patterns: the base patterns' IN_REGION by events (#119)."""
+    placed: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    for e in graph.edges:
+        if e["type"] == "IN_REGION" and (by := e["props"].get("placed_by")):
+            placed[(graph.insight(e["source"]).dataset_id, by)].add(e["source"])
+    return placed
 
 
 def _zone_scores(
@@ -226,9 +232,12 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
 
 def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
-    another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them."""
+    another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
+    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
+    if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
+        raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
     if rows is not None:
         inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
     else:

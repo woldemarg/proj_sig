@@ -434,10 +434,11 @@ function focusNodes(ids) {
 
 function reveal(id, { isolate = null, walk = false } = {}) {
   /* one insight shown where the user is looking (docs/08_interface.md §8.2, §8.7): on the map when it draws it (a Walk on
-     link picks it there, adding its card; one it does not draw clears the focus and opens the drawer), otherwise in the
-     graph, the table giving way: its isolated evidence path, or the node and its details */
+     link picks it there, adding its card); one it does not draw, from a citation, an evidence card or Walk on alike, clears
+     the focus and opens the drawer, saying why; otherwise in the graph, the table giving way: its isolated evidence
+     path, or the node and its details */
   if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
-  if (S.view === "map" && walk) { GeoMap.unfocus(); return inspect(id, "Not on this map: its level draws nowhere here."); }  // the old focus goes
+  if (S.view === "map") { GeoMap.unfocus(); return inspect(id, GeoMap.offMap(id)); }  // the old focus goes
   if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
   if (S.view === "table") setView("graph");
   focusNodes([id]);

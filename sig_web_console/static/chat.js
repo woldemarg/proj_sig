@@ -160,10 +160,10 @@ function insightCard(turn) {
   const chain = d.scale_chain || { up: [], down: [] }, level = (id) => (d.levels[id] != null ? `res ${d.levels[id]}` : "another level");
   const steps = [...chain.up.map((st) => [st, "↑"]), ...chain.down.map((st) => [st, "↓"])].map(([st, arrow]) =>  // the scale chain's levels first
     ({ id: st.pattern_id, label: `${arrow} ${level(st.pattern_id)}: ${nodeLabel(st.pattern_id, d.labels)}`, word: st.relation === "corresponds" ? "same shift" : "opposite shift" }));
-  const links = [...steps, ...Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).map((it) => ({ ...it, word })))]
+  const links = [...steps, ...Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).filter((it) => it.integrity !== "mismatch").map((it) => ({ ...it, word })))]
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
-    `<div class="ic-tags">${w ? chip("", w.level) : ""}${p.integrity === "mismatch" ? chip(INTEGRITY.mismatch[0], "integrity mismatch", INTEGRITY.mismatch[1]) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
+    `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(scopeText(p))}</b></p><p>${insightLead(p)}</p>` +
     `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
     (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
@@ -209,8 +209,8 @@ function renderThread() {
 }
 
 async function ask(question, zone = null) {
-  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty
-  if (!zone && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
+  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty; false: asked without one
+  if (zone === null && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
   if ((!question && !zone) || S.busy) return;
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();

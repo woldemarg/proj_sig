@@ -1,13 +1,17 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
+  offMap: (pid) => (G.loading ? "Not drawn yet: the map is still loading."  // why the drawer of an insight the map does not draw opens
+    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Not drawn on this map: its trust could not be read."
+    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Not drawn on this map: its record fails its integrity check."
+    : "Not on this map: its level draws nowhere here."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
@@ -37,11 +41,12 @@ const GeoMap = {
       try { await GeoMap.refresh(); } catch (e) { G.stale = true; console.error("map load failed", e); }
     }
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
-    else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
+    else if (G.data && !G.evidence.length) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   },
 
   pick(pid, fit = false) {  // an insight chosen in the view's list (the view stays) or walked to: drawn, described in the chat
+    if (!GeoMap.has(pid)) GeoMap.unfocus();  // one the map cannot draw (no trust read): no other insight stays painted
     GeoMap.focusPattern(pid, fit);
     pickInsight(pid, windowItem(pid));
   },
@@ -69,7 +74,8 @@ const GeoMap = {
     if (!G.map || S.view !== "map") { G.pending = qa; G.want = geoDs; return; }  // the map opens on the answer's dataset
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
     const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => G.patterns[i.pattern_id]); };
-    if (geoDs !== G.ds) loadDataset(geoDs).then(apply); else apply();
+    // a load in flight is superseded, the latest answer's dataset winning; a later load drops this one
+    if (geoDs !== G.ds || G.loading) loadDataset(geoDs).then((done) => done && apply()); else apply();
   },
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
@@ -119,12 +125,12 @@ const GeoMap = {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (!G.datasets.length) { G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value;
   const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
-  else if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
+  else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
   else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); scheduleWindow(); }  // a commit changes the graph over the same cells
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
 }
@@ -140,15 +146,18 @@ const viewPadding = () => {  // every cell clear of the open list, where the map
   return { top: 40, bottom: 40, left: 40, right: 40 + (open && w > 2 * MW_WIDTH ? MW_WIDTH : 0) };
 };
 
-function fitRows(rows, padding) {
-  if (!rows.length || !G.bounds[rows[0]]) return;
+function boundsOf(rows) {  // the cells' boxes, each moved next to the first one: cells across ±180° stay one box
   const x0 = G.bounds[rows[0]][0];
   const b = rows.reduce((a, r) => {
     const x = G.bounds[r]; if (!x) return a;
-    const dx = unwrap(x[0], x0) - x[0];  // each cell's box moved next to the first one
+    const dx = unwrap(x[0], x0) - x[0];
     return [Math.min(a[0], x[0] + dx), Math.min(a[1], x[1]), Math.max(a[2], x[2] + dx), Math.max(a[3], x[3])];
   }, [Infinity, 90, -Infinity, -90]);
-  G.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom: 10, duration: 900 });
+  return [[b[0], b[1]], [b[2], b[3]]];
+}
+
+function fitRows(rows, padding) {
+  if (rows.length && G.bounds[rows[0]]) G.map.fitBounds(boundsOf(rows), { padding, maxZoom: 10, duration: 900 });
 }
 
 function graticule() {
@@ -265,17 +274,27 @@ function cellFeatures(pack) {
 }
 
 async function loadDataset(ds) {
+  /* the latest call wins (whether the map ends on ``ds``): an earlier one stops at its next step and writes nothing */
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
+  let seq = ++G.loadSeq;
+  G.target = G.want = ds;  // the map opens on it: a refresh pass meanwhile keeps to it, a filter's other choice wins
   G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
     const data = cellFeatures(await api(`/api/geo/${encodeURIComponent(ds)}/cells`));
+    if (seq !== G.loadSeq) return false;
+    seq = ++G.loadSeq;  // a read of the old dataset started meanwhile (a refresh pass) is dropped too
+    GeoMap.unfocus();  // a focus or popup made during the load was the old dataset's
     G.ds = G.want = ds; G.data = data; G.evidence = [];
+    G.projected = []; G.overlay = null; mergePatterns();  // nothing of the old dataset indexes the new cells
+    for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
+    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on (the file's bbox is the points' min and max)
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
+    if (seq !== G.loadSeq) return false;
     const info = G.datasets.find((d) => d.dataset_id === ds) || {};
     const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
     if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
@@ -285,28 +304,44 @@ async function loadDataset(ds) {
     $("map-title").textContent = info.filename || ds;
     $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
       (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
-    G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: viewPadding(), duration: 0 });
+    G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
-  } finally { G.loading = false; scheduleWindow(); }
+    return true;
+  } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
 }
 
-async function loadProjected(ds) {
+async function loadProjected(ds, seq = G.loadSeq) {
   /* the upload's insights found at another level (the table, another resolution) on this map's cells, as /projected draws them */
   let failed = "";
-  G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
+  const projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
+  if (seq !== G.loadSeq) return;  // a dataset loaded since: these rows index other cells
+  G.projected = projected;
   $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read
   $("map-projected-error").textContent = failed && `Insights of other levels unavailable: ${failed}`;
-  G.patterns = Object.fromEntries([...G.data.patterns, ...G.projected].map((p) => [p.id, p]));
-  G.byRow = G.data.features.map(() => []);
-  Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
+  mergePatterns();
 }
 
-async function loadOverlay(ds) {
+function mergePatterns() {
+  /* what the map draws, each row's insights for the popup: its own level's insights that the commit's overlay holds intact
+     (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
+     (/projected, intact only) */
+  const trust = (G.overlay && G.overlay.patterns) || {};
+  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch");
+  G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
+  G.byRow = G.data.features.map(() => []);
+  Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
+  if (G.focusId && !G.patterns[G.focusId]) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
+}
+
+async function loadOverlay(ds, seq = G.loadSeq) {
   /* the graph's regions, trust and scale over the map: they change with every commit, the cells never */
   let failed = "";
-  G.overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  const overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  if (seq !== G.loadSeq) return;  // a dataset loaded since
+  G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
-  $("map-overlay-error").textContent = failed && `Regions and trust unavailable: ${failed}`;
+  $("map-overlay-error").textContent = failed && `Regions and trust unavailable, so this level's insights are not drawn: ${failed}`;
+  mergePatterns();
   const regions = (G.overlay || empty()).features;
   G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
   G.map.getSource("regions").setData(G.overlay || empty());
@@ -410,7 +445,7 @@ function renderCard(p, item, pts) {
       ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
       : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "") + mismatchTag(p.id);
+    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
   $("map-card").hidden = false;
 }
 
@@ -420,12 +455,8 @@ function trustTags(pid) {
   if (!t) return "";
   const [cls, words] = cred(t.credibility);
   return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
-    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "") +
-    mismatchTag(pid);
+    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "");
 }
-
-const mismatchTag = (pid) =>  // a record that fails its digest: labelled wherever the map shows the insight, never painted silently
-  G.overlay?.patterns[pid]?.integrity === "mismatch" ? `<i class="pp-tag bad" title="${esc(INTEGRITY.mismatch[1])}">integrity mismatch</i>` : "";
 
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row;
