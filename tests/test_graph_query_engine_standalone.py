@@ -262,6 +262,12 @@ def test_the_console_draws_a_patterns_places_and_the_regions_its_scale_chain_nam
     assert places(graph, "P1") == [("R:7:b", 1.0), ("R:7:a", 1.0)]  # two regions at 7, one at 5: its finest; more cells first
     assert scale_chain(graph, ["P1"])[0].regions == ["R:7:a", "R:5:c", "R:3:d"]
     assert shown_regions(graph, ["P1"]) == {"R:7:a", "R:7:b", "R:5:c"}  # R:3:d holds no pattern
+    at_seven = geo("P7")
+    at_seven["props"]["provenance"]["spatial"]["resolution"] = 7  # its own level is a region level: its cells there are no places
+    own = [edge("P7", r, "IN_REGION", 1.0, basis="cells", share=1.0, n=1) for r in ("R:7:a", "R:7:b")] + [
+        edge("P7", "R:5:c", "IN_REGION", 1.0, basis="cells", share=1.0, n=2)
+    ]
+    assert places(DualGraph({"version": SNAPSHOT_VERSION, "nodes": [at_seven, *_held_by(own, rids)], "edges": own}), "P7") == [("R:5:c", 1.0)]
     forged = geo("P2")
     forged["props"]["integrity"] = "mismatch"
     edges += [

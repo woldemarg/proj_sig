@@ -57,12 +57,14 @@ def place_key(edge: dict[str, Any]) -> tuple[float, float]:
 
 def _places(graph: DualGraph, pid: str) -> dict[int, tuple[int, list[tuple[str, float]]]]:
     """Per level: how many regions the pattern lies in (``lies_in``), and its at most ``ZONES_MAX`` strongest of them
-    with their key, ranked by ``place_key``, then id; derived once per graph."""
+    with their key, ranked by ``place_key``, then id; derived once per graph. A geo pattern's own level is none: there a
+    region is one of its cells, which the map paints, and all of them tie."""
 
     def build() -> dict[int, tuple[int, list[tuple[str, float]]]]:
+        own = graph.facts(pid).resolution
         by_level: defaultdict[int, list[dict[str, Any]]] = defaultdict(list)
         for e in graph.out.get(pid, []):
-            if e["type"] == "IN_REGION" and lies_in(e):
+            if e["type"] == "IN_REGION" and lies_in(e) and graph.nodes[e["target"]]["props"]["resolution"] != own:
                 by_level[graph.nodes[e["target"]]["props"]["resolution"]].append(e)
         ranked = {lv: sorted(edges, key=lambda e: (*(-k for k in place_key(e)), e["target"])) for lv, edges in by_level.items()}
         return {lv: (len(edges), [(e["target"], place_key(e)[0]) for e in edges[:ZONES_MAX]]) for lv, edges in ranked.items()}
