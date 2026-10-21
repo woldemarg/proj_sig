@@ -240,10 +240,11 @@ function spherePalette() {
 }
 
 async function loadGraph() {
-  const ds = $("dataset-filter").value;
+  const ds = $("dataset-filter").value, seq = ++S.graphSeq;
   let g;
   S.sphere = null;  // the graph changed (or is unknown): project again
   try { g = await api("/api/graph" + (ds ? `?dataset=${encodeURIComponent(ds)}` : "")); } catch (e) { return; }
+  if (seq !== S.graphSeq) return;  // a later filter or commit asked again
   S.datasets = g.datasets || {};
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";

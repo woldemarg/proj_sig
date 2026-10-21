@@ -79,8 +79,8 @@ async function refreshBatches() {
   let map;
   if (viewKey !== S.lastReady) {
     S.lastReady = viewKey;
-    await loadGraph(); refreshHealth();
     map = GeoMap.refresh().catch((e) => console.error("map refresh failed", e));  // the map never breaks the rail or an answer
+    await loadGraph(); refreshHealth();
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   $("batches").innerHTML = cards.length ? cards.map(datasetCard).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
