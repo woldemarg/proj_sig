@@ -110,7 +110,8 @@ function botCard(turn) {
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];
-  if (items.length && GeoMap.has(items[0].pattern_id)) return GeoMap.suggestions().filter((q) => q !== turn.question).slice(0, 3);
+  const geo = items.length && (GeoMap.has(items[0].pattern_id) || items[0].provenance.dataset_id === GeoMap.current());  // the map need not be open
+  if (geo) return GeoMap.suggestions().filter((q) => q !== turn.question).slice(0, 3);
   const atts = (turn.qa.view.evidence && turn.qa.view.evidence.attractors) || [];
   const out = [];
   if (atts[0]) out.push(`Де ще трапляється «${atts[0].label}»?`);

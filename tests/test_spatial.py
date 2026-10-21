@@ -185,14 +185,15 @@ def test_geo_batch_end_to_end(engine, points_csv):
             assert p["target"] not in ("points", "when_active_days")
     hot = [p for p in patterns if {"attribute": "lisa_points", "value": "hot spot"} in p["conditions"] and p["effect_size"] > 0]
     assert any(p["target"] in ("share_channel_phone", "load_median", "when_late_share") for p in hot)  # the planted effects
-    cells = json.loads(engine.geo_cells_file(record["dataset_id"]).read_text(encoding="utf-8"))  # written with the batch
-    assert len(cells["features"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
+    cells = json.loads(engine.geo_cells_pack(record["dataset_id"]))  # the package of the file written with the batch
+    assert len(cells["rings"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
+    assert all(len(c) == geo["cells"] for c in cells["columns"].values()) and not [k for k in cells["columns"] if k.endswith("_band")]
     one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
     assert len(one["cells"]) == patterns[0]["support"] and 0 < len(one["points"]) <= one["n_points"]
     assert engine.geo_datasets()[0]["dataset_id"] == record["dataset_id"]
     engine.ws.save_batch({**record, "status": "FAILED"})  # a batch that failed after its files were written serves no map
     with pytest.raises(PipelineError):
-        engine.geo_cells_file(record["dataset_id"])
+        engine.geo_cells_pack(record["dataset_id"])
 
 
 def test_geo_evidence_speaks_plain_language(engine, points_csv):
@@ -784,6 +785,34 @@ def test_the_window_leads_with_the_levels_of_its_extent(engine, points_csv):
     lat, lon = HOT
     close, rows = tiers(f"{lon - 0.04},{lat - 0.03},{lon + 0.04},{lat + 0.03}")
     assert close == "map" and rows
+
+
+def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
+    """The map's cell package (docs/08_interface.md §8.1) rebuilds every vertex within half its step, which follows the
+    resolution: 1e-5° up to 12, 1e-7° finer, where a cell's edge is a metre or less."""
+    from insight_graph_service.core.geo_views import _pack
+    from subgroup_miner.spatial import cell_boundary
+
+    for res, step in ((7, 1e-5), (14, 1e-7)):
+        cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
+        features = [
+            {
+                "type": "Feature",
+                "id": i,
+                "geometry": {"type": "Polygon", "coordinates": [cell_boundary(c)]},
+                "properties": {"h3": c, "row": i, "x_band": "q1"},
+            }
+            for i, c in enumerate(cells)
+        ]
+        path = tmp_path / f"cells{res}.geojson"
+        path.write_text(
+            json.dumps({"type": "FeatureCollection", "features": features, "bbox": [0, 0, 0, 0], "meta": {"resolution": res}, "patterns": []})
+        )
+        pack = json.loads(_pack(str(path), 0))
+        assert pack["scale"] == round(-np.log10(step)) and pack["columns"] == {"h3": cells}
+        for f, r in zip(features, pack["rings"]):
+            rebuilt = [(r[0], r[1])] + [(r[0] + r[k] * step, r[1] + r[k + 1] * step) for k in range(2, len(r), 2)]
+            assert all(abs(a - b) <= step / 2 + 1e-12 for p, q in zip(rebuilt, f["geometry"]["coordinates"][0]) for a, b in zip(p, q))
 
 
 def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():

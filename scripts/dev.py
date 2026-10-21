@@ -38,7 +38,7 @@ def compose(graph_service: Any, narrator: Any) -> Any:
         target = narrator if path.startswith("/api/chat/") else graph_service if path.startswith("/api/") or scope["type"] != "http" else console
         await target(scope, receive, send)
 
-    return GZipMiddleware(app, minimum_size=1024, compresslevel=5)  # as nginx: level 9 takes 7x longer on a 94 MB cell file for 11 % less
+    return GZipMiddleware(app, minimum_size=1024, compresslevel=5)  # as nginx: level 9 is several times slower for ~10 % less
 
 
 def chromium() -> str | None:
