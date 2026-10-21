@@ -74,7 +74,8 @@ const GeoMap = {
     if (!G.map || S.view !== "map") { G.pending = qa; G.want = geoDs; return; }  // the map opens on the answer's dataset
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
     const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => G.patterns[i.pattern_id]); };
-    if (geoDs !== G.ds) loadDataset(geoDs).then((done) => done && apply()); else apply();  // a later load drops this one
+    // a load in flight is superseded, the latest answer's dataset winning; a later load drops this one
+    if (geoDs !== G.ds || G.loading) loadDataset(geoDs).then((done) => done && apply()); else apply();
   },
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
@@ -124,7 +125,7 @@ const GeoMap = {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.loadSeq++; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (!G.datasets.length) { G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value;
   const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
@@ -277,7 +278,7 @@ async function loadDataset(ds) {
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
   let seq = ++G.loadSeq;
-  G.target = ds;
+  G.target = G.want = ds;  // the map opens on it: a refresh pass meanwhile keeps to it, a filter's other choice wins
   G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
     const data = cellFeatures(await api(`/api/geo/${encodeURIComponent(ds)}/cells`));
@@ -330,7 +331,6 @@ function mergePatterns() {
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
   if (G.focusId && !G.patterns[G.focusId]) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
-  G.evidence = G.evidence.filter((i) => G.patterns[i.pattern_id]);
 }
 
 async function loadOverlay(ds, seq = G.loadSeq) {

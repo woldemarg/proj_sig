@@ -388,7 +388,22 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               $("dataset-filter").value = real; await GeoMap.refresh(); await a;  // the filter picks it while the other loads
               return [G.ds, G.loading]; } finally { api = orig; $("dataset-filter").value = ""; } }"""
         assert page.evaluate(pick, [real, "ds-stub"]) == [real, False]  # the filter's choice wins over the load in flight
+        listed = page.evaluate("G.datasets")  # the stub listed as a geo dataset, as an answer's other dataset is
+        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, {**listed[0], "dataset_id": "ds-stub", "filename": "stub"}]))
+        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
+            try { const a = loadDataset(stub); await wait(50);  // an answer's load in flight
+              $("dataset-filter").value = ""; await GeoMap.refresh(); await a;  // a refresh with no filter keeps to it
+              const kept = G.ds;
+              await loadDataset(real);
+              const b = loadDataset(stub); await wait(50);  // an answer on the map still shown arrives during a load: it wins
+              GeoMap.onAnswer({ view: { evidence: { items: [{ pattern_id: own, provenance: { dataset_id: real }, statistics: {} }] } } });
+              await b; await wait(800);
+              return [kept, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
+        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", real, [own]]
+        page.unroute("**/api/geo")
         page.unroute("**/api/geo/ds-stub/**")
+        page.evaluate("GeoMap.refresh()")
         # the map as a window on the graph: the view's insights under their themes; a click draws one and describes it in the chat
         page.wait_for_function("W.data && !W.data.error && W.data.themes.length", timeout=30000)
         if page.evaluate("W.folded"):  # a narrow map starts with the list folded
