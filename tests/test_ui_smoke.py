@@ -259,8 +259,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
         page.evaluate("loadOverlay('ds-unknown')")  # an overlay that cannot be read says so, not an empty map of regions
         assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
+        assert not page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")  # no trust read: none of this level's insights is drawn
         page.evaluate("loadOverlay(G.ds)")
         assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
+        assert page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")
         page.evaluate("loadProjected('ds-unknown')")  # the other levels that cannot be read say so, not an upload without them
         assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Insights of other levels unavailable")
         page.evaluate("loadProjected(G.ds)")
@@ -301,12 +303,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("G.evidence.length") > 0 and page.evaluate(painted) == 0 and page.is_hidden("#map-card")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
-        forged = """(pid) => { const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" };
-            renderCard(G.patterns[pid], null, null); const html = $("map-card-body").innerHTML;
-            if (t) G.overlay.patterns[pid] = t; else delete G.overlay.patterns[pid];
-            renderCard(G.patterns[pid], null, null); return html; }"""
-        assert "integrity mismatch" not in page.inner_text("#map-card-body")  # a record that fails its digest is labelled on the card
-        assert "integrity mismatch" in page.evaluate(forged, page.evaluate("G.focusId"))
+        forged = """(pid) => { const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" }; mergePatterns();
+            const drawn = [GeoMap.has(pid), G.byRow.some((r) => r.includes(pid))];
+            G.overlay.patterns[pid] = t; mergePatterns(); return [...drawn, GeoMap.has(pid)]; }"""
+        own = page.evaluate("G.data.patterns.find((p) => GeoMap.has(p.id)).id")  # a record that fails its digest is never drawn
+        assert page.evaluate(forged, own) == [False, False, True]
         opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
         page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
         first = page.evaluate(opacity)
@@ -355,9 +356,6 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         row.click()
         page.wait_for_function(f"G.focusId === '{pid}' && S.chat.length === {turns + 1}", timeout=30000)
         assert page.locator(".msg-bot").last.locator(".insight-card").count() == 1 and page.is_visible(f"#map-window .mw-i.on[data-pid='{pid}']")
-        forged = """() => { const t = S.chat.at(-1), node = t.insight.node;  // the card's numbers are the journal record's: say when it fails its digest
-            return insightCard({ ...t, insight: { ...t.insight, node: { ...node, props: { ...node.props, integrity: "mismatch" } } } }); }"""
-        assert "integrity mismatch" not in page.locator(".msg-bot").last.inner_text() and "integrity mismatch" in page.evaluate(forged)
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")

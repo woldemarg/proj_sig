@@ -308,8 +308,12 @@ async function loadProjected(ds, seq = G.loadSeq) {
 }
 
 function mergePatterns() {
-  /* what the map draws: its own level's insights and the other levels' (/projected), each row's insights for the popup */
-  G.patterns = Object.fromEntries([...G.data.patterns, ...G.projected].map((p) => [p.id, p]));
+  /* what the map draws, each row's insights for the popup: its own level's insights that the commit's overlay holds intact
+     (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
+     (/projected, intact only) */
+  const trust = (G.overlay && G.overlay.patterns) || {};
+  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch");
+  G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
 }
@@ -321,7 +325,8 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   if (seq !== G.loadSeq) return;  // a dataset loaded since
   G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
-  $("map-overlay-error").textContent = failed && `Regions and trust unavailable: ${failed}`;
+  $("map-overlay-error").textContent = failed && `Regions and trust unavailable, so this level's insights are not drawn: ${failed}`;
+  mergePatterns();
   const regions = (G.overlay || empty()).features;
   G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
   G.map.getSource("regions").setData(G.overlay || empty());
@@ -425,7 +430,7 @@ function renderCard(p, item, pts) {
       ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
       : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "") + mismatchTag(p.id);
+    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
   $("map-card").hidden = false;
 }
 
@@ -435,12 +440,8 @@ function trustTags(pid) {
   if (!t) return "";
   const [cls, words] = cred(t.credibility);
   return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
-    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "") +
-    mismatchTag(pid);
+    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "");
 }
-
-const mismatchTag = (pid) =>  // a record that fails its digest: labelled wherever the map shows the insight, never painted silently
-  G.overlay?.patterns[pid]?.integrity === "mismatch" ? `<i class="pp-tag bad" title="${esc(INTEGRITY.mismatch[1])}">integrity mismatch</i>` : "";
 
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row;

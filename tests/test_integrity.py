@@ -10,6 +10,7 @@ from conftest import make_engine, rewrite_patterns, stale_snapshot, upload_level
 from fastapi.testclient import TestClient
 
 from insight_contracts import EdgeType, GraphEdge, record_digest
+from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.server.app import create_app
 
 
@@ -22,7 +23,6 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(cfg, tmp_path, demo_csv)
     removed one ``source_missing``; an unknown id is refused."""
     import shutil
 
-    from insight_graph_service.core.engine import PipelineError
     from subgroup_miner.discovery import recompute_statistics
 
     own = tmp_path / "demo.csv"  # ingest_file keeps the path it is given: this test changes and removes the file
@@ -94,7 +94,6 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv
     ``unverified``, not degraded, and its trust lines say so."""
     import numpy as np
 
-    from insight_graph_service.core.engine import PipelineError
     from insight_graph_service.core.snapshot import metadata_digest
     from insight_graph_service.server.views import cytoscape_elements
 
@@ -199,6 +198,24 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
         assert graph.nodes[anchor]["props"]["n_patterns"] == len(members - {forged})  # nor does it describe its anchors
     assert next(it for it in evidence.items if it.pattern_id == old).validation.endswith("integrity unverified")
     assert "integrity unverified" in engine.evidence(question).evidence_prompt
+
+
+def test_a_changed_geo_record_is_not_drawn_on_the_map(cfg, points_csv):
+    """A geo insight whose journal record fails its digest is not drawn: its points are refused, as the projection and the
+    window already skip it, while an intact one of the same map is served (M9AC-F02)."""
+    first = make_engine(cfg)
+    ds = first.process(first.submit(points_csv, geo="auto")["batch_id"])["dataset_id"]
+    rows = first.ws.patterns()
+    forged, intact = rows[0]["id"], rows[1]["id"]
+    rows[0]["p_adjusted"] = 0.5
+    rewrite_patterns(first, rows)
+    engine = make_engine(cfg)
+    assert engine.graph().nodes[forged]["props"]["integrity"] == "mismatch"
+    with pytest.raises(PipelineError, match="no intact pattern"):
+        engine.geo_pattern(ds, forged)
+    assert engine.geo_pattern(ds, intact)["n_points"] > 0
+    assert forged not in {i["id"] for t in engine.geo_window(ds, "-180,-90,180,90")["themes"] for i in t["insights"]}
+    assert engine.geo_overlay(ds)["patterns"][forged]["integrity"] == "mismatch"  # what the console's map reads to leave it out
 
 
 def test_dataset_source_and_reliability(engine, demo_csv):

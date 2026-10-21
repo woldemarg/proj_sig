@@ -226,9 +226,12 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
 
 def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
-    another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them."""
+    another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
+    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
+    if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
+        raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
     if rows is not None:
         inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
     else:
