@@ -229,10 +229,15 @@ function init() {
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
-  on($("inspector"), ".nb", (el) => {  // the drawer follows the row; on the map an insight is focused there when drawn, as reveal does
+  on($("inspector"), ".nb", async (el) => {  // the drawer follows the row; on the map an insight is focused there when drawn, as reveal does
     const id = el.dataset.id, onMap = S.view === "map" && id.startsWith("P-");
-    if (onMap && GeoMap.has(id)) GeoMap.focusPattern(id); else if (onMap) GeoMap.unfocus(); else focusNodes([id]);
     inspect(id, onMap && !GeoMap.has(id) ? GeoMap.offMap(id) : undefined);
+    if (onMap) return GeoMap.has(id) ? GeoMap.focusPattern(id) : GeoMap.unfocus();
+    if (S.view === "graph" && id.startsWith("R:") && !layerState().region) {  // a region asked for: the Map regions switch goes on
+      document.querySelector('.toggle[data-key="region"]').classList.add("on");
+      await toggleRegions();
+    }
+    focusNodes([id]);
   });
   on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });
   on($("mw-body"), ".mw-i", (b) => GeoMap.pick(b.dataset.pid));

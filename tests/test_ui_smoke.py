@@ -230,6 +230,14 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert len(set(map(tuple, spots))) == len(spots) == counted  # in rows, none on another
         page.click("#legend .toggle[data-key='region']")
         page.select_option("#layout", "dual")
+        regional = """async () => { for (const n of S.nodes) { await inspect(n.id);  // an insight's drawer with a region row
+            const row = document.querySelector("#inspector .nb[data-id^='R:']");
+            if (row) { const g = row.closest("details"); if (g) g.open = true; return row.dataset.id; } } return null; }"""
+        rid = page.evaluate(regional)
+        assert rid and not page.evaluate("layerState().region")
+        page.click(f"#inspector .nb[data-id='{rid}'] >> nth=0")  # a region asked for with the switch off: it goes on (M10-F07)
+        page.wait_for_function(f"layerState().region && S.regionsIn && S.cy.getElementById('{rid}').visible()", timeout=10000)
+        page.click("#legend .toggle[data-key='region']")
         # the column borders can be dragged
         handle = page.locator(".rail .col-resize").bounding_box()
         before = page.evaluate("document.querySelector('.rail').getBoundingClientRect().width")
