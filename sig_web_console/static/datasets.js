@@ -15,7 +15,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   if (running) {
     const i = Math.max(0, STAGES.indexOf(b.status));
     body = `<div class="progress"><i style="width:${Math.round(((i + 1) / STAGES.length) * 100)}%"></i></div>` +
-      `<div class="ds-step">${esc(STAGE_TEXT[b.status] || b.status)}… <span class="muted">step ${i + 1} of ${STAGES.length}</span></div>`;
+      `<div class="ds-step">${esc(STAGE_TEXT[b.status] || b.status)}… <span class="muted">step ${i + 1} of ${STAGES.length}` +
+      ((b.stage_times || {})[b.status] ? ` · <span class="ds-elapsed" data-since="${esc(b.stage_times[b.status])}"></span>` : "") + `</span></div>`;
   } else if (b.status === "READY") {
     body = `<div class="ds-stats">` +
       `<div class="stat"><b>${num(m.validated_insights, 0)}</b><span>insights</span></div>` +
@@ -82,6 +83,17 @@ async function deleteDataset(id, name) {
   refreshBatches();
 }
 
+const elapsed = (iso) => { const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
+function tickElapsed() { document.querySelectorAll("#batches [data-since]").forEach((el) => { el.textContent = elapsed(el.dataset.since); }); }
+
+function renderRail(parts) {
+  /* a card or group whose markup is unchanged keeps its nodes: a click on it survives the poll */
+  const box = $("batches");
+  if (box.children.length !== S.rail.length || parts.length !== S.rail.length) box.innerHTML = parts.join("");
+  else parts.forEach((h, i) => { if (h !== S.rail[i]) box.children[i].outerHTML = h; });
+  S.rail = parts; tickElapsed();
+}
+
 async function refreshBatches() {
   let batches = [];
   try { batches = await api("/api/batches"); } catch (e) { clearTimeout(S.poll); S.poll = setTimeout(refreshBatches, 3000); return; }
@@ -93,10 +105,12 @@ async function refreshBatches() {
   }
   const cards = [...byDataset.values()];
   const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b])).values()];
-  const sel = $("dataset-filter"), cur = sel.value;
-  sel.innerHTML = `<option value="">All datasets</option>` +
+  const sel = $("dataset-filter"), cur = sel.value, options = `<option value="">All datasets</option>` +
     ready.map((b) => `<option value="${esc(b.dataset_id)}" data-file="${esc(b.filename)}">${esc(datasetName(b))}</option>`).join("");
-  sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
+  if (options !== S.options) {  // rewritten only when the READY set changes: an open list stays open
+    S.options = sel.innerHTML = options;
+    sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
+  }
   // one key for what every view follows: the READY batches and the dataset filter
   const viewKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",") + "|" + sel.value;
   let map;
@@ -107,9 +121,9 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  $("batches").innerHTML = cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`;  // after the graph: the cards read its trust
+  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)) : [`<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`]);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
-  if (busy) S.poll = setTimeout(refreshBatches, 900);
+  if (busy) S.poll = setTimeout(refreshBatches, 2500);
   return map;  // a caller that acts on the map afterwards (ask) awaits its load too; the poll does not
 }
 
