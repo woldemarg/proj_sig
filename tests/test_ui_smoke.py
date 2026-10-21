@@ -573,12 +573,15 @@ def test_the_console_knows_the_empty_level_codes():
 
 
 @pytest.mark.browser
-def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
+def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
     """From the IN VIEW list to the insight's card: its theme is the one the list shows it under, its Walk on holds its
     scale chain's levels; asked from the card, the question carries the H3 cells it is drawn by, the answer has the
     AREA line and the insight, whose citation focuses it on the same map; New chat clears the focus and the list's mark;
     Show in graph on a base insight under a geo filter shows its node."""
+    import pandas as pd
+
     from graph_query_engine.graph import primary_anchor
+    from graph_query_engine.vertical import scale_chain
 
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
@@ -588,6 +591,8 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
     with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
         levels = engine.upload("california_housing.csv", f, geo="auto@6,5", table=True, bins="median_income_median:4,median_income:4")
     fine, _, table = (engine.process(r["batch_id"]) for r in levels)
+    pd.read_csv(PROJECT_ROOT / "data" / "demo" / "california_housing.csv").iloc[::2].to_csv(half := tmp_path / "half.csv", index=False)
+    other = engine.process(engine.submit(half, geo="auto@6", bins="median_income_median:4")["batch_id"])  # another upload: off this map
     graph = engine.graph()
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
@@ -606,7 +611,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
             i["id"]
             for t in page.evaluate("W.data.themes")
             for i in t["insights"]
-            if graph.facts(i["id"]).resolution == 6 and node_steps(graph, i["id"])
+            if graph.facts(i["id"]).resolution == 6 and (chain := scale_chain(graph, [i["id"]])) and chain[0].up
         )
         page.evaluate(f"GeoMap.pick('{chained}')")
         page.wait_for_selector(".insight-card .nb", timeout=10000)
@@ -617,8 +622,15 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
         page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()
         assert page.evaluate(f"W.fold[{theme!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{theme}']").count() == 1
-        page.evaluate(f"document.querySelector('.msg-bot:last-child .insight-card .nb').dataset.id = {theme!r}")  # a node this map does not draw
-        card.locator(".insight-card .nb").first.click()
+        # a neighbour of another upload, which this map does not draw: walked on, the focus goes and its drawer says so
+        offmap = "[...document.querySelectorAll('.msg-bot:last-child .insight-card .nb')].map((e) => e.dataset.id).filter((id) => !GeoMap.has(id))"
+        for row in [i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if graph.facts(i["id"]).resolution == 6]:
+            page.evaluate(f"GeoMap.pick('{row}')")
+            page.wait_for_function(f"S.chat.at(-1).insight && S.chat.at(-1).insight.node.id === '{row}'", timeout=10000)
+            if ids := page.evaluate(offmap):
+                break
+        assert graph.insight(ids[0]).dataset_id == other["dataset_id"] and page.evaluate("G.focusId") == row
+        page.locator(".msg-bot").last.locator(f".insight-card .nb[data-id='{ids[0]}']").click()
         page.wait_for_function("!$('drawer').hidden && $('inspector').textContent.includes('Not on this map')", timeout=10000)
         assert page.evaluate("G.focusId") is None
         # a base insight asked with its place: H3 cells as the zone, AREA in the prompt, the insight in the answer
@@ -632,7 +644,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
         page.wait_for_function("S.chat.at(-1).qa", timeout=30000)
         (asked,) = page.evaluate("__asked")
         assert asked["cells"] and all(isinstance(c, str) and re.fullmatch(r"[0-9a-f]{15}", c) for c in asked["cells"])
-        assert asked["cells"] == page.evaluate(f"GeoMap.cellsOf('{base}')")
+        assert asked["cells"] == page.evaluate(f"GeoMap.placeOf('{base}')")
         assert "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         assert base in page.evaluate("S.chat.at(-1).qa.view.evidence.items.map((i) => i.pattern_id)")
         answer = page.locator(".msg-bot").last
@@ -656,11 +668,3 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg):
         assert table["dataset_id"] == graph.insight(base).dataset_id
         browser.close()
         assert not errors, errors
-
-
-def node_steps(graph, pid: str) -> list:
-    """The coarser steps of a geo insight's scale chain, as its card walks them."""
-    from graph_query_engine.vertical import scale_chain
-
-    chain = scale_chain(graph, [pid])
-    return chain[0].up if chain else []

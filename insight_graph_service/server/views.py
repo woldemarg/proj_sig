@@ -119,13 +119,14 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
             {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}} for r, _ in places(graph, node_id)
         ]
         chain = scale_chain(graph, [node_id])
+        steps = chain[0].up + chain[0].down if chain else []
         out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
-        out["levels"] = {s.pattern_id: graph.facts(s.pattern_id).resolution for s in (chain[0].up + chain[0].down if chain else [])}
+        out["levels"] = {s.pattern_id: graph.facts(s.pattern_id).resolution for s in steps}
         anchor = primary_anchor(graph, node_id)  # the theme it is shown under, as the map's list shows it
         out["theme"] = {"id": anchor["target"], "label": graph.nodes[anchor["target"]]["label"]} if anchor else None
         basis = node["props"].get("credibility_basis", {})
         linked = [*basis.get("patterns", []), *basis.get("confirmed_by", [])]
-        linked += [s.pattern_id for s in (chain[0].up + chain[0].down if chain else [])]
+        linked += [s.pattern_id for s in steps]
         out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)

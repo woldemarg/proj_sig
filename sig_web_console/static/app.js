@@ -211,13 +211,10 @@ function init() {
   on(thread, "a.cite", (a) => reveal(a.dataset.pid));
   on(thread, ".ev", (el) => { const turn = turnOf(el), item = turn.qa.view.evidence.items[Number(el.dataset.i)]; reveal(item.pattern_id, { isolate: { turn, item, el } }); });
   on(thread, ".bot-tabs button", toggleTab);
-  on(thread, ".insight-card .nb", (el) => {  // walked on: picked where the map draws it, else its drawer, the old focus gone
-    if (S.view === "map" && !GeoMap.has(el.dataset.id)) { GeoMap.unfocus(); inspect(el.dataset.id, "Not on this map: its level draws nowhere here."); }
-    else reveal(el.dataset.id, { walk: true });
-  });
+  on(thread, ".insight-card .nb", (el) => reveal(el.dataset.id, { walk: true }));
   on(thread, ".insight-card .ic-theme", (el) => { inspect(el.dataset.id); GeoMap.openTheme(el.dataset.id); });
   on(thread, ".insight-card .ic-ask", (el) => {  // asked with its place: the cells it is drawn by on the open map, as a zone
-    const p = turnOf(el).insight.node.props, cells = GeoMap.cellsOf(p.id);
+    const p = turnOf(el).insight.node.props, cells = GeoMap.placeOf(p.id);
     ask(askAbout(p), cells.length ? { cells } : null);
   });
   on(thread, ".insight-card .ic-graph", async (el) => {  // a filter on another dataset would hide its node

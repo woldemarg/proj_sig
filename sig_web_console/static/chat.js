@@ -136,7 +136,7 @@ function suggestions() {
   return out;
 }
 
-// ponytail: PoC — an insight picked on the map (GeoMap.pick): its description in the chat and its graph links to walk on
+// an insight picked on the map (GeoMap.pick): its card in the chat, with its place to ask about and its graph links to walk on
 const WALK = { CONTRASTS: "contrasts with", "CONTRASTS (in)": "contrasts with", "SPECIALIZES": "narrower version of", "SPECIALIZES (in)": "broader than",
   SIBLING: "sibling", "SIBLING (in)": "sibling", CO_LOCATED: "same place", "CO_LOCATED (in)": "same place" };
 
