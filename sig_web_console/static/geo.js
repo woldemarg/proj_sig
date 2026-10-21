@@ -258,7 +258,7 @@ async function loadDataset(ds) {
 }
 
 async function loadProjected(ds) {
-  /* the upload's insights found at another level (the table, another resolution) on this map's cells, by their footprint */
+  /* the upload's insights found at another level (the table, another resolution) on this map's cells, as /projected draws them */
   let failed = "";
   G.projected = await api(`/api/geo/${encodeURIComponent(ds)}/projected`).catch((e) => { failed = e.message; return []; });
   $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read

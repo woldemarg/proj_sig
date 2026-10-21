@@ -779,8 +779,7 @@ def build_projection(cells: np.ndarray, other: np.ndarray) -> Callable[[np.ndarr
 def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
     """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
     and extents (``covers``), ``Z`` the dataset's cells inside the zone (``cells_inside``). A focus that is the zone
-    scores 1, as does a pattern that is; a
-    pattern far larger or smaller than the zone scores little; one outside it scores 0."""
+    scores 1, as does a pattern that is; a pattern far larger or smaller than the zone scores little; one outside it 0."""
     if not len(cells):
         return {}
     inside = cells_inside(cells, zone)

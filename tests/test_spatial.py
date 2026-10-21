@@ -767,7 +767,10 @@ def test_the_window_leads_with_the_levels_of_its_extent(engine, points_csv):
 
     def tiers(bbox: str) -> tuple[str, list[list[tuple[bool, float]]]]:
         window = engine.geo_window(fine["dataset_id"], bbox)
-        coarse = lambda i: i["level"] == "table" or i["level"] == "res 7"  # noqa: E731
+
+        def coarse(i: dict) -> bool:
+            return i["level"] in ("table", "res 7")
+
         rows = [[(coarse(i) != (window["first"] == "coarse"), -i["lift"]) for i in t["insights"]] for t in window["themes"]]
         assert [t["id"] is None for t in window["themes"]] == sorted(t["id"] is None for t in window["themes"])
         named = [r for r, t in zip(rows, window["themes"]) if t["id"] is not None]
