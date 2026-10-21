@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -743,6 +743,38 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
+def cells_inside(cells: np.ndarray, area: Iterable[str]) -> np.ndarray:
+    """Which of one level's ``cells`` lie in ``area``, cells of any resolutions, through the cell centre (docs/06_graph_and_storage.md
+    §6.1): an area cell finer than them counts the cell holding its centre, a coarser one every cell whose centre it holds
+    (H3 children do not tile their parent)."""
+    inside = np.zeros(len(cells), dtype=bool)
+    if not len(cells):
+        return inside
+    res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
+    by_res: defaultdict[int, set[str]] = defaultdict(set)
+    for c in area:
+        by_res[h3.get_resolution(c)].add(c)
+    for z, group in by_res.items():
+        if z >= res:
+            inside |= np.isin(names, [h3.latlng_to_cell(*h3.cell_to_latlng(c), res) for c in group])
+        else:
+            inside |= np.isin([h3.latlng_to_cell(*h3.cell_to_latlng(c), z) for c in names], list(group))
+    return inside
+
+
+def build_projection(cells: np.ndarray, other: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+    """The rows of one level's ``cells`` inside a set of rows of another level's ``other``, as ``cells_inside`` places
+    them, with the centres of the two levels matched once for every set."""
+    res, z = h3.get_resolution(str(cells[0])), h3.get_resolution(str(other[0]))
+    if z >= res:  # finer: the cell holding each of their centres
+        index = {str(c): i for i, c in enumerate(cells)}
+        holder = np.array([index.get(c, -1) for c in event_regions(other, (res,))[res]], dtype=np.int64)
+        return lambda rows: np.unique(holder[rows][holder[rows] >= 0])
+    index = {str(c): i for i, c in enumerate(other)}  # coarser: every cell whose centre one of them holds
+    parent = np.array([index.get(c, -1) for c in event_regions(cells, (z,))[z]], dtype=np.int64)
+    return lambda rows: np.flatnonzero(np.isin(parent, rows))
+
+
 def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
     """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
     and extents (``covers``), ``Z`` the dataset's cells inside the zone (a zone cell finer than the dataset counts the
@@ -751,16 +783,7 @@ def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozens
     pattern far larger or smaller than the zone scores little; one outside it scores 0."""
     if not len(cells):
         return {}
-    res, names = h3.get_resolution(str(cells[0])), cells.astype(str)
-    by_res: defaultdict[int, set[str]] = defaultdict(set)
-    for c in zone:
-        by_res[h3.get_resolution(c)].add(c)
-    inside = np.zeros(len(names), dtype=bool)
-    for z, group in by_res.items():
-        if z >= res:
-            inside |= np.isin(names, [h3.latlng_to_cell(*h3.cell_to_latlng(c), res) for c in group])
-        else:
-            inside |= np.isin([h3.latlng_to_cell(*h3.cell_to_latlng(c), z) for c in names], list(group))
+    inside = cells_inside(cells, zone)
     out, size = {}, int(inside.sum())
     for pid, rows in covers.items():
         rows = np.unique(np.asarray(rows, dtype=np.int64))

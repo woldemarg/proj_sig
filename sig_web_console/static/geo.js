@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -33,7 +33,7 @@ const GeoMap = {
     await ensureMap();
     G.map.resize();
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
-    else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: 40, duration: 0 });
+    else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   },
 
@@ -115,9 +115,18 @@ const empty = () => ({ type: "FeatureCollection", features: [] });
 const cellsOf = (rows) => ({ type: "FeatureCollection", features: rows.map((r) => G.data.features[r]).filter(Boolean) });
 const cellSource = () => ({ type: "geojson", data: empty(), maxzoom: 10 });  // one parameter set for every source of cells: their outlines coincide
 
+const unwrap = (x, x0) => x0 + ((x - x0 + 540) % 360) - 180;  // a longitude taken around x0: a span across ±180° stays whole
+const MW_WIDTH = 342;  // the IN VIEW list's width and right offset (.map-window)
+const viewPadding = () => ({ top: 40, bottom: 40, left: 40, right: 40 + (W.folded ?? $("map").clientWidth < 800 ? 0 : MW_WIDTH) });  // every cell clear of the open list
+
 function fitRows(rows, padding) {
-  if (!rows.length) return;
-  const b = rows.reduce((a, r) => { const x = G.bounds[r]; return x ? [Math.min(a[0], x[0]), Math.min(a[1], x[1]), Math.max(a[2], x[2]), Math.max(a[3], x[3])] : a; }, [180, 90, -180, -90]);
+  if (!rows.length || !G.bounds[rows[0]]) return;
+  const x0 = G.bounds[rows[0]][0];
+  const b = rows.reduce((a, r) => {
+    const x = G.bounds[r]; if (!x) return a;
+    const dx = unwrap(x[0], x0) - x[0];  // each cell's box moved next to the first one
+    return [Math.min(a[0], x[0] + dx), Math.min(a[1], x[1]), Math.max(a[2], x[2] + dx), Math.max(a[3], x[3])];
+  }, [Infinity, 90, -Infinity, -90]);
   G.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom: 10, duration: 900 });
 }
 
@@ -222,23 +231,27 @@ function placeDensity() {
 async function loadDataset(ds) {
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
-  const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
-  G.ds = ds; G.data = data; G.evidence = [];
-  G.bounds = data.features.map((f) => f.geometry.coordinates[0].reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[0]), Math.max(a[3], c[1])], [180, 90, -180, -90]));
-  G.map.getSource("cells").setData(data);
-  G.map.getSource("pts").setData(empty());
-  await Promise.all([loadProjected(ds), loadOverlay(ds)]);
-  const info = G.datasets.find((d) => d.dataset_id === ds) || {};
-  const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
-  if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
-  $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
-  colorBy(G.metric);
-  const sac = info.sac || {};
-  $("map-title").textContent = info.filename || ds;
-  $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
-    (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
-  G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: 40, duration: 0 });
-  paintZone();
+  G.loading = true; W.data = null; renderWindow();  // the list waits for the map to stand on the new dataset
+  try {
+    const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
+    G.ds = ds; G.data = data; G.evidence = [];
+    G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
+      return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
+    G.map.getSource("cells").setData(data);
+    G.map.getSource("pts").setData(empty());
+    await Promise.all([loadProjected(ds), loadOverlay(ds)]);
+    const info = G.datasets.find((d) => d.dataset_id === ds) || {};
+    const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
+    if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
+    $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
+    colorBy(G.metric);
+    const sac = info.sac || {};
+    $("map-title").textContent = info.filename || ds;
+    $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
+      (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
+    G.map.fitBounds([[data.bbox[0], data.bbox[1]], [data.bbox[2], data.bbox[3]]], { padding: viewPadding(), duration: 0 });
+    paintZone();
+  } finally { G.loading = false; scheduleWindow(); }
 }
 
 async function loadProjected(ds) {
@@ -268,8 +281,8 @@ async function loadOverlay(ds) {
 }
 
 const centre = (f) => {  // the mean of a ring's vertices, longitudes taken around its first one: a cell across ±180° stays whole
-  const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = x0 + r.reduce((a, c) => a + ((c[0] - x0 + 540) % 360) - 180, 0) / r.length;
-  return [((lon + 540) % 360) - 180, r.reduce((a, c) => a + c[1], 0) / r.length];
+  const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = r.reduce((a, c) => a + unwrap(c[0], x0), 0) / r.length;
+  return [unwrap(lon, 0), r.reduce((a, c) => a + c[1], 0) / r.length];
 };
 
 function countIcon(n) {
@@ -407,9 +420,10 @@ const W = { seq: 0, timer: null, data: null, fold: {}, folded: null };  // folde
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
 async function loadWindow() {
-  if (!G.map || !G.ds || S.view !== "map") return;
-  const b = G.map.getBounds(), seq = ++W.seq, clamp = (x, m) => Math.max(-m, Math.min(m, x)).toFixed(4);
-  const bbox = [clamp(b.getWest(), 180), clamp(b.getSouth(), 90), clamp(b.getEast(), 180), clamp(b.getNorth(), 90)].join(",");
+  if (!G.map || !G.ds || G.loading || S.view !== "map") return;
+  const b = G.map.getBounds(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
+  const [w, e] = b.getEast() - b.getWest() >= 360 ? ["-180", "180"] : [lon(b.getWest()), lon(b.getEast())];  // west > east: across ±180°
+  const bbox = [w, lat(b.getSouth()), e, lat(b.getNorth())].join(",");
   const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
   W.data = data; renderWindow();
@@ -426,11 +440,11 @@ function renderWindow() {
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(d.themes.length, "theme")} · ${num(d.points, 0)} pts`;
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">No insight has enough of its points in this view.</div>` : d.themes.map((t, k) => {
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : d.themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.insights.length}</b></button>` +
       (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
-        `<i class="lvl${i.level === "table" ? " tbl" : ""}">${esc(i.level)}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
+        `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
         `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
         `<b title="lift: its share of this view's points over its share of the whole map's">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
   }).join("");

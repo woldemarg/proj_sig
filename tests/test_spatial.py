@@ -27,6 +27,7 @@ from subgroup_miner.ingestion import IngestionError, auto_levels, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
+    cells_inside,
     effective_n_factor,
     footprint,
     locate_points,
@@ -371,11 +372,15 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
     assert {e["props"]["basis"] for e in members} >= {"events"}
-    # the map as a window on the graph (PoC): every other level's insights on the finest level's cells, by their footprint
+    # the map as a window on the graph: every other level's insights on the finest level's cells, a coarser geo one by
+    # every cell inside its own, a base one by the footprint of its events
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
-    assert all(p["rows"] and p["spatial"]["footprint_share"] == 0.8 for p in projected.values())
+    assert all(projected[pid]["rows"] and projected[pid]["spatial"]["footprint_share"] >= 0.8 for pid in table_ids)
+    fine_cells, coarse_cells = (engine.ws.load_geo(r["dataset_id"], ("cells",))["cells"] for r in done[:2])
+    for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
+        assert projected[pid]["rows"] == np.flatnonzero(cells_inside(fine_cells, coarse_cells[rows].astype(str))).tolist()
     everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every insight at its own share, lift 1
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
     assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
@@ -384,8 +389,10 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
         assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
-    drawn = engine.geo_pattern(fine, pid)
-    assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
+    drawn = engine.geo_pattern(fine, pid)  # drawn by its footprint, counted by all its events
+    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] < listed[pid]["points"] and set(drawn["rows"]) == set(
+        projected[pid]["rows"]
+    )
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
@@ -673,6 +680,87 @@ def test_an_auto_level_with_nothing_names_the_level_the_cap_left_out(engine, tmp
     done = engine.process(record["batch_id"])
     assert done["level"] == "6" and done["error"]["code"] in {"no_candidates", "no_viable_insights"}
     assert done["error"]["message"].endswith("@auto left latitude,longitude@7 out for GEO_AUTO_MAX_CELLS alone, try it")
+
+
+def test_the_window_lists_what_is_characteristic_of_the_view(engine, tmp_path):
+    """docs/08_interface.md §8.7: an insight counts all its located events, over the map's located points, so the whole
+    map gives every insight lift 1, a base one with unlocated events too; a part of the map lists only insights with
+    enough events there and lift at least 1, by ``(x + a) / (E + a)``; a view of too few events lists nothing."""
+    from subgroup_miner.spatial import GEO_LINK_MIN_EVENTS, cell_centres
+
+    frame = geo_frame()
+    frame.loc[frame.sample(frac=0.1, random_state=1).index, ["latitude", "longitude"]] = np.nan  # events no map locates
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    fine, _, table = upload_levels(engine, path, geo="auto@8,7", table=True)
+    geo = engine.ws.load_geo(fine["dataset_id"], ("cells", "point_cell"))
+    point_cell, covers = geo["point_cell"], engine.ws.load_covers(table["dataset_id"])
+    whole = {i["id"]: i for t in engine.geo_window(fine["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
+    unlocated = [pid for pid in covers if pid in whole and (point_cell[covers[pid]] < 0).any()]
+    assert unlocated and {i["lift"] for i in whole.values()} == {1.0}
+    lon = cell_centres(geo["cells"])[:, 0]
+    split = float(np.median(lon))
+    half = engine.geo_window(fine["dataset_id"], f"-180,-90,{split},90")
+    listed = {i["id"]: i for t in half["themes"] for i in t["insights"]}
+    shown = set(whole) | {a["id"] for i in whole.values() for a in i["also"]}  # a level folded there stands alone without its host
+    assert listed and set(listed) < shown and all(i["lift"] >= 1 and i["points"] >= GEO_LINK_MIN_EVENTS for i in listed.values())
+    pid = next(p for p in listed if p in covers)  # a base insight's lift from its events alone
+    located = point_cell[point_cell >= 0]
+    mine = point_cell[covers[pid]]
+    mine = mine[mine >= 0]
+    x, here = int((lon[mine] <= split).sum()), int((lon[located] <= split).sum())
+    expected = len(mine) * here / len(located)
+    assert listed[pid]["points"] == x and listed[pid]["lift"] == round((x + 30) / (expected + 30), 2)  # a = 30 (docs/08 §8.7)
+    busiest = np.bincount(located).argmax()  # one cell's view: fewer events than any insight needs
+    w, s = cell_centres(geo["cells"][[busiest]])[0] - 1e-6
+    few = engine.geo_window(fine["dataset_id"], f"{w},{s},{w + 2e-6},{s + 2e-6}")
+    assert few["cells"] == 1 and 0 < few["points"] < GEO_LINK_MIN_EVENTS and few["themes"] == []
+
+
+def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_csv):
+    """A geo insight whose scale chain restates another level of its upload (``restating``) lists once, the other in its
+    ``also``: the host is the open map's own insight, else the finest; in two neighbouring views alike, and on either map
+    no level folded into a host stands as a row of its own."""
+    from insight_graph_service.core.geo_views import _restates
+    from subgroup_miner.spatial import cell_centres
+
+    fine, coarse, _ = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    graph = engine.graph()
+    host, restated = next(
+        (p, _restates(graph, p)) for p in graph.insights if graph.insight(p).dataset_id == fine["dataset_id"] and _restates(graph, p)
+    )
+    cells = engine.ws.load_geo(fine["dataset_id"], ("cells",))["cells"][engine.ws.load_covers(fine["dataset_id"])[host]]
+    lon, lat = cell_centres(cells).T
+    for dx in (0.0, 0.05):  # a view on its place, then panned
+        bbox = f"{lon.min() - 0.1 + dx},{lat.min() - 0.1},{lon.max() + 0.1 + dx},{lat.max() + 0.1}"
+        listed = {i["id"]: i for t in engine.geo_window(fine["dataset_id"], bbox)["themes"] for i in t["insights"]}
+        assert restated & {a["id"] for a in listed[host]["also"]} and not restated & set(listed)
+        assert all(a["level"] == "res 7" for a in listed[host]["also"])
+    for ds in (fine, coarse):
+        listed = {i["id"]: i for t in engine.geo_window(ds["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
+        also = {a["id"] for i in listed.values() for a in i["also"]}
+        assert not also & set(listed)
+        for pid, row in listed.items():
+            assert {a["id"] for a in row["also"]} <= _restates(graph, pid)
+            if row["also"]:
+                assert graph.insight(pid).dataset_id == ds["dataset_id"] or graph.facts(pid).resolution > min(
+                    graph.facts(a["id"]).resolution for a in row["also"]
+                )
+
+
+def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
+    """``west > east`` is a view across ±180°: the cells on both sides of it, and none elsewhere; a bbox out of range
+    is refused."""
+    from insight_graph_service.core.geo_views import window_view
+    from subgroup_miner.spatial import cell_centres
+
+    lons = (179.6, 179.9, -179.9, -179.6, 10.0)
+    centres = cell_centres(np.array([h3.latlng_to_cell(-17.0, x, 6) for x in lons]))
+    assert window_view(centres, "179.5,-18,-179.5,-16").tolist() == [True, True, True, True, False]
+    assert window_view(centres, "179.5,-18,180,-16").tolist() == [True, True, False, False, False]
+    assert window_view(centres, "-180,-18,180,-16").all()
+    for bad in ("190,0,200,1", "0,5,1,4", "nan,0,1,1"):
+        with pytest.raises(PipelineError, match="west,south"):
+            window_view(centres, bad)
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():

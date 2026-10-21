@@ -191,6 +191,20 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
     return chains
 
 
+def restating(graph: DualGraph, chain: ScaleChain) -> set[str]:
+    """The levels of the chain's upload that restate its pattern: each step, up and down, while every step before it
+    corresponds, of the same upload; an answer folds them into the pattern and the map lists them with it (docs/07_question_answering.md
+    §7.4)."""
+    upload, out = graph.facts(chain.pattern_id).upload, set()
+    for steps in (chain.up, chain.down):
+        for step in steps:
+            if step.relation != "corresponds":
+                break
+            if upload is not None and graph.facts(step.pattern_id).upload == upload:
+                out.add(step.pattern_id)
+    return out
+
+
 def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
     """The pattern against its nearest coarser level of the same upload: ``nearest`` is its first step up, which ranks
     the same upload and the nearest level first, so a reversal at the next level is never hidden by a farther one."""
