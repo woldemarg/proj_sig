@@ -138,7 +138,7 @@ SIG owns its seven node labels in that database, so use one workspace per databa
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
    - The *Prompt* tab shows the exact evidence the model saw.
 
-6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@7` (or `curl -F geo=auto@7`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ a base level without geography* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
 
    **Demo: map** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
 
@@ -149,6 +149,7 @@ curl -X POST http://127.0.0.1:8765/api/demo/geo                                 
 curl -F file=@data\housing.csv -F bins=median_income:4,housing_median_age:4 http://127.0.0.1:8765/api/upload
 curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_income_median:4 http://127.0.0.1:8765/api/upload   # points -> H3 cells
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true http://127.0.0.1:8765/api/upload   # one dataset per level
+curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true -F bins=median_income_median:4,median_income:4 http://127.0.0.1:8765/api/upload   # the same file again adds its table level: the geo levels are SKIPPED
 curl -F file=@<new version>.csv -F geo=auto@7,5 -F supersedes=<upload id of the old> http://127.0.0.1:8765/api/upload   # a new version replaces the old
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
