@@ -98,10 +98,7 @@ def place_scores(
             if (r := graph.facts(pid).resolution) is not None and (resolution is None or r <= resolution)
         }
     )
-    placed: defaultdict[tuple[str, str], set[str]] = defaultdict(set)  # (table level, the geo level placing it) -> its placed patterns
-    for e in graph.edges:
-        if e["type"] == "IN_REGION" and (by := e["props"].get("placed_by")):
-            placed[(graph.insight(e["source"]).dataset_id, by)].add(e["source"])
+    placed = graph.memoised(("placed_by", ""), lambda: _placed_by(graph))
     res_of = {by: ((ws.ready_batch_for(by) or {}).get("profile") or {}).get("geo", {}).get("resolution") for _, by in placed}
     tables = sorted(t for t in placed if res_of[t[1]] is not None and (resolution is None or res_of[t[1]] <= resolution))
     try:
@@ -117,6 +114,15 @@ def place_scores(
         scores = _zone_scores(ws, zone, tuple(levels), tuple(tables), strict=False)
     kept = set().union(*(placed[t] for t in tables))
     return {pid: v for pid, v in scores.items() if pid in kept or graph.facts(pid).resolution is not None}
+
+
+def _placed_by(graph: DualGraph) -> dict[tuple[str, str], set[str]]:
+    """(table level, the geo level placing it) -> its placed patterns: the base patterns' IN_REGION by events (#119)."""
+    placed: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    for e in graph.edges:
+        if e["type"] == "IN_REGION" and (by := e["props"].get("placed_by")):
+            placed[(graph.insight(e["source"]).dataset_id, by)].add(e["source"])
+    return placed
 
 
 def _zone_scores(

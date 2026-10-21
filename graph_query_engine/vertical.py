@@ -92,9 +92,15 @@ def drawn_regions(graph: DualGraph, pid: str) -> frozenset[str]:
         if graph.tampered(pid):
             return frozenset()
         placed = {r for _, top in _places(graph, pid).values() for r, _ in top}
-        return frozenset(placed | {r for chain in scale_chain(graph, [pid]) for r in chain.regions})
+        chain = _own_chain(graph, pid)
+        return frozenset(placed | set(chain.regions if chain else ()))
 
     return graph.memoised(("drawn", pid), build)
+
+
+def _own_chain(graph: DualGraph, pid: str) -> ScaleChain | None:
+    """The pattern's scale chain alone (``scale_chain`` of it), derived once per graph: its drawn regions and its label."""
+    return graph.memoised(("chain", pid), lambda: next(iter(scale_chain(graph, [pid])), None))
 
 
 def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
@@ -218,9 +224,8 @@ def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
 
 def scale_label(graph: DualGraph, pid: str) -> str:
     """The ``scale`` that ``scale_chain`` gives one pattern, from its first step up alone (the map labels every pattern)."""
-    if graph.facts(pid).resolution is None or not graph.facts(pid).regions:
-        return ""
-    return _scale(graph, pid, _step(graph, pid, "up", {pid}))
+    chain = _own_chain(graph, pid)
+    return chain.scale if chain else ""
 
 
 def picture(graph: DualGraph, region: str) -> dict[str, int]:
