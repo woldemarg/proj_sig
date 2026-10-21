@@ -22,12 +22,15 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
     L   the hypergeometric tail P(X >= x) of |P_loc| events drawn from N with n_R in R, under BH at FDR_Q over the level's
         regions, lift >= LIFT_MIN, x >= EVENTS_MIN
+    P   the placement of #119: L on a level of at least LIFT_MIN_REGIONS regions, S below, both at x >= min(EVENTS_MIN,
+        max(5, ceil(0.05 |P_loc|)))
 A real export prints aggregates only; its result stays in ``.scratch/results/geo_coverage_<label>.json``.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any
 
@@ -41,12 +44,13 @@ from insight_graph_service.core.geo_views import member_rows
 from insight_graph_service.core.settings import PROJECT_ROOT
 from subgroup_miner.spatial import footprint
 
-GEO_LOCATED_MIN = 0.5  # #119: a base insight with fewer of its events located gets no link
+GEO_LOCATED_MIN = 0.8  # #119: a base insight with fewer of its events located gets no link
 SHARE_MIN = 0.2  # rules S, E, F
 EVENTS_MIN = 30  # rules E, L and the lift counts
 LIFT_MIN = 1.5  # rule L
 FDR_Q = 0.05  # rule L
-RULES = ("S", "E", "F", "L")
+LIFT_MIN_REGIONS = 12  # rule P: L where a level has this many regions, S below
+RULES = ("S", "E", "F", "L", "P")
 
 
 CALIFORNIA_BINS = "median_income:4,median_income_median:4"  # the table's and the cells' median income, in quartiles
@@ -118,11 +122,14 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
     held = np.cumsum(np.sort(x)[::-1])
     pv = np.where(x > 0, hypergeom.sf(x - 1, n_map, n_r, n_loc), 1.0)  # P's |P_loc| events drawn from the map's N
     fp_in = np.bincount(idx[fp], minlength=len(n_r))
+    q = false_discovery_control(pv)
+    x_min = min(EVENTS_MIN, max(5, math.ceil(0.05 * n_loc)))
     links = {
         "S": share >= SHARE_MIN,
         "E": (x / np.minimum(n_loc, n_r) >= SHARE_MIN) & (x >= EVENTS_MIN),
         "F": fp_in / np.minimum(len(fp), occupied) >= SHARE_MIN,
-        "L": (false_discovery_control(pv) <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
+        "L": (q <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
+        "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if len(n_r) >= LIFT_MIN_REGIONS else share >= SHARE_MIN) & (x >= x_min),
     }
     strong = (lift >= 2) & (x >= EVENTS_MIN)
     return {
