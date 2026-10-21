@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -87,7 +88,7 @@ def test_upload_process_render_query(client, demo_csv):
     geo_ds = geo_batch["dataset_id"]
     assert [d["dataset_id"] for d in client.get("/api/geo").json()] == [geo_ds]
     cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
-    assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["features"]) == 884
+    assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["rings"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
     overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # its insights' places and the regions above, their trust and scale
     assert overlay["features"] and all(f["properties"]["resolution"] <= 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
@@ -404,7 +405,7 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0 && G.data", timeout=60000)
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0", timeout=60000)
         page.evaluate(_SLOW_API)
         settled = "__net.pending === 0 && !G.refreshing"
         # the filter changed twice in a row: the first one's graph answers last
@@ -456,7 +457,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0 && G.data", timeout=60000)
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0", timeout=60000)
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
         page.click(".adv summary")
@@ -523,8 +524,11 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
+        requested: list[str] = []
+        page.on("request", lambda r: requested.append(r.url))
         page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.data", timeout=60000)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
+        assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
         group = f".ds-group[data-upload='{fine['upload_id']}']"
         assert page.inner_text(f"{group} .ds-group-head") == "points.csv · 2 of 3 levels ready · 1 without findings"
         card = page.locator(f"{group} .ds", has_text="H3 r5")
@@ -536,7 +540,17 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         assert page.evaluate(bad, [["7", "FAILED", "no_viable_insights"]]) == 1
         assert page.evaluate(bad, [["8", "READY", None], ["table", "FAILED", "no_candidates"]]) == 1
         page.click("#view-switch button[data-view='map']")
-        page.wait_for_function("G.map.loaded()", timeout=30000)
+        page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
+        assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
+        stored = json.loads(engine.ws.geo_cells_path(fine["dataset_id"]).read_text(encoding="utf-8"))["features"]
+        rebuilt = page.evaluate("G.data.features")  # the package rebuilds every cell: its ring and the fields its popup shows
+        assert [f["properties"] for f in rebuilt] == [{k: v for k, v in f["properties"].items() if not k.endswith("_band")} for f in stored]
+        assert all(
+            abs(a - b) <= 1e-5
+            for f, g in zip(rebuilt, stored)
+            for p, q in zip(f["geometry"]["coordinates"][0], g["geometry"]["coordinates"][0])
+            for a, b in zip(p, q)
+        )
         busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
         popup = f"cellPopup({busiest}, centre({busiest}))"
         pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")

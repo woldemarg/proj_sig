@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
@@ -217,8 +217,8 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_datasets()
 
     @app.get("/api/geo/{dataset_id}/cells")
-    def geo_cells(dataset_id: str) -> FileResponse:
-        return FileResponse(engine.geo_cells_file(dataset_id), media_type="application/geo+json")
+    def geo_cells(dataset_id: str) -> Response:
+        return Response(engine.geo_cells_pack(dataset_id), media_type="application/json")
 
     @app.get("/api/export/geosparql.ttl")
     def export_geosparql() -> Response:

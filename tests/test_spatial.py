@@ -185,14 +185,15 @@ def test_geo_batch_end_to_end(engine, points_csv):
             assert p["target"] not in ("points", "when_active_days")
     hot = [p for p in patterns if {"attribute": "lisa_points", "value": "hot spot"} in p["conditions"] and p["effect_size"] > 0]
     assert any(p["target"] in ("share_channel_phone", "load_median", "when_late_share") for p in hot)  # the planted effects
-    cells = json.loads(engine.geo_cells_file(record["dataset_id"]).read_text(encoding="utf-8"))  # written with the batch
-    assert len(cells["features"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
+    cells = json.loads(engine.geo_cells_pack(record["dataset_id"]))  # the package of the file written with the batch
+    assert len(cells["rings"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
+    assert all(len(c) == geo["cells"] for c in cells["columns"].values()) and not [k for k in cells["columns"] if k.endswith("_band")]
     one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
     assert len(one["cells"]) == patterns[0]["support"] and 0 < len(one["points"]) <= one["n_points"]
     assert engine.geo_datasets()[0]["dataset_id"] == record["dataset_id"]
     engine.ws.save_batch({**record, "status": "FAILED"})  # a batch that failed after its files were written serves no map
     with pytest.raises(PipelineError):
-        engine.geo_cells_file(record["dataset_id"])
+        engine.geo_cells_pack(record["dataset_id"])
 
 
 def test_geo_evidence_speaks_plain_language(engine, points_csv):

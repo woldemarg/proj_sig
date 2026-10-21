@@ -543,8 +543,8 @@ class Engine:
         return geo_views.geo_datasets(self.ws)
 
     @_healthy
-    def geo_cells_file(self, dataset_id: str) -> Path:
-        return geo_views.geo_cells_file(self.ws, dataset_id)
+    def geo_cells_pack(self, dataset_id: str) -> bytes:
+        return geo_views.geo_cells_pack(self.ws, dataset_id)
 
     def _load(self, record: dict[str, Any]) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it."""

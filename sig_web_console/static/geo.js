@@ -1,14 +1,14 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, popup: null };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
-  current: () => G.ds,  // the geo dataset the map holds (its questions are suggestions())
+  current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
   toggleZone(h3) {
@@ -32,6 +32,7 @@ const GeoMap = {
   async show() {
     await ensureMap();
     G.map.resize();
+    if (G.stale) { G.stale = false; await GeoMap.refresh(); }  // what changed while another tab was open
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
     else if (G.data && !G.evidence.length) G.map.fitBounds([[G.data.bbox[0], G.data.bbox[1]], [G.data.bbox[2], G.data.bbox[3]]], { padding: viewPadding(), duration: 0 });
     scheduleWindow();
@@ -43,17 +44,17 @@ const GeoMap = {
   },
 
   suggestions() {
-    /* questions in everyday words: no column names, only a category value the data holds */
-    if (!G.data) return [];
-    const scopes = G.data.patterns.flatMap((p) => p.scope);
-    const glossary = (G.datasets.find((d) => d.dataset_id === G.ds) || {}).glossary || {};
+    /* questions in everyday words: no column names, only a category value the data holds; from the graph's insights of
+       the map's dataset, so they need no cell of it loaded */
+    const ps = S.nodes.filter((n) => n.dataset === G.want), scopes = ps.flatMap((p) => p.scope || []);
+    const glossary = (G.datasets.find((d) => d.dataset_id === G.want) || {}).glossary || {};
     const out = [];
-    if (scopes.some((s) => s.endsWith("= hot spot"))) out.push("Що особливого в найгарячіших зонах, де подій найбільше?");
-    const share = [...G.data.patterns].sort((a, b) => b.weight - a.weight)
-      .find((p) => p.phenomenon_type !== "covariance" && p.effect_size > 0 && / is (.+?)(?: \(|$)/.test(glossary[p.target] || ""));
+    if (scopes.some((s) => /=\s*hot spot$/.test(s))) out.push("Що особливого в найгарячіших зонах, де подій найбільше?");
+    const share = [...ps].sort((a, b) => b.weight - a.weight)
+      .find((p) => p.ptype !== "covariance" && p.effect > 0 && / is (.+?)(?: \(|$)/.test(glossary[p.target] || ""));
     if (share) out.push(`Де частіше трапляється «${glossary[share.target].match(/ is (.+?)(?: \(|$)/)[1]}»?`);
-    if (scopes.some((s) => /= q1$/.test(s))) out.push("Що відбувається там, де подій найменше?");
-    if (G.data.patterns.length > 3) out.push("Які зони схожі між собою, хоча розташовані в різних місцях?");
+    if (scopes.some((s) => /=\s*q1$/.test(s))) out.push("Що відбувається там, де подій найменше?");
+    if (ps.length > 3) out.push("Які зони схожі між собою, хоча розташовані в різних місцях?");
     return out;
   },
 
@@ -115,10 +116,12 @@ const GeoMap = {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.ds = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (!G.datasets.length) { G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value;
-  const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.ds) || G.datasets[0];
-  if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
+  const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
+  G.want = want.dataset_id;
+  if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
+  else if (want.dataset_id !== G.ds || !G.data) await loadDataset(want.dataset_id);
   else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); scheduleWindow(); }  // a commit changes the graph over the same cells
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
 }
@@ -243,13 +246,28 @@ function placeDensity() {
     });
 }
 
+function cellFeatures(pack) {
+  /* the cell package (GET /api/geo/{ds}/cells) as a GeoJSON FeatureCollection: each ring from its first vertex and
+     integer offsets in 1e-5°, each cell's columns as its properties */
+  const names = Object.keys(pack.columns);
+  const features = pack.rings.map((r, i) => {
+    const ring = [[r[0], r[1]]];
+    for (let k = 2; k < r.length; k += 2) ring.push([r[0] + r[k] / 1e5, r[1] + r[k + 1] / 1e5]);
+    ring.push(ring[0]);
+    const properties = { row: i };
+    for (const n of names) properties[n] = pack.columns[n][i];
+    return { type: "Feature", id: i, geometry: { type: "Polygon", coordinates: [ring] }, properties };
+  });
+  return { type: "FeatureCollection", features, bbox: pack.bbox, meta: pack.meta, patterns: pack.patterns };
+}
+
 async function loadDataset(ds) {
   await ensureMap();
   GeoMap.unfocus();  // row ids are per dataset: nothing of the old one stays painted
   G.loading = true; W.seq++; W.data = null; renderWindow();  // the list waits for the new dataset; a view asked before is dropped
   try {
-    const data = await api(`/api/geo/${encodeURIComponent(ds)}/cells`);
-    G.ds = ds; G.data = data; G.evidence = [];
+    const data = cellFeatures(await api(`/api/geo/${encodeURIComponent(ds)}/cells`));
+    G.ds = G.want = ds; G.data = data; G.evidence = [];
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
     G.map.getSource("cells").setData(data);
