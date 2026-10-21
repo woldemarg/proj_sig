@@ -7,7 +7,7 @@ import time
 
 import httpx
 import pytest
-from conftest import FakeLLM, make_engine, serve
+from conftest import FakeLLM, make_engine, serve, upload_levels
 from dev import chromium, compose
 
 from evidence_narrator_service.app import create_app as create_narrator
@@ -300,6 +300,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate(opacity) != first
         page.keyboard.press("Escape")
         assert page.evaluate("G.focusId") is None and page.evaluate("G.focus.length") == 0 and page.evaluate(painted) == 0
+        assert page.is_visible("#drawer")  # Esc closes one layer a press: the focus, then the drawer
+        page.keyboard.press("Escape")
+        assert page.is_hidden("#drawer")
         page.locator(".msg-bot").last.locator("a.cite").first.click()
         page.evaluate("loadDataset(G.ds)")  # a dataset loaded again, or another one: no cell of the old focus stays painted
         assert page.evaluate("G.focusId") is None and page.evaluate(painted) == 0
@@ -498,5 +501,57 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         ]
         engine.process(queued["batch_id"])
         page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
+        browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
+    """A level with nothing to mine is a neutral card its group counts apart; the map holds one cell popup, closed by a
+    focus from it (which shows the insight's card) and by another tab; Esc closes the popup, then the focus, then the
+    drawer, one a press, and leaves the question field alone."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    fine, coarse, _ = upload_levels(engine, points_csv, geo="auto@8,5", table=True)
+    assert coarse["status"] == "FAILED" and coarse["error"]["code"] == "invalid_schema"  # too few cells at 5
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.data", timeout=60000)
+        group = f".ds-group[data-upload='{fine['upload_id']}']"
+        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · 2 of 3 levels ready · 1 without findings"
+        card = page.locator(f"{group} .ds", has_text="H3 r5")
+        assert card.locator(".chip").inner_text() == "No findings" and not card.locator(".chip.bad, .ds-error").count()
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.map.loaded()", timeout=30000)
+        busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
+        popup = f"cellPopup({busiest}, centre({busiest}))"
+        pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")
+        page.evaluate(f"{popup}; {popup}")
+        assert page.locator(".sig-pop").count() == 1  # one popup at a time
+        page.click(".sig-pop .pp-ins >> nth=0")  # a focus from the popup closes it: the card shows
+        assert page.locator(".sig-pop").count() == 0 and page.is_visible("#map-card")
+        page.evaluate(f"inspect('{pid}')")
+        page.wait_for_selector("#drawer:not([hidden])")
+        page.evaluate(popup)
+        layers = "[document.querySelectorAll('.sig-pop').length, GeoMap.focused(), !$('drawer').hidden]"
+        assert page.evaluate(layers) == [1, True, True]
+        page.focus("#question")
+        page.keyboard.press("Escape")  # a field keeps its Esc
+        assert page.evaluate(layers) == [1, True, True]
+        page.evaluate("document.activeElement.blur()")
+        for left in ([0, True, True], [0, False, True], [0, False, False]):
+            page.keyboard.press("Escape")
+            assert page.evaluate(layers) == left
+        page.evaluate(popup)
+        page.click("#view-switch button[data-view='graph']")  # another tab closes it
+        assert page.locator(".sig-pop").count() == 0
         browser.close()
         assert not errors, errors
