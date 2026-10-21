@@ -216,7 +216,7 @@ function init() {
   on(thread, ".insight-card .ic-theme", (el) => { inspect(el.dataset.id); GeoMap.openTheme(el.dataset.id); });
   on(thread, ".insight-card .ic-ask", (el) => {  // asked with its place: the cells it is drawn by on the open map, as a zone
     const p = turnOf(el).insight.node.props, cells = GeoMap.placeOf(p.id);
-    ask(askAbout(p), cells.length ? { cells } : null);
+    ask(askAbout(p), cells.length ? { cells } : false);  // never with a zone selected for other questions
   });
   on(thread, ".insight-card .ic-graph", async (el) => {  // a filter on another dataset would hide its node
     const p = turnOf(el).insight.node.props, sel = $("dataset-filter");

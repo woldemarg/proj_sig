@@ -302,6 +302,14 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(
             f"!G.focusId && $('drawer-title').textContent !== {title!r} && document.querySelector('#inspector .drawer-note')", timeout=10000
         )
+        page.evaluate("GeoMap.toggleZone(G.data.features[0].properties.h3)")  # a zone selected for other questions
+        turns = page.evaluate("S.chat.length")
+        page.evaluate(f"pickInsight('{off}', null)")  # the card of an insight this map does not draw: it has no place here
+        page.wait_for_function(f"S.chat.length === {turns + 1}")
+        page.locator(".msg-bot").last.locator(".ic-ask").click()
+        page.wait_for_function(f"S.chat.length === {turns + 2} && !S.busy", timeout=30000)
+        assert page.evaluate("S.chat.at(-1).zone") == 0  # asked without a zone, never with the one selected
+        page.evaluate("GeoMap.clearZone()")
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )

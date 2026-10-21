@@ -207,8 +207,8 @@ function renderThread() {
 }
 
 async function ask(question, zone = null) {
-  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty
-  if (!zone && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
+  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty; false: asked without one
+  if (zone === null && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
   if ((!question && !zone) || S.busy) return;
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();

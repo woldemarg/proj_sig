@@ -20,7 +20,7 @@ and N all located events. The candidate rules for #119, every share over |P_loc|
     S   x / |P_loc| >= SHARE_MIN                                  R holds a fifth of P
     E   x / min(|P_loc|, n_R) >= SHARE_MIN, x >= EVENTS_MIN       IN_REGION's rule, counted in events
     F   |fp ∩ R| / min(|fp|, occupied cells of R) >= SHARE_MIN     IN_REGION's rule on the GEO_FOOTPRINT_SHARE footprint
-    L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small, never below the exact hypergeometric one), under BH at FDR_Q over the level's
+    L   the binomial tail P(X >= x | n_R, |P_loc| / N) (where small and x >= 5, never below the exact hypergeometric one), under BH at FDR_Q over the level's
         regions holding a located event, lift >= LIFT_MIN, x >= EVENTS_MIN
     P   the placement of #119 (place_table): L on a level of at least LIFT_MIN_REGIONS regions holding a located event, S with
         lift >= 1 below, at x >= link_min_events(|P_loc|)
