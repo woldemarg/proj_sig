@@ -430,6 +430,7 @@ function focusNodes(ids) {
   const cy = S.cy; if (!cy) return;
   const els = cy.collection(ids.map((id) => cy.getElementById(id)).filter((e) => e.nonempty()));
   if (els.empty()) return;
+  cy.stop(true);  // a new focus replaces a flight still running or queued
   if (calm()) cy.fit(els, 90);  // reduced motion: straight there
   else cy.animate({ fit: { eles: els, padding: 90 } }, { duration: 350 });
 }
