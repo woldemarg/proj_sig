@@ -12,6 +12,7 @@ so answers are traceable to table slices.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from typing import Any
@@ -21,7 +22,7 @@ from graph_query_engine.graph import DualGraph, describe_components, insight_rea
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
+from insight_contracts import SpatialProvenance, dataset_node_id, dimension_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -45,6 +46,12 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
 AREA_TAG = {True: " | in the asked area", False: " | outside the asked area"}  # an item of a level the zone weighed
 AREA_WORDS = {True: " (у виділеній зоні)", False: " (поза виділеною зоною)"}
 WEAKEST_FIRST = (5, 6, 2, 1)
+PLAIN_HEAD = {  # the PLAIN LANGUAGE heading: a geo item's rows are map cells, a table's are its own
+    True: "rows are map cells built from point events; a subgroup is a set of map cells",
+    False: "column and category meanings declared for this dataset",
+}
+CONTEXT_VALUE_MAX = 300  # characters of one DATASET CONTEXT value, then "…"
+CONTEXT_MAX = 2000  # characters of the DATASET CONTEXT entries; those past it are counted, not shown
 
 
 @dataclass
@@ -104,6 +111,7 @@ class Evidence:
             self._head(),
             self._dataset_lines(),
             self._plain_lines(plain),
+            self._context_lines(),
             self._baseline_lines(),
             self._anchor_lines(),
             self._evidence_lines(plain),
@@ -151,14 +159,41 @@ class Evidence:
             lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
-    @staticmethod
-    def _plain_lines(plain: list[tuple[str, str]]) -> list[str]:
+    def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
         if not plain:
             return []
+        geo = any(it.provenance.get("spatial") for it in self.items)
+        return ["", f"PLAIN LANGUAGE ({PLAIN_HEAD[geo]}):", *(f"- {meaning}" for _, meaning in plain)]
+
+    def _context_lines(self) -> list[str]:
+        """DATASET CONTEXT: each metadata document's dataset description and, for every column the evidence names (seed
+        items' first; a geo cell's derivation read as its source column, ``wording.source_column``), its assistant
+        context or description, both JSON-quoted (a document's instruction stays a quoted value), clipped at
+        ``CONTEXT_VALUE_MAX``; entries past ``CONTEXT_MAX`` characters are counted in ``omitted_columns``."""
+        entries: list[str] = []
+        for d in self.datasets:
+            if not (doc := d.get("metadata_doc")):
+                continue
+            if about := doc["dataset"].get("description"):
+                entries.append(f"- dataset {d['dataset_id']}: {_quoted(about)}")
+            items = sorted((it for it in self.items if it.provenance["dataset_id"] == d["dataset_id"]), key=lambda it: it.role != "seed")
+            named = (wording.source_column(n, doc["columns"]) for it in items for n in _named(it))
+            for col in dict.fromkeys(filter(None, named)):
+                if text := doc["columns"][col].get("assistant_context") or doc["columns"][col].get("description"):
+                    entries.append(f"- {json.dumps(col, ensure_ascii=False)}: {_quoted(text)}")
+        if not entries:
+            return []
+        shown, used = [], 0
+        for entry in entries:
+            if used + len(entry) + 1 > CONTEXT_MAX:
+                break
+            shown.append(entry)
+            used += len(entry) + 1
         return [
             "",
-            "PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):",
-            *(f"- {meaning}" for _, meaning in plain),
+            "DATASET CONTEXT (declared by the uploader; describes columns, asserts nothing about the findings):",
+            *shown,
+            *([f"- omitted_columns: {len(entries) - len(shown)}"] if len(shown) < len(entries) else []),
         ]
 
     def _baseline_lines(self) -> list[str]:
@@ -317,28 +352,41 @@ class Evidence:
 
     @cached_property
     def _glossary(self) -> dict[str, str]:  # read by every reword of one rendering: merged once
-        return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
+        """The datasets' glossaries, each its derived English one (``glossary``) under the declared one (``user_glossary``)."""
+        return {k: v for d in self.datasets for k, v in (d.get("glossary", {}) | d.get("user_glossary", {})).items()}
+
+    @cached_property
+    def _names(self) -> tuple[re.Pattern[str], dict[str, str]] | None:
+        """One pattern over every glossary column name, raw and humanized, longest first, matched whole: never inside a
+        word nor a longer name (``rate`` leaves ``return rate`` alone)."""
+        names = {n: meaning for col, meaning in self._glossary.items() if "=" not in col for n in (col, humanize(col))}
+        if not names:
+            return None
+        alternatives = "|".join(map(re.escape, sorted(names, key=len, reverse=True)))
+        return re.compile(rf"(?<![\w])(?<!\w )(?:{alternatives})(?![\w])(?! \w)"), names
 
     def reword(self, text: str) -> str:
-        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning."""
-        for col, meaning in sorted(self._glossary.items(), key=lambda kv: -len(kv[0])):
-            if "=" not in col:
-                text = text.replace(humanize(col), meaning).replace(col, meaning)
-        return text
+        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning, in one pass."""
+        if self._names is None:
+            return text
+        pattern, names = self._names
+        return pattern.sub(lambda m: names[m[0]], text)
 
     def reword_condition(self, condition: str) -> str:
-        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>'."""
+        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>', a quantile
+        band's value with its place among the dataset's bands (a quarter only of four)."""
         glossary = self._glossary
         attribute, _, value = condition.partition("=")
-        return glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
+        words = glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
+        bands = next((d["bands"][attribute] for d in self.datasets if attribute in d.get("bands", {})), None)
+        if condition in glossary or not bands or not re.fullmatch(r"q\d+", value):
+            return words
+        return f"{words} ({f'quarter {value[1:]} of 4' if bands == 4 else f'band {value[1:]} of {bands}'})"
 
     def plain_language(self) -> list[tuple[str, str]]:
-        """(column, meaning) for the derived columns the evidence names, from the datasets' glossaries."""
+        """(column or ``column=value``, meaning) for what the evidence names that the datasets' glossaries hold."""
         glossary = self._glossary
-        named: list[str] = []
-        for it in self.items:
-            named += [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]]
-            named += it.statistics["covariance"].get("pair", [])
+        named = [n for it in self.items for n in (*_named(it), *it.scope)]
         return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
@@ -603,8 +651,19 @@ def _anchor_section(result: TraversalResult, graph: DualGraph) -> list[dict[str,
     return attractors
 
 
+def _named(it: EvidenceItem) -> list[str]:
+    """The columns an item names: its scope's attributes, its shifts' metrics, its correlation's pair."""
+    return [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]] + it.statistics["covariance"].get("pair", [])
+
+
+def _quoted(text: str) -> str:
+    """A declared value JSON-quoted, clipped at ``CONTEXT_VALUE_MAX`` characters."""
+    return json.dumps(text if len(text) <= CONTEXT_VALUE_MAX else text[: CONTEXT_VALUE_MAX - 1] + "…", ensure_ascii=False)
+
+
 def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
-    """The items' datasets (``DATASETS``): file, rows, batch, the declared trust and the glossary."""
+    """The items' datasets (``DATASETS``): file, rows, batch, the declared trust, the glossaries, the metadata document
+    and the band count of each quantile-band column the items name."""
     datasets = []
     for ds in sorted({it.provenance["dataset_id"] for it in items}):
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
@@ -612,10 +671,12 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity") if k in props}
+            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary", "metadata_doc") if props.get(k)}
         )
-        if dnode["props"].get("glossary"):
-            datasets[-1]["glossary"] = dnode["props"]["glossary"]
+        named = {c.split("=", 1)[0] for it in items if it.provenance["dataset_id"] == ds for c in it.scope}
+        dims = (graph.nodes.get(dimension_node_id(ds, a), {"props": {}})["props"] for a in sorted(named) if a.endswith("_band"))
+        if bands := {d["name"]: d["cardinality"] for d in dims if d.get("cardinality")}:
+            datasets[-1]["bands"] = bands
     return datasets
 
 

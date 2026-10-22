@@ -268,7 +268,9 @@ def test_indicator_registry(engine, demo_csv):
     ds, patterns = record["dataset_id"], sorted(p["id"] for p in engine.ws.patterns())
     margin = engine.graph().nodes[f"M:{ds}:margin"]["props"]
     assert (margin["indicator"], margin["unit"]) == ("gross margin", "%") and "unit" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]
-    assert '- margin (indicator "gross margin", unit "%"): median' in engine.evidence(question).evidence_prompt
+    assert (
+        '- gross margin (%) (indicator "gross margin", unit "%"): median'
+    )  # the indicator names the metric (#165) in engine.evidence(question).evidence_prompt
     with TestClient(create_app(engine)) as client:
         assert client.patch(f"/api/datasets/{ds}", json={"indicators": "margin:net_margin"}).json()["indicators"] == {
             "margin": {"indicator": "net_margin"}
@@ -420,3 +422,29 @@ def test_credibility_from_independent_sources_phase_a():
     assert levels([a, ins("V", "v2", -1.4)], [member("A", "A-1"), member("V", "A-1")])[0] == {"A": 6, "V": 6}  # not independent
     stronger = replace(a, p_value=0.04, p_adjusted=0.049, stability=0.51, weight=0.21)
     assert levels([stronger, b], [member("A", "A-1"), member("B", "A-1")])[0] == {"A": 1, "B": 1}  # p, stability, weight: unread
+
+
+def test_a_changed_declared_language_is_caught_and_ignored(cfg, demo_csv):
+    """The glossary and the metadata document are signed with the record (``BATCH_DIGEST_FIELDS``): either changed by hand
+    is a ``metadata_mismatch`` whose Dataset node declares neither, whose prompt has no PLAIN LANGUAGE nor DATASET
+    CONTEXT, and which no PATCH may sign again."""
+    from test_uploads import DOC, QUESTION
+
+    from insight_graph_service.core.snapshot import metadata_digest
+
+    engine = make_engine(cfg)
+    ds = engine.process(engine.submit(demo_csv, glossary='{"category": "товарна категорія"}', metadata=DOC)["batch_id"])["dataset_id"]
+    prompt = engine.evidence(QUESTION).evidence_prompt
+    assert "PLAIN LANGUAGE" in prompt and "DATASET CONTEXT" in prompt
+    record = engine.ws.ready_batch_for(ds)
+    for field in ("user_glossary", "metadata_doc"):
+        assert metadata_digest({**record, field: {"forged": "x"}}) != record["metadata_digest"], field
+    engine.ws.save_batch({**record, "user_glossary": {"category": "forged"}})  # by hand, past the API
+    engine = make_engine(cfg)  # an ordinary restart rebuilds the snapshot
+    props = engine.graph().nodes[f"DS:{ds}"]["props"]
+    assert props["integrity"] == "mismatch" and "user_glossary" not in props and "metadata_doc" not in props
+    prompt = engine.evidence(QUESTION).evidence_prompt
+    assert "PLAIN LANGUAGE" not in prompt and "DATASET CONTEXT" not in prompt and "forged" not in prompt
+    with pytest.raises(PipelineError) as refused:
+        engine.update_dataset_metadata(ds, glossary="")
+    assert refused.value.code == "metadata_mismatch"

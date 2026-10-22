@@ -91,6 +91,10 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
         page.set_input_files("#file", str(housing))
+        page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
+        page.set_input_files(
+            "#metadata", files=[{"name": "housing.md", "mimeType": "text/markdown", "buffer": b"Columns:\nmedian_income\n  Title (uk): dohid\n"}]
+        )
         page.click("#upload-btn")
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
@@ -113,6 +117,18 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
             "california_housing.csv · H3 r5",
             "california_housing.csv · таблиця",
         ]
+        table = next(b for b in levels if b["level"] == "table")
+        assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
+        chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
+        assert page.locator(chips).all_inner_texts()[-2:] == ["глосарій · 2 колонки", "документ · 1 колонка"]
+        # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
+        patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)
+        assert patched.status_code == 200
+        page.evaluate("refreshBatches()")
+        page.wait_for_function("Object.values(G.patterns).some((p) => p.reading.what.includes('вартість житла'))", timeout=30000)
+        renamed = page.evaluate("Object.keys(G.patterns).find((pid) => G.patterns[pid].reading.what.includes('вартість житла'))")
+        page.evaluate(f"GeoMap.pick('{renamed}')")
+        page.wait_for_function("$('map-card').querySelector('.mc-shift').textContent.includes('вартість житла')", timeout=10000)
         engine.process(queued["batch_id"])
         page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
         browser.close()

@@ -48,6 +48,12 @@
           <label class="small" for="indicators">Що вимірюють метрики</label>
           <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
           <div class="hint"><span class="mono">metric:indicator[:unit]</span> — що вимірює метрика, щоб порівнювати датасети. З просторовим аналізом метрики — комірок (<span class="mono">price_median</span>). В аналізі не бере участі.</div>
+          <label class="small" for="glossary">Що означають колонки</label>
+          <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
+          <div class="hint">JSON: назва колонки чи пари <span class="mono">колонка=значення</span> → слова, якими її читати. Перекриває документ і показники.</div>
+          <label class="small" for="metadata">Документ метаданих</label>
+          <input class="field" type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown">
+          <div class="hint">Текстовий опис датасету: заголовок, потім <span class="mono">Columns:</span> і блок на колонку з рядками <span class="mono">Ключ: значення</span>. Модель читає його як довідку про колонки.</div>
           <label class="small" for="source">Джерело</label>
           <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
           <label class="small" for="reliability">Надійність джерела</label>

@@ -70,7 +70,9 @@ function datasetTrust(t) {
   if (!t) return "";
   if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "метадані не пройшли перевірку", "Запис датасету більше не збігається з відбитком своїх метаданих: його джерело, надійність і показники ігноруються")}</div>`;
   const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "джерело"} · ${t.reliability}`, `${word("reliability")} (шкала Адміралтейства): ${word(`reliability_${t.reliability}`)}`) : "") +
-    (t.integrity === "unverified" ? chip("warn", "метадані не перевірено", "Записано до появи відбитків метаданих: джерело й оцінку не перевірено") : "");
+    (t.integrity === "unverified" ? chip("warn", "метадані не перевірено", "Записано до появи відбитків метаданих: джерело й оцінку не перевірено") : "") +
+    (t.glossary_columns ? chip("", `глосарій · ${plural(t.glossary_columns, "колонка", "колонки", "колонок")}`, "Заявлені назви колонок і категорій: так їх читають інсайти й відповіді") : "") +
+    (t.metadata_columns ? chip("", `документ · ${plural(t.metadata_columns, "колонка", "колонки", "колонок")}`, t.about || "Документ метаданих: довідка про колонки для відповідей") : "");
   return chips ? `<div class="ds-src">${chips}</div>` : "";
 }
 
@@ -123,7 +125,7 @@ async function refreshBatches() {
     sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
   }
   // one key for what every view follows: the READY batches and the dataset filter
-  const viewKey = batches.filter((b) => b.status === "READY").map((b) => b.batch_id).join(",") + "|" + sel.value;
+  const viewKey = batches.filter((b) => b.status === "READY").map((b) => `${b.batch_id}:${b.metadata_digest || ""}`).join(",") + "|" + sel.value;  // a PATCH re-signs its record
   let map;
   if (viewKey !== S.lastReady) {
     S.lastReady = viewKey;
@@ -147,8 +149,10 @@ async function upload() {
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
+  fd.append("glossary", $("glossary").value);
+  if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
   setUploadMsg(`Завантажую ${f.name}…`);
   $("upload-btn").disabled = true;
-  try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче."); $("file").value = ""; $("file-name").textContent = ""; refreshBatches(); }
+  try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче."); $("file").value = ""; $("metadata").value = ""; $("file-name").textContent = ""; refreshBatches(); }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }

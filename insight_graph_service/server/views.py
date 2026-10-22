@@ -88,10 +88,19 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         if e["source"] in keep and e["target"] in keep and (e["type"] != "IN_REGION" or e["target"] in drawn_regions(graph, e["source"]))
     ]  # an insight's IN_REGION to the regions drawn for it: a broad one lies in hundreds more
     trust = {
-        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]}
+        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]} | _declared(n["props"])
         for n in graph.of_kind("Dataset")
-    }  # every dataset's trust, whatever the filter
+    }  # every dataset's trust and declared language, whatever the filter
     return {"nodes": nodes, "edges": edges, "regions": len(regions), "stats": graph.snapshot.get("stats", {}), "datasets": trust}
+
+
+def _declared(props: dict[str, Any]) -> dict[str, Any]:
+    """What a dataset card says of its declared language: the columns its glossary and its metadata document name, and
+    the document's description of the dataset."""
+    out = {"glossary_columns": len({k.split("=", 1)[0] for k in props.get("user_glossary", {})})}
+    if doc := props.get("metadata_doc"):
+        out |= {"metadata_columns": len(doc["columns"]), "about": doc["dataset"].get("description", "")}
+    return {k: v for k, v in out.items() if v}
 
 
 IN_REGION_SHOWN = 25  # a pattern's regions in its panel

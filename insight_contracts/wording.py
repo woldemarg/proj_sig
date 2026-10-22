@@ -9,7 +9,7 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
@@ -178,6 +178,18 @@ def plural(n: int, one: str, few: str, many: str) -> str:
     if n % 10 == 1 and n % 100 != 11:
         return one
     return few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+
+
+def source_column(column: str, declared: Collection[str]) -> str | None:
+    """The declared column a dataset column stands for: itself, a band's (``<c>_band``), a geo cell's derivation
+    (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``); None when it is none of them."""
+    if column in declared:
+        return column
+    for suffix in ("_band", *_DERIVED):
+        if column.endswith(suffix) and column.removesuffix(suffix) in declared:
+            return column.removesuffix(suffix)
+    rest = column.removeprefix("share_")
+    return next((c for c in sorted(declared, key=len, reverse=True) if rest != column and rest.startswith(c + "_")), None)
 
 
 def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
