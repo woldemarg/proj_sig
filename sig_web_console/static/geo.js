@@ -234,7 +234,7 @@ function ensureMap() {
       if (!pointer) requestAnimationFrame(() => {
         const ev = pointer, f = m.queryRenderedFeatures(ev.point, { layers: ["cells-fill"] })[0];
         pointer = null;
-        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${num(f.properties.points, 0)} pts` : "");
+        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${plural(f.properties.points, "подія", "події", "подій")}` : "");
         m.getCanvas().style.cursor = f ? "pointer" : "";
       });
       pointer = e;
@@ -306,7 +306,7 @@ async function loadDataset(ds) {
     colorBy(G.metric);
     const sac = info.sac || {};
     $("map-title").textContent = info.filename || ds;
-    $("map-meta").innerHTML = `H3 ${levelName(`res ${info.resolution}`)} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
+    $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
       (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
@@ -441,11 +441,11 @@ function renderCard(p, item, pts) {
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["знайдено на рівні", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      ? [["де знайдено", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
       : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 0)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
-    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
+    (item ? `<div class="mc-path">${esc(word(`role_${item.role}`))}</div>` : "");
   $("map-card").hidden = false;
 }
 
@@ -463,12 +463,12 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
     `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
-    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
+    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   GeoMap.closePopup();
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);

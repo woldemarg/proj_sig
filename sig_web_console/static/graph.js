@@ -295,7 +295,7 @@ async function loadGraph() {
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
-  $("view-caption").textContent = S.nodes.length ? `${plural(S.nodes.length, "інсайт", "інсайти", "інсайтів")} · ${plural(themes, "тема", "теми", "тем")} у вигляді` : "У вигляді немає інсайтів";
+  $("view-caption").textContent = S.nodes.length ? `Показано: ${plural(S.nodes.length, "інсайт", "інсайти", "інсайтів")} · ${plural(themes, "тема", "теми", "тем")}` : "Немає інсайтів для показу";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
@@ -379,7 +379,7 @@ function renderTable() {
   const maxW = Math.max(...S.nodes.map((d) => d.weight || 0), 0.01);
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
-    const effect = d.ptype === "covariance" ? "corr. change" : `${signed(d.effect)} sd`;
+    const effect = d.ptype === "covariance" ? word("covariance") : `${signed(d.effect)} sd`;
     return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
       `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
@@ -491,7 +491,7 @@ function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
   const [ccls, cwords] = cred(p.credibility), integrity = p.integrity || "unverified";
   const basis = p.credibility_basis || {};
-  const source = ds.integrity === "mismatch" ? `${chip("bad", "невідоме")} метадані датасету не пройшли перевірку цілісності`
+  const source = ds.integrity === "mismatch" ? `${chip("bad", "невідома")} метадані датасету не пройшли перевірку цілісності`
     : `${chip("", ds.reliability || "F")} ${esc(ds.source || "джерело не заявлено")} — ${esc(word(`reliability_${ds.reliability || "F"}`))}${ds.integrity === "unverified" ? " (метадані не перевірено)" : ""}`;
   const by = basis.rule === "place" ? "порівняно за місцем" : basis.rule === "anchor" ? "порівняно за темою й метрикою" : "";
   const others = [...(basis.confirmed_by || []), ...(basis.patterns || []).filter((x) => !(basis.confirmed_by || []).includes(x))];
@@ -513,10 +513,10 @@ function scaleRows(c, labels) {
 function whereRows(places) {
   /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
   const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% інсайту` : "", r.lift_words ? `${word("place_lift")}: ${r.lift_words}` : "", r.n !== undefined ? plural(r.n, "подія", "події", "подій") : ""].filter(Boolean).join(" · ");
-  return `<h4>${cap(word("scope"))}</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
+  return `<h4>Де</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
 }
 
-const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Батч", Region: "Регіон мапи" };
+const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Обробка", Region: "Регіон мапи" };
 
 async function inspect(id, note = "") {
   const within = $("drawer").contains(document.activeElement);  // a drawer row followed: the focus stays in the drawer
@@ -546,18 +546,18 @@ async function inspect(id, note = "") {
     html += `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
     html += `<details class="nb-group"><summary>Походження</summary>` + kv([
-      ["Датасет", esc(`${p.provenance.filename}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Батч", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
+      ["Датасет", esc(`${p.provenance.filename}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
       ["Селектор", `<span class="mono">${esc(p.expression)}</span>`], ["Рушій", esc(p.provenance.engine)], ["Посилання на рядки", `<span class="mono">${esc(p.provenance.rows_ref)}</span>`],
       ["Модель опису", esc(`${p.embedding.model_id} · ${p.embedding.dim}d · ${p.embedding.representation_version}`)],
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
     $("drawer-title").textContent = n.label;
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += `<h4>Підпис теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
+    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
     html += `<h4>Подробиці</h4>` + kv([
       ["Колонки", esc(p.dimensions.map(human).join(", "))], ["Метрики", esc(p.targets.map(human).join(", "))],
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
-      ["Оновлено в батчі", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
+      ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
   } else if (n.kind === "Region") {
     $("drawer-title").textContent = `рівень ${p.resolution} · ${p.h3}`;

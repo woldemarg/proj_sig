@@ -570,7 +570,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         poll = "async () => { await refreshBatches(); clearTimeout(S.poll); }"
         step = "#batches .ds:not(.clickable) .ds-step"
         page.evaluate(poll)
-        assert re.fullmatch(r"Кодування інсайтів… крок 6 з 10 · 1 хв 1\d с", page.inner_text(step))
+        assert re.fullmatch(r"Індексування інсайтів… крок 6 з 10 · 1 хв 1\d с", page.inner_text(step))
         kept = "[...document.querySelectorAll('#batches .ds.clickable')]"
         assert page.evaluate(f"{kept}.map((c) => c.dataset.ds).sort().join()") == ",".join(sorted(["D-r7", ds]))
         page.evaluate(f"() => {{ window.__cards = {kept}; window.__opt = $('dataset-filter').options[1]; }}")
