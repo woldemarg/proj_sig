@@ -45,7 +45,7 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
+from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, forget_tables, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
 
@@ -136,6 +136,16 @@ class Engine:
             yield
         finally:
             self._lock.release()
+
+    @contextmanager
+    def _reading(self) -> Iterator[None]:
+        """A batch reads the parse its upload's levels share (``read_file(shared=True)``); it goes once no batch is left
+        to read it."""
+        try:
+            yield
+        finally:
+            if not self.ws.unfinished_batches():
+                forget_tables()
 
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
@@ -325,9 +335,11 @@ class Engine:
             except IngestionError as exc:
                 refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
+            forget_tables()
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
         if refused:
-            path.unlink(missing_ok=True)  # refused: the file is not kept
+            path.unlink(missing_ok=True)  # refused: the file is not kept, nor its parse
+            forget_tables()
             raise refused
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
@@ -336,6 +348,7 @@ class Engine:
             upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
         if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
             path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
+            forget_tables()
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
         options = {
             "filename": name,
@@ -424,7 +437,7 @@ class Engine:
     def process(self, batch_id: str) -> dict[str, Any]:
         """One batch through its stages (docs/09_operations.md §9.1): read, mined and embedded outside any transaction, then
         committed in one whose READY record is the commit point; readers switch to its graph only after that."""
-        with self._lock:
+        with self._lock, self._reading():
             record = self.ws.load_batch(batch_id)
             if record is None:
                 raise PipelineError("unknown_batch", batch_id)
@@ -434,7 +447,7 @@ class Engine:
             timings: dict[str, float] = {}
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
-                    loaded = self._load(record)
+                    loaded = self._load(record, shared=True)
                     record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
@@ -557,8 +570,9 @@ class Engine:
     def geo_cells_pack(self, dataset_id: str) -> bytes:
         return geo_views.geo_cells_pack(self.ws, dataset_id)
 
-    def _load(self, record: dict[str, Any]) -> LoadedDataset:
-        """The batch's stored file read with its own options, as its processing read it."""
+    def _load(self, record: dict[str, Any], shared: bool = False) -> LoadedDataset:
+        """The batch's stored file read with its own options, as its processing read it; ``shared`` for a level being
+        processed, never for a re-check (``verify``), which reads the file as it is now."""
         return load_dataset(
             Path(record["source_path"]),
             self.settings.miner,
@@ -568,6 +582,7 @@ class Engine:
             geo=record.get("geo"),
             strict=record.get("strict", True),
             locator=record.get("locator"),
+            shared=shared,
         )
 
     @_healthy

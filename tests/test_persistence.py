@@ -416,3 +416,63 @@ def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_pat
         with pytest.raises(IngestionError) as exc:
             load_dataset(table, cfg, **option)
         assert exc.value.code == "invalid_options"
+
+
+def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_csv, tmp_path):
+    """``read_file`` gives the frame pandas' Python parser gave — columns, types and values, a leading BOM kept in the
+    first name, one type per column from all its rows — and the dataset id the bytes always gave."""
+    import hashlib
+
+    import pandas as pd
+
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from subgroup_miner import ingestion
+
+    semicolons = tmp_path / "semi.txt"
+    semicolons.write_text('city;value;note\n"Kyiv";0.1234567890123456789;"a; b"\nLviv;1e-310;c\n', encoding="utf-8")
+    boms = []
+    for i, header in enumerate(["region,value", '"region",value', ",value", "a,a"]):  # plain, quoted, empty, repeated
+        boms.append(tmp_path / f"bom{i}.csv")
+        boms[-1].write_bytes(f"\ufeff{header}\nEU,1\nUS,2\n".encode())
+    mixed = tmp_path / "mixed.csv"  # a code column numeric-looking for its first 300,000 rows
+    mixed.write_text("code,value\n" + "".join(f"{i % 900:05d},{i}\n" for i in range(300_000)) + "x00042,1\n")
+    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, *boms, mixed):
+        pd.testing.assert_frame_equal(ingestion.read_file(path)[0], pd.read_csv(path, sep=None, engine="python"), check_exact=True)
+    assert (
+        ingestion.dataset_fingerprint(ingestion.read_file(points_csv)[1], {})
+        == "ds-" + hashlib.sha256(points_csv.read_bytes() + b"[]").hexdigest()[:12]
+    )
+
+
+def test_an_upload_parses_its_file_once_and_a_recheck_reads_it_anew(cfg, points_csv, demo_csv):
+    """The ``@auto`` choice, each level and each dataset id of one upload read one parse, gone once no batch waits and
+    after a refused upload; a re-check reads the file as it is now: an edit of the same length under the old mtime is
+    ``source_changed``, a file gone ``unsupported_file``."""
+    import os
+    from pathlib import Path
+    from unittest import mock
+
+    import pandas as pd
+
+    from subgroup_miner import ingestion
+
+    engine = make_engine(cfg)
+    ingestion.forget_tables()
+    with mock.patch.object(ingestion.pd, "read_csv", wraps=pd.read_csv) as parse:
+        levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert len(levels) == 3 and all(r["status"] == "READY" for r in levels)
+    assert parse.call_count == 1 and ingestion._kept.cache_info().currsize == 0  # one parse, then gone
+    with demo_csv.open("rb") as f, pytest.raises(engine_mod.PipelineError):
+        engine.upload("demo.csv", f, geo="nowhere@auto")  # no such point columns: refused
+    assert ingestion._kept.cache_info().currsize == 0
+    table = next(r for r in levels if r["level"] == "table")
+    pid = next(p for p, ins in engine.graph().insights.items() if ins.dataset_id == table["dataset_id"])
+    assert engine.verify_pattern(pid)["status"] == "reproduced"
+    stored = Path(table["source_path"])
+    st, raw = stored.stat(), stored.read_bytes()
+    stored.write_bytes(raw.replace(b"4", b"5", 1))  # the same length, put back under the old mtime
+    os.utime(stored, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert engine.verify_pattern(pid)["status"] == "source_changed"
+    with pytest.raises(ingestion.IngestionError, match="not found") as gone:
+        ingestion.read_file(stored.with_name("gone.csv"))
+    assert gone.value.code == "unsupported_file"

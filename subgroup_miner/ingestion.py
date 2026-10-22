@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import functools
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,10 +75,11 @@ def parse_columns(spec: str | None) -> list[str]:
 
 
 def dataset_fingerprint(
-    payload: bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
+    digest: Any, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
 ) -> str:
-    """Content-addressed dataset id: same bytes + same derivation options -> same id."""
-    h = hashlib.sha256(payload)
+    """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
+    options -> same id."""
+    h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
         h.update(repr(sorted(categories)).encode("utf-8"))
@@ -87,17 +90,51 @@ def dataset_fingerprint(
     return "ds-" + h.hexdigest()[:12]
 
 
-def read_table(path: Path) -> pd.DataFrame:
+def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
+    """(the file as a frame, the sha256 of its bytes). ``shared``: the levels of one upload read one parse, kept until
+    ``forget_tables`` (each gets a shallow copy: no level writes into the columns it reads); any other read, a re-check
+    of the source among them, parses the file as it is now."""
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise IngestionError("unsupported_file", f"Unsupported file type '{ext}'. Supported: {sorted(SUPPORTED_EXTENSIONS)}")
     try:
+        st = path.stat()
+    except OSError as exc:  # removed meanwhile
+        raise IngestionError("unsupported_file", f"File not found: {path}") from exc
+    if not shared:
+        return _parse(str(path), ext, st.st_mtime_ns, st.st_size)
+    frame, digest = _kept(str(path), ext, st.st_mtime_ns, st.st_size)
+    return frame.copy(deep=False), digest.copy()
+
+
+def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
+    """One parse. A CSV's delimiter is sniffed from its first line and the C parser reads the whole file at once, as
+    pandas' Python parser reads it: the same columns, types and values. A file with a BOM keeps the Python parser,
+    which leaves the BOM in the first name."""
+    try:
+        with open(path, "rb") as f:
+            bom = f.read(3) == b"\xef\xbb\xbf"
+            f.seek(0)
+            digest = hashlib.file_digest(f, "sha256")
         if ext == ".parquet":
-            return pd.read_parquet(path)
-        sep = "\t" if ext == ".tsv" else None
-        return pd.read_csv(path, sep=sep, engine="python" if sep is None else "c")
+            return pd.read_parquet(path), digest
+        if ext == ".tsv":
+            return pd.read_csv(path, sep="\t", engine="c"), digest
+        if bom:
+            return pd.read_csv(path, sep=None, engine="python"), digest
+        with open(path, encoding="utf-8", newline="") as f:
+            sep = csv.Sniffer().sniff(f.readline()).delimiter
+        return pd.read_csv(path, sep=sep, engine="c", low_memory=False), digest  # one dtype per column, from all its rows
     except Exception as exc:  # parser errors, encoding errors, empty files
-        raise IngestionError("unreadable_file", f"Could not parse {path.name}: {exc}") from exc
+        raise IngestionError("unreadable_file", f"Could not parse {Path(path).name}: {exc}") from exc
+
+
+_kept = functools.lru_cache(maxsize=1)(_parse)  # ponytail: one file, as the levels of one upload run one after another
+
+
+def forget_tables() -> None:
+    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``)."""
+    _kept.cache_clear()
 
 
 def select_present(
@@ -153,13 +190,15 @@ def load_dataset(
     geo: str | None = None,
     strict: bool = True,
     locator: str | None = None,
+    shared: bool = False,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
     upload share their options) a geo level skips the file's own columns and the table level any column: a name in
     neither the file nor the cells still fails the geo levels. ``locator`` (the table level of a geo upload) leaves
     the columns it locates the points in out of the table. ``geo`` turns the
-    point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table."""
+    point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
+    of an upload, reading the parse its levels share (``read_file``)."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -169,7 +208,7 @@ def load_dataset(
         geo_spec = parse_geo(geo, config.geo_resolution) if geo else None
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
-    frame = read_table(path)
+    frame, digest = read_file(path, shared=shared)
     if frame.shape[1] < 2:
         raise IngestionError("invalid_schema", "Need at least one categorical and one numeric column")
     if len(frame) < config.min_rows:
@@ -202,7 +241,7 @@ def load_dataset(
         warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
+        dataset_id=dataset_fingerprint(digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,
@@ -215,9 +254,10 @@ def load_dataset(
 
 
 def auto_levels(path: Path, locator: str, config: MinerConfig, region_levels: tuple[int, ...]) -> dict[str, Any]:
-    """``select_levels`` for the points of a stored file (the ``@auto`` resolution of an upload)."""
+    """``select_levels`` for the points of a stored file (the ``@auto`` resolution of an upload), its parse kept for
+    the levels (``read_file(shared=True)``)."""
     try:
-        lat, lon, _ = locate_points(read_table(Path(path)), locator)
+        lat, lon, _ = locate_points(read_file(Path(path), shared=True)[0], locator)
         return select_levels(lat, lon, region_levels, min_rows=config.min_rows, min_cell_points=config.min_cell_points)
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
