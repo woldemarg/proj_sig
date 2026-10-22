@@ -30,7 +30,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 | Path | Role |
 |---|---|
-| `insight_contracts/` | the shared kernel, **standard library only**: `insight` (the `Insight` and its parts, `PhenomenonThresholds`), `graph` (edge types, node ids, the snapshot contract), `text` (how an insight reads), `payload` (`EvidencePayload`, the graph service → narrator contract) |
+| `insight_contracts/` | the shared kernel, **standard library only**: `insight` (the `Insight` and its parts, `PhenomenonThresholds`), `graph` (edge types, node ids, the snapshot contract), `text` (how an insight reads, in the English the canonical form embeds), `wording` (the Ukrainian names, meanings and readings people see), `payload` (`EvidencePayload`, the graph service → narrator contract) |
 | `subgroup_miner/` | table → validated, weighted insights: `ingestion`, `spatial` (the geo option: points → H3 cells, LISA, extents; the only module that imports `h3`), `discovery` (the EDA adapter), `selection` (validity rules, weight), `lattice`, `describe`, `config`; **vendored** `vendor/eda/main_upd.py` (divergences in `vendor/PROVENANCE.md`) |
 | `attractor_topology/` | insights → vectors → latent attractors: `canonical`, `encoder` (Qwen3 only), `ontology` (the lac adapter), `models`, `config`; **vendored** `vendor/lac/` (`vendor/PROVENANCE.md`) |
 | `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `vertical`, `evidence`, `search`, `ports`, `config` |
@@ -142,7 +142,7 @@ Code surface → doc owner:
 | `attractor_topology/ontology.py`, `vendor/lac/`, the anchor descriptions in `core/snapshot.py` | `05_latent_anchors.md`, `PROVENANCE.md` |
 | `subgroup_miner/lattice.py`, `core/snapshot.py`, `core/workspace.py`, `core/uploads.py`, `core/verify.py`, `fileio.py`, `neo4j_mirror.py`, `cypher/` | `06_graph_and_storage.md` |
 | `graph_query_engine/`, `evidence_narrator_service/` | `07_question_answering.md` |
-| `sig_web_console/`, `insight_graph_service/server/` | `08_interface.md` |
+| `sig_web_console/`, `insight_graph_service/server/`, `insight_contracts/wording.py` | `08_interface.md` |
 | `core/engine.py`, `core/settings.py`, `core/model_store.py` | `09_operations.md` (+ `11_reference.md` §11.3 for fields) |
 | `core/demo.py`, `scripts/`, `tests/` | `10_verification.md` |
 | the trust model as a whole: the three axes, the integrity checks, the poisoning audit (the rules themselves stay in 06 and 07) | `13_trust.md` |

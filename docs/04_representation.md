@@ -20,7 +20,7 @@ The service never embeds the canonical document; the measurement scripts embed i
 
 ## 4.2 The canonical form
 
-`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)` (`config` a `TopologyConfig`), version `ltir-canon-4` (`CANONICAL_VERSION`). The readable phrases come from the shared kernel (`insight_contracts/text.py`), so the canonical form, the evidence prompt and the miner's LLM context read alike; which shifts and which correlation change belong to the phenomenon is decided by `PhenomenonThresholds` (`insight_contracts/insight.py`).
+`canonicalize(insight, config, dataset_rows) → CanonicalInsight(insight_id, version, target, scope, scope_sentence, phenomenon, covariance, confounders, support, components)` (`config` a `TopologyConfig`), version `ltir-canon-4` (`CANONICAL_VERSION`). The readable phrases come from the shared kernel (`insight_contracts/text.py`), so the canonical form, the evidence prompt and the miner's LLM context read alike (what people read in Ukrainian comes from `insight_contracts/wording.py`, [8.5](08_interface.md#85-text-shown-to-people), and changes no vector); which shifts and which correlation change belong to the phenomenon is decided by `PhenomenonThresholds` (`insight_contracts/insight.py`).
 
 **Embedding inputs.**
 
