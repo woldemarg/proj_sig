@@ -144,12 +144,16 @@ def test_every_text_is_plain_and_claims_no_cause():
         assert "значущ" not in low or key == "sac", (key, text)
 
 
-def test_the_console_copy_and_the_glossary_hold_every_term():
-    """``TERMS`` in app.js is this table (JS cannot import it); docs/11 §11.1 names every term."""
+def test_the_console_copy_is_the_table():
+    """``TERMS`` in app.js is this table: JS cannot import it."""
     js = (ROOT / "sig_web_console" / "static" / "app.js").read_text(encoding="utf-8")
     copied = json.loads(re.search(r"^const TERMS = (\{.*?^\});", js, re.S | re.M).group(1))
     expected = {k: list(v) for k, v in w.TERMS.items()}
     assert copied == expected, "app.js TERMS differs; paste:\nconst TERMS = " + json.dumps(expected, ensure_ascii=False, indent=0) + ";"
+
+
+@pytest.mark.skipif(not (ROOT / "docs").is_dir(), reason="the graph service image holds no docs (.dockerignore)")
+def test_the_glossary_names_every_term():
     doc = (ROOT / "docs" / "11_reference.md").read_text(encoding="utf-8")
     glossary = doc[doc.index("## 11.1") : doc.index("## 11.2")]
     assert not [name for name, _ in w.TERMS.values() if name not in glossary]
