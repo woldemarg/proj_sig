@@ -480,7 +480,8 @@ def test_an_upload_parses_its_file_once_and_a_recheck_reads_it_anew(cfg, points_
 
 def test_a_commit_derives_only_the_new_datasets_spatial_part(cfg, points_csv):
     """Each geo dataset's part of the spatial plane is derived once, at its own commit, and a table's placement once:
-    the snapshot equals one derived afresh, is written compact, and a deletion drops what it held from the memo."""
+    the snapshot equals one derived afresh, is written compact, hands out copies the memo does not share, and a
+    deletion drops what it held from the memo, a reset all of it."""
     from unittest import mock
 
     from subgroup_miner import spatial
@@ -493,8 +494,13 @@ def test_a_commit_derives_only_the_new_datasets_spatial_part(cfg, points_csv):
         levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
     assert [r["status"] for r in levels] == ["READY"] * 3 and part.call_count == 2 and place.call_count == 1
     kept = engine.graph().snapshot
+    for e in engine._derive(engine.ontology())[0]["edges"]:  # what a commit hands out is a copy: the memo stays as built
+        e["props"]["touched"] = True
+    assert engine._derive(engine.ontology())[0] == kept
     engine._spatial_memo.clear()
     assert engine._derive(engine.ontology())[0] == kept and "\n" not in engine.ws.graph_path.read_text(encoding="utf-8")
     table = next(r["dataset_id"] for r in levels if r["level"] == "table")
     engine.delete_dataset(table)
     assert not any(table in key for key in engine._spatial_memo) and len(engine._spatial_memo) == 2
+    engine.reset()
+    assert not engine._spatial_memo

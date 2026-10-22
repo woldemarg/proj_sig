@@ -257,7 +257,7 @@ class Workspace:
         )
 
     def save_geo_cells(self, dataset_id: str, payload: dict[str, Any]) -> None:
-        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch: compact, as only the map reads it."""
+        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch."""
         atomic_write_json(self.geo_cells_path(dataset_id), payload)
 
     def geo_cells_path(self, dataset_id: str) -> Path:

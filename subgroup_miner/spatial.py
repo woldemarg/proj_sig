@@ -621,10 +621,10 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
 @dataclass
 class _DatasetPart:
     """What ``derive_spatial`` derives of one geo dataset alone (its files never change once READY): ``places`` holds its
-    patterns' places, regions, IN_REGION, props and compactness and the dataset's occupied cells."""
+    patterns' places, regions, IN_REGION, props and compactness and the dataset's occupied cells (``plane``)."""
 
     res: int
-    places: SpatialStructure
+    plane: SpatialStructure
     covered: Counter[str]
     raw: dict[str, set[str]]
     grown: dict[str, set[str]]
@@ -685,7 +685,11 @@ def derive_spatial(
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
     strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
     either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``): never
-    CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis."""
+    CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis.
+
+    ``memo`` (the caller's, kept between calls): each geo dataset's own part (``_dataset_part``) by its id and the levels,
+    each table's placement by its id, its ``placed_by`` and the levels; read when present, filled when not, and left
+    holding only what this call used. The result holds copies, so the memo stays as built."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
     raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
@@ -697,14 +701,14 @@ def derive_spatial(
             continue
         used.add(key := ("geo", d.dataset_id, levels))
         part = memo[key] if key in memo else memo.setdefault(key, _dataset_part(d, levels))
-        for pid in part.places.places:
+        for pid in part.plane.places:
             res_of[pid], dataset_of[pid] = part.res, d.dataset_id
-        out.occupied.update({k: dict(v) for k, v in part.places.occupied.items()})  # copies: the memo stays as built
-        out.places.update({k: dict(v) for k, v in part.places.places.items()})
-        out.compactness.update(part.places.compactness)
-        out.in_region.extend(part.places.in_region)
-        out.edge_props.update({k: dict(v) for k, v in part.places.edge_props.items()})
-        for rid, props in part.places.regions.items():
+        out.occupied.update({k: dict(v) for k, v in part.plane.occupied.items()})  # copies: the memo stays as built
+        out.places.update({k: dict(v) for k, v in part.plane.places.items()})
+        out.compactness.update(part.plane.compactness)
+        out.in_region.extend(part.plane.in_region)
+        out.edge_props.update({k: dict(v) for k, v in part.plane.edge_props.items()})
+        for rid, props in part.plane.regions.items():
             out.regions.setdefault(rid, dict(props))
         covered.update(part.covered)
         raw.update(part.raw)
@@ -717,7 +721,7 @@ def derive_spatial(
         out.partial |= partial
         for pid, rid, share, props in placed:
             out.in_region.append((pid, rid, share))
-            out.edge_props[(pid, rid)] = props
+            out.edge_props[(pid, rid)] = dict(props)
             _, lv, cell = rid.split(":")  # R:<level>:<h3>
             _add_region(out, levels, int(lv), cell)
     for stale in set(memo) - used:  # a deleted dataset, or a table placed by another level now

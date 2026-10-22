@@ -650,6 +650,7 @@ class Engine:
 
     def _fail(self, record: dict[str, Any], exc: Exception, t0: float) -> dict[str, Any]:
         """Record the failure of a batch (called inside ``except``; ``Workspace.transaction`` has rolled its writes back)."""
+        self._spatial_memo.clear()  # it may hold the part of a dataset the rollback removed
         if self.ws.pending_path.exists():  # the rollback failed too (logged): its marker blocks every write until a restart
             record["warnings"].append("rollback failed; restart the service to retry it, no write runs until then")
         code = getattr(exc, "code", "internal_error")
@@ -810,6 +811,7 @@ class Engine:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning). Refused with
         ``busy``, never queued, while a batch or a deletion runs or an upload waits. Also the way out of a degraded start."""
         with self._writing():
+            self._spatial_memo.clear()
             busy = [b["batch_id"] for b in self.ws.unfinished_batches()]
             if busy:
                 raise PipelineError("busy", f"batches in progress: {busy}")
