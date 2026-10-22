@@ -113,12 +113,12 @@ def parse_geo_levels(spec: str, default_resolution: int) -> list[tuple[str, int]
 
 def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ...], *, min_rows: int, min_cell_points: int) -> dict[str, Any]:
     """The resolutions ``@auto`` picks for these points (docs/02_discovery.md §2.9): the finest of
-    ``GEO_AUTO_RESOLUTIONS`` with at least ``min_rows`` cells, ``GEO_DENSE_POINTS_MIN`` of the points in cells of at
-    least ``min_cell_points`` and at most ``GEO_AUTO_MAX_CELLS`` cells (``cap_cells``): those of the finest of ``region_levels`` not finer
+    ``GEO_AUTO_RESOLUTIONS`` with at least ``min_rows`` dense cells (of at least ``min_cell_points`` points), which hold
+    ``GEO_DENSE_POINTS_MIN`` of the points, and at most ``GEO_AUTO_MAX_CELLS`` cells (``cap_cells``): those of the finest of ``region_levels`` not finer
     than it, where its patterns' IN_REGION edges lie, or its own when it is finer than every region level or below them
     (the coarsest such level when every one has more), then the coarser ``region_levels`` that keep
     ``GEO_AUTO_MIN_CELLS`` cells, at most ``GEO_LEVELS_MAX`` in all.
-    Returns ``{chosen, capped, candidates: {res: {cells, dense_points, median_points, cap_cells}}, reasons: {res: why}}``,
+    Returns ``{chosen, capped, candidates: {res: {cells, dense_cells, dense_points, median_points, cap_cells}}, reasons: {res: why}}``,
     ``capped`` the finer resolutions left out by the cap alone, finest first; keyed by the resolution as text (as JSON
     stores it)."""
     ok = np.isfinite(lat) & np.isfinite(lon)
@@ -135,20 +135,23 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
     candidates = {
         res: {
             "cells": len(counts[res]),
+            "dense_cells": int((counts[res] >= min_cell_points).sum()),
             "dense_points": round(float(counts[res][counts[res] >= min_cell_points].sum() / counts[res].sum()), 4),
             "median_points": float(counts[res].median()),
             "cap_cells": len(counts[cap_of[res]]),
         }
         for res in GEO_AUTO_RESOLUTIONS
     }
-    fits = [res for res, c in candidates.items() if c["cells"] >= min_rows and c["dense_points"] >= GEO_DENSE_POINTS_MIN]
+    fits = [res for res, c in candidates.items() if c["dense_cells"] >= min_rows and c["dense_points"] >= GEO_DENSE_POINTS_MIN]
     finest = next((res for res in fits if candidates[res]["cap_cells"] <= GEO_AUTO_MAX_CELLS), fits[-1] if fits else None)
     reasons, chosen, capped = {}, [], []
     for res, c in candidates.items():
         if c["cells"] < min_rows:
             reasons[res] = f"{c['cells']} cells < MIN_ROWS {min_rows}"
         elif finest is None or res > finest:
-            if c["dense_points"] < GEO_DENSE_POINTS_MIN:
+            if c["dense_cells"] < min_rows:  # medians in too few rows for the miner, however many points they hold
+                reasons[res] = f"{c['dense_cells']} dense cells < MIN_ROWS {min_rows}"
+            elif c["dense_points"] < GEO_DENSE_POINTS_MIN:
                 reasons[res] = f"points in dense cells {c['dense_points']} < {GEO_DENSE_POINTS_MIN}"
             else:
                 reasons[res] = f"{c['cap_cells']} cells at {cap_of[res]} > GEO_AUTO_MAX_CELLS"

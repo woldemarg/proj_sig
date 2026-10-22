@@ -16,10 +16,10 @@ from subgroup_miner.spatial import SpatialError, select_levels
 
 
 def test_auto_picks_the_levels_from_the_points(points_csv, engine, tmp_path, monkeypatch):
-    """``@auto``: the finest resolution with enough cells, half its points in dense cells and few enough cells at its
+    """``@auto``: the finest resolution with enough dense cells, holding half its points, and few enough cells at its
     region level (its own below the finest region level), then the coarser region levels; the same file the same levels;
-    a denser file a finer level; a sparse wide file the level its points fill, not the one its territory does; an upload
-    with ``@auto`` is the upload of its levels."""
+    a denser file a finer level; a sparse wide file the level its points fill, not the one its territory does; points
+    piled on a few spots not the level where only those spots are dense; an upload with ``@auto`` is the upload of its levels."""
     cfg, levels = MinerConfig(), (7, 5, 3, 1)
     california = PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
     picked = auto_levels(california, "auto", cfg, levels)
@@ -30,13 +30,20 @@ def test_auto_picks_the_levels_from_the_points(points_csv, engine, tmp_path, mon
         for n in (2_000, 50_000)
     }
     assert finest == {2_000: 6, 50_000: 7}  # the denser file the finer level; 8 has 10,000 cells of its own
-    with pytest.raises(SpatialError, match="points in dense cells"):  # many cells, none dense: the refusal names that
+    with pytest.raises(SpatialError, match="dense cells < MIN_ROWS"):  # many cells, none dense: the refusal names that
         select_levels(rng.uniform(-80, 80, 3_000), rng.uniform(-179, 179, 3_000), levels, min_rows=50, min_cell_points=5)
     town = select_levels(50 + rng.random(5_000) * 0.09, 30 + rng.random(5_000) * 0.14, levels, min_rows=50, min_cell_points=5)
     assert town["chosen"] == [9] and town["candidates"]["10"]["dense_points"] < 0.5  # 10 fits the cap, but its points sit alone
     sparse = pd.read_csv(write_synthetic_points(tmp_path, 30_000))  # 30,000 points over the whole state, most cells empty-ish
     wide_sparse = select_levels(sparse["lat"].to_numpy(), sparse["lon"].to_numpy(), levels, min_rows=50, min_cell_points=5)
-    assert wide_sparse["chosen"] == [6, 5] and wide_sparse["candidates"]["6"]["dense_points"] > 0.5  # 4 by the share of cells
+    assert wide_sparse["chosen"] == [6, 5] and wide_sparse["candidates"]["6"]["dense_points"] > 0.5  # 0.12 of its cells dense
+    spots = rng.integers(0, 10, 5_000)  # 5,000 events on 10 depots, 2,000 scattered over about 50 km × 50 km
+    lat, lon = (
+        np.r_[36 + rng.random(10)[spots] * 0.45, 36 + rng.random(2_000) * 0.45],
+        np.r_[-120 + rng.random(10)[spots] * 0.55, -120 + rng.random(2_000) * 0.55],
+    )
+    depots = select_levels(lat, lon, levels, min_rows=50, min_cell_points=5)
+    assert depots["chosen"][0] == 7 and depots["candidates"]["10"]["dense_points"] > 0.5 and depots["candidates"]["10"]["dense_cells"] < 50
     big = np.random.default_rng(1)  # a large export: level 7 dense but 13,500 cells, level 5 only ~310
     picked = select_levels(35 + big.random(80_000) * 3, -121 + big.random(80_000) * 2.5, levels, min_rows=50, min_cell_points=5)
     assert picked["chosen"] == [6] and "GEO_AUTO_MAX_CELLS" in picked["reasons"]["7"] and "GEO_AUTO_MIN_CELLS" in picked["reasons"]["5"]
