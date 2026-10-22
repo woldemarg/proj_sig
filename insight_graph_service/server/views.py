@@ -40,8 +40,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
     keep: set[str] = set()
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
-    members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view
-    regions = {r for r in shown_regions(graph, list(pids)) if members[r]}
+    members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view: a size
+    regions = shown_regions(graph, list(pids))  # the regions the map draws for them, a scale chain's above with none in view too
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and (not with_regions or n["id"] not in regions):

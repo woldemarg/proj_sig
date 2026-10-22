@@ -739,9 +739,15 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
             return geometry_to_cells(geometry["geometry"], resolution)
         if kind not in ("Polygon", "MultiPolygon"):
             raise SpatialError(f"geometry type {kind!r} is not a Polygon, MultiPolygon, Feature, FeatureCollection, center or bbox")
+        # a longitude past ±180 (a map ring, cell_boundary) back in range: H3 reads a crossing by the jump of its edge
+        polygons = [geometry["coordinates"]] if kind == "Polygon" else geometry["coordinates"]
+        geometry = {
+            "type": "MultiPolygon",
+            "coordinates": [[[[x if -180 <= x <= 180 else (x + 180) % 360 - 180, y] for x, y, *_ in ring] for ring in poly] for poly in polygons],
+        }
         cells = set(h3.geo_to_cells(geometry, resolution))
         if not cells:
-            rings = geometry["coordinates"] if kind == "Polygon" else [r for poly in geometry["coordinates"] for r in poly]
+            rings = [r for poly in geometry["coordinates"] for r in poly]
             cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
         return frozenset(cells)
     except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError
@@ -807,8 +813,12 @@ def cell_centres(cells: np.ndarray) -> np.ndarray:
 
 
 def cell_boundary(cell: str) -> list[list[float]]:
-    """Closed GeoJSON ring ([lon, lat] pairs) of one cell."""
-    ring = [[round(lng, 6), round(lat, 6)] for lat, lng in h3.cell_to_boundary(cell)]
+    """Closed GeoJSON ring ([lon, lat] pairs) of one cell, its longitudes taken around its first vertex: a cell across
+    ±180° stays one small polygon (a longitude past 180, which the map draws on the next copy of the world), not a band
+    around the globe."""
+    vertices = [(lng, lat) for lat, lng in h3.cell_to_boundary(cell)]
+    x0 = vertices[0][0]
+    ring = [[round(x0 + (x - x0 + 540) % 360 - 180, 6), round(y, 6)] for x, y in vertices]
     return ring + ring[:1]
 
 

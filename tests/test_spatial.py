@@ -815,6 +815,8 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
         for f, r in zip(features, pack["rings"]):
             rebuilt = [(r[0], r[1])] + [(r[0] + r[k] * step, r[1] + r[k + 1] * step) for k in range(2, len(r), 2)]
             assert all(abs(a - b) <= step / 2 + 1e-12 for p, q in zip(rebuilt, f["geometry"]["coordinates"][0]) for a, b in zip(p, q))
+    lons = [x for x, _ in cell_boundary("85f385a3fffffff")]  # an H3 cell across ±180°: one small polygon, not a band (M10-F01)
+    assert max(lons) - min(lons) < 1 and min(lons) > 179
 
 
 def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
@@ -831,6 +833,9 @@ def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     for bad in ("190,0,200,1", "0,5,1,4", "nan,0,1,1"):
         with pytest.raises(PipelineError, match="west,south"):
             window_view(centres, bad)
+    from insight_graph_service.core.geo_views import lon_span  # the cells file's bbox: west > east across ±180° (M10-F05)
+
+    assert lon_span(np.array([179.2, 179.6, -179.5])) == (179.2, -179.5) and lon_span(np.array([-114.3, -124.3])) == (-124.3, -114.3)
 
 
 def test_a_geometry_becomes_the_cells_of_a_zone():
@@ -838,8 +843,10 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
     anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
     by its centre, also where the centre lies outside its H3 parent."""
-    from subgroup_miner.spatial import geometry_to_cells, parse_zone, zone_overlap
+    from subgroup_miner.spatial import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
 
+    crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
+    assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
     centre = h3.latlng_to_cell(*HOT, 7)
     disk = set(h3.grid_disk(centre, 2))
     shape = h3.h3shape_to_geo(h3.cells_to_h3shape(list(disk)))

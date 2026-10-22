@@ -244,6 +244,28 @@ def _held_by(edges: list[dict], rids: list[str]) -> list[dict]:
     return [region(r, patterns=sum(e["type"] == "IN_REGION" and e["target"] == r for e in edges)) for r in rids]
 
 
+def test_the_graphs_regions_are_the_regions_the_map_draws():
+    """The graph's Map regions layer (``cytoscape_elements`` with ``regions``) holds the regions the map draws for the same
+    insights (``shown_regions``): a region the scale chain names above them is a node even when it holds no insight in
+    view (its size, none), as docs/08_interface.md §8.2 says (M10-F02)."""
+    from graph_query_engine.vertical import shown_regions
+    from insight_graph_service.server.views import cytoscape_elements
+
+    def geo(pid: str, ds: str) -> dict:
+        node = pattern(pid, [f"district={pid}"], dataset=ds)
+        node["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
+        return node
+
+    edges = [edge("P1", "R:7:a", "IN_REGION", 1.0, basis="cells", share=1.0, n=3), edge("R:7:a", "R:5:c", "PARENT_OF")]
+    edges += [edge("Q1", "R:5:c", "IN_REGION", 1.0, basis="cells", share=1.0, n=2)]  # another dataset's insight holds R:5:c
+    nodes = [geo("P1", "ds8"), geo("Q1", "ds5"), dataset("ds8"), dataset("ds5"), *_held_by(edges, ["R:7:a", "R:5:c"])]
+    graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
+    view = cytoscape_elements(graph, "ds8", regions=True)
+    drawn = {n["data"]["id"]: n["data"]["patterns"] for n in view["nodes"] if n["data"]["kind"] == "Region"}
+    assert set(drawn) == shown_regions(graph, ["P1"]) == {"R:7:a", "R:5:c"} and view["regions"] == 2
+    assert drawn == {"R:7:a": 1, "R:5:c": 0} and {e["data"]["type"] for e in view["edges"]} >= {"IN_REGION", "PARENT_OF"}
+
+
 def test_the_console_draws_a_patterns_places_and_the_regions_its_scale_chain_names():
     """``shown_regions`` is one bound: a pattern's places at every level it lies at (its five strongest there, a geo edge
     by share, then its cells there) and the regions its scale chain names (with no coarser step, from its home region

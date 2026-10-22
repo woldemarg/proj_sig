@@ -134,7 +134,8 @@ async function refreshBatches() {
   renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">No datasets yet.<br>Upload a table or try a demo.</div>`);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
-  return map;  // a caller that acts on the map afterwards (ask) awaits its load too; the poll does not
+  // a caller that acts on the map afterwards (ask) awaits its load too, or the pass a poll began for this key; the poll does not
+  return map || GeoMap.refreshing()?.catch((e) => console.error("map refresh failed", e));
 }
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
