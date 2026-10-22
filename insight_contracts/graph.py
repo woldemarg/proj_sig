@@ -1,6 +1,6 @@
 """The dual graph's vocabulary and its snapshot contract (docs/06_graph_and_storage.md §6.1–6.2).
 
-A snapshot is ``{"version": SNAPSHOT_VERSION, "nodes": [...], "edges": [...], "stats": {...}}``; the graph service
+A snapshot is ``{"version": SNAPSHOT_VERSION, "nodes": [...], "edges": [...], "own_cells": {...}, "stats": {...}}``; the graph service
 compiles it, the query engine and the console read it. Node ``props`` by kind, as the readers rely on them:
 
 * ``Pattern``   the ``Insight.to_record()`` fields, plus ``row_id`` (its journal row), ``canonical`` (with ``document``
@@ -8,7 +8,7 @@ compiles it, the query engine and the console read it. Node ``props`` by kind, a
 * ``Attractor`` ``attractor_id``, ``mass``, ``n_patterns``, ``distinct_scopes``, ``signature`` [{component, value}],
                 ``targets``, ``datasets``, ``dimensions``, ``dispersion``, ``centroid``
 * ``Region``    ``resolution``, ``h3``, ``cells_covered`` (geo patterns' cells inside it), ``patterns`` (IN_REGION members
-                of both bases)
+                of both bases, and the geo patterns whose own cell it is)
 * ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
@@ -20,7 +20,8 @@ Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (
 ``events`` for a base (table-level) pattern, with ``rule`` (lift | share), ``share`` (of its located events), ``lift``,
 ``n``, ``q`` and ``placed_by`` (the geo level whose points place it); the two shares do not compare. ``PARENT_OF`` runs
 from a region to its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, a base one
-``geo: partial`` when too few of its events are located, both derived at the commit.
+``geo: partial`` when too few of its events are located, both derived at the commit. ``own_cells`` maps a geo pattern
+whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 10  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 11  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
