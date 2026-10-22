@@ -11,7 +11,16 @@ from typing import Any
 
 import numpy as np
 
-from insight_contracts import SNAPSHOT_VERSION, Insight, PhenomenonThresholds, SpatialProvenance, dataset_node_id, dimension_node_id, region_node_id, wording
+from insight_contracts import (
+    SNAPSHOT_VERSION,
+    Insight,
+    PhenomenonThresholds,
+    SpatialProvenance,
+    dataset_node_id,
+    dimension_node_id,
+    region_node_id,
+    wording,
+)
 from insight_contracts.text import describe_component
 
 

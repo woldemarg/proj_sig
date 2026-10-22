@@ -658,7 +658,7 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     from insight_graph_service.server.views import node_details
 
     def panel(snap: dict) -> list[str]:
-        items = node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"]
+        items = node_details(DualGraph(snap), "R:5:a", PhenomenonThresholds())["neighbors"]["IN_REGION (in)"]
         assert all(set(it) == {"id", "label", "kind", "weight", "props", "integrity"} for it in items)  # one shape for both
         return sorted(it["id"] for it in items)
 
