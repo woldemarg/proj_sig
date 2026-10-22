@@ -23,8 +23,7 @@ function md(text, keyTo) {
 }
 
 function renderChain(item) {
-  if (item.role.startsWith("vertical_")) return `<div class="chain"><span class="n">${esc(item.path_text)}</span></div>`;  // a level up or down
-  if (item.role === "seed" || !item.path.length) return `<div class="chain"><span class="n">${esc(word("role_seed"))}</span></div>`;
+  if (item.role === "seed" || item.role.startsWith("vertical_") || !item.path.length) return `<div class="chain"><span class="n">${esc(word(`role_${item.role}`))}</span></div>`;  // a level up or down, or no path
   let html = `<span class="n">${esc(item.path[0].source)}</span>`;
   for (const st of item.path) {
     const label = word(st.edge_type + (st.reverse ? " (in)" : ""));  // the other end's relation, as the drawer and the legend name it
@@ -77,7 +76,7 @@ function botCard(turn) {
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
-  const understood = grounded.length ? `<div class="understood" title="Слова питання, зіставлені з літералами даних (за символами чи за змістом)">Зрозуміло: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
+  const understood = grounded.length ? `<div class="understood" title="Слова питання, зіставлені зі значеннями з даних (за написанням чи за змістом)">Розпізнано: ${grounded.map((g) => `<b>${esc(g.span)}</b> → ${esc(g.literal)}`).join(" · ")}</div>` : "";
   const evid = items.map((it, i) => {
     if (it.folded_into) return "";  // another level of the same finding: shown on its host's card
     const s = it.statistics;
@@ -89,7 +88,7 @@ function botCard(turn) {
       `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
       `<div class="ev-stats">${term("support")}: ${num(s.support, 0)} · ${term("weight")}: ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
-  const hypo = b.transversal_only ? `<div class="hypo"><b>${cap(word("transversal_only"))}:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з питанням і знайдені лише через тему.</div>` : "";
+  const hypo = b.transversal_only ? `<div class="hypo"><b>${cap(word("transversal_only"))}:</b> ${b.transversal_only.length} із цих інсайтів ${form(b.transversal_only.length, "не має", "не мають", "не мають")} жодної спільної умови з питанням і ${form(b.transversal_only.length, "знайдений", "знайдені", "знайдені")} лише через тему.</div>` : "";
   const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
   const zones = (ev.zones || []).length ? `<div class="hypo"><b>Регіони відповіді</b>${ev.zones.map((z, n) => `<div>Z${n + 1} · рівень ${z.resolution} · ${z.holds.map((p) => keyOf[p]).join(", ")} — ${picture(z)}</div>`).join("")}</div>` : "";
   const notes = (ev.notes || []).length ? `<div class="hypo"><b>Примітки</b>${ev.notes.map((n) => `<div>${esc(n)}</div>`).join("")}</div>` : "";
@@ -157,21 +156,21 @@ function insightCard(turn) {
   const chain = d.scale_chain || { up: [], down: [] }, level = (id) => (d.levels[id] != null ? `рівень ${d.levels[id]}` : "інший рівень");
   const steps = [...chain.up.map((st) => [st, "↑"]), ...chain.down.map((st) => [st, "↓"])].map(([st, arrow]) =>  // the scale chain's levels first
     ({ id: st.pattern_id, label: `${arrow} ${level(st.pattern_id)}: ${nodeLabel(st.pattern_id, d.labels)}`, word: st.relation === "corresponds" ? "той самий зсув" : "протилежний зсув" }));
-  const links = [...steps, ...Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).filter((it) => it.integrity !== "mismatch").map((it) => ({ ...it, word })))]
+  const links = [...steps, ...Object.entries(WALK).flatMap(([type, note]) => (d.neighbors[type] || []).filter((it) => it.integrity !== "mismatch").map((it) => ({ ...it, word: note })))]
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
     `<div class="ic-tags">${w ? chip("", levelName(w.level)) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Відкрити тему">${word("theme")} · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
-    (links.length ? `<h4>Далі графом</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
+    (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
     `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph">Показати в графі</button></div></div>`;
 }
 
 function botTurn(turn, isLast) {
   if (turn.insight) return insightCard(turn);
   if (turn.pending) {
-    return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Шукаю в графі${$("use-llm").checked ? " і пишу відповідь" : ""}… <span class="ds-elapsed" data-since="${turn.since}"></span></span>` +
+    return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Шукаю в графі${$("use-llm").checked ? " й пишу відповідь" : ""}… <span class="ds-elapsed" data-since="${turn.since}"></span></span>` +
       `<button type="button" class="linkish ask-cancel">Скасувати</button></div></div>`;
   }
   if (turn.error) return `<div class="bot-card${turn.cancelled ? "" : " error"}"><div class="answer-box">${esc(turn.error)}</div></div>`;
@@ -199,7 +198,7 @@ function renderThread() {
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на карті · комірок: ${turn.zone}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на карті</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
   t.scrollTop = t.scrollHeight;

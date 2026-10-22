@@ -136,7 +136,7 @@ def test_lifts_say_which_one_they_are():
 
 def test_relations_label_the_other_end():
     """SPECIALIZES points from the narrower insight to the broader one: from the broader, the other end is narrower."""
-    assert w.name("SPECIALIZES") == "вужчий за" and "ширш" not in w.name("SPECIALIZES (in)")
+    assert w.name("SPECIALIZES") == "ширший інсайт" and "ширш" not in w.name("SPECIALIZES (in)")
     assert w.name("PARENT_OF") == "ширший регіон" and w.name("PARENT_OF (in)") == "вужчий регіон"
     assert w.name("NEW_EDGE (in)") == "NEW_EDGE (in)"  # an unknown term reads as its key
 
@@ -197,7 +197,7 @@ ENGLISH_CHROME = (  # the console's former chrome: none of it is left (#101)
     "Evidence & how it was found", "Searching the graph", "Cancelled.", "No answer in time", "Regions and trust unavailable",
     "Insights of other levels unavailable", "Not on this map", "No findings", "levels ready", "Re-check from the raw data",
     "Clear highlight", "Ask your data", "New chat", "Walk on", "Reproduced", "Drop a table here", "Server unreachable",
-    "Score breakdown", "Show in graph", "Treat as categories", "Two planes", "IN VIEW", "Colour cells by",
+    "Score breakdown", "Show in graph", "Treat as categories", "Two planes", "IN VIEW", "Colour cells by", "Deleted ", "corr. change",
 )  # fmt: skip
 
 

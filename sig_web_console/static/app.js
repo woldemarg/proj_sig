@@ -4,7 +4,7 @@
 const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
-  VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Кодування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
+  VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
   BUILDING_GRAPH: "Побудова графа", PERSISTING: "Збереження", READY: "Готово",
 };
 const STAGES = Object.keys(STAGE_TEXT);  // in processing order
@@ -109,7 +109,7 @@ const TERMS = {
   "RELATED_TO (in)": ["пов'язана тема", "теми, чиї інсайти найбільше схожі одна на одну за змістом; не сусідство на мапі"],
   "CO_OCCURS": ["спільна тема", "теми, що мають спільні інсайти"],
   "CO_OCCURS (in)": ["спільна тема", "теми, що мають спільні інсайти"],
-  "SPECIALIZES": ["вужчий за", "ця знахідка — вужча частина тієї: її умови і ще одна"],
+  "SPECIALIZES": ["ширший інсайт", "ширша знахідка, частина якої — ця: ті самі умови без однієї"],
   "SPECIALIZES (in)": ["вужчий інсайт", "вужча частина цієї знахідки: її умови і ще одна"],
   "CONTRASTS": ["протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"],
   "CONTRASTS (in)": ["протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"],
@@ -165,7 +165,8 @@ const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const human = (s) => String(s || "").replace(/_/g, " ");
-const form = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14) ? few : many);  // 1 / 2–4 / 5+
+const PLURAL = new Intl.PluralRules("uk");
+const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+
 const plural = (n, one, few, many) => `${num(n, 0)} ${form(n, one, few, many)}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
