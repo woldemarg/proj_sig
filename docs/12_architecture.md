@@ -95,6 +95,7 @@ A missing field fails `EvidencePayload.from_dict`, and the narrator answers 502:
 - **A workspace that cannot answer** gets 409 with `{detail, code}`; `code` is `representation_mismatch` or `workspace_degraded`. The narrator passes it through as sent.
 - **Every refusal of the graph service** ([9.4](09_operations.md#94-error-codes)) has the body `{detail, code}`: 413 for `file_too_large`, 404 for `unknown_dataset` and `unknown_upload`, 400 for `invalid_options`, 409 for every other code (`busy`, `workspace_degraded`, `representation_mismatch`, `rollback_pending`, …). An unexpected error answers 500 with `code: internal_error`.
 - **A graph service that does not answer** within `INSIGHT_GRAPH_TIMEOUT_S` gives a 504 from the narrator.
+- **A client gone** before the evidence arrives (the console cancelled the question) gets an empty 499 from the narrator: no LLM call, no query log line.
 - **An unreachable graph service**, any other status from it, or a payload that breaks the contract gives a 502 from the narrator.
 
 **The broker** replaces the request's `model` with the configured one. Every other field (`temperature`, `max_tokens`, `top_p`, `stop`, `response_format`, …) is forwarded as sent. `stream: true` and a malformed body are refused with a 400, not FastAPI's 422. The broker adds the bearer key and, for OpenRouter, the pinned provider order without fallbacks. Error statuses:

@@ -12,8 +12,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from evidence_narrator_service.llm_client import ChatModel, OpenAICompatibleLLM
@@ -49,11 +50,11 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
     app = FastAPI(title="SIG evidence narrator", lifespan=lifespan)
 
     @app.post("/api/chat/query", response_model=None)
-    def query(body: QueryIn) -> dict[str, Any] | JSONResponse:
+    async def query(body: QueryIn, request: Request) -> dict[str, Any] | JSONResponse | Response:
         if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
         try:
-            resp = graph.post("/api/search", json=body.model_dump(exclude={"use_llm"}, exclude_none=True))
+            resp = await run_in_threadpool(graph.post, "/api/search", json=body.model_dump(exclude={"use_llm"}, exclude_none=True))
         except httpx.ReadTimeout as exc:  # the console reads a 504 as no answer in time
             raise HTTPException(504, f"graph service did not answer within {settings.insight_graph_timeout_s:g} s") from exc
         except httpx.HTTPError as exc:
@@ -66,7 +67,9 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
             payload = EvidencePayload.from_dict(resp.json())
         except (KeyError, ValueError) as exc:  # another version of the graph service
             raise HTTPException(502, f"graph service broke the evidence contract: {type(exc).__name__}: {exc}") from exc
-        qa = answer(payload, llm if body.use_llm else None)
+        if body.use_llm and await request.is_disconnected():  # the console cancelled or left: no paid call, no log line
+            return Response(status_code=499)
+        qa = await run_in_threadpool(answer, payload, llm if body.use_llm else None)
         if not payload.graph_empty:
             queries.info(
                 json.dumps(
