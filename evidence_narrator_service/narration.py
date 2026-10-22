@@ -122,7 +122,7 @@ def jargon(answer: str, prompt: str) -> dict[str, int]:
     own = (_section(prompt, "PLAIN LANGUAGE (") + _section(prompt, "DATASET CONTEXT (")).lower()
     counts: dict[str, int] = {}
     for word in (w for w in wording.JARGON if w.isascii() or w not in own):
-        tail = r"(?![\w])" if word.isascii() else r"[\w]*"
+        tail = r"s?(?![\w])" if word.isascii() else r"[\w]*"  # an English plural too
         found = [m[0] for m in re.finditer(rf"(?<![\w]){re.escape(word)}{tail}", answer, re.IGNORECASE)]
         if n := sum(1 for f in found if f.lower() not in data):
             counts[word] = n
