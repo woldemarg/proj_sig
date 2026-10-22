@@ -556,12 +556,28 @@ def link_min_events(n: int) -> int:
     return min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
 
 
+CENTRE_TIE_DEG = 1e-7  # ≈ 1 cm: far above where math libraries disagree (≈ 1e-12°), far below any cell
+
+
 def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.ndarray]:
     """Each cell's region at every listed level not finer than its own: the cell holding its centre (docs/06_graph_and_storage.md
-    §6.1), as the points were indexed."""
+    §6.1), as the points were indexed; a centre on a boundary by one rule on every platform (``centre_region``)."""
     names = [str(c) for c in cells]
     res = h3.get_resolution(names[0])
-    return {lv: np.array(names if lv == res else [h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in levels if lv <= res}
+    return {lv: np.array(names if lv == res else [centre_region(c, lv) for c in names]) for lv in levels if lv <= res}
+
+
+def centre_region(cell: str, level: int) -> str:
+    """The cell at ``level`` holding ``cell``'s centre, read at four points ``CENTRE_TIE_DEG`` around it: when they
+    disagree the centre lies on a boundary, and it goes to the H3 parent if that is among them, else to the least of
+    them. Many centres lie exactly on a coarser boundary, where platforms' floating point would otherwise decide."""
+    lat, lng = h3.cell_to_latlng(cell)
+    d = CENTRE_TIE_DEG
+    around = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
+    if len(around) == 1:
+        return around.pop()
+    parent = h3.cell_to_parent(cell, level)
+    return parent if parent in around else min(around)
 
 
 def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tuple[str, str, float, dict[str, Any]]], set[str]]:
@@ -626,8 +642,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
             continue
         res = h3.get_resolution(str(d.cells[0]))
         own = [lv for lv in levels if lv <= res]
-        # each cell in the region holding its centre, as the points were indexed: H3 children do not tile their parent,
-        # about 6 % of cells lie in another coarse cell than their parent (docs/06_graph_and_storage.md §6.1)
+        # each cell in the region holding its centre, as the points were indexed (docs/06_graph_and_storage.md §6.1)
         grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
         occupied = {lv: dict(zip(*np.unique(grid[lv], return_counts=True), strict=True)) for lv in own}
         out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}

@@ -28,6 +28,7 @@ from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
     cells_inside,
+    centre_region,
     effective_n_factor,
     footprint,
     locate_points,
@@ -272,10 +273,10 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert spatial.regions[shared]["resolution"] == 5 and (shared, f"R:3:{h3.cell_to_parent(region, 3)}") in spatial.parent_of
     assert all(0 < share <= 1 and isinstance(share, float) for _, _, share in spatial.in_region)
     assert region in spatial.occupied["coarse"][5] and spatial.occupied["one"][8].isdisjoint(spatial.occupied["dot"][8])
-    centre = {lv: frozenset(h3.latlng_to_cell(*h3.cell_to_latlng(k), lv) for k in coarse) for lv in (5, 3, 1)}  # where each cell lies
+    centre = {lv: frozenset(centre_region(k, lv) for k in coarse) for lv in (5, 3, 1)}  # where each cell lies
     assert spatial.places["P-z"] == {7: frozenset(coarse), **centre}
-    fine = "8729aab49ffffff"  # its centre lies in another resolution-5 cell than its H3 parent
-    holder = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5)
+    fine = "8829aab493fffff"  # its centre lies clearly (no tie) in another resolution-5 cell than its H3 parent
+    holder = centre_region(fine, 5)
     assert holder != h3.cell_to_parent(fine, 5)
     edge = derive_spatial([_geo_dataset("fine", [fine], {"P-fine": [fine]}), _geo_dataset("coarse", [holder], {"P-holder": [holder]})], (7, 5, 3, 1))
     assert edge.places["P-fine"][5] == edge.places["P-holder"][5] == edge.occupied["fine"][5] == {holder}  # one place for credibility
@@ -285,7 +286,7 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
 
     drawn = region_features(np.array(near + far), [shared, f"R:8:{x}"])  # the console's region outlines, with the cell rows inside
-    by_centre = [i for i, c in enumerate(near + far) if h3.latlng_to_cell(*h3.cell_to_latlng(c), 5) == region]  # as events are placed
+    by_centre = [i for i, c in enumerate(near + far) if centre_region(c, 5) == region]  # as events are placed
     assert [f["properties"]["rows"] for f in drawn] == [by_centre, [near.index(x)]] and len(by_centre) < len(near + far)
     assert drawn[0]["geometry"]["coordinates"][0][0] == drawn[0]["geometry"]["coordinates"][0][-1]
 
@@ -886,11 +887,11 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
     assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
     coarse = h3.latlng_to_cell(*h3.cell_to_latlng(centre), 6)
-    below = {str(c) for c in cells if h3.latlng_to_cell(*h3.cell_to_latlng(str(c)), 6) == coarse}  # a coarser cell: the centres it holds
+    below = {str(c) for c in cells if centre_region(str(c), 6) == coarse}  # a coarser cell: the centres it holds
     hit = len(below & set(h3.grid_disk(centre, 1)))
     assert zone_overlap(cells, covers, frozenset([coarse]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
-    fine = "8729aab49ffffff"  # its centre lies in another resolution-5 cell than its H3 parent
-    holder, parent = h3.latlng_to_cell(*h3.cell_to_latlng(fine), 5), h3.cell_to_parent(fine, 5)
+    fine = "8829aab493fffff"  # its centre lies clearly (no tie) in another resolution-5 cell than its H3 parent
+    holder, parent = centre_region(fine, 5), h3.cell_to_parent(fine, 5)
     assert holder != parent
     assert zone_overlap(np.array([holder, parent]), {"holder": [0], "parent": [1]}, frozenset([fine])) == {"holder": 1.0, "parent": 0.0}
     assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
@@ -981,3 +982,17 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     ds = graph.insight(pid).dataset_id
     cells = {str(c) for c in engine.ws.load_geo(ds)["cells"][engine.ws.load_covers(ds)[pid]]}
     assert set(h3.h3shape_to_cells(shape, h3.get_resolution(next(iter(cells))))) == cells  # the WKT outline holds exactly its cells
+
+
+def test_a_centre_on_a_boundary_goes_by_one_rule_on_every_platform():
+    """A cell's centre a math library's rounding away (5e-13°) gives the same coarse cell: a tie goes to the H3 parent
+    when it is among the cells around the centre, a centre clearly elsewhere to the cell holding it."""
+    points = geo_frame()[["latitude", "longitude"]].to_numpy()
+    cells = sorted({h3.latlng_to_cell(lat, lon, 7) for lat, lon in points})
+    rule = {c: centre_region(c, 5) for c in cells}
+    exact = h3.cell_to_latlng
+    for nudge in (5e-13, -5e-13):
+        with mock.patch.object(h3, "cell_to_latlng", lambda c, n=nudge: tuple(x + n for x in exact(c))):
+            assert {c: centre_region(c, 5) for c in cells} == rule
+    ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 5) != h3.latlng_to_cell(*exact(c), 5)]
+    assert ties and centre_region("8829aab493fffff", 5) == "8529a86bfffffff" != h3.cell_to_parent("8829aab493fffff", 5)
