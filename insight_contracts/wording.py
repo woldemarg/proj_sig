@@ -168,6 +168,13 @@ _DERIVED = {
 }
 
 
+JARGON = (  # analyst words a plain-language answer leaves out (system-prompt rule 10, narration.jargon): English whole words,
+    # Ukrainian stems
+    *("sd", "MAD", "median", "quartile", "q1", "q2", "q3", "q4", "LISA", "subgroup", "seed", "transversal", "latent", "anchor"),
+    *("медіан", "квартил", "підгруп", "якор", "якір", "латентн", "трансверсальн", "атрактор"),
+)
+
+
 def name(key: str) -> str:
     """The Ukrainian name of a term; an unknown key reads as itself (a new edge type or label never raises)."""
     return TERMS.get(key, (key, ""))[0]
