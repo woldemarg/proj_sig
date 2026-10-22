@@ -8,9 +8,8 @@ import re
 
 import httpx
 import pytest
-from conftest import make_engine, serve, upload_levels
+from conftest import make_engine, serve, stack, upload_levels
 from dev import chromium
-from test_ui_smoke import stack
 
 from insight_graph_service.core.settings import PROJECT_ROOT
 
@@ -45,7 +44,7 @@ def test_the_drawer_lists_where_a_base_insight_lies(cfg):
         page.evaluate(f"inspect('{region}')")
         page.wait_for_function(f"$('drawer-title').textContent.includes('{region.split(':')[2]}')", timeout=10000)
         held = engine.graph().nodes[region]["props"]["patterns"]
-        assert f": {held} інсайт" in page.inner_text("#inspector .lead")  # its members of both bases, in the region's reading
+        assert page.inner_text("#inspector .lead").startswith(f"{held} інсайт")  # its members of both bases, in the region's reading
         browser.close()
         assert not errors, errors
 
@@ -260,6 +259,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.inner_text("#inspector .lead") == words["what"]
         theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list, or the group it is in
         group = page.evaluate(f"W.data.themes.find((t) => t.id === {theme!r} || t.members.includes({theme!r})).id")
+        assert group != theme and len(page.evaluate("W.data.themes")) > 8  # the whole map's themes are grouped: the folded path runs
         page.evaluate(f"W.fold[{group!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()
         assert page.evaluate(f"W.fold[{group!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{group}']").count() == 1

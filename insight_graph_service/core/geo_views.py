@@ -39,7 +39,7 @@ from subgroup_miner.spatial import (
     zone_overlap,
 )
 
-WINDOW_GROUP_MIN_THEMES = 8  # a window listing more themes folds each into the related theme it links to most (docs/08 §8.7)
+WINDOW_THEMES_UNGROUPED = 8  # the most themes a window lists ungrouped; over it related themes fold together (docs/08 §8.7)
 WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in view and to their expected count (docs/08 §8.7)
 WINDOW_DETAIL_LEVEL = 5  # the regions whose count in view decides which levels a window lists first
 WINDOW_DETAIL_REGIONS = 3  # a view over more of them lists the table and coarser levels first, a closer one the map's own
@@ -436,10 +436,17 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
         ins, anchor, res = graph.insight(pid), primary_anchor(graph, pid), graph.facts(pid).resolution
         coarse = res is None or res < proj["resolution"]
         aid = anchor["target"] if anchor else None
-        if aid not in themes:
-            node = graph.nodes[aid] if aid else None
-            themes[aid] = {"id": aid, "label": node["label"] if node else "без теми", "reading": _theme_words(node), "insights": [], "members": []}
-        theme = themes[aid]
+        node = graph.nodes.get(aid)
+        theme = themes.setdefault(
+            aid,
+            {
+                "id": aid,
+                "label": node["label"] if node else "без теми",
+                "reading": wording.theme_reading(node["props"]) if node else "",
+                "insights": [],
+                "members": [],
+            },
+        )
         theme["insights"].append(
             (
                 (coarse != wide, -lift, -ins.weight),
@@ -456,7 +463,6 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
                     "share": round(x / mine, 3),
                     "cells": int(view[p.events].sum()),
                     "lift": round(lift, 2),
-                    "reading": insight_reading(graph, pid, thresholds),
                     "also": [{"id": q, "level": proj["patterns"][q].level} for q in hosts.get(pid, [])],
                 },
             )
@@ -465,27 +471,28 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
     for t in order:
         t["insights"] = [item for _, item in sorted(t["insights"], key=lambda ki: ki[0])]
     first = "coarse" if wide else "map"
-    listed = sum(len(t["insights"]) for t in order)
-    return {"cells": int(view.sum()), "points": here, "first": first, "insights": listed, "themes": group_themes(graph, order)}
-
-
-def _theme_words(node: dict[str, Any] | None) -> str:
-    return wording.theme_reading(node["props"]["signature"], node["props"]["n_patterns"], node["props"]["distinct_scopes"]) if node else ""
+    return {
+        "cells": int(view.sum()),
+        "points": here,
+        "first": first,
+        "insights": sum(len(t["insights"]) for t in order),
+        "themes": group_themes(graph, order),
+    }
 
 
 def group_themes(graph: DualGraph, themes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Over ``WINDOW_GROUP_MIN_THEMES`` themes, a star merge in the list's order: a theme with a direct RELATED_TO link to
+    """Over ``WINDOW_THEMES_UNGROUPED`` themes, a star merge in the list's order: a theme with a direct RELATED_TO link to
     a theme kept before it joins the ``members`` (ids) of the one it links to most (an earlier one on a tie), else is
     kept. One hop, never a chain: a theme linked only to a member is kept. The list keeps every theme in its order, so a
     reader of the rows needs no group; RELATED_TO comes from the commit's graph, every dataset's themes included, and
     links between places (CO_LOCATED) group nothing."""
-    if len(themes) > WINDOW_GROUP_MIN_THEMES:
+    if len(themes) > WINDOW_THEMES_UNGROUPED:
         kept: list[dict[str, Any]] = []
         for t in themes:
-            links = {other: e["weight"] for e, other in graph.incident(t["id"], ["RELATED_TO"])} if t["id"] else {}
-            best = max(((links[k["id"]], -i) for i, k in enumerate(kept) if k["id"] in links), default=None)
-            if best:
-                kept[-best[1]]["members"].append(t["id"])
+            links = {other: e["weight"] for e, other in graph.incident(t["id"], ["RELATED_TO"])}
+            host = max((k for k in kept if k["id"] in links), key=lambda k: links[k["id"]], default=None)  # max keeps the earlier on a tie
+            if host:
+                host["members"].append(t["id"])
             else:
                 kept.append(t)
     return themes

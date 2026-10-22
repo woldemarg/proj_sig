@@ -433,7 +433,6 @@ function wireHud() {
   $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
 }
 
-const shiftText = (p) => `<b class="${p.effect_size >= 0 ? "up" : "down"}">${esc(human(p.target))} ${signed(p.effect_size)} sd</b>`;  // compact, for the cell popup
 
 function renderCard(p, item, pts) {
   const sp = p.spatial || {};
@@ -464,7 +463,7 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button">${shiftText(q)}<span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
@@ -501,6 +500,8 @@ async function loadWindow() {
 const windowItem = (pid) => ((W.data && W.data.themes) || []).flatMap((t) => t.insights).find((i) => i.id === pid) || null;
 const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the headline after its scope: "score +1.20 sd"
 
+const reading = (pid) => { const r = (G.patterns[pid] || {}).reading; return r ? `${r.where} — ${r.what}` : ""; };  // a row's insight as the map holds it
+
 function renderWindow() {
   const el = $("map-window"), d = W.data;
   el.hidden = !d || !G.ds;
@@ -508,18 +509,19 @@ function renderWindow() {
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
-  $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(d.themes.length, "theme")} · ${num(d.points, 0)} pts`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(`${i.reading.where} — ${i.reading.what}`)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
+  const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
+  $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(shown.length, "theme")} · ${num(d.points, 0)} pts`;
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
     `<b title="lift: (its events in view + 30) / (the events its map-wide share puts here + 30)">×${num(i.lift, 1)}</b></button>`;
-  const byId = Object.fromEntries(d.themes.map((t) => [t.id, t])), absorbed = new Set(d.themes.flatMap((t) => t.members));
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : d.themes.filter((t) => !absorbed.has(t.id)).map((t, k) => {
+  const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : shown.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     const members = t.members.map((id) => byId[id]), m = members.length;  // a group: the related themes folded into it
     const n = t.insights.length + members.reduce((a, x) => a + x.insights.length, 0);
-    const label = m ? `${t.label} та ${m} ${uk(m, "пов'язана тема", "пов'язані теми", "пов'язаних тем")}` : t.label;
-    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(m ? `${t.reading}\n${TERMS.RELATED_TO[0]}: ${TERMS.RELATED_TO[1]}` : t.reading || t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(label)}</span><b>${n}</b></button>` +
+    const tip = m ? `${t.reading}\n+${m} — ${TERMS.RELATED_TO[0]}: ${TERMS.RELATED_TO[1]}` : t.reading || t.label;
+    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(tip)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}${m ? ` +${m}` : ""}</span><b>${n}</b></button>` +
       (open ? t.insights.map(row).join("") + members.map((x) => `<div class="mw-sub" title="${esc(x.reading)}">${esc(x.label)}</div>` + x.insights.map(row).join("")).join("") : "") + `</div>`;
   }).join("");
 }

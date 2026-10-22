@@ -9,7 +9,7 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
@@ -260,10 +260,11 @@ def sentence(words: Mapping[str, str]) -> str:
     return f"Де {words['where']} — {words['what']}"
 
 
-def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, distinct_scopes: int) -> str:
-    """A theme in one sentence from its two strongest signature entries (docs/05_latent_anchors.md §5.8)."""
-    parts = []
-    for entry in signature[:2]:
+def theme_reading(props: Mapping[str, Any]) -> str:
+    """A theme in one sentence from its Attractor props: its two strongest signature entries, its insights and scopes
+    (docs/05_latent_anchors.md §5.8)."""
+    n_patterns, distinct_scopes, parts = props["n_patterns"], props["distinct_scopes"], []
+    for entry in props["signature"][:2]:
         label, up = entry["component"], entry["value"] > 0
         if label.startswith("correlation between "):
             # ponytail: a column name holding " and " splits at its first one
@@ -276,12 +277,11 @@ def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, disti
     return f"Повторювана картина: {', '.join(parts)} — {found}." if parts else f"Тема без інсайтів: {found}."
 
 
-def region_reading(region_id: str, picture: Mapping[str, int]) -> str:
-    """A map region in one sentence: its H3 cell as a literal and what it holds (``vertical.picture``); no place name."""
-    _, resolution, cell = region_id.split(":", 2)
+def region_reading(picture: Mapping[str, int]) -> str:
+    """What a map region holds (``vertical.picture``) in one sentence; the drawer's title names the region, no place name."""
     p, d, t = picture["patterns"], picture["datasets"], picture["themes"]
     return (
-        f"Регіон {cell} (рівень {resolution}): {p} {plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
+        f"{p} {plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
         f"з {d} {plural(d, 'датасету', 'датасетів', 'датасетів')}, {t} {plural(t, 'тема', 'теми', 'тем')}."
     )
 

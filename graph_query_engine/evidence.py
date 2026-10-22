@@ -359,7 +359,7 @@ class Evidence:
             n = it.statistics["support"]
             lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
         if len(trust) == 1:
-            lines.append(f"- довіра всіх свідчень: {_trust_words(*trust.pop())}")
+            lines.append(f"- довіра{' всіх свідчень' if len(shown) > 1 else ''}: {_trust_words(*trust.pop())}")
         keys = self._keys()
         lines += [
             f"- регіон Z{n} (рівень {z['resolution']}): {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)
@@ -380,7 +380,8 @@ class Evidence:
 
 def _trust_words(reliability: str, credibility: int | None) -> str:
     """An item's trust in the summary's words: its source's code and rating, and whether another source confirms it."""
-    source = f"джерело {reliability} ({wording.name('reliability_' + reliability)})" if reliability else "джерело невідоме"
+    rated = wording.name(f"reliability_{reliability}") if f"reliability_{reliability}" in wording.TERMS else "невідомий код"
+    source = f"джерело {reliability} ({rated})" if reliability else "джерело невідоме"
     return source + (f", {wording.name(f'credibility_{credibility}')}" if f"credibility_{credibility}" in wording.TERMS else "")
 
 

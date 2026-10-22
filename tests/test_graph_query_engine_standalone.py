@@ -12,7 +12,7 @@ from doubles import HashingEmbedder
 from test_traversal import edge, pattern
 
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds
 
 QUESTION = "Why is margin lower for phones in the US?"
 
@@ -630,9 +630,9 @@ def test_a_node_panel_lists_the_strongest_of_each_group_and_counts_the_rest(monk
     from insight_graph_service.server import views
 
     graph = DualGraph(snapshot())
-    full = views.node_details(graph, "A-1")["neighbors"]["ACTIVATES (in)"]
+    full = views.node_details(graph, "A-1", PhenomenonThresholds())["neighbors"]["ACTIVATES (in)"]
     monkeypatch.setattr(views, "NEIGHBOURS_SHOWN", 1)
-    panel = views.node_details(graph, "A-1")
+    panel = views.node_details(graph, "A-1", PhenomenonThresholds())
     assert len(full) == panel["neighbor_counts"]["ACTIVATES (in)"] == 2 and panel["neighbors"]["ACTIVATES (in)"] == full[:1]
     assert full[0]["weight"] >= full[1]["weight"]  # the strongest kept
 

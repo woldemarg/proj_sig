@@ -153,10 +153,9 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)
-        out["reading"] = {"what": wording.region_reading(node_id, out["picture"])}
+        out["reading"] = {"what": wording.region_reading(out["picture"])}
     elif node["kind"] == "Attractor":
-        props = node["props"]
-        out["reading"] = {"what": wording.theme_reading(props["signature"], props["n_patterns"], props["distinct_scopes"])}
+        out["reading"] = {"what": wording.theme_reading(node["props"])}
     return out
 
 
@@ -190,7 +189,7 @@ def _attractor_hover(node: dict[str, Any]) -> str:
     p = node["props"]
     return (
         f"<b>{wording.name('theme')}</b> {node['id']}<br><b>{escape(node['label'])}</b><br>"
-        f"{escape(wording.theme_reading(p['signature'], p['n_patterns'], p['distinct_scopes']))}<br>"
+        f"{escape(wording.theme_reading(p))}<br>"
         f"<b>{wording.name('mass')}:</b> {p['mass']} · <b>{wording.name('evidence_mass')}</b> {p['evidence_mass']:.2f}<br>"
         f"<b>колонки:</b> {escape(', '.join(p['dimensions']))}"
     )

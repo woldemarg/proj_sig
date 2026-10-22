@@ -138,7 +138,7 @@ def test_related_themes_group_by_one_hop_in_the_windows_order():
     every theme in order, and eight themes group nothing."""
     from graph_query_engine.graph import DualGraph
     from insight_contracts import SNAPSHOT_VERSION
-    from insight_graph_service.core.geo_views import WINDOW_GROUP_MIN_THEMES, group_themes
+    from insight_graph_service.core.geo_views import WINDOW_THEMES_UNGROUPED, group_themes
 
     ids = [f"A-{k}" for k in range(9)]
     links = [("RELATED_TO", "A-1", "A-0", 0.5), ("RELATED_TO", "A-2", "A-1", 0.9), ("RELATED_TO", "A-3", "A-0", 0.4),
@@ -155,13 +155,13 @@ def test_related_themes_group_by_one_hop_in_the_windows_order():
         "A-0": ["A-1", "A-4"],  # A-4 ties A-0 and A-2 at 0.5: the earlier
         "A-2": ["A-3"],  # A-3 links A-0 at 0.4, A-2 at 0.6; A-2 links only A-1, a member: kept
     }
-    assert not any(t["members"] for t in group_themes(graph, window(ids[:WINDOW_GROUP_MIN_THEMES])))
+    assert not any(t["members"] for t in group_themes(graph, window(ids[:WINDOW_THEMES_UNGROUPED])))
 
 
 def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, points_csv):
-    """The panel, the overlay the map card reads, the other levels' insights and the window's rows carry one reading per
-    insight, built from the dataset's declared words only: the derived glossary on the Dataset node stays English, for
-    the prompt, and never reaches a reading."""
+    """The panel, the overlay the map card reads and the other levels' insights carry one reading per insight, the one the
+    window's rows read from the map; the Dataset node's derived glossary stays English, for the prompt, and never reaches
+    a reading."""
     from insight_contracts import dataset_node_id
     from insight_graph_service.server.views import node_details
 
@@ -170,12 +170,12 @@ def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, poin
     overlay = engine.geo_overlay(fine["dataset_id"])["patterns"]
     projected = {p["id"]: p["reading"] for p in engine.geo_projected(fine["dataset_id"])}
     window = engine.geo_window(fine["dataset_id"], "-180,-90,180,90")
-    rows = {i["id"]: i["reading"] for t in window["themes"] for i in t["insights"]}
+    rows = [i["id"] for t in window["themes"] for i in t["insights"]]
     readings = {pid: t["reading"] for pid, t in overlay.items()} | projected
     assert table["dataset_id"] in {graph.insight(p).dataset_id for p in overlay} and coarse["dataset_id"] in {
         graph.insight(p).dataset_id for p in projected
     }
-    assert rows and all(rows[p] == readings[p] for p in rows)
+    assert rows and set(rows) <= set(readings)  # every row is an insight the map holds a reading for
     assert all(node_details(graph, p, thresholds)["reading"] == r for p, r in readings.items())
     glossary = graph.nodes[dataset_node_id(fine["dataset_id"])]["props"]["glossary"]
     words = " ".join(f"{r['where']} {r['what']}" for r in readings.values())
