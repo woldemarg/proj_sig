@@ -68,11 +68,13 @@ function botCard(turn) {
   const cit = qa.citations || {};
   const b = (qa.view.traversal && qa.view.traversal.baselines) || {};
   const cross = items.filter((i) => i.transversal_only).length;
+  const jargon = Object.entries((qa.metrics || {}).jargon || {}), said = jargon.reduce((a, [, n]) => a + n, 0);  // a plain-language answer's analyst words
   const model = String(llm.model || "").split("/").pop();
   const meta = [
     qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення"),
     cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат"),
     cross ? chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1]) : "",
+    said && (qa.prompt || "").includes("PLAIN LANGUAGE") ? chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`) : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
