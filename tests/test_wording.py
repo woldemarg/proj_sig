@@ -35,6 +35,7 @@ def _texts() -> list[tuple[str, str]]:
         (-2.5, "помітно нижче"),
         (3.0, "різко вище"),
         (-9.0, "різко нижче"),
+        (-0.998, "помірно нижче"),  # shown as -1.00 sd
     ],
 )
 def test_a_shift_reads_by_the_buckets_of_magnitude_word(z, words):

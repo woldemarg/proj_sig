@@ -221,8 +221,9 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
 
 
 def shift_words(z: float) -> str:
-    """Direction and degree of a robust shift, gender-neutral: 'помітно вище' (the buckets of ``text.magnitude_word``)."""
-    return f"{_DEGREE[magnitude_word(z)]} {'вище' if z > 0 else 'нижче'}"
+    """Direction and degree of a robust shift, gender-neutral: 'помітно вище' (the buckets of ``text.magnitude_word``, on
+    the shift as it is shown, to two decimals: -0.998 shows as -1.00 sd and reads помірно)."""
+    return f"{_DEGREE[magnitude_word(round(z, 2))]} {'вище' if z > 0 else 'нижче'}"
 
 
 def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str:
