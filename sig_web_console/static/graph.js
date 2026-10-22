@@ -562,7 +562,6 @@ async function inspect(id, note = "") {
       ["Last updated", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
   } else if (n.kind === "Region") {
-    const pic = d.picture || {};
     $("drawer-title").textContent = `res ${p.resolution} · ${p.h3}`;
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
     html += kv([["Cells covered", num(p.cells_covered, 0)], ["Region id", `<span class="mono">${esc(n.id)}</span>`]]);

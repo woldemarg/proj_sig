@@ -193,6 +193,21 @@ class Crash(BaseException):
     """The process dies mid-write: no except-handler runs (the recovery and deletion tests raise it)."""
 
 
+def stack(engine):
+    """The graph service and the narrator with the fake LLM on one local port, as the console reaches them (the browser
+    tests); the services are imported here, so a library test never loads them."""
+    from dev import compose
+    from scratch import free_port
+
+    from evidence_narrator_service.app import create_app as create_narrator
+    from evidence_narrator_service.settings import NarratorSettings
+    from insight_graph_service.server.app import create_app
+
+    port = free_port()
+    narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())
+    return port, compose(create_app(engine), narrator)
+
+
 def make_config(workspace: Path, **overrides):
     overrides.setdefault("neo4j_enabled", False)
     return load_settings(workspace_dir=workspace, **overrides)

@@ -16,7 +16,7 @@ from conftest import HOT, geo_frame, make_config, make_engine, upload_levels
 from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, PhenomenonThresholds, SpatialProvenance
+from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.core.settings import PROJECT_ROOT
@@ -467,12 +467,12 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     for z in mixed:  # each insight's weight times its share of its place keys at the level
         shares = [(graph.insight(h).weight, dict(places(graph, h, z["resolution"]))) for h in z["holds"]]
         assert z["score"] == pytest.approx(sum(w * keys[z["id"]] / sum(keys.values()) for w, keys in shares), abs=1e-3)
-    panel = node_details(graph, pid, PhenomenonThresholds())
+    panel = node_details(graph, pid, engine.settings.thresholds)
     assert panel["scale_chain"] is None and panel["places"] and all({"id", "share", "lift", "n"} <= set(p) for p in panel["places"])
     broad = max(graph.insights, key=lambda p: len(graph.facts(p).regions))
-    wide = node_details(graph, broad, PhenomenonThresholds())
+    wide = node_details(graph, broad, engine.settings.thresholds)
     assert len(wide["neighbors"]["IN_REGION"]) == IN_REGION_SHOWN < wide["neighbor_counts"]["IN_REGION"] == len(graph.facts(broad).regions)
-    held = [x["weight"] for x in node_details(graph, zones[0]["id"], PhenomenonThresholds())["neighbors"]["IN_REGION (in)"]]
+    held = [x["weight"] for x in node_details(graph, zones[0]["id"], engine.settings.thresholds)["neighbors"]["IN_REGION (in)"]]
     assert held == sorted(held, reverse=True)  # a region's insights by weight: a lift and a cell share do not compare
     finer = make_engine(make_config(points_csv.parent / "ws8", geo_region_levels="8,7,5,3,1"))  # regions at 8 too
     levels = upload_levels(finer, points_csv, geo="auto@8,7", table=True)

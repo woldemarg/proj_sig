@@ -116,12 +116,15 @@ def test_a_covariance_insight_reads_as_its_correlation_change():
 
 def test_a_theme_and_a_region_read_in_plain_words():
     signature = [{"component": "discount", "value": 1.0}, {"component": "margin", "value": -0.49}, {"component": "x", "value": 0.1}]
-    assert w.theme_reading(signature, 9, 9) == "Повторювана картина: discount вище, margin нижче — 9 інсайтів у 9 частинах даних."
-    assert w.theme_reading([{"component": "correlation between a and b", "value": -0.3}], 1, 1) == (
+    assert (
+        w.theme_reading({"signature": signature, "n_patterns": 9, "distinct_scopes": 9})
+        == "Повторювана картина: discount вище, margin нижче — 9 інсайтів у 9 частинах даних."
+    )
+    assert w.theme_reading({"signature": [{"component": "correlation between a and b", "value": -0.3}], "n_patterns": 1, "distinct_scopes": 1}) == (
         "Повторювана картина: зв'язок метрик a і b слабшає — 1 інсайт у 1 частині даних."
     )
     picture = {"patterns": 3, "datasets": 1, "themes": 2}
-    assert w.region_reading("R:5:85283473fffffff", picture) == "Регіон 85283473fffffff (рівень 5): 3 інсайти з 1 датасету, 2 теми."
+    assert w.region_reading(picture) == "3 інсайти з 1 датасету, 2 теми."
 
 
 def test_lifts_say_which_one_they_are():

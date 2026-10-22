@@ -162,7 +162,6 @@ const human = (s) => String(s || "").replace(/_/g, " ");
 const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
-const uk = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14) ? few : many);  // 1 / 2–4 / 5+
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
 const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
 const MOTION = matchMedia("(prefers-reduced-motion: reduce)");

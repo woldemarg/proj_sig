@@ -8,14 +8,11 @@ import time
 
 import httpx
 import pytest
-from conftest import FakeLLM, make_engine, serve
-from dev import chromium, compose
+from conftest import make_engine, serve, stack
+from dev import chromium
 
-from evidence_narrator_service.app import create_app as create_narrator
-from evidence_narrator_service.settings import NarratorSettings
 from graph_query_engine.vertical import ZONES_MAX
 from insight_graph_service.core.settings import PROJECT_ROOT
-from insight_graph_service.server.app import create_app
 
 
 def _wait_ready(client):
@@ -26,15 +23,6 @@ def _wait_ready(client):
             return batches
         time.sleep(0.2)
     raise AssertionError("batch did not finish")
-
-
-def stack(engine):
-    """The graph service and the narrator on one local port, as the console reaches them."""
-    from scratch import free_port
-
-    port = free_port()
-    narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())
-    return port, compose(create_app(engine), narrator)
 
 
 @pytest.fixture
