@@ -83,7 +83,9 @@ function insightLead(p, tail = "") {
     : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
 }
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
-const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
+const KEYED = "#thread .ev, .nb, tr[data-id], .pp-ins, a.cite, a.ic-theme, .ds.clickable";  // clickable without being buttons: tabindex 0
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;  // no camera flights or pulses then
+const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}" tabindex="0" role="button"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
 
 async function api(path, opts = {}) {
@@ -173,9 +175,12 @@ function init() {
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
   for (const [id, path] of [["demo-btn", "/api/demo"], ["demo-geo-btn", "/api/demo/geo"]]) {
-    $(id).addEventListener("click", async () => {
+    $(id).addEventListener("click", async () => {  // both wait for the request: a double click queues one demo
+      const demos = [$("demo-btn"), $("demo-geo-btn")];
+      demos.forEach((b) => { b.disabled = true; });
       setUploadMsg("Preparing the demo dataset…");
       try { await api(path, { method: "POST" }); setUploadMsg("Demo queued — progress is shown below."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
+      demos.forEach((b) => { b.disabled = false; });
     });
   }
   $("reset-btn").addEventListener("click", async () => {
@@ -198,8 +203,11 @@ function init() {
     else if (S.cy) S.cy.fit(S.cy.elements(":visible"), 40);
   });
   document.querySelectorAll("#legend .key[data-key]").forEach((k) => {
-    k.addEventListener("mouseenter", () => spotlight(k.dataset.key));
-    k.addEventListener("mouseleave", () => spotlight(null));
+    if (!k.matches("button")) k.tabIndex = 0;  // a plain key is reached by Tab too: its spotlight on focus
+    for (const [on_, off] of [["mouseenter", "mouseleave"], ["focus", "blur"]]) {
+      k.addEventListener(on_, () => spotlight(k.dataset.key));
+      k.addEventListener(off, () => spotlight(null));
+    }
   });
   $("legend-btn").addEventListener("click", () => setLegend($("legend").hidden));
   $("clear-btn").addEventListener("click", clearAnswer);
@@ -247,6 +255,9 @@ function init() {
   $("question").addEventListener("input", autosize);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
+  document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches(KEYED)) { e.preventDefault(); e.target.click(); }
+  });
   document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
     if (GeoMap.closePopup()) return;

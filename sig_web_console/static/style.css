@@ -87,7 +87,7 @@ details.adv { margin-top: 10px; font-size: 13px; }
 details.adv > summary { cursor: pointer; color: var(--ink-2); list-style: none; user-select: none; }
 details.adv > summary::-webkit-details-marker { display: none; }
 details.adv > summary::before { content: "▸ "; color: var(--muted); } details.adv[open] > summary::before { content: "▾ "; }
-.rail-actions { display: flex; gap: 8px; margin-top: 12px; } .rail-actions .btn { flex: 1; }
+.rail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; } .rail-actions .btn { flex: 1 1 auto; }
 .msg { font-size: 13px; margin-top: 8px; color: var(--ink-2); } .msg.err { color: var(--bad); } .msg:empty { display: none; }
 .rail-list { flex: 1; overflow: auto; padding: 14px 16px 20px; }
 .ds { position: relative; border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 10px; background: var(--surface); transition: border-color .15s, box-shadow .15s; }
@@ -336,3 +336,17 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .maplibregl-ctrl-scale { background: rgba(8, 12, 19, .7); color: #8592ab; border-color: #5c6a85; font: 10px var(--mono); }
 .maplibregl-ctrl-group { background: rgba(8, 12, 19, .9); } .maplibregl-ctrl-group button + button { border-top-color: #263248; }
 .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(.85); }
+@media (max-width: 1000px) {  /* the map's panels share its width */
+  .app { grid-template-rows: minmax(460px, auto) max(560px, 80vh) minmax(460px, auto); }
+  .map-hud { width: min(300px, calc(50% - 18px)); }
+  .map-window { width: min(330px, calc(50% - 18px)); }
+  .map-card { width: min(460px, calc(100% - 24px)); }
+}
+@media (max-width: 700px) {  /* a phone: the panels go below the map, not over it */
+  .map-wrap:not([hidden]) { display: flex; flex-direction: column; overflow-y: auto; }
+  #map { position: relative; flex: none; height: 55vh; order: 0; }
+  .map-card, .map-zone, .map-window, .map-hud { position: static; transform: none; width: auto; max-height: none; margin: 8px 8px 0; }
+  .map-card { order: 1; } .map-zone { order: 2; } .map-window { order: 3; } .map-hud { order: 4; margin-bottom: 8px; }
+  .map-cursor { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

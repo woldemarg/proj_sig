@@ -81,10 +81,10 @@
   <section class="canvas" aria-label="Knowledge graph">
     <div class="canvas-bar">
       <div class="tabs" id="view-switch" role="tablist">
-        <button type="button" data-view="graph" class="active" role="tab">Graph</button>
-        <button type="button" data-view="sphere" role="tab">3D Sphere</button>
-        <button type="button" data-view="table" role="tab">Insights <span class="count" id="ins-count"></span></button>
-        <button type="button" data-view="map" role="tab" id="map-tab" hidden>Map</button>
+        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true">Graph</button>
+        <button type="button" data-view="sphere" role="tab" aria-selected="false">3D Sphere</button>
+        <button type="button" data-view="table" role="tab" aria-selected="false">Insights <span class="count" id="ins-count"></span></button>
+        <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Map</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Dataset"><option value="">All datasets</option></select>

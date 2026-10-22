@@ -321,7 +321,7 @@ async function loadGraph() {
 function setView(view) {
   S.view = view;
   if (view !== "map") GeoMap.closePopup();
-  document.querySelectorAll("#view-switch button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  document.querySelectorAll("#view-switch button").forEach((b) => { b.classList.toggle("active", b.dataset.view === view); b.setAttribute("aria-selected", String(b.dataset.view === view)); });
   $("cy").hidden = view !== "graph";
   $("sphere").hidden = view !== "sphere";
   $("table-view").hidden = view !== "table";
@@ -380,7 +380,7 @@ function renderTable() {
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
     const effect = d.ptype === "covariance" ? "corr. change" : `${signed(d.effect)} sd`;
-    return `<tr data-id="${esc(d.id)}"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
+    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
       `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
@@ -429,7 +429,9 @@ function highlightPath(turn, item, el) {
 function focusNodes(ids) {
   const cy = S.cy; if (!cy) return;
   const els = cy.collection(ids.map((id) => cy.getElementById(id)).filter((e) => e.nonempty()));
-  if (els.nonempty()) cy.animate({ fit: { eles: els, padding: 90 } }, { duration: 350 });
+  if (els.empty()) return;
+  if (calm()) cy.fit(els, 90);  // reduced motion: straight there
+  else cy.animate({ fit: { eles: els, padding: 90 } }, { duration: 350 });
 }
 
 function reveal(id, { isolate = null, walk = false } = {}) {

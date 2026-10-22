@@ -158,7 +158,7 @@ function boundsOf(rows) {  // the cells' boxes, each moved next to the first one
 }
 
 function fitRows(rows, padding) {
-  if (rows.length && G.bounds[rows[0]]) G.map.fitBounds(boundsOf(rows), { padding, maxZoom: 10, duration: 900 });
+  if (rows.length && G.bounds[rows[0]]) G.map.fitBounds(boundsOf(rows), { padding, maxZoom: 10, duration: calm() ? 0 : 900 });
 }
 
 function graticule() {
@@ -216,7 +216,7 @@ function ensureMap() {
     m.on("idle", () => { rest = true; });
     const pulse = (now) => {
       requestAnimationFrame(pulse);
-      if (!(G.focus.length && rest && S.view === "map" && !document.hidden)) {
+      if (!(G.focus.length && rest && S.view === "map" && !document.hidden) || calm()) {
         if (!still) { m.setPaintProperty("focus-line", "line-opacity", 1); still = true; }
         return;
       }
@@ -465,7 +465,7 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
