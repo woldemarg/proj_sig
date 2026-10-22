@@ -244,7 +244,8 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
             vec, matrix, idx = entry
             sims = np.where(catalog.words[idx] == len(span.split()), (matrix @ vec.transform([span]).T).toarray().ravel(), -1.0)
             best = int(np.argmax(sims))
-            if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF:
+            tied = {catalog.symbol_key(idx[i]) for i in np.flatnonzero(sims == sims[best])}  # one name declared for two metrics: ambiguous
+            if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF and len(tied) == 1:
                 hit = (idx[best], "chars", float(sims[best]))
         if hit is not None:
             _register(q, catalog, hit, span, pos, claimed, tokens)

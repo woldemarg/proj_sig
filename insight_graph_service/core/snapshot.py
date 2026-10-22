@@ -95,7 +95,7 @@ def _schema_plane(
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
-                **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in declared})) else {}),  # however declared
+                **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
                 **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
             },
         )

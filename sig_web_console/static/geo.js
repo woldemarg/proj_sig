@@ -356,7 +356,7 @@ async function loadOverlay(ds, seq = G.loadSeq) {
 }
 
 const centre = (f) => {  // the region's H3 centre, the one its window membership uses; a ring's mean for a feature without one
-  if (f.properties.centre) return f.properties.centre;
+  if ((f.properties || {}).centre) return f.properties.centre;
   const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = r.reduce((a, c) => a + unwrap(c[0], x0), 0) / r.length;
   return [unwrap(lon, 0), r.reduce((a, c) => a + c[1], 0) / r.length];
 };

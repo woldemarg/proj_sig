@@ -103,6 +103,9 @@ def test_a_declared_name_grounds_the_metric():
     p = grounded(toy_graph([dataset]))("Де маржинальність нижча?")
     assert p.targets == ["margin"] and p.direction == -1
     assert [(x["span"], x["literal"], x["layer"]) for x in p.grounding] == [("маржинальність", "маржинальність", "chars")]  # the literal as declared
+    twice = {**dataset, "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржинальність", "return_rate": "маржинальність"}}}
+    p = grounded(toy_graph([twice]))("Де маржинальність нижча?")
+    assert p.targets == [] and p.grounding == []  # one name declared for two metrics says neither
 
 
 def test_hub_and_ambiguity_are_rejected():

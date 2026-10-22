@@ -81,7 +81,7 @@ class EvidenceItem:
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
-    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what"} in Ukrainian (graph.insight_reading)
+    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline"} in Ukrainian (graph.insight_reading)
 
 
 @dataclass
