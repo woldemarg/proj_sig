@@ -317,6 +317,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .mc-head { display: flex; justify-content: space-between; color: #ffb000; font-weight: 700; letter-spacing: .12em; }
 .mc-x { background: none; border: 0; color: #8592ab; cursor: pointer; font-size: 16px; line-height: 1; }
 .mc-scope { color: #eef3ff; font-size: 12.5px; margin: 3px 0; font-family: var(--font); }
+.mc-note { color: #8592ab; font-size: 11px; margin-top: 4px; } .term { cursor: help; border-bottom: 1px dotted currentColor; }
 .mc-shift { margin-bottom: 6px; } .mc-shift .up, .pp-ins .up { color: #ff8a3d; } .mc-shift .down, .pp-ins .down { color: #36d6ff; }
 .mc-grid { display: grid; grid-template-columns: auto 1fr auto 1fr auto 1fr; gap: 2px 8px; color: #8592ab; } .mc-grid b { color: #dfe7f7; font-weight: 600; }
 .mc-path { margin-top: 6px; color: #6f7c95; font-size: 10.5px; overflow-wrap: anywhere; }

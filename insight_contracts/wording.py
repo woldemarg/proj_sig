@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
-from insight_contracts.text import covariance_change, format_value, humanize, magnitude_word
+from insight_contracts.text import covariance_change, format_p, format_value, humanize, magnitude_word
 
 # key -> (name, meaning). A relation's key is its edge type, "<TYPE> (in)" for the incoming direction (the drawer's
 # neighbour groups and a reversed path step use the same keys); its name labels the node at the other end.
@@ -297,3 +297,28 @@ def lift_words(kind: str, lift: float) -> str:
         count = f"{int(times)} {plural(int(times), 'раз', 'рази', 'разів')}" if times.is_integer() else f"{times} раза"
         words = f"у {count} частіше, ніж очікувано за часткою на всій мапі"
     return words + (" (згладжено)" if kind == "window" else "")
+
+
+def value_words(ins: Insight) -> dict[str, str]:
+    """What an insight's test numbers say: ``p_adjusted`` its bucket and the exact value, and for a geo insight
+    ``n_eff``, the effective sample size of its median test with the cells it counts. ``n_eff`` is the cells holding a
+    value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ = max(0, Moran's I)``: a sparse cell holds no value, so ``n_eff``
+    below the extent's cells says nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing."""
+    p = ins.p_adjusted
+    if p is None:
+        out = {"p_adjusted": "не перевірялося (зміна зв'язку)"}
+    else:
+        exact = f" ({p:.1e})" if 0 < p < 0.05 else " (< 1e-300)" if p == 0 else ""  # above 0.05 the bucket is the number
+        out = {"p_adjusted": format_p(p) + exact}
+    spatial = ins.provenance.get("spatial") or {}
+    if spatial.get("n_eff") is not None:
+        n_eff, rho = spatial["n_eff"], max(0.0, spatial.get("moran_i") or 0.0)
+        valued = round(n_eff * (1 + rho) / (1 - rho)) if rho < 1 else None
+        if rho > 0:
+            counted = f"{valued} {plural(valued, 'непорожня комірка', 'непорожні комірки', 'непорожніх комірок')} метрики, " if valued else ""
+            out["n_eff"] = f"{n_eff:g}: {counted}зменшено за схожістю сусідніх комірок (Moran's I {spatial['moran_i']:.2f})"
+        else:
+            out["n_eff"] = (
+                f"{n_eff:g}: без зменшення за автокореляцією; враховано {valued} {plural(valued, 'непорожню комірку', 'непорожні комірки', 'непорожніх комірок')} метрики"
+            )
+    return out

@@ -161,3 +161,31 @@ def test_the_glossary_names_every_term():
     doc = (ROOT / "docs" / "11_reference.md").read_text(encoding="utf-8")
     glossary = doc[doc.index("## 11.1") : doc.index("## 11.2")]
     assert not [name for name, _ in w.TERMS.values() if name not in glossary]
+
+
+def test_test_numbers_read_as_the_method_gives_them():
+    """p in its bucket with the exact value; n_eff with the cells it counts: below the extent's cells and with I ≤ 0 it
+    reduces nothing and claims no independence; with I > 0 the cells it counts come back from the factor."""
+    sparse = toy_insight(
+        [("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=1.2e-5, provenance={"spatial": {"cells": 420, "n_eff": 180.0, "moran_i": -0.1}}
+    )
+    words = w.value_words(sparse)
+    assert words["p_adjusted"] == "< 0.001 (1.2e-05)"
+    assert words["n_eff"] == "180: без зменшення за автокореляцією; враховано 180 непорожніх комірок метрики" and "незалежн" not in words["n_eff"]
+    alike = toy_insight(
+        [("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.0, provenance={"spatial": {"cells": 420, "n_eff": 120.0, "moran_i": 0.2}}
+    )
+    assert w.value_words(alike) == {
+        "p_adjusted": "< 0.001 (< 1e-300)",
+        "n_eff": "120: 180 непорожніх комірок метрики, зменшено за схожістю сусідніх комірок (Moran's I 0.20)",
+    }
+    assert w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.2)) == {"p_adjusted": "0.20"}
+    assert w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=None))["p_adjusted"].startswith("не перевірялося")
+
+
+def test_the_console_claims_no_cause_and_significance_only_on_the_sac_line():
+    static = ROOT / "sig_web_console" / "static"
+    text = "\n".join(p.read_text(encoding="utf-8") for p in [*static.glob("*.js"), static / "index.html"])
+    assert not [b for b in ("комірки незалежні", "частка бутстреп", "поділена на MAD", "доводить", "спричиняє") if b in text]
+    significant = [ln for ln in text.splitlines() if "значущ" in ln]  # the SAC term's meaning and the HUD's SAC line only
+    assert significant and all(ln.lstrip().startswith('"sac":') or 'term("sac")' in ln for ln in significant)

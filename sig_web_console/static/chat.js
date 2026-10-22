@@ -37,9 +37,9 @@ function itemTrust(it) {
   /* an evidence item's trust badges; the tooltip is the trust line the model saw */
   if (!it.trust) return "";
   const integrity = (it.trust.match(/integrity (\w+)$/) || [])[1] || "unverified";
-  const [ccls] = cred(it.credibility);
-  return `<div class="ev-trust" title="${esc(it.trust)}">` + (it.reliability ? chip("", `source ${it.reliability}`) : chip("bad", "source unknown")) +
-    (it.credibility != null ? chip(ccls, `credibility ${it.credibility}`) : "") + chip((INTEGRITY[integrity] || INTEGRITY.unverified)[0], `integrity ${integrity}`) + `</div>`;
+  const [ccls, cwords] = cred(it.credibility);
+  return `<div class="ev-trust" title="${esc(it.trust)}">` + (it.reliability ? chip("", `${word("reliability")} ${it.reliability}`) : chip("bad", `${word("reliability")}: невідома`)) +
+    (it.credibility != null ? chip(ccls, cwords) : "") + chip(INTEGRITY[integrity] ?? "warn", word(`integrity_${integrity}`)) + `</div>`;
 }
 
 function chainLine(chain, items) {
@@ -85,9 +85,9 @@ function botCard(turn) {
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") +
-      (it.scale && it.scale !== "insufficient" && SCALE[it.scale] ? `<span class="role" title="${esc(SCALE[it.scale])}">${esc(human(it.scale))}</span>` : "") + `</div>` +
+      (it.scale && it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
-      `<div class="ev-stats">${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
+      `<div class="ev-stats">${term("support")}: ${num(s.support, 0)} · ${term("weight")}: ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
   const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему.</div>` : "";
   const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
@@ -162,8 +162,8 @@ function insightCard(turn) {
   return `<div class="bot-card insight-card"><div class="answer-box">` +
     `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
-    `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
-    (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
+    `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
+    (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
     (links.length ? `<h4>Walk on</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
     `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph">Показати в графі</button></div></div>`;
 }

@@ -307,7 +307,7 @@ async function loadDataset(ds) {
     const sac = info.sac || {};
     $("map-title").textContent = info.filename || ds;
     $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
-      (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
+      (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
     return true;
@@ -330,7 +330,7 @@ function mergePatterns() {
      (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
      (/projected, intact only) */
   const trust = (G.overlay && G.overlay.patterns) || {};
-  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch").map((p) => ({ ...p, reading: trust[p.id].reading }));
+  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch").map((p) => ({ ...p, reading: trust[p.id].reading, numbers: trust[p.id].numbers }));
   G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
@@ -441,9 +441,10 @@ function renderCard(p, item, pts) {
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
-      : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
+      ? [["found at", esc(p.level)], [term("cells_footprint"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 0)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
+    (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${term("n_eff")} ${esc(p.numbers.n_eff)}</div>` : "") +
     (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -453,8 +454,7 @@ function trustTags(pid) {
   const t = G.overlay && G.overlay.patterns[pid];
   if (!t) return "";
   const [cls, words] = cred(t.credibility);
-  return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
-    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "");
+  return `<i class="pp-tag ${cls}" title="${esc(TERMS.credibility[1])}">${esc(words)}</i>` + (t.scale ? `<i class="pp-tag">${term(`scale_${t.scale}`)}</i>` : "");
 }
 
 function cellPopup(f, lngLat) {
@@ -514,7 +514,7 @@ function renderWindow() {
   const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
-    `<b title="lift: (its events in view + 30) / (the events its map-wide share puts here + 30)">×${num(i.lift, 1)}</b></button>`;
+    `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
   const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
   $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : shown.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded

@@ -50,17 +50,15 @@ const MARKS = {
   region: 'node[kind="Region"], edge[type="IN_REGION"], edge[type="PARENT_OF"]',
 };
 const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot draw
-// trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4) in the console's words
-const RELIABILITY = { A: "completely reliable", B: "usually reliable", C: "fairly reliable", D: "not usually reliable", E: "unreliable", F: "reliability cannot be judged" };
-const CREDIBILITY = {  // level -> chip class, words
-  1: ["ok", "confirmed by another source"], 2: ["warn", "not confirmed by another source"],
-  5: ["bad", "contradicted by another source"], 6: ["", "no independent source covers this"],
-};
-const INTEGRITY = { ok: ["ok", "its statistics match their digest"], mismatch: ["bad", "its statistics no longer match their digest"], unverified: ["warn", "recorded before digests"] };
-const SCALE = {
-  regional: "regional — holds at a coarser level", "scale-dependent": "scale-dependent — reverses at a coarser level",
-  not_found_coarser: "not found at the coarser level", insufficient: "no coarser level analysed",
-};
+// trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
+// (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
+const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
+const INTEGRITY = { ok: "ok", mismatch: "bad", unverified: "warn" };
+// the legend's entries -> the terms whose meaning is their tooltip (index.html data-key), and a note of the drawing's own
+const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIALIZES"], latent: ["RELATED_TO", "CO_OCCURS"], contrast: ["CONTRASTS"],
+  sibling: ["SIBLING"], colocated: ["CO_LOCATED"], activates: ["ACTIVATES"], region: ["region", "IN_REGION", "PARENT_OF"], schema: ["HAS_SCOPE", "TARGETS"],
+  seed: ["role_seed"], cross: ["transversal_only"] };
+const LEGEND_NOTE = { lattice: "стрілка веде до ширшого інсайту", latent: "пунктир — спільні теми", activates: "пунктир — слабка належність: лише для охоплення, пошук нею не йде" };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
 const TERMS = {
@@ -149,7 +147,10 @@ const TERMS = {
   "emm_score": ["оцінка зміни зв'язків", "середньоквадратична зміна рангових кореляцій між метриками, зменшена для малих частин даних"],
   "volume_utility": ["корисність обсягу", "√p · (1 − p) для частки рядків p: найбільша, коли інсайт охоплює третину даних"]
 };
-const cred = (level) => CREDIBILITY[level] || ["warn", "not rated"];
+const word = (key) => (TERMS[key] || [key])[0];  // a term's name; an unknown key reads as itself
+// a term as the console names it, its meaning in the tooltip: the one writer of the dictionary's tooltips (docs/08_interface.md §8.5)
+const term = (key) => (TERMS[key] ? `<span class="term" title="${esc(TERMS[key][1])}">${esc(TERMS[key][0])}</span>` : esc(key));
+const cred = (level) => [CREDIBILITY[level] ?? "warn", TERMS[`credibility_${level}`] ? word(`credibility_${level}`) : "не оцінено"];
 const RELATION = { overlaps: "zones overlap", adjacent: "zones touch", same_region: "same region, zones apart" };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
@@ -244,6 +245,10 @@ function clearAnswer() {
 }
 
 function init() {
+  document.querySelectorAll(".key[data-key]").forEach((el) => {  // the legend's tooltips: the terms' meanings
+    const keys = LEGEND_TERMS[el.dataset.key];
+    if (keys) el.title = [...keys.map((k) => `${word(k)}: ${TERMS[k][1]}`), LEGEND_NOTE[el.dataset.key]].filter(Boolean).join("\n");
+  });
   $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop
   const drop = $("drop");

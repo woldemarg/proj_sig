@@ -450,8 +450,8 @@ function reveal(id, { isolate = null, walk = false } = {}) {
 // details drawer
 function closeDrawer() { $("drawer").hidden = true; if (S.cy) S.cy.$(":selected").unselect(); }
 
-function kv(rows) {
-  return `<dl class="kv">${rows.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+function kv(rows) {  // [label, value] as HTML: the console's own words or term(key)
+  return `<dl class="kv">${rows.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
 }
 
 function shiftRows(shifts) {
@@ -459,7 +459,7 @@ function shiftRows(shifts) {
   return shifts.map((s) => {
     const dir = s.robust_z >= 0 ? "up" : "down";
     return `<div class="shift-row"><span>${esc(human(s.metric))} <span class="muted">${num(s.local_median, 4)} vs ${num(s.global_median, 4)}</span></span>` +
-      `<b class="effect ${dir}">${signed(s.robust_z)} sd</b>` +
+      `<b class="effect ${dir}" title="${esc(TERMS.sd[1])}">${signed(s.robust_z)} sd</b>` +
       `<div class="meter"><i class="${dir}" style="width:${Math.min(100, Math.round((Math.abs(s.robust_z) / max) * 100))}%"></i></div></div>`;
   }).join("");
 }
@@ -488,30 +488,30 @@ const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id =
 
 function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
-  const [ccls, cwords] = cred(p.credibility);
-  const basis = p.credibility_basis || {}, [icls, iwords] = INTEGRITY[p.integrity] || INTEGRITY.unverified;
+  const [ccls, cwords] = cred(p.credibility), integrity = p.integrity || "unverified";
+  const basis = p.credibility_basis || {};
   const source = ds.integrity === "mismatch" ? `${chip("bad", "unknown")} its dataset's metadata failed its integrity check`
-    : `${chip("", ds.reliability || "F")} ${esc(ds.source || "source not declared")} — ${esc(RELIABILITY[ds.reliability || "F"])}${ds.integrity === "unverified" ? " (metadata unverified)" : ""}`;
+    : `${chip("", ds.reliability || "F")} ${esc(ds.source || "source not declared")} — ${esc(word(`reliability_${ds.reliability || "F"}`))}${ds.integrity === "unverified" ? " (metadata unverified)" : ""}`;
   const by = basis.rule === "place" ? "compared by place" : basis.rule === "anchor" ? "compared by theme and metric" : "";
   const others = [...(basis.confirmed_by || []), ...(basis.patterns || []).filter((x) => !(basis.confirmed_by || []).includes(x))];
   return kv([
-    ["Source", source],
-    ["Credibility", `${chip(ccls, String(p.credibility ?? "–"))} ${esc(cwords)}${(basis.sources || []).length ? ` · ${esc(basis.sources.join(", "))}` : ""}${by ? ` <span class="muted">(${by})</span>` : ""}`],
-    ["Integrity", `${chip(icls, p.integrity || "unverified")} ${esc(iwords)}`],
+    [term("reliability"), source],
+    [term("credibility"), `${chip(ccls, String(p.credibility ?? "–"))} ${esc(cwords)}${(basis.sources || []).length ? ` · ${esc(basis.sources.join(", "))}` : ""}${by ? ` <span class="muted">(${by})</span>` : ""}`],
+    [term("integrity"), `${chip(INTEGRITY[integrity] ?? "warn", integrity)} ${esc(word(`integrity_${integrity}`))}`],
   ]) + (others.length ? `<details class="nb-group"><summary>Basis <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "confirms" : "")).join("")}</details>` : "");
 }
 
 function scaleRows(c, labels) {
   /* the scale chain the graph already holds: ↑ coarser and ↓ finer levels of one phenomenon, then the regions above it */
   const step = (st, arrow) => nbRow(st.pattern_id, `${arrow} ${nodeLabel(st.pattern_id, labels)}`, st.relation === "corresponds" ? "same shift" : "opposite shift");
-  return `<h4>Scale</h4><p class="lead">${esc(SCALE[c.scale] || "a single level")}</p>` +
+  return `<h4>Scale</h4><p class="lead">${term(`scale_${c.scale || "insufficient"}`)}</p>` +
     c.up.map((st) => step(st, "↑")).join("") + c.down.map((st) => step(st, "↓")).join("") +
     c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
 }
 
 function whereRows(places) {
   /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
-  const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% of it` : "", r.lift !== undefined ? `lift ${num(r.lift, 1)}` : "", r.n !== undefined ? `${num(r.n, 0)} events` : ""].filter(Boolean).join(" · ");
+  const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% of it` : "", r.lift_words || "", r.n !== undefined ? `${num(r.n, 0)} events` : ""].filter(Boolean).join(" · ");
   return `<h4>Where</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
 }
 
@@ -533,19 +533,19 @@ async function inspect(id, note = "") {
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
     html += p.phenomenon_type === "covariance" ? `<h4>Median differences (not validated)</h4>${shiftRows(p.shifts)}` : `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
     html += `<h4>Evidence</h4>` + kv([
-      ["Rows", `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% of data)`],
-      ["Evidence weight", `<b>${num(p.weight)}</b>`],
-      ["Adjusted p-value", p.p_adjusted === null || p.p_adjusted === undefined ? "not tested (correlation change)" : Number(p.p_adjusted) > 0 ? Number(p.p_adjusted).toExponential(1) : "< 1e-300 (underflow)"],
-      ["Bootstrap stability", p.stability === null || p.stability === undefined ? "not measured (correlation change)" : num(p.stability)],
-      ["Correlation change", cov ? `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}` : ""],
-      ["Confounders", esc((p.drivers || []).join("; ") || "none detected")],
-      ["Also known as", esc((p.aliases || []).join("; "))],
+      [term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% of data)`],
+      [term("weight"), `<b>${num(p.weight)}</b>`],
+      [term("p_adjusted"), esc(d.numbers.p_adjusted)],
+      [term("stability"), p.stability === null || p.stability === undefined ? "not measured (correlation change)" : num(p.stability)],
+      [term("covariance"), cov ? `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}` : ""],
+      [term("drivers"), esc((p.drivers || []).join("; ") || "none detected")],
+      [term("aliases"), esc((p.aliases || []).join("; "))],
     ]);
     html += `<h4>Trust</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Recompute this insight's statistics from the stored upload and compare them with the journal">Re-check from the raw data</button><div class="msg" id="verify-out"></div></div>`;
-    html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [k, num(v)]).concat([["SD score", num(p.sd_score)], ["EMM score", num(p.emm_score, 3)], ["Volume utility", num(p.volume_utility, 3)]])) + `</details>`;
+    html += `<details class="nb-group"><summary>Score breakdown</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>`;
     html += `<details class="nb-group"><summary>Canonical representation</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
     html += `<details class="nb-group"><summary>Provenance</summary>` + kv([
       ["Dataset", esc(`${p.provenance.filename}`)], ["Dataset id", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Batch", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
@@ -558,7 +558,7 @@ async function inspect(id, note = "") {
     html += `<h4>Signature</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
     html += `<h4>Details</h4>` + kv([
       ["Columns involved", esc(p.dimensions.map(human).join(", "))], ["Metrics", esc(p.targets.map(human).join(", "))],
-      ["Mass", num(p.mass, 0)], ["Evidence mass", num(p.evidence_mass)], ["Dispersion", num(p.dispersion, 3)],
+      [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Last updated", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
   } else if (n.kind === "Region") {
@@ -567,7 +567,7 @@ async function inspect(id, note = "") {
     html += kv([["Cells covered", num(p.cells_covered, 0)], ["Region id", `<span class="mono">${esc(n.id)}</span>`]]);
   } else {
     $("drawer-title").textContent = n.label;
-    html += kv(Object.entries(p).map(([k, v]) => [human(k), esc(typeof v === "object" ? JSON.stringify(v) : v)]));
+    html += kv(Object.entries(p).map(([k, v]) => [esc(human(k)), esc(typeof v === "object" ? JSON.stringify(v) : v)]));
   }
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
