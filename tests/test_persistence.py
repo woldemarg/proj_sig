@@ -430,11 +430,13 @@ def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_
 
     semicolons = tmp_path / "semi.txt"
     semicolons.write_text('city;value;note\n"Kyiv";0.1234567890123456789;"a; b"\nLviv;1e-310;c\n', encoding="utf-8")
-    bom = tmp_path / "bom.csv"
-    bom.write_bytes("\ufeffregion,value\nEU,1\nUS,2\n".encode())
+    boms = []
+    for i, header in enumerate(["region,value", '"region",value', ",value", "a,a"]):  # plain, quoted, empty, repeated
+        boms.append(tmp_path / f"bom{i}.csv")
+        boms[-1].write_bytes(f"\ufeff{header}\nEU,1\nUS,2\n".encode())
     mixed = tmp_path / "mixed.csv"  # a code column numeric-looking for its first 300,000 rows
     mixed.write_text("code,value\n" + "".join(f"{i % 900:05d},{i}\n" for i in range(300_000)) + "x00042,1\n")
-    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, bom, mixed):
+    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, *boms, mixed):
         pd.testing.assert_frame_equal(ingestion.read_file(path)[0], pd.read_csv(path, sep=None, engine="python"), check_exact=True)
     assert (
         ingestion.dataset_fingerprint(ingestion.read_file(points_csv)[1], {})

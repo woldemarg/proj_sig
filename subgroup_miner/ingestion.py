@@ -109,7 +109,8 @@ def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
 
 def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
     """One parse. A CSV's delimiter is sniffed from its first line and the C parser reads the whole file at once, as
-    pandas' Python parser reads it: the same columns, types and values, a leading BOM in the first name included."""
+    pandas' Python parser reads it: the same columns, types and values. A file with a BOM keeps the Python parser,
+    which leaves the BOM in the first name."""
     try:
         with open(path, "rb") as f:
             bom = f.read(3) == b"\xef\xbb\xbf"
@@ -119,10 +120,11 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
             return pd.read_parquet(path), digest
         if ext == ".tsv":
             return pd.read_csv(path, sep="\t", engine="c"), digest
+        if bom:
+            return pd.read_csv(path, sep=None, engine="python"), digest
         with open(path, encoding="utf-8", newline="") as f:
             sep = csv.Sniffer().sniff(f.readline()).delimiter
-        frame = pd.read_csv(path, sep=sep, engine="c", low_memory=False)  # one dtype per column, from all its rows
-        return (frame.rename(columns={frame.columns[0]: "\ufeff" + str(frame.columns[0])}) if bom else frame), digest
+        return pd.read_csv(path, sep=sep, engine="c", low_memory=False), digest  # one dtype per column, from all its rows
     except Exception as exc:  # parser errors, encoding errors, empty files
         raise IngestionError("unreadable_file", f"Could not parse {Path(path).name}: {exc}") from exc
 
