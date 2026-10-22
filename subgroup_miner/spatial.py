@@ -642,8 +642,7 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
             continue
         res = h3.get_resolution(str(d.cells[0]))
         own = [lv for lv in levels if lv <= res]
-        # each cell in the region holding its centre, as the points were indexed: H3 children do not tile their parent,
-        # about 6 % of cells lie in another coarse cell than their parent (docs/06_graph_and_storage.md §6.1)
+        # each cell in the region holding its centre, as the points were indexed (docs/06_graph_and_storage.md §6.1)
         grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
         occupied = {lv: dict(zip(*np.unique(grid[lv], return_counts=True), strict=True)) for lv in own}
         out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}

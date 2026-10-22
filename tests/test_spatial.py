@@ -987,12 +987,12 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
 def test_a_centre_on_a_boundary_goes_by_one_rule_on_every_platform():
     """A cell's centre a math library's rounding away (5e-13°) gives the same coarse cell: a tie goes to the H3 parent
     when it is among the cells around the centre, a centre clearly elsewhere to the cell holding it."""
-    points = pd.read_csv(PROJECT_ROOT / "data" / "demo" / "california_housing.csv")[["latitude", "longitude"]].to_numpy()
-    cells = sorted({h3.latlng_to_cell(lat, lon, 5) for lat, lon in points})
-    rule = {c: centre_region(c, 3) for c in cells}
+    points = geo_frame()[["latitude", "longitude"]].to_numpy()
+    cells = sorted({h3.latlng_to_cell(lat, lon, 7) for lat, lon in points})
+    rule = {c: centre_region(c, 5) for c in cells}
     exact = h3.cell_to_latlng
     for nudge in (5e-13, -5e-13):
         with mock.patch.object(h3, "cell_to_latlng", lambda c, n=nudge: tuple(x + n for x in exact(c))):
-            assert {c: centre_region(c, 3) for c in cells} == rule
-    ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 3) != h3.latlng_to_cell(*exact(c), 3)]
+            assert {c: centre_region(c, 5) for c in cells} == rule
+    ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 5) != h3.latlng_to_cell(*exact(c), 5)]
     assert ties and centre_region("8829aab493fffff", 5) == "8529a86bfffffff" != h3.cell_to_parent("8829aab493fffff", 5)
