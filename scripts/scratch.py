@@ -32,7 +32,7 @@ SCRATCH = PROJECT_ROOT / ".scratch"
 def settings(**overrides: Any) -> Settings:
     """The configured settings (``.env`` loaded first, as the service does) with Neo4j off and ``overrides`` applied."""
     load_env_file()
-    return load_settings(neo4j_enabled=False, **overrides)
+    return load_settings(**{"neo4j_enabled": False, **overrides})
 
 
 def scratch_dir(name: str, *, fresh: bool = False) -> Path:

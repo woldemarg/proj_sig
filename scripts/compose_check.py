@@ -149,8 +149,16 @@ def wait_for_batch(batch_id: str, timeout: float = 1200) -> tuple[dict[str, Any]
     raise TimeoutError(f"batch {batch_id} not finished after {timeout:.0f} s")
 
 
+def mirror_equals_graph() -> bool:
+    graph = http("GET", "/api/graph?regions=1")
+    mirrored, relationships = mirror_counts()
+    return mirrored == dict(Counter(n["data"]["kind"] for n in graph["nodes"])) and relationships == len(graph["edges"])
+
+
 def check_workflow(live_llm: bool) -> None:
     from scratch import scratch_dir, write_demo_csv
+
+    from insight_graph_service.core.demo import generate_retail_dataset
 
     csv = write_demo_csv(scratch_dir("compose_check"))
     rec, slowest = wait_for_batch(upload(csv)["batch_id"])
@@ -177,6 +185,14 @@ def check_workflow(live_llm: bool) -> None:
         qa = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": True}, timeout=300)
         detail = f"{qa['llm'].get('model')}, {qa['llm'].get('latency_s')} s{', ' + str(qa['llm'].get('error')) if qa['llm'].get('error') else ''}"
         record("LLM answer through the broker", qa["answer_mode"] == "llm" and qa["citations"]["grounded"], detail)
+    second = scratch_dir("compose_check") / "retail_synthetic_seed8.csv"
+    generate_retail_dataset(5000, 8).to_csv(second, index=False)
+    added, _ = wait_for_batch(upload(second)["batch_id"])
+    grown = mirror_equals_graph()
+    removed = http("DELETE", f"/api/datasets/{added.get('dataset_id')}") if added["status"] == "READY" else {"neo4j": {}}
+    syncs = (added.get("neo4j", {}).get("sync"), removed["neo4j"].get("sync"))
+    ok = grown and mirror_equals_graph() and syncs == ("diff", "diff") and removed["neo4j"].get("deleted", 0) > 0
+    record("the mirror follows an upload and a deletion by diffs", ok, f"syncs {syncs}, {removed['neo4j'].get('deleted')} deleted")
     reset = http("POST", "/api/reset")
     mirrored, relationships = mirror_counts()
     after = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": False})

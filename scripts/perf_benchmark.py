@@ -1,19 +1,21 @@
 """The performance benchmark (docs/10_verification.md §10.4): the gauge of every optimisation in epics #83 and #84.
 
-One upload through the graph service's HTTP API on a scratch workspace (the configured model, Neo4j off): each level's
-stage times; then what the console asks of the result — the graph, the widest insight's node, each geo level's cells,
-overlay, projected insights and window, three questions — once right after the commit (cold) and again (warm), with
-the response sizes, raw and gzipped, and the stored snapshot's and cell files' sizes.
+One upload through the graph service's HTTP API on a scratch workspace (the configured model, Neo4j off unless
+``--neo4j``): each level's stage times; then what the console asks of the result — the graph, the widest insight's
+node, each geo level's cells, overlay, projected insights and window, three questions — once right after the commit
+(cold) and again (warm), with the response sizes, raw and gzipped, and the stored snapshot's and cell files' sizes.
 
     python scripts/perf_benchmark.py <file | synthetic | california> [--geo auto@auto] [--table] [--console] [--browser]
-                                     [--label NAME]
+                                     [--neo4j URI] [--label NAME]
 
 ``synthetic``: ``SYNTHETIC_POINTS`` synthetic deliveries over California (``write_synthetic_points``); ``california``:
 the map demo's table. ``--console``: while the levels process, a second client asks what an open console asks (the
 batch list every 2.5 s, the reads above after every new READY). ``--browser``: the console in headless Chromium, as
 ``tests/test_ui_smoke.py`` drives it (skipped without one): the time to the graph and to the map, the map's time to
 idle after each step of a zoom sequence, the most DOM markers on the map, frames per second during an animated zoom,
-long tasks. Writes ``.scratch/results/perf_benchmark_<label>.json`` and prints a table.
+long tasks. ``--neo4j``: the mirror synced to the Neo4j at ``URI`` (``NEO4J_USER``, ``NEO4J_PASSWORD``,
+``NEO4J_DATABASE`` from the environment), so each level's ``neo4j_s`` is measured — an empty, throwaway one: the sync
+makes it equal to the scratch workspace, so a database that already holds SIG nodes is refused. Writes ``.scratch/results/perf_benchmark_<label>.json`` and prints a table.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
-from scratch import build_engine, free_port, save_result, scratch_dir, serve
+from scratch import build_engine, free_port, save_result, scratch_dir, serve, settings
 
 from insight_graph_service.core.engine import Engine
 from insight_graph_service.core.settings import PROJECT_ROOT
@@ -255,6 +257,26 @@ def table(result: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
+def refuse_a_used_neo4j(uri: str) -> None:
+    """``--neo4j`` only into a database without SIG nodes: its sync makes it equal to the scratch workspace."""
+    from neo4j import GraphDatabase
+    from neo4j.exceptions import ClientError
+
+    from insight_graph_service.core.neo4j_mirror import LABELS
+
+    cfg = settings()
+    query = "MATCH (n) WHERE any(l IN labels(n) WHERE l IN $labels) RETURN count(n) AS n"
+    with GraphDatabase.driver(uri, auth=(cfg.neo4j_user, cfg.neo4j_password)) as driver:
+        try:
+            held = driver.execute_query(query, labels=list(LABELS), database_=cfg.neo4j_database).records[0]["n"]
+        except ClientError as exc:
+            if exc.code != "Neo.ClientError.Database.DatabaseNotFound":
+                raise
+            held = 0  # the sync creates it
+    if held:
+        raise SystemExit(f"--neo4j {uri}: database {cfg.neo4j_database} holds {held} SIG nodes; point it at an empty, throwaway Neo4j")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", help="a file, 'synthetic' or 'california'")
@@ -262,6 +284,7 @@ def main() -> int:
     parser.add_argument("--table", action="store_true", help="the table level too")
     parser.add_argument("--console", action="store_true", help="a console asking while the levels process")
     parser.add_argument("--browser", action="store_true", help="the console in headless Chromium afterwards")
+    parser.add_argument("--neo4j", metavar="URI", default=None, help="sync a throwaway Neo4j mirror at URI")
     parser.add_argument("--label", default="baseline")
     args = parser.parse_args()
 
@@ -274,7 +297,9 @@ def main() -> int:
         if args.source == "california"
         else Path(args.source)
     )
-    engine = build_engine(root / "ws")
+    if args.neo4j:
+        refuse_a_used_neo4j(args.neo4j)
+    engine = build_engine(root / "ws", **({"neo4j_enabled": True, "neo4j_uri": args.neo4j} if args.neo4j else {}))
     app = create_app(engine)
     result: dict[str, Any] = {"source": args.source, "geo": args.geo, "table": args.table}
     with TestClient(app) as client:  # its lifespan owns the batch worker

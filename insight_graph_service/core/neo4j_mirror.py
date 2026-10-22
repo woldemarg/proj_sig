@@ -2,11 +2,12 @@
 
 Follows lac's publisher pattern (constraints + parameterised UNWIND/MERGE) with
 the SIG schema. The local journal/state is the source of truth and every publish makes
-the mirror equal to the snapshot: properties are replaced, not merged, and nodes of the
-SIG labels and relationships of the SIG types that the snapshot no longer holds are deleted
-(after a reset, a rebuild or a recomputed topology), as are relationships between SIG nodes
-of a type the schema no longer has. SIG owns these labels in ``NEO4J_DATABASE``: one
-workspace per database.
+the mirror equal to the snapshot: properties are replaced, not merged. A full sync (the
+first publish of a process, and the one after a failed publish) writes every row and deletes
+the nodes of the SIG labels and relationships of the SIG types that the snapshot does not
+hold, as well as relationships between SIG nodes of a type the schema no longer has; every
+other publish sends only what changed since the last one written. SIG owns these labels in
+``NEO4J_DATABASE``: one workspace per database.
 """
 
 from __future__ import annotations
@@ -98,53 +99,103 @@ def stale_edge_query(edge_type: str) -> str:
     return f"MATCH (s:{src})-[r:{edge_type}]->(t:{dst}) WHERE NOT (s.id + '|' + t.id) IN $keys DELETE r"
 
 
-def publish_snapshot(snapshot: dict[str, Any], settings: Settings, driver: Any = None) -> dict[str, Any]:
-    """Make ``NEO4J_DATABASE`` equal to the snapshot (an empty snapshot clears it); returns counts.
+def gone_edge_query(edge_type: str) -> str:
+    """Delete the type's relationships between the listed (source, target) pairs."""
+    src, dst = EDGE_ENDPOINTS[edge_type]
+    return f"UNWIND $rows AS row\nMATCH (s:{src} {{id: row.source}})-[r:{edge_type}]->(t:{dst} {{id: row.target}})\nDELETE r"
 
-    ``driver`` is injectable for tests."""
-    own = driver is None
-    if own:
-        from neo4j import GraphDatabase
 
-        driver = GraphDatabase.driver(  # a mirror that is down fails fast: the sync runs under the write lock
-            settings.neo4j_uri,
-            auth=(settings.neo4j_user, settings.neo4j_password),
-            connection_timeout=5.0,
-            connection_acquisition_timeout=10.0,
-            max_transaction_retry_time=5.0,
-        )
-    try:
-        try:  # multi-database editions: create the SIG database on first use
-            with driver.session(database="system") as session:
-                session.run(f"CREATE DATABASE {settings.neo4j_database} IF NOT EXISTS WAIT")
-        except Exception:
-            pass  # community edition / insufficient rights: use the database as configured
+def gone_node_query(label: str) -> str:
+    """Delete the label's listed nodes with their relationships."""
+    assert label in LABELS
+    return f"MATCH (n:{label}) WHERE n.id IN $ids DETACH DELETE n"
+
+
+def row_hashes(rows: dict[str, list[dict[str, Any]]], key: tuple[str, ...]) -> dict[tuple[str, ...], int]:
+    """``(label or type, *key)`` -> a hash of the row as written: what the next diff compares against."""
+    return {(kind, *(r[k] for k in key)): hash(json.dumps(r, sort_keys=True, default=str)) for kind, kind_rows in rows.items() for r in kind_rows}
+
+
+class Mirror:
+    """The Neo4j mirror as this process last wrote it: ``written`` holds the row hashes of its last successful publish,
+    None before the first one and after a failed one."""
+
+    def __init__(self) -> None:
+        self.written: tuple[dict, dict] | None = None
+
+    def publish(self, snapshot: dict[str, Any], settings: Settings, driver: Any = None) -> dict[str, Any]:
+        """Make ``NEO4J_DATABASE`` equal to the snapshot (an empty one clears it): a full sync while ``written`` is None,
+        else only the rows that differ from it and explicit deletions; returns counts. ``driver`` is injectable for tests."""
+        previous, self.written = self.written, None
         nodes, edges = snapshot_rows(snapshot)
-        batch = settings.neo4j_load_batch_size
-        with driver.session(database=settings.neo4j_database) as session:
-            for stmt in (s.strip() for s in load_cypher("ensure_constraints").split(";")):
-                if stmt:
-                    session.run(stmt)
-
-            def write(tx) -> None:
-                for label, rows in nodes.items():
-                    for i in range(0, len(rows), batch):
-                        tx.run(node_query(label), rows=rows[i : i + batch])
-                for etype, rows in edges.items():
-                    for i in range(0, len(rows), batch):
-                        tx.run(edge_query(etype), rows=rows[i : i + batch])
-                for etype, rows in edges.items():
-                    tx.run(stale_edge_query(etype), keys=[f"{r['source']}|{r['target']}" for r in rows])
-                tx.run(STALE_TYPES_QUERY, types=list(EDGE_ENDPOINTS), labels=list(LABELS))
-                for label, rows in nodes.items():
-                    tx.run(stale_node_query(label), ids=[r["id"] for r in rows])
-
-            session.execute_write(write)
-        return {
-            "nodes": {k: len(v) for k, v in nodes.items()},
+        now = (row_hashes(nodes, ("id",)), row_hashes(edges, ("source", "target")))
+        out = {
+            "nodes": {k: len(v) for k, v in nodes.items() if v},
             "edges": {k: len(v) for k, v in edges.items() if v},
             "database": settings.neo4j_database,
+            "sync": "full" if previous is None else "diff",
         }
-    finally:
+        if previous is not None:
+            nodes = {kind: [r for r in rows if previous[0].get((kind, r["id"])) != now[0][(kind, r["id"])]] for kind, rows in nodes.items()}
+            edges = {kind: [r for r in rows if previous[1].get(k := (kind, r["source"], r["target"])) != now[1][k]] for kind, rows in edges.items()}
+            gone_nodes = [k for k in previous[0] if k not in now[0]]
+            gone_edges = [k for k in previous[1] if k not in now[1]]
+            out["deleted"] = len(gone_nodes) + len(gone_edges)
+        out["written"] = sum(map(len, nodes.values())) + sum(map(len, edges.values()))
+        if previous is not None and not out["written"] and not out["deleted"]:
+            self.written = now
+            return out
+        own = driver is None
         if own:
-            driver.close()
+            from neo4j import GraphDatabase
+
+            driver = GraphDatabase.driver(  # a mirror that is down fails fast: the sync runs under the write lock
+                settings.neo4j_uri,
+                auth=(settings.neo4j_user, settings.neo4j_password),
+                connection_timeout=5.0,
+                connection_acquisition_timeout=10.0,
+                max_transaction_retry_time=5.0,
+            )
+        try:
+            if previous is None:
+                try:  # multi-database editions: create the SIG database on first use
+                    with driver.session(database="system") as session:
+                        session.run(f"CREATE DATABASE {settings.neo4j_database} IF NOT EXISTS WAIT")
+                except Exception:
+                    pass  # community edition / insufficient rights: use the database as configured
+            batch = settings.neo4j_load_batch_size
+            with driver.session(database=settings.neo4j_database) as session:
+                if previous is None:  # a diff follows a full sync of this process, which made them
+                    for stmt in (s.strip() for s in load_cypher("ensure_constraints").split(";")):
+                        if stmt:
+                            session.run(stmt)
+
+                def write(tx) -> None:
+                    for label, rows in nodes.items():
+                        for i in range(0, len(rows), batch):
+                            tx.run(node_query(label), rows=rows[i : i + batch])
+                    for etype, rows in edges.items():
+                        for i in range(0, len(rows), batch):
+                            tx.run(edge_query(etype), rows=rows[i : i + batch])
+                    if previous is None:
+                        for etype in EDGE_ENDPOINTS:
+                            tx.run(stale_edge_query(etype), keys=[f"{k[1]}|{k[2]}" for k in now[1] if k[0] == etype])
+                        tx.run(STALE_TYPES_QUERY, types=list(EDGE_ENDPOINTS), labels=list(LABELS))
+                        for label in LABELS:
+                            tx.run(stale_node_query(label), ids=[k[1] for k in now[0] if k[0] == label])
+                        return
+                    for etype in EDGE_ENDPOINTS:
+                        rows = [{"source": k[1], "target": k[2]} for k in gone_edges if k[0] == etype]
+                        for i in range(0, len(rows), batch):
+                            tx.run(gone_edge_query(etype), rows=rows[i : i + batch])
+                    for label in LABELS:
+                        ids = [k[1] for k in gone_nodes if k[0] == label]
+                        for i in range(0, len(ids), batch):
+                            tx.run(gone_node_query(label), ids=ids[i : i + batch])
+
+                session.execute_write(write)
+        finally:
+            if own:
+                driver.close()
+        self.written = now
+        return out
