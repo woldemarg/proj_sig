@@ -233,8 +233,7 @@ def test_neo4j_mirror_does_not_change_retrieval(cfg, demo_csv, monkeypatch):
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     question = "Чому margin нижчий для phones у US?"
     off = engine.evidence(question).view["traversal"]["seeds"]
-    real = neo4j_mirror.publish_snapshot
-    monkeypatch.setattr(neo4j_mirror, "publish_snapshot", lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver()))
+    monkeypatch.setattr(engine._mirror, "publish", lambda s, c: neo4j_mirror.Mirror.publish(engine._mirror, s, c, driver=_Driver()))
     engine.settings = replace(cfg, neo4j_enabled=True)
     assert engine.sync_neo4j(engine.committed().graph.snapshot)["status"] == "ok"
     assert engine.evidence(question).view["traversal"]["seeds"] == off

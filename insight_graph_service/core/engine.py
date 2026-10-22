@@ -41,6 +41,7 @@ from insight_contracts.text import RELIABILITY
 from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
 from insight_graph_service.core.errors import PipelineError
+from insight_graph_service.core.neo4j_mirror import Mirror
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
@@ -122,6 +123,7 @@ class Engine:
         self.ws = Workspace(settings)
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
+        self._mirror = Mirror()  # what this process last wrote to Neo4j: the next sync sends the difference
         self._spatial_memo: dict[tuple, Any] = {}  # derive_spatial's parts of each READY geo dataset and table placement
         self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
         self._publishing: str | None = None  # the batch past its commit point whose graph readers do not see yet
@@ -817,6 +819,7 @@ class Engine:
                 raise PipelineError("busy", f"batches in progress: {busy}")
             self.ws.reset()
             self._open()  # the empty workspace
+            self._mirror.written = None  # a full sync: every SIG node and relationship goes
             return {"neo4j": self.sync_neo4j({"nodes": [], "edges": []})}
 
     def startup_sync(self) -> dict[str, Any]:
@@ -832,10 +835,8 @@ class Engine:
         """Make the Neo4j mirror equal to ``snapshot`` when ``NEO4J_ENABLED``."""
         if not self.settings.neo4j_enabled:
             return {"status": "disabled"}
-        from insight_graph_service.core.neo4j_mirror import publish_snapshot
-
         try:
-            return {"status": "ok", **publish_snapshot(snapshot, self.settings)}
+            return {"status": "ok", **self._mirror.publish(snapshot, self.settings)}
         except Exception as exc:  # the mirror is optional: report, never fail the caller
             log.warning("Neo4j sync failed: %s", exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}

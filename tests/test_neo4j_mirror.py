@@ -1,21 +1,25 @@
-"""The Neo4j mirror: the snapshot published through a fake driver, CO_OCCURS and the Cypher walk (docs/06_graph_and_storage.md §6.6)."""
+"""The Neo4j mirror: the snapshot published through a fake driver, full and as a diff, CO_OCCURS and the Cypher walk (docs/06_graph_and_storage.md §6.6)."""
 
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
+from conftest import make_config, make_engine
 
 from insight_contracts import LATENT_EDGES, EdgeType, GraphEdge
 from insight_graph_service.core.neo4j_mirror import (
     EDGE_ENDPOINTS,
     LABELS,
     STALE_TYPES_QUERY,
+    Mirror,
     edge_query,
     flatten_props,
+    gone_edge_query,
+    gone_node_query,
     load_cypher,
     node_query,
-    publish_snapshot,
     stale_edge_query,
     stale_node_query,
 )
@@ -50,11 +54,11 @@ class _Driver:
 def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     snap = hashed_engine.ws.load_graph()
     driver = _Driver()
-    out = publish_snapshot(snap, hashed_engine.settings, driver=driver)
+    out = Mirror().publish(snap, hashed_engine.settings, driver=driver)
     queries = [q for q, _ in driver.log]
     assert any("CREATE CONSTRAINT pattern_id_unique" in q for q in queries)
     assert all("CREATE (" not in q for q in queries)  # idempotent: MERGE only
-    assert out["nodes"]["Pattern"] == len(hashed_engine.graph().of_kind("Pattern"))
+    assert out["nodes"]["Pattern"] == len(hashed_engine.graph().of_kind("Pattern")) and out["sync"] == "full"
     assert "MERGE (s)-[r:ACTIVATES]->(t)" in edge_query("ACTIVATES")
     # properties are replaced, not merged: a property that disappeared (or became None) is removed
     assert "SET n = row.props, n.id = row.id" in node_query("Pattern") and "SET r = row.props" in edge_query("RELATED_TO")
@@ -66,7 +70,7 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     assert stale[STALE_TYPES_QUERY] == {"types": list(EDGE_ENDPOINTS), "labels": list(LABELS)}  # a type the schema dropped
     # an empty snapshot (a reset) clears the mirror
     empty = _Driver()
-    publish_snapshot({"nodes": [], "edges": []}, hashed_engine.settings, driver=empty)
+    Mirror().publish({"nodes": [], "edges": []}, hashed_engine.settings, driver=empty)
     assert all(p["ids"] == [] for q, p in empty.log if "DETACH DELETE" in q)
     flat = flatten_props({"a": 1, "b": [1, 2], "c": {"x": 1}, "d": None, "e": [{"k": 1}]})
     assert flat == {
@@ -75,6 +79,48 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
         "c_json": json.dumps({"x": 1}),
         "e_json": json.dumps([{"k": 1}]),
     }
+
+
+def test_a_publish_after_the_first_sends_only_what_changed(hashed_engine, tmp_path, monkeypatch):
+    """The diff with the last publish written: changed rows rewritten, gone ones deleted by id, no stale sweep; a
+    failed publish and a reset are followed by a full sync."""
+    settings, snap, mirror = hashed_engine.settings, hashed_engine.ws.load_graph(), Mirror()
+    mirror.publish(snap, settings, driver=_Driver())
+    again = _Driver()
+    assert mirror.publish(snap, settings, driver=again) == {**mirror.publish(snap, settings, driver=_Driver()), "written": 0, "deleted": 0}
+    assert not [q for q, _ in again.log if "UNWIND" in q or "DELETE" in q]  # nothing changed: nothing sent
+
+    nxt = copy.deepcopy(snap)
+    patterns = [n for n in nxt["nodes"] if n["kind"] == "Pattern"]
+    gone, changed = patterns[0]["id"], patterns[1]
+    changed["props"]["weight"] = 0.123
+    edge = next(e for e in nxt["edges"] if gone not in (e["source"], e["target"]))
+    edge["props"] = {**edge["props"], "note": "x"}  # the same pair, new props
+    nxt["nodes"] = [n for n in nxt["nodes"] if n["id"] != gone]
+    dropped = [e for e in nxt["edges"] if gone in (e["source"], e["target"])]
+    nxt["edges"] = [e for e in nxt["edges"] if e not in dropped]
+    driver = _Driver()
+    out = mirror.publish(nxt, settings, driver=driver)
+    sent = {q: p for q, p in driver.log if "UNWIND" in q or "DELETE" in q}
+    assert out["sync"] == "diff" and out["written"] == 2 and out["deleted"] == 1 + len(dropped)
+    assert [r["id"] for r in sent[node_query("Pattern")]["rows"]] == [changed["id"]]
+    assert sent[edge_query(edge["type"])]["rows"][0]["props"]["note"] == "x"
+    assert sent[gone_node_query("Pattern")] == {"ids": [gone]}
+    deleted = [(t, r["source"], r["target"]) for t in EDGE_ENDPOINTS if (q := gone_edge_query(t)) in sent for r in sent[q]["rows"]]
+    assert sorted(deleted) == sorted((e["type"], e["source"], e["target"]) for e in dropped)
+    assert not [q for q in sent if q == STALE_TYPES_QUERY or "NOT" in q]
+
+    class _Down(_Driver):
+        def session(self, database=None):
+            raise ConnectionError("down")
+
+    with pytest.raises(ConnectionError):
+        mirror.publish(snap, settings, driver=_Down())
+    assert mirror.publish(snap, settings, driver=_Driver())["sync"] == "full"
+    engine = make_engine(make_config(tmp_path, neo4j_enabled=True))
+    engine._mirror.written = mirror.written
+    monkeypatch.setattr(engine._mirror, "publish", lambda s, c: Mirror.publish(engine._mirror, s, c, driver=_Driver()))
+    assert engine.reset()["neo4j"]["sync"] == "full"
 
 
 def test_co_occurrence_edges_from_memberships():
