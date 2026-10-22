@@ -25,6 +25,8 @@ A workspace the engine cannot serve does not stop the start: the engine starts d
 
 After the start, the app queues `Engine.startup_sync()` on its worker thread. It brings the Neo4j mirror up to the committed snapshot, holding the write lock so it never interleaves with a deletion's or a reset's own sync. It never syncs from a degraded or empty workspace: that would wipe a mirror without an operator action.
 
+The worker also builds a commit's first reads before a console asks, at the start and after an upload's last level, a `PATCH /api/datasets` and a deletion: the graph view (`GET /api/graph`, no filter), then each READY geo dataset's cell package, overlay, projected insights and the whole map's window (`Engine.warm_map`, `geo_views.warm`), all kept in the commit's memo. It stops while a batch waits, whose commit would throw them away, and builds nothing on a degraded workspace. Measured on the 300,000-point synthetic upload (`@auto` and `table`): the first Map open one poll after READY — the cells, `/projected` and `/overlay` together, then a window — takes 0.07 s, against 2.0 s when every read was built on its request.
+
 ```text
 UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS → EMBEDDING
          → UPDATING_ONTOLOGY → BUILDING_GRAPH → PERSISTING → READY            terminal: READY | FAILED | SKIPPED

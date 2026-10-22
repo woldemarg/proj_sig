@@ -12,6 +12,7 @@ import functools
 import json
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -196,7 +197,7 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
             v = values[i]
             props[name] = (None if not np.isfinite(v) else round(float(v), 4)) if values.dtype.kind == "f" else str(v)
         features.append({"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props})
-    lonlat = ctx.lonlat[ctx.point_cell >= 0]
+    lonlat = ctx.lonlat[ctx.point_cell >= 0]  # never empty: build_cells refuses a level without a valid point
     west, east = lon_span(lonlat[:, 0])
     bbox = [west, float(lonlat[:, 1].min()), east, float(lonlat[:, 1].max())]
     covers = ws.load_covers(dataset_id)
@@ -395,6 +396,21 @@ def geo_projected(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: 
             )
         )
     return out
+
+
+def warm(ws: Workspace, graph: DualGraph, thresholds: PhenomenonThresholds) -> None:
+    """Every READY geo dataset's map reads built ahead of the console — its cell package, overlay, projected insights and
+    the whole map's window, which reads every insight's facts — so the first Map open after a commit answers from the
+    memo; stops while a batch waits, whose commit would throw them away."""
+    for d in geo_datasets(ws):
+        if ws.unfinished_batches():
+            return
+        ds = d["dataset_id"]
+        with suppress(PipelineError, FileNotFoundError):  # deleted meanwhile: nothing to read
+            geo_cells_pack(ws, ds)
+            geo_overlay(ws, graph, ds, thresholds)
+            geo_projected(ws, graph, ds, thresholds)
+            geo_window(ws, graph, ds, "-180,-90,180,90", thresholds)
 
 
 def window_view(centres: np.ndarray, bbox: str) -> np.ndarray:

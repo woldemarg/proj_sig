@@ -166,6 +166,11 @@ def test_geo_option_is_strict_and_changes_the_dataset_id(points_csv):
     with pytest.raises(IngestionError) as err:
         load_dataset(points_csv, MinerConfig(), geo="nowhere")
     assert err.value.code == "invalid_options"
+    blank = points_csv.with_name("blank.csv")
+    geo_frame().assign(latitude=np.nan).to_csv(blank, index=False)  # refused before any cell: geo_cells reads a located point
+    with pytest.raises(IngestionError, match="No valid point") as err:
+        load_dataset(blank, MinerConfig(), geo="latitude,longitude")
+    assert err.value.code == "invalid_options"
 
 
 def test_geo_batch_end_to_end(engine, points_csv):
@@ -195,6 +200,34 @@ def test_geo_batch_end_to_end(engine, points_csv):
     engine.ws.save_batch({**record, "status": "FAILED"})  # a batch that failed after its files were written serves no map
     with pytest.raises(PipelineError):
         engine.geo_cells_pack(record["dataset_id"])
+
+
+def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv):
+    """The batch worker builds the graph view and each READY geo dataset's map reads after an upload's last level and
+    after a PATCH (``Engine.warm_map``), so the first Map open after READY reads the commit's memo; never while a batch waits."""
+
+    def warmed(ds: str) -> bool:  # the worker's reads: the test reads no graph or map of its own before
+        for _ in range(400):
+            if {("cytoscape", "", False), ("projection", ds), ("overlay", ds)} <= engine.graph().memo.keys():
+                return True
+            time.sleep(0.05)
+        return False
+
+    with TestClient(create_app(engine)) as client:
+        with points_csv.open("rb") as f:
+            bid = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data={"geo": "auto"}).json()["batch_id"]
+        for _ in range(600):
+            if (record := client.get(f"/api/batches/{bid}").json())["status"] == "READY":
+                break
+            time.sleep(0.1)
+        ds = record["dataset_id"]
+        assert warmed(ds)
+        assert client.patch(f"/api/datasets/{ds}", json={"source": "field survey"}).status_code == 200
+        assert warmed(ds)  # the PATCH's own graph
+    engine.update_dataset_metadata(ds, source="")  # a new graph, and a batch waiting for the worker
+    engine.submit(points_csv)
+    engine.warm_map()
+    assert not {("projection", ds), ("overlay", ds)} & engine.graph().memo.keys()
 
 
 def test_geo_evidence_speaks_plain_language(engine, points_csv):
