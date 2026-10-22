@@ -45,9 +45,10 @@ class _Session:
 
 class _Driver:
     def __init__(self):
-        self.log = []
+        self.log, self.sessions = [], 0
 
     def session(self, database=None):
+        self.sessions += 1
         return _Session(self.log)
 
 
@@ -85,10 +86,10 @@ def test_a_publish_after_the_first_sends_only_what_changed(hashed_engine, tmp_pa
     """The diff with the last publish written: changed rows rewritten, gone ones deleted by id, no stale sweep; a
     failed publish and a reset are followed by a full sync."""
     settings, snap, mirror = hashed_engine.settings, hashed_engine.ws.load_graph(), Mirror()
-    mirror.publish(snap, settings, driver=_Driver())
+    full = mirror.publish(snap, settings, driver=_Driver())
     again = _Driver()
-    assert mirror.publish(snap, settings, driver=again) == {**mirror.publish(snap, settings, driver=_Driver()), "written": 0, "deleted": 0}
-    assert not [q for q, _ in again.log if "UNWIND" in q or "DELETE" in q]  # nothing changed: nothing sent
+    assert mirror.publish(snap, settings, driver=again) == {**full, "sync": "diff", "written": 0, "deleted": 0}  # the snapshot's counts
+    assert again.sessions == 0  # nothing changed: no session at all
 
     nxt = copy.deepcopy(snap)
     patterns = [n for n in nxt["nodes"] if n["kind"] == "Pattern"]
@@ -103,6 +104,7 @@ def test_a_publish_after_the_first_sends_only_what_changed(hashed_engine, tmp_pa
     out = mirror.publish(nxt, settings, driver=driver)
     sent = {q: p for q, p in driver.log if "UNWIND" in q or "DELETE" in q}
     assert out["sync"] == "diff" and out["written"] == 2 and out["deleted"] == 1 + len(dropped)
+    assert out["nodes"]["Pattern"] == len(patterns) - 1 and not [q for q, _ in driver.log if "CREATE" in q]  # no setup again
     assert [r["id"] for r in sent[node_query("Pattern")]["rows"]] == [changed["id"]]
     assert sent[edge_query(edge["type"])]["rows"][0]["props"]["note"] == "x"
     assert sent[gone_node_query("Pattern")] == {"ids": [gone]}

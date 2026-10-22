@@ -13,7 +13,6 @@ other publish sends only what changed since the last one written. SIG owns these
 from __future__ import annotations
 
 import json
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -130,12 +129,22 @@ class Mirror:
         previous, self.written = self.written, None
         nodes, edges = snapshot_rows(snapshot)
         now = (row_hashes(nodes, ("id",)), row_hashes(edges, ("source", "target")))
-        counts = {"nodes": dict(Counter(k[0] for k in now[0])), "edges": dict(Counter(k[0] for k in now[1]))}
+        out = {
+            "nodes": {k: len(v) for k, v in nodes.items() if v},
+            "edges": {k: len(v) for k, v in edges.items() if v},
+            "database": settings.neo4j_database,
+            "sync": "full" if previous is None else "diff",
+        }
         if previous is not None:
             nodes = {kind: [r for r in rows if previous[0].get((kind, r["id"])) != now[0][(kind, r["id"])]] for kind, rows in nodes.items()}
             edges = {kind: [r for r in rows if previous[1].get(k := (kind, r["source"], r["target"])) != now[1][k]] for kind, rows in edges.items()}
             gone_nodes = [k for k in previous[0] if k not in now[0]]
             gone_edges = [k for k in previous[1] if k not in now[1]]
+            out["deleted"] = len(gone_nodes) + len(gone_edges)
+        out["written"] = sum(map(len, nodes.values())) + sum(map(len, edges.values()))
+        if previous is not None and not out["written"] and not out["deleted"]:
+            self.written = now
+            return out
         own = driver is None
         if own:
             from neo4j import GraphDatabase
@@ -148,16 +157,18 @@ class Mirror:
                 max_transaction_retry_time=5.0,
             )
         try:
-            try:  # multi-database editions: create the SIG database on first use
-                with driver.session(database="system") as session:
-                    session.run(f"CREATE DATABASE {settings.neo4j_database} IF NOT EXISTS WAIT")
-            except Exception:
-                pass  # community edition / insufficient rights: use the database as configured
+            if previous is None:
+                try:  # multi-database editions: create the SIG database on first use
+                    with driver.session(database="system") as session:
+                        session.run(f"CREATE DATABASE {settings.neo4j_database} IF NOT EXISTS WAIT")
+                except Exception:
+                    pass  # community edition / insufficient rights: use the database as configured
             batch = settings.neo4j_load_batch_size
             with driver.session(database=settings.neo4j_database) as session:
-                for stmt in (s.strip() for s in load_cypher("ensure_constraints").split(";")):
-                    if stmt:
-                        session.run(stmt)
+                if previous is None:  # a diff follows a full sync of this process, which made them
+                    for stmt in (s.strip() for s in load_cypher("ensure_constraints").split(";")):
+                        if stmt:
+                            session.run(stmt)
 
                 def write(tx) -> None:
                     for label, rows in nodes.items():
@@ -187,7 +198,4 @@ class Mirror:
             if own:
                 driver.close()
         self.written = now
-        written = sum(map(len, nodes.values())) + sum(map(len, edges.values()))
-        if previous is None:
-            return {**counts, "database": settings.neo4j_database, "sync": "full", "written": written}
-        return {**counts, "database": settings.neo4j_database, "sync": "diff", "written": written, "deleted": len(gone_nodes) + len(gone_edges)}
+        return out
