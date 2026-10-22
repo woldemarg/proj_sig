@@ -191,3 +191,26 @@ def test_the_console_claims_no_cause_and_significance_only_on_the_sac_line():
     assert not [b for b in ("комірки незалежні", "частка бутстреп", "поділена на MAD", "доводить", "спричиняє") if b in text]
     significant = [ln for ln in text.splitlines() if "значущ" in ln]  # the SAC term's meaning and the HUD's SAC line only
     assert significant and all(ln.lstrip().startswith('"sac":') or 'term("sac")' in ln for ln in significant)
+
+
+ENGLISH_CHROME = (  # the console's former chrome: none of it is left (#101)
+    "Evidence & how it was found", "Searching the graph", "Cancelled.", "No answer in time", "Regions and trust unavailable",
+    "Insights of other levels unavailable", "Not on this map", "No findings", "levels ready", "Re-check from the raw data",
+    "Clear highlight", "Ask your data", "New chat", "Walk on", "Reproduced", "Drop a table here", "Server unreachable",
+    "Score breakdown", "Show in graph", "Treat as categories", "Two planes", "IN VIEW", "Colour cells by",
+)  # fmt: skip
+
+
+def test_the_console_speaks_ukrainian_and_explains_every_error_code():
+    static = ROOT / "sig_web_console" / "static"
+    text = "\n".join(
+        re.sub(r"//[^\n]*|/\*.*?\*/", "", p.read_text(encoding="utf-8"), flags=re.S) for p in [*static.glob("*.js"), static / "index.html"]
+    )
+    assert not [s for s in ENGLISH_CHROME if s in text]
+    assert {"invalid_options", "metadata_mismatch"} <= set(re.findall(r"^\s+(\w+): \[", text.split("const ERROR_HELP = {")[1].split("};")[0], re.M))
+
+
+@pytest.mark.skipif(not (ROOT / "docs").is_dir(), reason="the graph service image holds no docs (.dockerignore)")
+def test_the_interface_chapter_quotes_the_ukrainian_chrome():
+    doc = (ROOT / "docs" / "08_interface.md").read_text(encoding="utf-8")
+    assert not [s for s in ENGLISH_CHROME if f"*{s}" in doc or f"«{s}" in doc]
