@@ -556,12 +556,28 @@ def link_min_events(n: int) -> int:
     return min(GEO_LINK_MIN_EVENTS, max(5, math.ceil(0.05 * n)))
 
 
+CENTRE_TIE_DEG = 1e-7  # ≈ 1 cm: far above where math libraries disagree (≈ 1e-12°), far below any cell
+
+
 def event_regions(cells: np.ndarray, levels: tuple[int, ...]) -> dict[int, np.ndarray]:
     """Each cell's region at every listed level not finer than its own: the cell holding its centre (docs/06_graph_and_storage.md
-    §6.1), as the points were indexed."""
+    §6.1), as the points were indexed; a centre on a boundary by one rule on every platform (``centre_region``)."""
     names = [str(c) for c in cells]
     res = h3.get_resolution(names[0])
-    return {lv: np.array(names if lv == res else [h3.latlng_to_cell(*h3.cell_to_latlng(c), lv) for c in names]) for lv in levels if lv <= res}
+    return {lv: np.array(names if lv == res else [centre_region(c, lv) for c in names]) for lv in levels if lv <= res}
+
+
+def centre_region(cell: str, level: int) -> str:
+    """The cell at ``level`` holding ``cell``'s centre, read at four points ``CENTRE_TIE_DEG`` around it: when they
+    disagree the centre lies on a boundary, and it goes to the H3 parent if that is among them, else to the least of
+    them. Many centres lie exactly on a coarser boundary, where platforms' floating point would otherwise decide."""
+    lat, lng = h3.cell_to_latlng(cell)
+    d = CENTRE_TIE_DEG
+    around = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
+    if len(around) == 1:
+        return around.pop()
+    parent = h3.cell_to_parent(cell, level)
+    return parent if parent in around else min(around)
 
 
 def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tuple[str, str, float, dict[str, Any]]], set[str]]:
