@@ -455,11 +455,16 @@ function kv(rows) {  // [label, value] as HTML: the console's own words or term(
   return `<dl class="kv">${rows.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
 }
 
-function shiftRows(shifts) {
+// a column's description in the dataset's metadata document; a geo cell's derivation reads its source column
+// ponytail: share_<column>_<level> is not mapped back; wording.source_column does it on the server
+const described = (doc, col) => (doc ? doc.columns[col] || doc.columns[col.replace(/_(median|mode|band|late_share|active_days)$/, "")] || {} : {}).description;
+
+function shiftRows(shifts, doc = null) {
   const max = Math.max(...shifts.map((s) => Math.abs(s.robust_z)), 1);
   return shifts.map((s) => {
     const dir = s.robust_z >= 0 ? "up" : "down";
-    return `<div class="shift-row"><span>${esc(human(s.metric))} <span class="muted">${num(s.local_median, 4)} проти ${num(s.global_median, 4)}</span></span>` +
+    const about = described(doc, s.metric);
+    return `<div class="shift-row"><span${about ? ` title="${esc(about)}"` : ""}>${esc(human(s.metric))} <span class="muted">${num(s.local_median, 4)} проти ${num(s.global_median, 4)}</span></span>` +
       `<b class="effect ${dir}">${signed(s.robust_z)} ${term("sd")}</b>` +
       `<div class="meter"><i class="${dir}" style="width:${Math.min(100, Math.round((Math.abs(s.robust_z) / max) * 100))}%"></i></div></div>`;
   }).join("");
@@ -529,7 +534,7 @@ async function inspect(id, note = "") {
     $("drawer-title").textContent = d.reading.where;  // the insight in words (insight_contracts/wording.py), as every surface reads it
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += p.phenomenon_type === "covariance" ? `<h4>Різниці медіан (не перевірено)</h4>${shiftRows(p.shifts)}` : `<h4>Зсуви</h4>${shiftRows(p.shifts)}`;
+    html += p.phenomenon_type === "covariance" ? `<h4>Різниці медіан (не перевірено)</h4>${shiftRows(p.shifts, (d.dataset || {}).metadata_doc)}` : `<h4>Зсуви</h4>${shiftRows(p.shifts, (d.dataset || {}).metadata_doc)}`;
     html += `<h4>Свідчення</h4>` + kv([
       [term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`],
       [term("weight"), `<b>${num(p.weight)}</b>`],

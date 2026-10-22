@@ -314,6 +314,8 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
+        glossary: str | None = None,
+        metadata: str | None = None,
         table: bool = False,
         supersedes: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -322,6 +324,7 @@ class Engine:
         levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
         READY (``uploads.replaced_by``). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
+        uploads.resolve_declared_metadata(glossary, metadata)
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
@@ -356,6 +359,8 @@ class Engine:
             "source": source,
             "reliability": reliability,
             "indicators": indicators,
+            "glossary": glossary,
+            "metadata": metadata,
             "supersedes": supersedes,
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
@@ -384,6 +389,8 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
+        glossary: str | None = None,
+        metadata: str | None = None,
         upload: dict[str, Any] | None = None,
         strict: bool = True,
         geo_levels: dict[str, Any] | None = None,
@@ -396,12 +403,14 @@ class Engine:
         (applied leniently); an explicit string (even "") overrides them strictly.
         ``geo`` (``auto``, a point column or ``lat,lon``, optionally ``@<res>``) analyses H3 cells (docs/02_discovery.md §2.9).
         ``source`` / ``reliability`` (A-F) describe where the data comes from, ``indicators`` what its metrics measure
-        (``metric:indicator[:unit],...``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
+        (``metric:indicator[:unit],...``), ``glossary`` (JSON) and ``metadata`` (a metadata document) what its columns
+        mean (``uploads.resolve_declared_metadata``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
+        trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         path = Path(path)
         created = utc_now()
@@ -489,6 +498,10 @@ class Engine:
             record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
             kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
             record.update({"indicators": kept} if kept else {})
+        if declared := {k: record.pop(k) for k in ("user_glossary", "metadata_doc") if k in record}:  # kept to the columns the level holds
+            fitted, warnings = uploads.fit_declared(declared, [*result.profile.numerics, *result.profile.categoricals], frame=loaded.frame)
+            record["warnings"] += warnings
+            record.update({k: v for k, v in fitted.items() if v})
         self.ws.save_profile(record["dataset_id"], record["profile"])
         return result
 
@@ -626,9 +639,10 @@ class Engine:
         record["status"] = "SKIPPED"
         record["duplicate_of"] = duplicate["batch_id"]
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
-        if record.get("source") or record.get("reliability") or record.get("indicators"):
+        if any(record.get(k) for k in ("source", "reliability", "indicators", "user_glossary", "metadata_doc")):
             record["warnings"].append(
-                f"a re-upload does not change the source, reliability or indicators: PATCH /api/datasets/{record['dataset_id']}"
+                "a re-upload does not change the source, reliability, indicators, glossary or metadata document:"
+                f" PATCH /api/datasets/{record['dataset_id']}"
             )
         self._supersede_alone(record, ("SKIPPED", None))  # the last level of the new version may be one already ingested
         self.ws.save_batch(record)
@@ -688,12 +702,14 @@ class Engine:
         source: str | None = None,
         reliability: str | None = None,
         indicators: str | None = None,
+        glossary: str | None = None,
+        metadata: str | None = None,
         supersedes: str | None = None,
     ) -> dict[str, Any]:
-        """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` / ``supersedes`` (None: unchanged, "":
-        undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
-        (docs/06_graph_and_storage.md §6.2). An indicator for a metric the dataset does not have is refused, and so is a
-        record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
+        """Change a READY dataset's ``source`` / ``reliability`` / ``indicators`` / ``glossary`` / ``metadata`` /
+        ``supersedes`` (None: unchanged, "": undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
+        (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
+        refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
         the same transaction (docs/06_graph_and_storage.md §6.8)."""
         changes = resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
@@ -712,6 +728,9 @@ class Engine:
             unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
             if unknown:
                 raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
+            columns = [*record["profile"].get("numerics", []), *record["profile"].get("categoricals", [])]
+            declared, warnings = uploads.resolve_declared_metadata(glossary, metadata, columns, strict=True)
+            changes.update(declared)
             record.update(changes)
             for cleared in [k for k, v in changes.items() if v is None]:
                 del record[cleared]
@@ -730,7 +749,10 @@ class Engine:
                 "source": record.get("source"),
                 "reliability": record.get("reliability", "F"),
                 "indicators": record.get("indicators", {}),
+                "user_glossary": record.get("user_glossary", {}),
+                "metadata_columns": len((record.get("metadata_doc") or {}).get("columns", {})),
                 "supersedes": record.get("supersedes"),
+                **({"warnings": warnings} if warnings else {}),
                 **({"superseded": superseded} if superseded else {}),
                 "neo4j": self._publish(state, snapshot),
             }
