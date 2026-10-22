@@ -291,7 +291,11 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
             f["properties"].update(picture(graph, f["properties"]["id"]))
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
-            | {"scale": scale_label(graph, pid), "reading": insight_reading(graph, pid, thresholds)}
+            | {
+                "scale": scale_label(graph, pid),
+                "reading": insight_reading(graph, pid, thresholds),
+                "numbers": wording.value_words(graph.insight(pid)),
+            }
             for pid in pids
         }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
@@ -463,6 +467,7 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
                     "share": round(x / mine, 3),
                     "cells": int(view[p.events].sum()),
                     "lift": round(lift, 2),
+                    "lift_words": wording.lift_words("window", lift),
                     "also": [{"id": q, "level": proj["patterns"][q].level} for q in hosts.get(pid, [])],
                 },
             )

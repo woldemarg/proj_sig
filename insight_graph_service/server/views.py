@@ -136,10 +136,13 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         neighbors[key] = items[: IN_REGION_SHOWN if key == "IN_REGION" else NEIGHBOURS_SHOWN]
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["reading"] = insight_reading(graph, node_id, thresholds)
+        out["numbers"] = wording.value_words(graph.insight(node_id))
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
         out["places"] = [
-            {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}} for r, _ in places(graph, node_id)
+            {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}}
+            | ({"lift_words": wording.lift_words("place", edges[r]["props"]["lift"])} if "lift" in edges[r]["props"] else {})
+            for r, _ in places(graph, node_id)
         ]
         chain = scale_chain(graph, [node_id])
         steps = chain[0].up + chain[0].down if chain else []
