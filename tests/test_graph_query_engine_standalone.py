@@ -658,7 +658,9 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     from insight_graph_service.server.views import node_details
 
     def panel(snap: dict) -> list[str]:
-        return sorted(it["id"] for it in node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"])
+        items = node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"]
+        assert all(set(it) == {"id", "label", "kind", "weight", "props", "integrity"} for it in items)  # one shape for both
+        return sorted(it["id"] for it in items)
 
     assert panel(cells_form) == panel(edges_form) == ["P1", "P7"]  # the region's panel lists both, as its count does
     scattered = {**cells_form, "edges": [*cells_form["edges"], edge("P7", "R:1:c", "IN_REGION", 0.3)]}  # lies at 1, not at 3

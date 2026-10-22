@@ -126,6 +126,7 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
                 "kind": "Pattern",
                 "weight": 1.0,
                 "props": {"basis": "cells", "share": 1.0, "own": True},
+                "integrity": graph.nodes[pid]["props"].get("integrity"),
             }
             neighbors.setdefault("IN_REGION (in)", []).append(item)
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
