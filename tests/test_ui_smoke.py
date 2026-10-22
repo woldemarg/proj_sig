@@ -531,7 +531,7 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
 
 
 @pytest.mark.browser
-def test_an_item_reached_by_location_alone_says_so(cfg, demo_csv):
+def test_an_item_reached_by_location_alone_says_so(cfg):
     """An item the walk reached last over a CO_LOCATED link of the same area, with no condition in common with the
     question (``located``), is "лише за місцем" on its evidence card and on the map card, whatever its role, never
     "пов'язана знахідка"; one that shares a condition keeps its role."""
@@ -539,9 +539,7 @@ def test_an_item_reached_by_location_alone_says_so(cfg, demo_csv):
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
-    engine = make_engine(cfg)
-    assert engine.ingest_file(demo_csv)["status"] == "READY"
-    port, app = stack(engine)
+    port, app = stack(make_engine(cfg))  # the cards render synthetic input: no dataset needed
     item = {
         "key": "P2", "pattern_id": "P-x", "role": "structural", "located": "same_region", "transversal_only": False, "scope": [], "also": [],
         "scale": "insufficient", "trust": "", "reading": {"where": "де", "what": "що"}, "provenance": {"dataset_id": "ds"},
@@ -559,7 +557,10 @@ def test_an_item_reached_by_location_alone_says_so(cfg, demo_csv):
         "weight": 0.5,
         "numbers": {},
     }
-    turn = lambda it: {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [it]}, "traversal": {}}}}  # noqa: E731
+
+    def turn(it):
+        return {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [it]}, "traversal": {}}}}
+
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page()
         page.goto(f"{url}/")

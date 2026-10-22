@@ -356,17 +356,19 @@ class Evidence:
     def _glossaries(self) -> dict[str, dict[str, str]]:  # read by every reword of one rendering: built once
         """Each dataset's glossary by id, never another's: its derived English one (``glossary``) under the declared one
         (``user_glossary``); a declared source column read onto every cell column derived from it, as the readings read
-        it (``wording.column_words``), and a declared ``column=value`` onto the cell's mode column."""
+        it (``wording.column_words``), a column's quantile band read as the column (as ``condition_words`` reads it) and a
+        declared ``column=value`` onto the cell's mode column."""
         out = {}
         for d in self.datasets:
             derived, user = d.get("glossary", {}), d.get("user_glossary", {})
             cells = {
                 c: wording.column_words(c, user, True)
                 for c in derived
-                if "=" not in c and not c.endswith("_band") and wording.source_column(c, user) in user
+                if "=" not in c and not c.endswith("_band") and c not in user and wording.source_column(c, user) in user
             }
+            bands = {f"{c}_band": v for c, v in (derived | cells | user).items() if "=" not in c}
             modes = {k.replace("=", "_mode=", 1): v for k, v in user.items() if "=" in k and k.split("=", 1)[0] + "_mode" in derived}
-            out[d["dataset_id"]] = derived | cells | user | modes
+            out[d["dataset_id"]] = derived | cells | bands | user | modes
         return out
 
     @cached_property
@@ -402,14 +404,16 @@ class Evidence:
 
     def plain_language(self) -> list[tuple[str, str]]:
         """(column or declared ``column=value``, meaning) for what each item names that its dataset's glossary holds, each
-        once; a derived pair's phrase (a geo cell's class or band) is on its scope line already."""
+        meaning once; a derived pair's phrase (a geo cell's class or band) is on its scope line already, a declared one is listed."""
         derived = {d["dataset_id"]: d.get("glossary", {}) for d in self.datasets}
-        out: dict[tuple[str, str], None] = {}
+        out: dict[str, str] = {}  # meaning -> the first name read as it
         for it in self.items:
             ds = it.provenance["dataset_id"]
-            glossary = self._glossaries.get(ds, {})
-            out |= {(n, glossary[n]): None for n in (*_named(it), *(c for c in it.scope if c not in derived.get(ds, {}))) if n in glossary}
-        return list(out)
+            glossary, own = self._glossaries.get(ds, {}), derived.get(ds, {})
+            for n in (*_named(it), *(c for c in it.scope if glossary.get(c) != own.get(c))):
+                if n in glossary:
+                    out.setdefault(glossary[n], n)
+        return [(n, meaning) for meaning, n in out.items()]
 
     def summary(self) -> str:
         """The observations, cited: one ``- …`` line each, the item's reading (``wording``) in Ukrainian around

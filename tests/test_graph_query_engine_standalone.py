@@ -680,8 +680,8 @@ def test_reword_matches_whole_names_and_a_band_says_its_place():
     ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets and the names the items use
     ev.items = [
         SimpleNamespace(
-            scope=["price_band=q2", "kind_mode=INLAND"],
-            statistics={"shifts": [{"metric": "return_rate"}], "covariance": {"pair": ["points", "rate"]}},
+            scope=["price_band=q2", "kind_mode=INLAND", "load_median_band=q4", "lisa_points=hot spot"],
+            statistics={"shifts": [{"metric": "return_rate"}, {"metric": "load_median"}], "covariance": {"pair": ["points", "rate"]}},
             provenance={"dataset_id": "d"},
         ),
         SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "rate"}], "covariance": {}}, provenance={"dataset_id": "e"}),
@@ -694,15 +694,20 @@ def test_reword_matches_whole_names_and_a_band_says_its_place():
                 "share_kind_INLAND": "share of the cell's events whose kind is INLAND",
                 "kind_mode": "the most frequent kind among the cell's events",
                 "neighbours_points_band": "how busy the six surrounding cells are",
+                "load_median": "typical (median) load of the cell's events",
+                "lisa_points=hot spot": "a hot spot: a busy cell surrounded by busy cells",
             },
             "user_glossary": {
                 "points": "кількість викликів",
                 "rate": "ставка",
                 "price_band": "ціна",
+                "qty": "кількість",
+                "load": "навантаження",
                 "kind": "близькість до океану",
                 "kind=INLAND": "вглиб материка",
+                "lisa_points=hot spot": "гаряча точка",
             },
-            "bands": {"price_band": 5, "qty_band": 4},
+            "bands": {"price_band": 5, "qty_band": 4, "load_median_band": 4},
         },
         {"dataset_id": "e", "bands": {"price_band": 4}},
     ]
@@ -719,12 +724,16 @@ def test_reword_matches_whole_names_and_a_band_says_its_place():
         ev.reword_condition("price_band=q2", "d") == "ціна is q2 (band 2 of 5)"
         and ev.reword_condition("price_band=q2", "e") == "price band is q2 (quarter 2 of 4)"
     )
-    assert ev.reword_condition("qty_band=q3", "d") == "qty band is q3 (quarter 3 of 4)"
+    assert ev.reword_condition("qty_band=q3", "d") == "кількість is q3 (quarter 3 of 4)"  # a band reads as its column, declared or derived
+    assert ev.reword_condition("load_median_band=q4", "d") == "навантаження (медіана подій комірки) is q4 (quarter 4 of 4)"
     assert ev.reword_condition("region=US", "d") == "region is US" and ev.reword_condition("kind_mode=INLAND", "d") == "вглиб материка"
+    assert ev.reword_condition("lisa_points=hot spot", "d") == "гаряча точка"  # the declared phrase over the derived one
     assert ev.plain_language() == [
         ("price_band", "ціна"),
         ("kind_mode", "близькість до океану (найчастіше серед подій комірки)"),
+        ("load_median_band", "навантаження (медіана подій комірки)"),  # once: the metric's shift reads the same meaning
         ("points", "кількість викликів"),
         ("rate", "ставка"),
         ("kind_mode=INLAND", "вглиб материка"),
-    ]  # each item's names in its own dataset's words: the second dataset declares nothing
+        ("lisa_points=hot spot", "гаряча точка"),
+    ]  # each item's names in its own dataset's words, a declared pair listed, a derived one not; the second dataset declares nothing

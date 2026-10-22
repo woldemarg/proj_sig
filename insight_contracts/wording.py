@@ -351,8 +351,7 @@ def value_words(ins: Insight) -> dict[str, str]:
         moran = spatial.get("moran_i") or 0.0
         rho = min(max(moran, 0.0), 0.99)
         valued = round(spatial["n_eff"] * (1 + rho) / (1 - rho))
-        if spatial.get("cells") is not None:
-            valued = min(valued, int(spatial["cells"]))  # the rounded n_eff and I can give one cell more than the extent holds
+        valued = min(valued, int(spatial.get("cells") or valued))  # the rounded n_eff and I can give one cell more than the extent holds
         tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
         cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
         out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"

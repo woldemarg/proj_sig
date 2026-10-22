@@ -108,7 +108,8 @@ def _section(prompt: str, head: str) -> str:
 def _literals(prompt: str) -> set[str]:
     """The words a prompt holds as data, which rule 9 asks to copy, lower-cased: its scopes' values and its baselines'
     metric names. A PLAIN LANGUAGE phrase is no literal: rule 10 asks to retell it, so its analyst words count — a scope
-    condition a pair's phrase replaced (no " is "), a band's place after its value and a baseline reworded to a meaning."""
+    condition a pair's phrase replaced (no " is "), a band's value with its place ("q2 (quarter 2 of 4)") and a baseline
+    reworded to a meaning."""
     plain = {ln[2:].lower() for ln in _section(prompt, "PLAIN LANGUAGE (").splitlines() if ln.startswith("- ")}
     values = [
         re.sub(r"^q\d+ \((?:quarter|band) \d+ of \d+\)$", "", part.partition(" is ")[2])
