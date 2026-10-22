@@ -1,5 +1,5 @@
 """How SIG talks to people (docs/08_interface.md §8.5): the Ukrainian name and one-line meaning of every term the
-console and the chat show, and the readings of an insight, a theme and a region built from them.
+console and the chat show, and the readings of an insight, a theme, a region and a lift built from them.
 
 Beside ``insight_contracts.text``, not in it: that module's English phrases build the embedded canonical document
 (docs/04_representation.md §4.2), so changing them re-embeds every workspace; this one is presentation only. Plain
@@ -9,12 +9,11 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
-from insight_contracts.text import covariance_change, format_value, headline, humanize
+from insight_contracts.text import covariance_change, format_value, humanize, magnitude_word
 
 # key -> (name, meaning). A relation's key is its edge type, "<TYPE> (in)" for the incoming direction (the drawer's
 # neighbour groups and a reversed path step use the same keys); its name labels the node at the other end.
@@ -23,15 +22,22 @@ TERMS: dict[str, tuple[str, str]] = {
     "theme": ("тема", "картина, що повторюється в інсайтах з різних частин даних, наприклад «discount вище, margin нижче»"),
     "scope": ("де", "умови, що виділяють частину даних, про яку інсайт"),
     "metric": ("метрика", "числова колонка, зсув якої описує інсайт"),
-    "sd": ("sd", "різниця медіан у робастних стандартних відхиленнях: 0,6745 · Δмедіани / MAD, зі знаком, не більше 10"),
-    "weight": ("сила свідчення", "від 0,05 до 1: сила зсуву, стабільність, обсяг і зміна зв'язків разом; слабкий бік не компенсується сильним"),
+    "sd": ("sd", "різниця медіан у робастних стандартних відхиленнях: 0,6745 · Δмедіани / MAD, зі знаком, |z| не більше 10"),
+    "weight": (
+        "сила свідчення",
+        "від нижньої межі до 1: зважене геометричне середнє сили зсуву, стабільності, обсягу і зміни зв'язків; слабкий бік не компенсується сильним",
+    ),
     "support": ("рядки", "скільки рядків даних охоплює інсайт і яку частку всіх рядків"),
     "p_adjusted": ("скоригована p", "результат тесту медіани з поправкою на кількість перевірок; поріг відбору, а не точна ймовірність"),
     "stability": (
         "стабільність",
-        "стійкість величини зсуву на 20 бутстреп-вибірках: 1 − min(CV, 0,9), від 0,1 до 1, 0 коли SD = 0; ближче до 1 — менше коливання",
+        "1 − min(CV, 0,9), де CV — коефіцієнт варіації суми |z| головних зсувів на 20 бутстреп-вибірках; "
+        "від 0,1 до 1, 0 коли зсуву немає; ближче до 1 — менше коливання",
     ),
-    "drivers": ("супутні чинники", "інші колонки, знайдені під час перевірки, які можуть пояснювати зсув"),
+    "drivers": (
+        "супутні чинники",
+        "колонки, чиї значення в цій частині даних розподілені помітно інакше (тест хі-квадрат); вони можуть пояснювати зсув",
+    ),
     "covariance": ("зміна зв'язку", "кореляція двох метрик тут інша, ніж у всіх даних"),
     "aliases": ("інші умови", "інші умови, що виділяють ті самі рядки"),
     # trust: three separate things (docs/13_trust.md)
@@ -125,13 +131,13 @@ TERMS: dict[str, tuple[str, str]] = {
     "mass": ("вага теми", "сума сил свідчення її інсайтів"),
     "evidence_mass": ("вага з відповідністю", "сума сил свідчення її інсайтів, кожна помножена на те, наскільки інсайт відповідає темі"),
     "dispersion": ("розкид", "наскільки інсайти теми відрізняються від неї: 0 — усі однакові"),
-    # the score breakdown
-    "weight_effect": ("внесок зсуву", "частка сили свідчення від величини зсуву, від 0 до 1"),
-    "weight_support": ("внесок обсягу", "частка сили свідчення від кількості рядків, від 0 до 1"),
-    "weight_emm": ("внесок зміни зв'язків", "бонус за зміну кореляцій, від 0,5 до 1"),
+    # the score breakdown: the factors of the weight's geometric mean, each from 0 to 1
+    "weight_effect": ("множник зсуву", "множник сили свідчення від величини зсуву, від 0 до 1"),
+    "weight_support": ("множник обсягу", "корисність обсягу, поділена на її найбільше можливе значення, від 0 до 1"),
+    "weight_emm": ("множник зміни зв'язків", "бонус за зміну кореляцій, від 0,5 до 1: ніколи не обнуляє силу свідчення"),
     "sd_score": ("оцінка зсуву", "сума зсувів головних метрик з поправкою на стабільність"),
-    "emm_score": ("оцінка зміни зв'язків", "середньоквадратична зміна кореляцій між метриками"),
-    "volume_utility": ("корисність обсягу", "√(p · (1 − p)) для частки рядків p: найбільша для половини даних"),
+    "emm_score": ("оцінка зміни зв'язків", "середньоквадратична зміна рангових кореляцій між метриками, зменшена для малих частин даних"),
+    "volume_utility": ("корисність обсягу", "√p · (1 − p) для частки рядків p: найбільша, коли інсайт охоплює третину даних"),
 }
 
 # the cells' neighbourhood classes and bands (subgroup_miner/spatial.py), in plain words
@@ -144,20 +150,21 @@ LISA = {
 }
 QUARTERS = {
     "q1": "серед найтихіших (нижня чверть)",
-    "q2": "нижче середнього",
-    "q3": "вище середнього",
+    "q2": "нижче середини",
+    "q3": "вище середини",
     "q4": "серед найжвавіших (верхня чверть)",
     "missing": "без подій",
 }
 _ORDINAL = ("першій", "другій", "третій", "четвертій", "п'ятій", "шостій", "сьомій", "восьмій", "дев'ятій", "десятій")  # locative
-_DEGREE = ((1.0, "слабко"), (2.0, "помірно"), (3.0, "помітно"))  # the buckets of text.magnitude_word
+_DEGREE = {"mild": "слабко", "moderate": "помірно", "strong": "помітно", "extreme": "різко"}  # text.magnitude_word's buckets
 _COVARIANCE = {"strengthens": "сильнішає", "weakens": "слабшає", "reverses": "змінює знак"}
-_DERIVED = (  # a geo dataset's cell columns -> their reading, given the source column's words
-    (re.compile(r"(.+)_active_days"), "кількість різних днів з подіями в комірці (за {})"),
-    (re.compile(r"(.+)_late_share"), "частка подій комірки в другій половині періоду (за {})"),
-    (re.compile(r"(.+)_median"), "типове (медіанне) значення {} у подіях комірки"),
-    (re.compile(r"(.+)_mode"), "найчастіше значення {} серед подій комірки"),
-)
+# a geo dataset's cell column suffix -> its reading; the source column's words stay in the nominative, as a declared phrase is
+_DERIVED = {
+    "_active_days": "кількість днів з подіями в комірці ({})",
+    "_late_share": "частка подій комірки в другій половині періоду ({})",
+    "_median": "{} (медіана подій комірки)",
+    "_mode": "{} (найчастіше серед подій комірки)",
+}
 
 
 def name(key: str) -> str:
@@ -165,7 +172,8 @@ def name(key: str) -> str:
     return TERMS.get(key, (key, ""))[0]
 
 
-def _plural(n: int, one: str, few: str, many: str) -> str:
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """The Ukrainian form of a noun after the number ``n``: 1 інсайт, 2 інсайти, 5 інсайтів."""
     if n % 10 == 1 and n % 100 != 11:
         return one
     return few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
@@ -180,16 +188,16 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
         if column == "points":
             return "кількість подій у комірці"
         if column.startswith("neighbours_") and not column.endswith("_band"):
-            return "середня кількість подій у шести сусідніх комірках"
+            return f"{column_words(column.removeprefix('neighbours_'), glossary, geo)} (середнє шести сусідніх комірок)"
         if column.startswith("share_"):
             rest = column.removeprefix("share_")
             # ponytail: a source column the glossary does not name splits at the last "_"; a level holding "_" misreads
             source = next((c for c in sorted(glossary, key=len, reverse=True) if rest.startswith(c + "_")), rest.rpartition("_")[0])
             if source:
                 return f"частка подій комірки, де {column_words(source, glossary, False)} — {rest[len(source) + 1 :]}"
-        for pattern, template in _DERIVED:
-            if m := pattern.fullmatch(column):
-                return template.format(column_words(m.group(1), glossary, False))
+        for suffix, template in _DERIVED.items():
+            if column.endswith(suffix):
+                return template.format(column_words(column.removesuffix(suffix), glossary, False))
     return humanize(column)
 
 
@@ -203,8 +211,8 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
         return LISA[value]
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
         return f"сусідні комірки {QUARTERS[value]}"
-    words = column_words(attribute.removesuffix("_band") if attribute.endswith("_band") else attribute, glossary, geo)
-    if attribute.endswith("_band") and re.fullmatch(r"q\d+", value):
+    words = column_words(attribute.removesuffix("_band"), glossary, geo)
+    if attribute.endswith("_band") and value[:1] == "q" and value[1:].isdigit():
         i, k = int(value[1:]), bands.get(attribute)
         ordinal = _ORDINAL[i - 1] if i <= len(_ORDINAL) else f"{i}-й"
         where = f"{ordinal} чверті" if k == 4 else f"{ordinal} з {k} смуг" if k else f"смузі {i}"
@@ -214,8 +222,7 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
 
 def shift_words(z: float) -> str:
     """Direction and degree of a robust shift, gender-neutral: 'помітно вище' (the buckets of ``text.magnitude_word``)."""
-    degree = next((word for limit, word in _DEGREE if abs(z) < limit), "різко")
-    return f"{degree} {'вище' if z > 0 else 'нижче'}"
+    return f"{_DEGREE[magnitude_word(z)]} {'вище' if z > 0 else 'нижче'}"
 
 
 def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str:
@@ -227,33 +234,30 @@ def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str
 
 
 def covariance_words(cov: Mapping[str, Any], glossary: Mapping[str, str], geo: bool) -> str:
-    """'зв'язок між a і b слабшає: кореляція +0.88 загалом → +0.73 тут' (the predicates of ``text.covariance_change``)."""
-    word, _ = covariance_change(dict(cov))
+    """'зв'язок метрик a і b слабшає: кореляція +0.88 загалом → +0.73 тут' (the predicates of ``text.covariance_change``)."""
+    word, _ = covariance_change(cov)
     a, b = (column_words(c, glossary, geo) for c in sorted(cov["pair"]))
-    return f"зв'язок між {a} і {b} {_COVARIANCE[word]}: кореляція {cov['global_corr']:+.2f} загалом → {cov['local_corr']:+.2f} тут"
+    return f"зв'язок метрик {a} і {b} {_COVARIANCE[word]}: кореляція {cov['global_corr']:+.2f} загалом → {cov['local_corr']:+.2f} тут"
 
 
-def scope_words(ins: Insight, glossary: Mapping[str, str] | None = None, bands: Mapping[str, int] | None = None) -> str:
-    """Where the insight holds, in words: its conditions joined by 'і'."""
-    geo = bool(ins.provenance.get("spatial"))
-    return " і ".join(condition_words(c, glossary or {}, geo, bands or {}) for c in ins.conditions)
-
-
-def phenomenon_words(ins: Insight, thresholds: PhenomenonThresholds, glossary: Mapping[str, str] | None = None) -> str:
-    """What the insight shows, without where: the target's shift and the next material one (at most two, as the
-    evidence lists them), or the correlation change. Any other kind reads by its shifts; a record without one, as its
-    headline."""
+def reading(
+    ins: Insight, thresholds: PhenomenonThresholds, glossary: Mapping[str, str] | None = None, bands: Mapping[str, int] | None = None
+) -> dict[str, str]:
+    """An insight in words: ``where`` its conditions joined by 'і', ``what`` the target's shift and the next material one
+    (at most two, as the evidence lists them) or the correlation change. ``glossary`` is the dataset's declared one
+    (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already
+    prints ``what`` alone; ``sentence`` joins the two."""
     glossary, geo = glossary or {}, bool(ins.provenance.get("spatial"))
-    if ins.phenomenon_type == "covariance" and ins.covariance.get("pair"):
-        return covariance_words(ins.covariance, glossary, geo)
-    shifts = thresholds.phenomenon_shifts(ins)[:2] or [s for s in ins.shifts if s.metric == ins.target]
-    return "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts)) or headline(ins)
+    if ins.phenomenon_type == "covariance":
+        what = covariance_words(ins.covariance, glossary, geo)
+    else:
+        what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(thresholds.phenomenon_shifts(ins)[:2]))
+    return {"where": " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions), "what": what}
 
 
-def reading(ins: Insight, thresholds: PhenomenonThresholds, glossary: Mapping[str, str] | None = None, bands: Mapping[str, int] | None = None) -> str:
-    """An insight in one sentence: 'Де <scope> — <phenomenon>.' ``glossary`` is the dataset's declared one (empty
-    without it), ``bands`` the quantile-band columns' band counts."""
-    return f"Де {scope_words(ins, glossary, bands)} — {phenomenon_words(ins, thresholds, glossary)}."
+def sentence(words: Mapping[str, str]) -> str:
+    """A reading as one sentence, without its full stop: 'Де <where> — <what>'."""
+    return f"Де {words['where']} — {words['what']}"
 
 
 def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, distinct_scopes: int) -> str:
@@ -262,12 +266,13 @@ def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, disti
     for entry in signature[:2]:
         label, up = entry["component"], entry["value"] > 0
         if label.startswith("correlation between "):
-            pair = label.removeprefix("correlation between ").replace(" and ", " і ")
-            parts.append(f"зв'язок {pair} {'сильнішає' if up else 'слабшає'}")
+            # ponytail: a column name holding " and " splits at its first one
+            pair = label.removeprefix("correlation between ").replace(" and ", " і ", 1)
+            parts.append(f"зв'язок метрик {pair} {'сильнішає' if up else 'слабшає'}")
         else:
             parts.append(f"{label} {'вище' if up else 'нижче'}")
-    found = f"{n_patterns} {_plural(n_patterns, 'інсайт', 'інсайти', 'інсайтів')} у {distinct_scopes} "
-    found += _plural(distinct_scopes, "частині", "частинах", "частинах") + " даних"
+    found = f"{n_patterns} {plural(n_patterns, 'інсайт', 'інсайти', 'інсайтів')} у {distinct_scopes} "
+    found += plural(distinct_scopes, "частині", "частинах", "частинах") + " даних"
     return f"Повторювана картина: {', '.join(parts)} — {found}." if parts else f"Тема без інсайтів: {found}."
 
 
@@ -276,15 +281,18 @@ def region_reading(region_id: str, picture: Mapping[str, int]) -> str:
     _, resolution, cell = region_id.split(":", 2)
     p, d, t = picture["patterns"], picture["datasets"], picture["themes"]
     return (
-        f"Регіон {cell} (рівень {resolution}): {p} {_plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
-        f"з {d} {_plural(d, 'датасету', 'датасетів', 'датасетів')}, {t} {_plural(t, 'тема', 'теми', 'тем')}."
+        f"Регіон {cell} (рівень {resolution}): {p} {plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
+        f"з {d} {plural(d, 'датасету', 'датасетів', 'датасетів')}, {t} {plural(t, 'тема', 'теми', 'тем')}."
     )
 
 
 def lift_words(kind: str, lift: float) -> str:
-    """A lift in words: 'window' (the map window's, smoothed by its prior) or 'place' (a region's, unsmoothed)."""
-    if abs(lift - 1) < 0.05:
+    """A lift in words: 'window' (the map window's, smoothed by its prior) or 'place' (a region's, unsmoothed). Both are
+    listed only at 1 or more."""
+    times = round(lift, 1)
+    if times <= 1:
         words = "як на всій мапі"
     else:
-        words = f"у {max(lift, 1 / lift):.1f} раза {'частіше' if lift > 1 else 'рідше'}, ніж очікувано за часткою на всій мапі"
+        count = f"{int(times)} {plural(int(times), 'раз', 'рази', 'разів')}" if times.is_integer() else f"{times} раза"
+        words = f"у {count} частіше, ніж очікувано за часткою на всій мапі"
     return words + (" (згладжено)" if kind == "window" else "")

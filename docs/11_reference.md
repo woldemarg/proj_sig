@@ -66,7 +66,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | relations (`<TYPE>`, `<TYPE> (in)`) | `ACTIVATES` належить до теми · `ACTIVATES (in)` інсайт теми · `RELATED_TO` пов'язана тема · `RELATED_TO (in)` пов'язана тема · `CO_OCCURS` спільна тема · `CO_OCCURS (in)` спільна тема · `SPECIALIZES` вужчий за · `SPECIALIZES (in)` вужчий інсайт · `CONTRASTS` протилежний зсув · `CONTRASTS (in)` протилежний зсув · `SIBLING` сусідній варіант · `SIBLING (in)` сусідній варіант · `CO_LOCATED` те саме місце · `CO_LOCATED (in)` те саме місце · `IN_REGION` у регіоні · `IN_REGION (in)` інсайт у регіоні · `PARENT_OF` ширший регіон · `PARENT_OF (in)` вужчий регіон · `HAS_SCOPE` колонка умови · `HAS_SCOPE (in)` інсайт за колонкою · `TARGETS` метрика інсайту · `TARGETS (in)` інсайт про метрику |
 | the map | `cell` комірка · `region` регіон · `zone` зона · `points` події · `cells_extent` комірки · `cells_footprint` комірки сліду · `cells_in_view` комірки у вікні · `window_lift` частота у вікні · `place_lift` частота в регіоні · `compactness` суцільність · `n_eff` ефективний обсяг · `moran_i` схожість сусідів · `sac` поправка на сусідство |
 | a theme | `mass` вага теми · `evidence_mass` вага з відповідністю · `dispersion` розкид |
-| score breakdown | `weight_effect` внесок зсуву · `weight_support` внесок обсягу · `weight_emm` внесок зміни зв'язків · `sd_score` оцінка зсуву · `emm_score` оцінка зміни зв'язків · `volume_utility` корисність обсягу |
+| score breakdown | `weight_effect` множник зсуву · `weight_support` множник обсягу · `weight_emm` множник зміни зв'язків · `sd_score` оцінка зсуву · `emm_score` оцінка зміни зв'язків · `volume_utility` корисність обсягу |
 
 ## 11.2 Identifiers
 
