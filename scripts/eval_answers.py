@@ -6,7 +6,7 @@ literal fidelity, latency, tokens.
 Asks through ``LLM_BASE_URL`` (by default the LLM model broker, configured in ``.env``; values are never printed), on
 throwaway workspaces of public data only: the five demo questions on the plain demo and on the demo with an invented
 glossary and metadata document, three questions with a California zone and two of the map's suggested questions on
-the California table at resolution 5. Fifteen LLM calls per run.
+the California table at resolutions 6 and 5. Fifteen LLM calls per run.
 """
 
 from __future__ import annotations
@@ -69,25 +69,30 @@ TRANSLATED = {  # a demo literal the model may write in Ukrainian, counted as ke
 }
 
 
-def fidelity(qa) -> tuple[int, int]:
-    """(cited items whose every scope value without a glossary phrase stands in the answer as stored or as a listed
-    translation, cited items)."""
+def fidelity(qa) -> tuple[int, int, int]:
+    """Over the cited items with a scope value no glossary phrases (an item whose every condition is phrased says
+    nothing of rule 9): (those whose every such value stands in the answer as stored, those that need a listed
+    Ukrainian form of a demo value for one, those checked)."""
     evidence = qa.view["evidence"]
     items = {it["key"]: it for it in evidence.get("items", [])}
     phrased = {k for d in evidence.get("datasets", []) for k in (d.get("glossary", {}) | d.get("user_glossary", {}))}
-    cited = [c["key"] for c in qa.citations.get("cited", [])]
-    kept = 0
-    for key in cited:
-        values = [c.split("=", 1)[1] for c in items[key]["scope"] if c not in phrased]
-        kept += all(v in qa.answer or any(t in qa.answer for t in TRANSLATED.get(v, ())) for v in values)
-    return kept, len(cited)
+    exact = translated = checked = 0
+    for key in (c["key"] for c in qa.citations.get("cited", [])):
+        if not (values := [c.split("=", 1)[1] for c in items[key]["scope"] if c not in phrased]):
+            continue
+        checked += 1
+        if all(re.search(rf"(?<![^\W_]){re.escape(v)}(?![^\W_])", qa.answer) for v in values):
+            exact += 1
+        elif all(v in qa.answer or any(t in qa.answer for t in TRANSLATED.get(v, ())) for v in values):
+            translated += 1
+    return exact, translated, checked
 
 
 def evaluate(engine, llm, question: str, **zone) -> dict:
     """One question: answer mode, grounding, citations, analyst words, literal fidelity, latency and token usage."""
     qa = answer(engine.evidence(question, **zone), llm)
     usage = qa.llm.get("usage") or {}
-    kept, cited = fidelity(qa)
+    exact, translated, checked = fidelity(qa)
     return {
         "question": question or "(the zone alone)",
         "mode": qa.answer_mode,
@@ -96,7 +101,9 @@ def evaluate(engine, llm, question: str, **zone) -> dict:
         "unknown": len(qa.citations.get("unknown", [])),
         "evidence": len(qa.view["evidence"].get("items", [])),
         "jargon": qa.metrics.get("jargon", {}),
-        "literal_ok": kept,
+        "literal_ok": exact,
+        "literal_translated": translated,
+        "literal_checked": checked,
         "words": {w: len(re.findall(rf"(?<![^\W_]){w}", qa.answer, re.IGNORECASE)) for w in ("сегмент", "зон", "комірк", "регіон")},
         "latency_s": qa.llm.get("latency_s"),
         "prompt_tokens": usage.get("prompt_tokens"),
@@ -123,7 +130,9 @@ def summarise(rows: list[dict]) -> dict:
         "jargon": sum(words.values()),
         "jargon_words": words,
         "words": {w: sum(r["words"][w] for r in rows) for w in rows[0]["words"]},
-        "literal_fidelity": round(sum(r["literal_ok"] for r in rows) / max(sum(r["cited"] for r in rows), 1), 3),
+        "literal_fidelity": round(sum(r["literal_ok"] for r in rows) / max(sum(r["literal_checked"] for r in rows), 1), 3),
+        "literal_translated": sum(r["literal_translated"] for r in rows),
+        "literal_checked": sum(r["literal_checked"] for r in rows),
         "prompt_tokens": [min(tokens, default=0), max(tokens, default=0), sum(tokens)],
         "completion_tokens_total": sum(r["completion_tokens"] or 0 for r in rows),
         "mean_latency_s": round(sum(r["latency_s"] or 0 for r in answered) / max(len(answered), 1), 2),
@@ -131,19 +140,21 @@ def summarise(rows: list[dict]) -> dict:
 
 
 def engines() -> dict:
-    """The three workspaces: the demo, the demo with its declared language, California at resolution 5."""
+    """The three workspaces, one embedding model: the demo, the demo with its declared language, California at
+    resolutions 6 and 5 (its scale chains)."""
     plain = build_engine(scratch_dir("eval_answers_demo", fresh=True) / "ws")
     ingest_ready(plain, write_demo_csv(scratch_dir("eval_answers_demo")))
     root = scratch_dir("eval_answers_declared", fresh=True)
-    declared = build_engine(root / "ws")
+    declared = build_engine(root / "ws", embedder=plain.encoder.embedder)
     record = declared.process(declared.submit(write_demo_csv(root), glossary=GLOSSARY, metadata=DOC)["batch_id"])
     if record["status"] != "READY":
         raise SystemExit(f"declared demo: {record['status']} {record.get('error')}")
-    california = build_engine(scratch_dir("eval_answers_california", fresh=True) / "ws")
+    california = build_engine(scratch_dir("eval_answers_california", fresh=True) / "ws", embedder=plain.encoder.embedder)
     with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
-        (level,) = california.upload("california_housing.csv", f, geo="auto@5")
-    if (record := california.process(level["batch_id"]))["status"] != "READY":
-        raise SystemExit(f"california: {record['status']} {record.get('error')}")
+        levels = california.upload("california_housing.csv", f, geo="auto@6,5")
+    for level in levels:
+        if (record := california.process(level["batch_id"]))["status"] != "READY":
+            raise SystemExit(f"california {level['level']}: {record['status']} {record.get('error')}")
     return {"demo": plain, "demo_declared": declared, "california": california}
 
 
@@ -159,7 +170,18 @@ def main() -> int:
         "demo_declared": [evaluate(built["demo_declared"], llm, q) for q in QUESTIONS],
         "california": [evaluate(built["california"], llm, q, **zone) for q, zone in CALIFORNIA],
     }
-    cols = ["mode", "grounded", "cited", "unknown", "literal_ok", "latency_s", "prompt_tokens", "completion_tokens", "plain_language"]
+    cols = [
+        "mode",
+        "grounded",
+        "cited",
+        "unknown",
+        "literal_ok",
+        "literal_checked",
+        "latency_s",
+        "prompt_tokens",
+        "completion_tokens",
+        "plain_language",
+    ]
     for name, rows in runs.items():
         print(f"\n{name}")
         print(f"{'#':<3}" + "".join(f"{c:>18}" for c in cols) + "   jargon")

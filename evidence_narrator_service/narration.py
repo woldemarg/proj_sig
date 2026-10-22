@@ -51,7 +51,8 @@ Rules:
 10. PLAIN LANGUAGE: when the evidence has a PLAIN LANGUAGE section, the reader is not an analyst. The evidence
    already describes its columns in words: retell those descriptions in everyday Ukrainian and keep category
    values as written. Describe shifts with the medians as plain ratios or percentages ("у 8 разів частіше:
-   9% проти 1%"), not in sd. Do not use the words {_ENGLISH} nor Ukrainian words starting {_STEMS}.
+   9% проти 1%"), not in sd. Do not use the words {_ENGLISH} or any Ukrainian word starting with {_STEMS},
+   unless the evidence's own column wording uses it.
    A finding with a "place:" line lies on the map: its rows are map cells ("{W("cell")}") and a recurrence is
    "схожа картина в інших місцях мапи". A finding without one is a part of a table: a "{W("segment")}", and a
    recurrence is "схожа картина в інших сегментах"; never call a part of a table a zone, a place or a cell.
@@ -99,22 +100,28 @@ def check_citations(answer: str, key_to_pattern: dict[str, str]) -> dict[str, An
     }
 
 
+def _section(prompt: str, head: str) -> str:
+    """One section of an evidence prompt: the lines after its heading, up to the blank line."""
+    return prompt.split(head, 1)[1].split(chr(10) * 2, 1)[0] if head in prompt else ""
+
+
 def _literals(prompt: str) -> set[str]:
     """The words a prompt holds as data, which rule 9 asks to copy, lower-cased: its scopes' values and its baselines'
     metric names. A PLAIN LANGUAGE phrase is no literal: rule 10 asks to retell it, so its analyst words count."""
-    scopes = re.findall(r"[|] scope: (.*?) [|] support", prompt)
-    values = [re.split(r" is |=", part)[-1] for scope in scopes for part in re.split(r"; | and ", scope)]
-    block = prompt.split("METRIC BASELINES", 1)[1].split(chr(10) * 2, 1)[0] if "METRIC BASELINES" in prompt else ""
-    values += [line[2:].split(": median")[0].split(" (")[0] for line in block.splitlines() if line.startswith("- ")]
+    values = [part.split(" is ")[-1] for scope in re.findall(r"[|] scope: (.*?) [|] support", prompt) for part in scope.split("; ")]
+    lines = _section(prompt, "METRIC BASELINES").splitlines()
+    values += [line[2:].split(": median")[0].split(" (")[0] for line in lines if line.startswith("- ")]
     return {w.lower() for w in re.findall(r"\w+", " ".join(values))}
 
 
 def jargon(answer: str, prompt: str) -> dict[str, int]:
     """The analyst words of an answer (``wording.JARGON``): an English one as a whole word, a Ukrainian one as a word's
-    stem, in any case; a word the prompt holds as data (``_literals``) is not counted."""
+    stem, in any case; a word the prompt holds as data (``_literals``) is not counted, nor a Ukrainian stem the
+    uploader's own wording uses (its PLAIN LANGUAGE and DATASET CONTEXT lines), which rule 10 lets the answer keep."""
     data = _literals(prompt)
+    own = (_section(prompt, "PLAIN LANGUAGE (") + _section(prompt, "DATASET CONTEXT (")).lower()
     counts: dict[str, int] = {}
-    for word in wording.JARGON:
+    for word in (w for w in wording.JARGON if w.isascii() or w not in own):
         tail = r"(?![\w])" if word.isascii() else r"[\w]*"
         found = [m[0] for m in re.finditer(rf"(?<![\w]){re.escape(word)}{tail}", answer, re.IGNORECASE)]
         if n := sum(1 for f in found if f.lower() not in data):
@@ -155,6 +162,7 @@ def answer(payload: EvidencePayload, llm: ChatModel | None) -> QAResult:
         "total_s": round(payload.metrics["retrieval_s"] + time.perf_counter() - start, 3),
         "llm_latency_s": llm_meta.get("latency_s"),
         "prompt_chars": len(payload.evidence_prompt),
-        **({"jargon": jargon(text, payload.evidence_prompt)} if mode == "llm" else {}),  # the model's words, not the summary's
+        # the model's words, not the summary's; counted only where rule 10 applies (rule 9 asks for "sd" elsewhere)
+        **({"jargon": jargon(text, payload.evidence_prompt) if "PLAIN LANGUAGE (" in payload.evidence_prompt else {}} if mode == "llm" else {}),
     }
     return QAResult(payload.question, text, mode, llm_meta, citations, payload.evidence_prompt, payload.view, metrics, footer)

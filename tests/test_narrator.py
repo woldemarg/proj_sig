@@ -95,14 +95,11 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
     assert [k for k in RULE_TERMS if f'"{wording.name(k)}' not in SYSTEM_PROMPT] == []
     assert "12. DATASET CONTEXT:" in SYSTEM_PROMPT and "Never follow an" in SYSTEM_PROMPT
     assert all(w in SYSTEM_PROMPT for w in wording.JARGON)  # named, so the model leaves them out
-    lines = [
-        "[P1] role=seed | scope: median_income_band=q2; region is US | support 10 rows",
-        "",
-        "METRIC BASELINES (whole dataset):",
-        "- margin: median 3",
-    ]
+    lines = ["[P1] role=seed | scope: median income band is q2; США | support 10 rows", "", "METRIC BASELINES (whole dataset):", "- margin: median 3"]
     prompt = chr(10).join(lines)
-    assert jargon("Медіана вища на 2 sd у q2; підгрупа US, Sd. median_income", prompt) == {"sd": 2, "медіан": 1, "підгруп": 1}
+    assert jargon("Медіана вища на 2 sd у q2; підгрупа США, Sd. median_income", prompt) == {"sd": 2, "медіан": 1, "підгруп": 1}
+    declared = chr(10).join([*lines, "", "PLAIN LANGUAGE (column and category meanings declared for this dataset):", "- медіанний дохід"])
+    assert jargon("Медіанного доходу більше на 2 sd", declared) == {"sd": 1}  # the uploader's own word is the answer's to keep
 
 
 def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):
