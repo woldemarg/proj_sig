@@ -3,7 +3,7 @@
 
 function md(text, keyTo) {
   /* small, safe markdown: escape first, then bold/italic/code, headings, lists, paragraphs, citations */
-  const cite = (s) => s.replace(/\[(P\d+(?:\s*[,;]\s*P\d+)*)\]/g, (m, g) => g.split(/\s*[,;]\s*/).map((k) => keyTo[k] ? `<a class="cite" data-pid="${esc(keyTo[k])}" title="${esc(keyTo[k])}">${k}</a>` : k).join(""));
+  const cite = (s) => s.replace(/\[(P\d+(?:\s*[,;]\s*P\d+)*)\]/g, (m, g) => g.split(/\s*[,;]\s*/).map((k) => keyTo[k] ? `<a class="cite" data-pid="${esc(keyTo[k])}" tabindex="0" role="button" title="${esc(keyTo[k])}">${k}</a>` : k).join(""));
   const inline = (s) => cite(s.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>"));
   const lines = esc(text).split(/\r?\n/);
   let html = "", list = null, para = [];
@@ -84,7 +84,7 @@ function botCard(turn) {
     const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
       ? esc(it.relationship || "correlation change")
       : s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
-    return `<div class="ev" data-i="${i}"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
+    return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") +
@@ -103,7 +103,7 @@ function botCard(turn) {
   ].filter(Boolean);
   return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>${understood}` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}"${String(i) === turn.pane ? "" : " hidden"}>${body}</div>`).join("") +
     `</div>`;
 }
@@ -163,7 +163,7 @@ function insightCard(turn) {
   const links = [...steps, ...Object.entries(WALK).flatMap(([type, word]) => (d.neighbors[type] || []).filter((it) => it.integrity !== "mismatch").map((it) => ({ ...it, word })))]
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
-    `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
+    `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(scopeText(p))}</b></p><p>${insightLead(p)}</p>` +
     `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
     (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
@@ -188,7 +188,7 @@ function toggleTab(tab) {
   /* an answer's panel tab: opens its pane, or closes it when it is the open one */
   const box = tab.closest(".msg-bot"), open = !tab.classList.contains("active");
   turnOf(tab).pane = open ? tab.dataset.pane : null;  // on the turn: the thread's next render keeps it open
-  box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); });
+  box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-selected", String(open && t === tab)); });
   box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
 }
 
