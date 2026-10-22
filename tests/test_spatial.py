@@ -179,7 +179,8 @@ def test_geo_batch_end_to_end(engine, points_csv):
     graph = engine.graph()
     assert all(0 <= graph.nodes[p["id"]]["props"]["compactness"] <= 1 for p in patterns)  # derived at the commit
     regions = graph.of_kind("Region")
-    assert regions and {r["props"]["resolution"] for r in regions} == {7, 5, 3, 1}  # own level included
+    assert regions and {r["props"]["resolution"] for r in regions} == {5, 3, 1}  # its own level 7 is its cells, no region
+    assert set(graph.own_cells) == {p["id"] for p in patterns} and all(r["props"]["patterns"] == len(graph.holders(r["id"])) for r in regions)
     assert {e["type"] for e in graph.edges} >= {"IN_REGION", "PARENT_OF"}
     for p in patterns:  # a neighbourhood condition never explains the counters it is computed from
         if any(c["attribute"] in ("lisa_points", "neighbours_points_band") for c in p["conditions"]):
@@ -475,9 +476,10 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     held = [x["weight"] for x in node_details(graph, zones[0]["id"])["neighbors"]["IN_REGION (in)"]]
     assert held == sorted(held, reverse=True)  # a region's insights by weight: a lift and a cell share do not compare
     finer = make_engine(make_config(points_csv.parent / "ws8", geo_region_levels="8,7,5,3,1"))  # regions at 8 too
-    levels = upload_levels(finer, points_csv, geo="auto@8,7", table=True)
+    levels = upload_levels(finer, points_csv, geo="auto@9,7", table=True)
     every = {n["id"] for n in finer.graph().of_kind("Region")}
-    assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7
+    assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7 (where the level of 9 lies)
+    assert all(n["props"]["patterns"] == len(finer.graph().holders(n["id"])) for n in finer.graph().of_kind("Region"))  # the r7 cells too
     with mock.patch("insight_graph_service.core.geo_views.shown_regions", return_value=every):  # were they shown
         drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
     assert drawn and all(f["properties"]["resolution"] <= 7 for f in drawn)  # none inside one of its cells

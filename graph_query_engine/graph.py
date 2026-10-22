@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from insight_contracts import SNAPSHOT_VERSION, Insight, SpatialProvenance, dataset_node_id
+from insight_contracts import SNAPSHOT_VERSION, Insight, SpatialProvenance, dataset_node_id, region_node_id
 from insight_contracts.text import describe_component
 
 
@@ -31,7 +31,8 @@ class PatternFacts:
     resolution: int | None
     upload: str | None
     regions: dict[str, float]  # IN_REGION target -> share (read only)
-    finest: frozenset[str]  # its regions at its finest level: its own resolution when that is a region level, many for a broad one
+    placed: frozenset[str]  # its IN_REGION targets at the finest level they reach
+    finest: frozenset[str]  # its own cells' region ids at a region level (a cell no other pattern lies in has no node), else ``placed``
     anchors: dict[str, float]  # non-weak ACTIVATES target -> alignment (read only)
 
 
@@ -59,6 +60,7 @@ class DualGraph:
         for e in self.edges:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
+        self.own_cells: dict[str, list[str]] = snapshot.get("own_cells", {})  # a geo pattern at a region level -> its cells
         self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
         self._memo_lock = threading.RLock()
 
@@ -80,6 +82,20 @@ class DualGraph:
         """Whether the pattern's journal record fails its digest (docs/13_trust.md §13.4): never a seed, a walk slot or evidence."""
         return self.nodes[pattern_id]["props"].get("integrity") == "mismatch"
 
+    def holders(self, region: str) -> list[str]:
+        """The patterns a region holds: its IN_REGION sources, and the geo patterns whose own cell it is (``own_cells``)."""
+
+        def build() -> dict[str, list[str]]:
+            held: defaultdict[str, list[str]] = defaultdict(list)
+            for pid, cells in self.own_cells.items():
+                res = self.facts(pid).resolution
+                for c in cells:
+                    held[region_node_id(res, c)].append(pid)
+            return dict(held)
+
+        own = self.memoised(("own_holders", ""), build)
+        return [e["source"] for e in self.inc.get(region, []) if e["type"] == "IN_REGION"] + own.get(region, [])
+
     def facts(self, pattern_id: str) -> PatternFacts:
         """``pattern_id``'s facts, derived once per graph (``memoised``)."""
 
@@ -89,11 +105,14 @@ class DualGraph:
             regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
             levels = {r: self.nodes[r]["props"]["resolution"] for r in regions}
             top = max(levels.values(), default=None)
+            own = self.own_cells.get(pattern_id)
+            placed = frozenset(r for r, lv in levels.items() if lv == top)
             return PatternFacts(
                 resolution=spatial.resolution if spatial else None,
                 upload=self.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
                 regions=regions,
-                finest=frozenset(r for r, lv in levels.items() if lv == top),
+                placed=placed,
+                finest=frozenset(region_node_id(spatial.resolution, c) for c in own) if own else placed,
                 anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
             )
 

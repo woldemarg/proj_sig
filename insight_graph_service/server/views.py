@@ -40,7 +40,7 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
     keep: set[str] = set()
     nodes = []
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
-    members = Counter(e["target"] for e in graph.edges if e["type"] == "IN_REGION" and e["source"] in pids)  # the insights in view: a size
+    members = Counter({r["id"]: sum(p in pids for p in graph.holders(r["id"])) for r in graph.of_kind("Region")})  # the insights in view: a size
     regions = shown_regions(graph, list(pids))  # the regions the map draws for them, a scale chain's above with none in view too
     for n in graph.nodes.values():
         p = n["props"]
@@ -117,6 +117,18 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
                 "integrity": on["props"].get("integrity"),
             }
         )
+    if node["kind"] == "Region":  # the patterns whose own cell it is hold it too (``DualGraph.holders``)
+        members = {it["id"] for it in neighbors.get("IN_REGION (in)", [])}
+        for pid in (p for p in graph.holders(node_id) if p not in members):
+            item = {
+                "id": pid,
+                "label": graph.nodes[pid]["label"],
+                "kind": "Pattern",
+                "weight": 1.0,
+                "props": {"basis": "cells", "share": 1.0, "own": True},
+                "integrity": graph.nodes[pid]["props"].get("integrity"),
+            }
+            neighbors.setdefault("IN_REGION (in)", []).append(item)
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
         items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
     out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}

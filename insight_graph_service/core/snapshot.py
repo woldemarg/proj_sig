@@ -503,6 +503,7 @@ def build_snapshot(
         "representation": representation,
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
+        "own_cells": {pid: sorted(cells) for pid, cells in spatial.own_cells.items() if pid in nodes},
         "stats": {
             "patterns": len(insights),
             "attractors": n_attr,

@@ -545,6 +545,7 @@ class SpatialStructure:
     occupied: dict[str, dict[int, frozenset[str]]] = field(default_factory=dict)  # dataset -> resolution -> the same, of all its cells
     edge_props: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)  # (pattern, region) -> its IN_REGION props
     partial: set[str] = field(default_factory=set)  # base patterns with fewer than GEO_LOCATED_MIN of their events located
+    own_cells: dict[str, frozenset[str]] = field(default_factory=dict)  # a geo pattern at a region level -> its cells: its regions there
 
 
 RELATIONS = ("overlaps", "adjacent", "same_region")  # strongest first
@@ -650,12 +651,14 @@ def _dataset_part(d: GeoDataset, levels: tuple[int, ...]) -> _DatasetPart:
     for pid, rows in d.covers.items():
         rows = np.unique(np.asarray(rows, dtype=np.int64))
         out.places[pid] = {lv: frozenset(cells[rows].tolist()) for lv, cells in grid.items()}
+        if res in levels:  # at its own level a region is one of its cells: those, not an IN_REGION per cell
+            out.own_cells[pid] = out.places[pid][res]
         raw[pid] = {str(c) for c in d.cells[rows]}
         near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
         grown[pid] = {str(c) for c in d.cells[near]}
         ring[pid] = {n for c in raw[pid] for n in h3.grid_ring(c, 1)}
         out.compactness[pid] = round(compactness(rows, d.nbr_ptr, d.nbr_idx), 4)
-        for lv in own:
+        for lv in (x for x in own if x != res):
             regions, counts = np.unique(grid[lv][rows], return_counts=True)
             for cell, n in zip(regions, counts, strict=True):
                 rid = region_node_id(lv, str(cell))
@@ -674,7 +677,7 @@ def derive_spatial(
 ) -> SpatialStructure:
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
-    A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
+    A pattern is IN_REGION of a region at every listed level coarser than its dataset when
     their overlap reaches ``GEO_REGION_MIN_SHARE`` of the smaller of its cells and the region's occupied cells (a focus inside
     a region scores 1, as does a pattern covering the region); a region holds the cells whose centres it holds
     (``event_regions``), as the events, the overlay's rows, zones and credibility place them, and PARENT_OF follows the
@@ -686,6 +689,8 @@ def derive_spatial(
     strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
     either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``): never
     CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis.
+    At its own resolution, when that is a listed level, a geo pattern has no IN_REGION: a region there is one of its
+    cells, and ``own_cells`` gives them; a region's ``patterns`` counts those patterns too.
 
     ``memo`` (the caller's, kept between calls): each geo dataset's own part (``_dataset_part``) by its id and the levels,
     each table's placement by its id, its ``placed_by`` and the levels; read when present, filled when not, and left
@@ -706,6 +711,7 @@ def derive_spatial(
         out.occupied.update({k: dict(v) for k, v in part.plane.occupied.items()})  # copies: the memo stays as built
         out.places.update({k: dict(v) for k, v in part.plane.places.items()})
         out.compactness.update(part.plane.compactness)
+        out.own_cells.update(part.plane.own_cells)
         out.in_region.extend(part.plane.in_region)
         out.edge_props.update({k: dict(v) for k, v in part.plane.edge_props.items()})
         for rid, props in part.plane.regions.items():
@@ -726,7 +732,8 @@ def derive_spatial(
             _add_region(out, levels, int(lv), cell)
     for stale in set(memo) - used:  # a deleted dataset, or a table placed by another level now
         del memo[stale]
-    members = Counter(rid for _, rid, _ in out.in_region)
+    members = Counter(rid for _, rid, _ in out.in_region)  # and the patterns whose own cell a region is
+    members.update(rid for pid, cells in out.own_cells.items() for c in cells if (rid := region_node_id(res_of[pid], c)) in out.regions)
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])
         coarser = [x for x in levels if x < props["resolution"]]

@@ -7,7 +7,7 @@ chain reads ACTIVATES, IN_REGION and PARENT_OF of the snapshot.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,14 +112,14 @@ def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
 def _held(graph: DualGraph, regions: set[str]) -> set[str]:
     """The regions that hold an intact pattern: an ancestor no intact pattern reaches, or a region of tampered patterns
     only, holds nothing."""
-    tampered = Counter(e["target"] for pid in graph.insights if graph.tampered(pid) for e in graph.out.get(pid, []) if e["type"] == "IN_REGION")
-    return {r for r in regions if graph.nodes[r]["props"]["patterns"] > tampered[r]}
+    return {r for r in regions if any(not graph.tampered(p) for p in graph.holders(r))}
 
 
 def _home(graph: DualGraph, pid: str) -> str | None:
-    """One finest region of the pattern, the largest share first (where the regions above a chain start)."""
+    """One region of the pattern at the finest level its IN_REGION reaches, the largest share first (where the regions
+    above a chain start)."""
     facts = graph.facts(pid)
-    return min(facts.finest, key=lambda r: (-facts.regions[r], r), default=None)
+    return min(facts.placed, key=lambda r: (-facts.regions[r], r), default=None)
 
 
 def _relation(graph: DualGraph, a: str, b: str) -> tuple[str, str] | None:
@@ -146,15 +146,20 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
     res, anchors, upload, own = facts.resolution, facts.anchors, facts.upload, facts.finest
     kin = {e["source"] for a in anchors for e in graph.inc.get(a, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak")}
     best: tuple[tuple[bool, int, float, float], VerticalStep] | None = None
-    for region, share in graph.facts(pid).regions.items():
-        for e in graph.inc.get(region, []):
-            other = e["source"]  # only a pattern of the same phenomenon (a shared non-weak anchor) can be a step
-            if e["type"] != "IN_REGION" or other in seen or other not in kin or graph.tampered(other):
+    # up: a coarser holder of one of its regions, whose finest regions hold it; down: a finer pattern lying in one of its
+    # own finest regions, by that IN_REGION's share (sorted: ties resolve alike in every process)
+    for region in facts.regions if direction == "up" else sorted(own):
+        if direction == "up":
+            others = [(o, facts.regions[region]) for o in graph.holders(region)]
+        else:
+            others = [(e["source"], e["weight"]) for e in graph.inc.get(region, []) if e["type"] == "IN_REGION"]
+        for other, finer_share in others:  # only a pattern of the same phenomenon (a shared non-weak anchor) can be a step
+            if other in seen or other not in kin or graph.tampered(other):
                 continue
             if (other_res := graph.facts(other).resolution) is None:
                 continue
-            coarser, finer_share = (other_res < res, share) if direction == "up" else (other_res > res, e["weight"])
-            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in (graph.facts(other).finest if direction == "up" else own):
+            coarser = other_res < res if direction == "up" else other_res > res
+            if not coarser or finer_share < VERTICAL_MIN_SHARE or (direction == "up" and region not in graph.facts(other).finest):
                 continue
             shared = [(anchors[a] * w * finer_share, a) for a, w in graph.facts(other).anchors.items() if a in anchors]
             relation = _relation(graph, pid, other)
@@ -175,7 +180,7 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
     with its first step up, budget or not."""
     chains, reached = [], set()
     for pid in pattern_ids:
-        if graph.facts(pid).resolution is None or not graph.facts(pid).regions:
+        if graph.facts(pid).resolution is None or not graph.facts(pid).finest:
             continue
         chain, seen = ScaleChain(pid), {pid}
         nearest = _step(graph, pid, "up", seen)
@@ -231,7 +236,7 @@ def scale_label(graph: DualGraph, pid: str) -> str:
 def picture(graph: DualGraph, region: str) -> dict[str, int]:
     """What a region holds: its intact IN_REGION patterns over every dataset (a tampered one counts for nothing), and how
     many datasets and anchors (themes) they span."""
-    members = [e["source"] for e in graph.inc.get(region, []) if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
+    members = [p for p in graph.holders(region) if not graph.tampered(p)]
     return {
         "patterns": len(members),
         "datasets": len({graph.insight(p).dataset_id for p in members}),

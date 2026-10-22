@@ -635,3 +635,33 @@ def test_a_node_panel_lists_the_strongest_of_each_group_and_counts_the_rest(monk
     panel = views.node_details(graph, "A-1")
     assert len(full) == panel["neighbor_counts"]["ACTIVATES (in)"] == 2 and panel["neighbors"]["ACTIVATES (in)"] == full[:1]
     assert full[0]["weight"] >= full[1]["weight"]  # the strongest kept
+
+
+def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
+    """A geo pattern at a region level has no IN_REGION per cell: its cells are ``own_cells``, its finest regions there.
+    The chain up and down, the fold into one fact, the regions above and a region's picture are those the IN_REGION
+    form gives."""
+    from graph_query_engine.vertical import picture, scale_chain
+
+    def chains(snap: dict):
+        graph, found = _levels_search(snap)
+        items = {it.pattern_id: it for it in found.evidence.items}
+        (up,) = scale_chain(graph, ["P1"])
+        (down,) = scale_chain(graph, ["P7"])
+        return ([s.pattern_id for s in up.up], up.regions, [s.pattern_id for s in down.down], items["P7"].folded_into, picture(graph, "R:5:a"))
+
+    edges_form = _levels(-1.2, ("7", "5"), coarse_regions=("R:5:a", "R:5:z"))
+    cells_form = {**edges_form, "own_cells": {"P7": ["a", "z"]}}
+    cells_form["edges"] = [e for e in edges_form["edges"] if not (e["source"] == "P7" and e["type"] == "IN_REGION")]
+    assert chains(cells_form) == chains(edges_form) and chains(cells_form)[0] == ["P7"] and chains(cells_form)[2] == ["P1"]
+    assert DualGraph(cells_form).holders("R:5:a") == ["P1", "P7"]  # its IN_REGION member, then the pattern whose cell it is
+    from insight_graph_service.server.views import node_details
+
+    def panel(snap: dict) -> list[str]:
+        items = node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"]
+        assert all(set(it) == {"id", "label", "kind", "weight", "props", "integrity"} for it in items)  # one shape for both
+        return sorted(it["id"] for it in items)
+
+    assert panel(cells_form) == panel(edges_form) == ["P1", "P7"]  # the region's panel lists both, as its count does
+    scattered = {**cells_form, "edges": [*cells_form["edges"], edge("P7", "R:1:c", "IN_REGION", 0.3)]}  # lies at 1, not at 3
+    assert scale_chain(DualGraph(scattered), ["P7"])[0].regions == ["R:1:c"]  # the regions above start where it lies
