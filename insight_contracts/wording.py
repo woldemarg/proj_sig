@@ -104,7 +104,10 @@ TERMS: dict[str, tuple[str, str]] = {
     "points": ("події", "точки з файлу, що потрапили в комірки інсайту"),
     "cells_extent": ("комірки", "комірки мапи, з яких складається інсайт на своєму рівні"),
     "cells_footprint": ("комірки сліду", "комірки цього рівня, що тримають 80 % подій інсайту, знайденого на іншому рівні"),
-    "cells_inside": ("комірки всередині", "комірки цього рівня, чиї центри лежать у комірках інсайту, знайденого на іншому рівні мапи"),
+    "cells_inside": (
+        "комірки всередині",
+        "комірки цього рівня, чиї центри лежать у комірках інсайту іншого рівня мапи (або тримають їхні центри на ширшій мапі)",
+    ),
     "cells_in_view": ("комірки у вікні", "комірки у вікні мапи, де є події інсайту"),
     "window_lift": (
         "частота у вікні",
@@ -194,6 +197,8 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
         return column
     if column.endswith("_band"):  # a band of a column or of a cell's derivation
         return source_column(column.removesuffix("_band"), declared)
+    if column.startswith("neighbours_"):  # a counter's neighbourhood lag
+        return source_column(column.removeprefix("neighbours_"), declared)
     for suffix in _DERIVED:
         if column.endswith(suffix) and column.removesuffix(suffix) in declared:
             return column.removesuffix(suffix)
@@ -228,15 +233,18 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
 
 
 def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool, bands: Mapping[str, int]) -> str:
-    """One ``attribute = value`` in words: the glossary's phrase for the pair, a cell's neighbourhood class or band, a
-    quantile band 'у i-й з k смуг' (``bands``: band column -> k), else ``<column words> = <value>`` with the value as written."""
+    """One ``attribute = value`` in words: the glossary's phrase for the pair (a cell's mode column reads its source
+    column's pair), a cell's neighbourhood class or band (named by its counter, but the events'), a quantile band 'у i-й
+    з k смуг' (``bands``: band column -> k), else ``<column words> = <value>`` with the value as written."""
     attribute, value = condition.attribute, condition.value
-    if phrase := glossary.get(condition.expr):
+    pair = f"{attribute.removesuffix('_mode')}={value}" if geo and attribute.endswith("_mode") else condition.expr
+    if phrase := glossary.get(condition.expr) or glossary.get(pair):
         return phrase
     if geo and attribute == "lisa_points" and value in LISA:
         return LISA[value]
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
-        return f"сусідні комірки {QUARTERS[value]}"
+        counter = attribute.removeprefix("neighbours_").removesuffix("_band")
+        return f"сусідні комірки {QUARTERS[value]}" + (f" ({column_words(counter, glossary, geo)})" if counter != "points" else "")
     words = column_words(attribute.removesuffix("_band"), glossary, geo)
     if attribute.endswith("_band") and value[:1] == "q" and value[1:].isdigit():
         i, k = int(value[1:]), bands.get(attribute)
@@ -331,7 +339,7 @@ def value_words(ins: Insight) -> dict[str, str]:
     value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ`` Moran's I clipped to [0, 0.99] as
     ``spatial.effective_n_factor`` clips it: a sparse cell holds no value, so ``n_eff`` below the extent's cells says
     nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing. With ``I > 0`` the counted cells come back from
-    the rounded ``n_eff`` and ``I``, so they read as approximate."""
+    the rounded ``n_eff`` and ``I``, so they read as approximate and never exceed the extent's cells."""
     p = ins.p_adjusted
     if p is None:
         out = {"p_adjusted": "не перевірялося (зміна зв'язку)"}
@@ -343,6 +351,7 @@ def value_words(ins: Insight) -> dict[str, str]:
         moran = spatial.get("moran_i") or 0.0
         rho = min(max(moran, 0.0), 0.99)
         valued = round(spatial["n_eff"] * (1 + rho) / (1 - rho))
+        valued = min(valued, int(spatial.get("cells") or valued))  # the rounded n_eff and I can give one cell more than the extent holds
         tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
         cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
         out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"

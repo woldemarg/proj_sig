@@ -61,7 +61,7 @@ function botCard(turn) {
   const forged = (ev.datasets || []).filter((d) => d.integrity === "mismatch").map((d) => d.dataset_id);
   const llm = qa.llm || {};
   const answer = qa.answer || "";
-  const forgedNote = forged.length ? `<div class="notice bad">Метадані ${esc(forged.join(", "))} не пройшли перевірку цілісності: джерело, надійність і показники ігноруються.</div>` : "";
+  const forgedNote = forged.length ? `<div class="notice bad">Метадані ${esc(forged.join(", "))} не пройшли перевірку цілісності: ${DECLARED} ігноруються.</div>` : "";
   const notice = qa.answer_mode !== "fallback" ? ""
     : llm.error === "disabled" ? "Показано лише свідчення (пояснення вимкнено)."
     : "Мовна модель недоступна — показано лише свідчення.";
@@ -82,7 +82,7 @@ function botCard(turn) {
   const evid = items.map((it, i) => {
     if (it.folded_into) return "";  // another level of the same finding: shown on its host's card
     const s = it.statistics;
-    return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc(word(`role_${it.role}`))}</span>` +
+    return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc(word(reached(it)))}</span>` +
       (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="Та сама знахідка на іншому рівні цього завантаження">також ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Її комірки мапи проти зони з питання">${area[it.key] ? "у виділеній зоні" : "поза виділеною зоною"}</span>` : "") +

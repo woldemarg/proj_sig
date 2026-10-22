@@ -204,7 +204,7 @@ class Evidence:
         for m in self.metrics:
             parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
             meaning = f" ({', '.join(parts)})" if parts else ""
-            name = humanize(m["metric"]) if parts else self.reword(humanize(m["metric"]))  # the indicator already says it
+            name = humanize(m["metric"]) if parts else self.reword(humanize(m["metric"]), m["dataset_id"])  # the indicator already says it
             lines.append(f"- {name}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         return lines
 
@@ -239,16 +239,16 @@ class Evidence:
         return lines
 
     def _item_lines(self, it: EvidenceItem, plain: list[tuple[str, str]]) -> list[str]:
-        s = it.statistics
-        scope = "; ".join(self.reword_condition(c, it.provenance["dataset_id"]) for c in it.scope) if plain else it.scope_text
+        s, ds = it.statistics, it.provenance["dataset_id"]
+        scope = "; ".join(self.reword_condition(c, ds) for c in it.scope) if plain else it.scope_text
         area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
         lines = [f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})"]
-        lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
+        lines.append(f"     shifts: {'; '.join(self.reword(t, ds) for t in it.shift_text) or 'no validated median shift'}")
         if it.relationship:
-            lines.append(f"     relationship: {self.reword(it.relationship)} (divergence {s['emm_score']:.2f})")
+            lines.append(f"     relationship: {self.reword(it.relationship, ds)} (divergence {s['emm_score']:.2f})")
         lines.append(
             f"     validation: {it.validation.replace('; ', ' | ')} | insight weight {s['weight']:.2f}"
-            f" | confounders: {', '.join(self.reword(d) for d in s['drivers']) or 'none detected'}"
+            f" | confounders: {', '.join(self.reword(d, ds) for d in s['drivers']) or 'none detected'}"
         )
         if it.trust:
             lines.append(f"     trust: {it.trust}")
@@ -322,7 +322,7 @@ class Evidence:
 
     def _shift(self, it: EvidenceItem, metric: str) -> str:
         shift = self._shift_of(it, metric) or it.statistics["shifts"][0]
-        return f"{self.reword(humanize(shift['metric']))} {shift['robust_z']:+.2f} sd"
+        return f"{self.reword(humanize(shift['metric']), it.provenance['dataset_id'])} {shift['robust_z']:+.2f} sd"
 
     def _chain_text(self, chain: dict[str, Any]) -> str:
         """``res 7: P1 +1.60 sd -> res 5: P7 +1.10 sd -> region R:3:…``, finest first, on the host's target."""
@@ -353,32 +353,48 @@ class Evidence:
         ]
 
     @cached_property
-    def _glossary(self) -> dict[str, str]:  # read by every reword of one rendering: merged once
-        """The datasets' glossaries, each its derived English one (``glossary``) under the declared one (``user_glossary``)."""
-        return {k: v for d in self.datasets for k, v in (d.get("glossary", {}) | d.get("user_glossary", {})).items()}
+    def _glossaries(self) -> dict[str, dict[str, str]]:  # read by every reword of one rendering: built once
+        """Each dataset's glossary by id, never another's: its derived English one (``glossary``) under the declared one
+        (``user_glossary``); a declared source column read onto every cell column derived from it, as the readings read
+        it (``wording.column_words``), a column's quantile band read as the column (as ``condition_words`` reads it) and a
+        declared ``column=value`` onto the cell's mode column."""
+        out = {}
+        for d in self.datasets:
+            derived, user = d.get("glossary", {}), d.get("user_glossary", {})
+            cells = {
+                c: wording.column_words(c, user, True)
+                for c in derived
+                if "=" not in c and not c.endswith("_band") and c not in user and wording.source_column(c, user) in user
+            }
+            bands = {f"{c}_band": v for c, v in (derived | cells | user).items() if "=" not in c}
+            modes = {k.replace("=", "_mode=", 1): v for k, v in user.items() if "=" in k and k.split("=", 1)[0] + "_mode" in derived}
+            out[d["dataset_id"]] = derived | cells | bands | user | modes
+        return out
 
     @cached_property
-    def _names(self) -> tuple[re.Pattern[str], dict[str, str]] | None:
-        """One pattern over every glossary column name, raw and humanized, longest first, matched whole: never inside a
-        word, and never inside a longer name the evidence uses, which stands for itself (``rate`` leaves ``return rate``)."""
-        meanings = {n: meaning for col, meaning in self._glossary.items() if "=" not in col for n in (col, humanize(col))}
-        if not meanings:
-            return None
-        names = {n: n for it in self.items for c in _named(it) for n in (c, humanize(c))} | meanings
-        alternatives = "|".join(map(re.escape, sorted(names, key=len, reverse=True)))
-        return re.compile(rf"(?<![\w])(?:{alternatives})(?![\w])"), names
+    def _names(self) -> dict[str, tuple[re.Pattern[str], dict[str, str]]]:
+        """Per dataset, one pattern over every glossary column name, raw and humanized, longest first, matched whole: never
+        inside a word, and never inside a longer name its evidence uses, which stands for itself (``rate`` leaves ``return rate``)."""
+        out = {}
+        for ds, glossary in self._glossaries.items():
+            meanings = {n: meaning for col, meaning in glossary.items() if "=" not in col for n in (col, humanize(col))}
+            if meanings:
+                names = {n: n for it in self.items if it.provenance["dataset_id"] == ds for c in _named(it) for n in (c, humanize(c))} | meanings
+                out[ds] = re.compile(rf"(?<![\w])(?:{'|'.join(map(re.escape, sorted(names, key=len, reverse=True)))})(?![\w])"), names
+        return out
 
-    def reword(self, text: str) -> str:
-        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning, in one pass."""
-        if self._names is None:
+    def reword(self, text: str, dataset_id: str) -> str:
+        """``text`` of ``dataset_id`` with every column name of its glossary (raw or humanized) replaced by its plain meaning,
+        in one pass."""
+        if dataset_id not in self._names:
             return text
-        pattern, names = self._names
+        pattern, names = self._names[dataset_id]
         return pattern.sub(lambda m: names[m[0]], text)
 
-    def reword_condition(self, condition: str, dataset_id: str | None = None) -> str:
-        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>', a quantile
-        band's value with its place among its dataset's bands (a quarter only of four)."""
-        glossary = self._glossary
+    def reword_condition(self, condition: str, dataset_id: str) -> str:
+        """``attribute=value`` of ``dataset_id`` in plain words: its glossary's phrase for the pair, else '<meaning> is <value>',
+        a quantile band's value with its place among the dataset's bands (a quarter only of four)."""
+        glossary = self._glossaries.get(dataset_id, {})
         attribute, _, value = condition.partition("=")
         words = glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
         bands = next((d.get("bands", {}).get(attribute) for d in self.datasets if d["dataset_id"] == dataset_id), None)
@@ -387,12 +403,17 @@ class Evidence:
         return f"{words} ({f'quarter {value[1:]} of 4' if bands == 4 else f'band {value[1:]} of {bands}'})"
 
     def plain_language(self) -> list[tuple[str, str]]:
-        """(column or declared ``column=value``, meaning) for what the evidence names that the datasets' glossaries hold;
-        a derived pair's phrase (a geo cell's class or band) is on its scope line already."""
-        glossary = self._glossary
-        pairs = {k for d in self.datasets for k in d.get("user_glossary", {}) if "=" in k}
-        named = [n for it in self.items for n in (*_named(it), *(c for c in it.scope if c in pairs))]
-        return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
+        """(column or declared ``column=value``, meaning) for what each item names that its dataset's glossary holds, each
+        meaning once; a derived pair's phrase (a geo cell's class or band) is on its scope line already, a declared one is listed."""
+        derived = {d["dataset_id"]: d.get("glossary", {}) for d in self.datasets}
+        out: dict[str, str] = {}  # meaning -> the first name read as it
+        for it in self.items:
+            ds = it.provenance["dataset_id"]
+            glossary, own = self._glossaries.get(ds, {}), derived.get(ds, {})
+            for n in (*_named(it), *(c for c in it.scope if glossary.get(c) != own.get(c))):
+                if n in glossary:
+                    out.setdefault(glossary[n], n)
+        return [(n, meaning) for meaning, n in out.items()]
 
     def summary(self) -> str:
         """The observations, cited: one ``- …`` line each, the item's reading (``wording``) in Ukrainian around
@@ -422,7 +443,7 @@ class Evidence:
         if self.excluded:  # what the NOTEs say of integrity, for the answer without the model
             lines.append(f"- виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): {', '.join(self.excluded)}")
         lines += [
-            f"- метадані датасету {d['dataset_id']} не пройшли перевірку цілісності: його джерело, надійність і показники проігноровано"
+            f"- метадані датасету {d['dataset_id']} не пройшли перевірку цілісності: його джерело, надійність, показники, глосарій і документ проігноровано"
             for d in self.datasets
             if d.get("integrity") == "mismatch"
         ]
