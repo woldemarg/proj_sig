@@ -471,6 +471,10 @@ def test_a_file_read_otherwise_than_before_gets_its_own_dataset_id(tmp_path):
     with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:
         frame, ds = read(mixed)
     assert frame["code"].map(type).eq(str).all() and ds == plain_id(mixed, ingestion.READING_FIX) and parse.call_count == 2
+    unsigned = tmp_path / "unsigned.tsv"  # an int64 chunk, then a uint64 one: their concatenation is a lossy float64, no warning
+    unsigned.write_text("code\tvalue\n" + "".join(f"c{i % 9}\t{i}\n" for i in range(300_000)) + f"c0\t{2**63}\n")
+    frame, ds = read(unsigned)
+    assert frame["value"].dtype == "uint64" and ds == plain_id(unsigned, ingestion.READING_FIX)
     clean = tmp_path / "clean.tsv"
     clean.write_bytes(b"\xef\xbb\xbfregion\tflag\tvalue\nEU\tTrue\t1\nUS\t\t2\n")  # a BOM the C parser always dropped, an object column
     with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:

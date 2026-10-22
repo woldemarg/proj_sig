@@ -123,9 +123,12 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
             return pd.read_parquet(path), digest
         if ext == ".tsv":
             frame = pd.read_csv(path, sep="\t", engine="c")
-            # a chunk typed a column apart when it holds values of more than one type (pandas' mixed-type warning): then
-            # the whole file decides; a text column of one type is read once
-            if any(pd.api.types.infer_dtype(frame[c], skipna=True).startswith("mixed") for c in frame):
+            # a chunk typed a column apart: codes then text leave values of two types, an integer chunk beside a float or
+            # an unsigned one makes floats of integers past 2**53; then the whole file decides, else it is read once
+            if any(
+                pd.api.types.infer_dtype(s, skipna=True).startswith("mixed") or (s.dtype.kind == "f" and s.abs().max() >= 2**53)
+                for _, s in frame.items()
+            ):
                 whole = pd.read_csv(path, sep="\t", engine="c", low_memory=False)
                 if not whole.equals(frame):
                     frame = whole
