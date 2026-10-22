@@ -31,7 +31,7 @@ The worker also builds a commit's first reads before a console asks, at the star
 - **When it stops:** while a batch waits, whose commit would throw them away. It builds nothing on a degraded workspace.
 - **With the Neo4j mirror on,** it starts once the mirror's sync has finished, because the sync runs in the commit's job. A console that reads in between builds what it reads itself, as before.
 
-Measured without the mirror, on the 300,000-point synthetic upload (`@auto` and `table`): the first Map open one poll after READY (the cells, `/projected` and `/overlay` together, then a window) takes 0.07 s, against 2.0 s when every read was built on its request.
+Measured without the mirror, on the 300,000-point synthetic upload (`@auto` and `table`): the first Map open one poll after READY (the cells, `/projected` and `/overlay` together, then a window) takes 0.03–0.09 s over four runs, against 2.0 s when every read was built on its request. A graph read that lands while the worker builds the graph view waits for that one build (up to 0.43 s, against 0.27 s for a cold build), and is a memo hit otherwise.
 
 ```text
 UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS → EMBEDDING
