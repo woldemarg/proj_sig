@@ -153,6 +153,6 @@ async function upload() {
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
   setUploadMsg(`Завантажую ${f.name}…`);
   $("upload-btn").disabled = true;
-  try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче."); $("file").value = ""; $("metadata").value = ""; $("file-name").textContent = ""; refreshBatches(); }
+  try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче."); $("file").value = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; refreshBatches(); }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
