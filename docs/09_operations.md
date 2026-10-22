@@ -25,7 +25,13 @@ A workspace the engine cannot serve does not stop the start: the engine starts d
 
 After the start, the app queues `Engine.startup_sync()` on its worker thread. It brings the Neo4j mirror up to the committed snapshot, holding the write lock so it never interleaves with a deletion's or a reset's own sync. It never syncs from a degraded or empty workspace: that would wipe a mirror without an operator action.
 
-The worker also builds a commit's first reads before a console asks, at the start and after an upload's last level, a `PATCH /api/datasets` and a deletion: the graph view (`GET /api/graph`, no filter), then each READY geo dataset's cell package, overlay, projected insights and the whole map's window (`Engine.warm_map`, `geo_views.warm`), all kept in the commit's memo. It stops while a batch waits, whose commit would throw them away, and builds nothing on a degraded workspace. Measured on the 300,000-point synthetic upload (`@auto` and `table`): the first Map open one poll after READY — the cells, `/projected` and `/overlay` together, then a window — takes 0.07 s, against 2.0 s when every read was built on its request.
+The worker also builds a commit's first reads before a console asks, at the start and after an upload's last level, a `PATCH /api/datasets` and a deletion. It builds the graph view first (`GET /api/graph`, no filter), then the map's reads for each READY geo dataset (`Engine.warm_map`, `geo_views.warm`):
+- **Which datasets:** newest first, and at most as many as the cell-package cache holds (8).
+- **What it reads:** the cell package, which goes to its per-file cache; the overlay, the projected insights and the whole map's window, whose projection and per-insight facts go to the commit's memo.
+- **When it stops:** while a batch waits, whose commit would throw them away. It builds nothing on a degraded workspace.
+- **With the Neo4j mirror on,** it starts once the mirror's sync has finished, because the sync runs in the commit's job. A console that reads in between builds what it reads itself, as before.
+
+Measured without the mirror, on the 300,000-point synthetic upload (`@auto` and `table`): the first Map open one poll after READY (the cells, `/projected` and `/overlay` together, then a window) takes 0.07 s, against 2.0 s when every read was built on its request.
 
 ```text
 UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS → EMBEDDING

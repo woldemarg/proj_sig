@@ -138,7 +138,7 @@ def create_app(engine: Engine) -> FastAPI:
     def warm() -> None:  # a commit's first reads, built before a console asks: the graph view it loads at READY, then the map
         if not (engine.problem or engine.ws.unfinished_batches()):
             cytoscape_elements(engine.graph(), None, False)
-        engine.warm_map()
+            engine.warm_map()
 
     def written(result: dict[str, Any]) -> dict[str, Any]:  # a write's response, its commit's reads queued
         run(warm)

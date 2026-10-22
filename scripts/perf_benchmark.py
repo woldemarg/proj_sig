@@ -3,7 +3,7 @@
 One upload through the graph service's HTTP API on a scratch workspace (the configured model, Neo4j off unless
 ``--neo4j``): each level's stage times; then what the console asks of the result — the graph, the widest insight's
 node, each geo level's cells, overlay, projected insights and window, three questions — once right after the commit
-(cold) and again (warm), with the response sizes, raw and gzipped, and the stored snapshot's and cell files' sizes.
+(as a console reads them then: what the batch worker has built by then, docs/09_operations.md §9.1) and again (warm), with the response sizes, raw and gzipped, and the stored snapshot's and cell files' sizes.
 
     python scripts/perf_benchmark.py <file | synthetic | california> [--geo auto@auto] [--table] [--console] [--browser]
                                      [--neo4j URI] [--label NAME]

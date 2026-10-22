@@ -228,6 +228,9 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
     engine.submit(points_csv)
     engine.warm_map()
     assert not {("projection", ds), ("overlay", ds)} & engine.graph().memo.keys()
+    for read in (engine.geo_overlay, engine.geo_projected):  # its record deleted after its files were read: refused, no TypeError
+        with mock.patch.object(engine.ws, "ready_batch_for", return_value=None), pytest.raises(PipelineError, match="not a geo dataset"):
+            read(ds)
 
 
 def test_geo_evidence_speaks_plain_language(engine, points_csv):

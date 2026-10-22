@@ -68,6 +68,14 @@ def _geo(ws: Workspace, dataset_id: str, keys: tuple[str, ...] | None = None) ->
     return geo
 
 
+def _owner(ws: Workspace, dataset_id: str) -> dict[str, Any]:
+    """The dataset's READY batch, or ``unknown_dataset``: a deletion may take it after ``_geo`` read its files."""
+    owner = ws.ready_batch_for(dataset_id)
+    if owner is None:
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+    return owner
+
+
 def geo_profile(loaded: Any) -> dict[str, Any]:
     """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers."""
     ctx = loaded.spatial
@@ -282,7 +290,7 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells",))  # inside: a memo hit reads no file
-        owner = ws.ready_batch_for(dataset_id)
+        owner = _owner(ws, dataset_id)
         tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
         res = owner["profile"]["geo"]["resolution"]
@@ -340,7 +348,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
         geo = _geo(ws, dataset_id, ("cells", "point_cell"))  # inside: a memo hit reads no file
         cells, point_cell = geo["cells"], geo["point_cell"]
         per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(cells))
-        owner = ws.ready_batch_for(dataset_id)  # READY: _geo checked it
+        owner = _owner(ws, dataset_id)
         patterns: dict[str, Projected] = {}
         for b in ws.list_batches():
             if b.get("status") != "READY":
@@ -399,10 +407,11 @@ def geo_projected(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: 
 
 
 def warm(ws: Workspace, graph: DualGraph, thresholds: PhenomenonThresholds) -> None:
-    """Every READY geo dataset's map reads built ahead of the console — its cell package, overlay, projected insights and
-    the whole map's window, which reads every insight's facts — so the first Map open after a commit answers from the
-    memo; stops while a batch waits, whose commit would throw them away."""
-    for d in geo_datasets(ws):
+    """The READY geo datasets' map reads built ahead of the console — each one's cell package, overlay, projected insights
+    and the whole map's window, which reads every insight's facts — so the first Map open after a commit answers from the
+    package cache and the memo; newest first, as many as the package cache holds, so it never evicts its own. Stops while
+    a batch waits, whose commit would throw them away."""
+    for d in geo_datasets(ws)[::-1][: _pack.cache_info().maxsize]:
         if ws.unfinished_batches():
             return
         ds = d["dataset_id"]
