@@ -12,6 +12,7 @@ from conftest import make_engine, serve, stack
 from dev import chromium
 
 from graph_query_engine.vertical import ZONES_MAX
+from insight_contracts.wording import TERMS, name
 from insight_graph_service.core.settings import PROJECT_ROOT
 
 
@@ -156,7 +157,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("S.cy.nodes('.hl-anchor').length") > 0
         assert page.evaluate("S.cy.nodes('.hl-seed').length") > 0
         assert page.evaluate("document.querySelectorAll('.ev').length") > 0
-        # the answer's panels start closed; a click opens the evidence, a second click closes it; UI chrome stays English
+        # the answer's panels start closed; a click opens the evidence, a second click closes it
         assert page.evaluate("document.querySelectorAll('.bot-tabs button.active').length") == 0 and page.is_hidden(".bot-pane[data-pane='0']")
         tab = ".bot-tabs button[data-pane='0']"
         assert page.inner_text(tab).startswith("Свідчення і як їх знайдено")
@@ -169,6 +170,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.click(".answer-box a.cite >> nth=0")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
+        heads = page.evaluate("[...document.querySelectorAll('#inspector .nb-group summary')].map((s) => s.firstChild.textContent.trim())")
+        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава"}
+        assert relations and relations <= {name(k)[0].upper() + name(k)[1:] for k in TERMS}  # the relations in TERMS' words, as the chain's
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
         assert "Відтворено" in page.inner_text("#verify-out")
