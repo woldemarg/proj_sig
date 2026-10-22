@@ -577,7 +577,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         pytest.skip("no local Chromium for Playwright")
     engine, housing, bins = make_engine(cfg), PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "median_income_median:4"
     with housing.open("rb") as f:
-        (level,) = engine.upload(housing.name, f, geo="auto@auto", bins=bins)
+        (level,) = engine.upload(housing.name, f, geo="auto@5", bins=bins)
     geo = engine.process(level["batch_id"])
     queued = engine.submit(demo_csv)  # not run until the end: a batch runs all along
     port, app = stack(engine)
@@ -592,12 +592,12 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
         page.click(".adv summary")
         assert page.is_disabled("#table")
-        page.fill("#geo", "auto@auto")
+        page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
         page.fill("#bins", f"{bins},median_income:4")  # the table's own band beside the cells'
         page.evaluate("$('geo').value = ''; window.dispatchEvent(new PageTransitionEvent('pageshow'))")  # a form the browser restored
         assert page.is_disabled("#table")
-        page.evaluate("$('geo').value = 'auto@auto'; window.dispatchEvent(new PageTransitionEvent('pageshow'))")
+        page.evaluate("$('geo').value = 'auto@5'; window.dispatchEvent(new PageTransitionEvent('pageshow'))")
         assert page.is_enabled("#table")
         grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
