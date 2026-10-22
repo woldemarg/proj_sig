@@ -31,7 +31,8 @@ class PatternFacts:
     resolution: int | None
     upload: str | None
     regions: dict[str, float]  # IN_REGION target -> share (read only)
-    finest: frozenset[str]  # its regions at its finest level: its own cells when its resolution is a region level, many for a broad one
+    placed: frozenset[str]  # its IN_REGION targets at the finest level they reach
+    finest: frozenset[str]  # its own cells' region ids at a region level (a cell no other pattern lies in has no node), else ``placed``
     anchors: dict[str, float]  # non-weak ACTIVATES target -> alignment (read only)
 
 
@@ -105,13 +106,13 @@ class DualGraph:
             levels = {r: self.nodes[r]["props"]["resolution"] for r in regions}
             top = max(levels.values(), default=None)
             own = self.own_cells.get(pattern_id)
+            placed = frozenset(r for r, lv in levels.items() if lv == top)
             return PatternFacts(
                 resolution=spatial.resolution if spatial else None,
                 upload=self.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
                 regions=regions,
-                finest=frozenset(region_node_id(spatial.resolution, c) for c in own)
-                if own
-                else frozenset(r for r, lv in levels.items() if lv == top),
+                placed=placed,
+                finest=frozenset(region_node_id(spatial.resolution, c) for c in own) if own else placed,
                 anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
             )
 

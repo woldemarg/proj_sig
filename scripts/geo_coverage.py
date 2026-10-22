@@ -180,10 +180,13 @@ def run(engine: Engine, path: Path, geo: str, bins: str | None = None) -> dict[s
     res = h3.get_resolution(str(cells[0]))
     levels = [lv for lv in engine.settings.region_levels if lv <= res]
     in_region: dict[tuple[str, int], int] = {}
-    for e in engine.committed().graph.edges:
+    graph = engine.committed().graph
+    for e in graph.edges:
         if e["type"] == "IN_REGION":  # R:<level>:<h3>
             key = (e["source"], int(e["target"].split(":")[1]))
             in_region[key] = in_region.get(key, 0) + 1
+    for pid, own in graph.own_cells.items():  # at its own level a geo insight's regions are its cells
+        in_region[(pid, graph.facts(pid).resolution)] = len(own)
     per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(cells))
     out: dict[str, Any] = {
         "levels": [{"level": r["level"], "status": r["status"], "insights": r["metrics"].get("validated_insights", 0)} for r in records]

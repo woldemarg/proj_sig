@@ -117,6 +117,17 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
                 "integrity": on["props"].get("integrity"),
             }
         )
+    if node["kind"] == "Region":  # the patterns whose own cell it is hold it too (``DualGraph.holders``)
+        members = {it["id"] for it in neighbors.get("IN_REGION (in)", [])}
+        for pid in (p for p in graph.holders(node_id) if p not in members):
+            item = {
+                "id": pid,
+                "label": graph.nodes[pid]["label"],
+                "kind": "Pattern",
+                "weight": 1.0,
+                "props": {"basis": "cells", "share": 1.0, "own": True},
+            }
+            neighbors.setdefault("IN_REGION (in)", []).append(item)
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
         items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
     out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}

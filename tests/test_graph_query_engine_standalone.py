@@ -655,3 +655,11 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     cells_form["edges"] = [e for e in edges_form["edges"] if not (e["source"] == "P7" and e["type"] == "IN_REGION")]
     assert chains(cells_form) == chains(edges_form) and chains(cells_form)[0] == ["P7"] and chains(cells_form)[2] == ["P1"]
     assert DualGraph(cells_form).holders("R:5:a") == ["P1", "P7"]  # its IN_REGION member, then the pattern whose cell it is
+    from insight_graph_service.server.views import node_details
+
+    def panel(snap: dict) -> list[str]:
+        return sorted(it["id"] for it in node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"])
+
+    assert panel(cells_form) == panel(edges_form) == ["P1", "P7"]  # the region's panel lists both, as its count does
+    scattered = {**cells_form, "edges": [*cells_form["edges"], edge("P7", "R:1:c", "IN_REGION", 0.3)]}  # lies at 1, not at 3
+    assert scale_chain(DualGraph(scattered), ["P7"])[0].regions == ["R:1:c"]  # the regions above start where it lies

@@ -118,10 +118,8 @@ def _held(graph: DualGraph, regions: set[str]) -> set[str]:
 def _home(graph: DualGraph, pid: str) -> str | None:
     """One region of the pattern at the finest level its IN_REGION reaches, the largest share first (where the regions
     above a chain start)."""
-    regions = graph.facts(pid).regions
-    level = {r: graph.nodes[r]["props"]["resolution"] for r in regions}
-    top = max(level.values(), default=None)
-    return min((r for r in regions if level[r] == top), key=lambda r: (-regions[r], r), default=None)
+    facts = graph.facts(pid)
+    return min(facts.placed, key=lambda r: (-facts.regions[r], r), default=None)
 
 
 def _relation(graph: DualGraph, a: str, b: str) -> tuple[str, str] | None:
@@ -148,12 +146,11 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
     res, anchors, upload, own = facts.resolution, facts.anchors, facts.upload, facts.finest
     kin = {e["source"] for a in anchors for e in graph.inc.get(a, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak")}
     best: tuple[tuple[bool, int, float, float], VerticalStep] | None = None
-    # up: a coarser holder of one of its regions (by its own cells, if it lies at a region level); down: a finer pattern
-    # lying in one of its own finest regions, by that IN_REGION's share
-    meetings = facts.regions.items() if direction == "up" else ((r, 1.0) for r in sorted(own))  # sorted: ties resolve alike in every process
-    for region, share in meetings:
+    # up: a coarser holder of one of its regions, whose finest regions hold it; down: a finer pattern lying in one of its
+    # own finest regions, by that IN_REGION's share (sorted: ties resolve alike in every process)
+    for region in facts.regions if direction == "up" else sorted(own):
         if direction == "up":
-            others = [(o, share) for o in graph.holders(region)]
+            others = [(o, facts.regions[region]) for o in graph.holders(region)]
         else:
             others = [(e["source"], e["weight"]) for e in graph.inc.get(region, []) if e["type"] == "IN_REGION"]
         for other, finer_share in others:  # only a pattern of the same phenomenon (a shared non-weak anchor) can be a step
@@ -162,7 +159,7 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
             if (other_res := graph.facts(other).resolution) is None:
                 continue
             coarser = other_res < res if direction == "up" else other_res > res
-            if not coarser or finer_share < VERTICAL_MIN_SHARE or region not in (graph.facts(other).finest if direction == "up" else own):
+            if not coarser or finer_share < VERTICAL_MIN_SHARE or (direction == "up" and region not in graph.facts(other).finest):
                 continue
             shared = [(anchors[a] * w * finer_share, a) for a, w in graph.facts(other).anchors.items() if a in anchors]
             relation = _relation(graph, pid, other)
@@ -183,7 +180,7 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
     with its first step up, budget or not."""
     chains, reached = [], set()
     for pid in pattern_ids:
-        if graph.facts(pid).resolution is None or not (graph.facts(pid).regions or graph.facts(pid).finest):  # its own cells count
+        if graph.facts(pid).resolution is None or not graph.facts(pid).finest:
             continue
         chain, seen = ScaleChain(pid), {pid}
         nearest = _step(graph, pid, "up", seen)

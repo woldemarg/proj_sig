@@ -1,7 +1,8 @@
 """The dual graph's vocabulary and its snapshot contract (docs/06_graph_and_storage.md §6.1–6.2).
 
-A snapshot is ``{"version": SNAPSHOT_VERSION, "nodes": [...], "edges": [...], "own_cells": {...}, "stats": {...}}``; the graph service
-compiles it, the query engine and the console read it. Node ``props`` by kind, as the readers rely on them:
+A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "nodes": [...], "edges": [...],
+"own_cells": {...}, "stats": {...}}``; the graph service compiles it, the query engine and the console read it. Node
+``props`` by kind, as the readers rely on them:
 
 * ``Pattern``   the ``Insight.to_record()`` fields, plus ``row_id`` (its journal row), ``canonical`` (with ``document``
                 and ``components``) and ``embedding`` (the vector contract)
