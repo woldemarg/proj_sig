@@ -16,40 +16,39 @@ from subgroup_miner.spatial import SpatialError, parse_geo_levels
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 GLOSSARY_VALUE_MAX = 120  # characters of one declared glossary value
 METADATA_DOC_MAX_BYTES = 64 * 1024  # a metadata document as uploaded
-_FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):(?:\s+(.*))?$")  # "Key: value" (a key of at most 41 characters)
+_FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):\s*(.*)$")  # "Key: value" (a key of at most 41 characters)
 
 
 def parse_metadata_doc(text: str) -> dict[str, Any]:
     """A metadata document (docs/02_discovery.md §2.1) -> ``{"dataset": {field: value}, "columns": {column: {field: value}}}``.
     The lines before ``Columns:`` describe the dataset as ``Key: value`` lines; after it come blocks, one per column: its
-    name on an unindented line, its ``Key: value`` fields indented, an indented line without a key continuing the
-    previous value. A key is its label in snake case (``Title (uk)`` -> ``title_uk``); unknown keys are kept, a block
-    without fields is just its name. A BOM and CRLF are read; ``ValueError`` without ``Columns:`` or a column."""
-    lines = text.removeprefix("﻿").splitlines()
+    name on an unindented line, its ``Key: value`` fields indented. A field sits at the indentation of its block's (or the
+    header's) first field; any other line, a deeper one or one without a key, continues the previous value. A key is its
+    label in snake case (``Title (uk)`` -> ``title_uk``); unknown keys are kept, a block without fields is just its name.
+    A BOM and CRLF are read; ``ValueError`` without ``Columns:`` or a column."""
+    lines = text.removeprefix(chr(0xFEFF)).splitlines()
     marker = next((i for i, ln in enumerate(lines) if ln.strip().lower() == "columns:"), None)
     if marker is None:
         raise ValueError("no 'Columns:' line")
-
-    def field(line: str) -> tuple[str, str] | None:
-        m = _FIELD.match(line.strip())
-        return (re.sub(r"[^0-9a-z]+", "_", m[1].lower()).strip("_"), (m[2] or "").strip()) if m else None
-
-    dataset = {k: v for k, v in filter(None, map(field, lines[:marker])) if v}
+    dataset: dict[str, str] = {}
     columns: dict[str, dict[str, str]] = {}
-    block: dict[str, str] | None = None
-    key = None
-    for line in lines[marker + 1 :]:
-        if not line.strip():
+    fields: dict[str, str] | None = dataset
+    key, indent = None, None
+    for i, line in enumerate(lines):
+        depth = len(line) - len(line.lstrip())
+        if i == marker or not line.strip():
+            fields = None if i == marker else fields
             continue
-        if not line[0].isspace():  # a column's name opens its block
-            block, key = columns.setdefault(line.strip(), {}), None
-        elif block is not None and (kv := field(line)):
-            key, block[kv[0]] = kv
-        elif block is not None and key:
-            block[key] = f"{block[key]} {line.strip()}".strip()
+        if i > marker and depth == 0:  # a column's name opens its block
+            fields, key, indent = columns.setdefault(line.strip(), {}), None, None
+        elif fields is not None and (m := _FIELD.match(line.strip())) and indent in (None, depth):
+            key, indent = re.sub(r"[^0-9a-z]+", "_", m[1].lower()).strip("_"), depth
+            fields[key] = m[2].strip()
+        elif fields is not None and key:
+            fields[key] = f"{fields[key]} {line.strip()}".strip()
     if not columns:
         raise ValueError("no column after 'Columns:'")
-    return {"dataset": dataset, "columns": columns}
+    return {"dataset": {k: v for k, v in dataset.items() if v}, "columns": {c: {k: v for k, v in f.items() if v} for c, f in columns.items()}}
 
 
 def _parse_glossary(text: str) -> dict[str, str] | None:
@@ -93,7 +92,7 @@ def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: boo
     kept, warnings, held = dict(declared), [], list(columns)
 
     def unknown(names: Collection[str]) -> list[str]:
-        return sorted(n for n in names if not any(source_column(c, {n}) for c in held))
+        return sorted(set(names) - {source_column(c, names) for c in held})
 
     if user := kept.get("user_glossary"):
         if missing := unknown({k.split("=", 1)[0] for k in user}):
@@ -103,7 +102,8 @@ def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: boo
             warnings.append(message + "; dropped")
             kept["user_glossary"] = user = {k: v for k, v in user.items() if k.split("=", 1)[0] not in missing} or None
         pairs = [k.split("=", 1) for k in user or {} if "=" in k]
-        if frame is not None and (absent := [f"{c}={v}" for c, v in pairs if c in frame and v not in set(frame[c].astype(str))]):
+        named = [(c, v) for c, v in pairs if frame is not None and c in frame and frame[c].dtype.kind not in "biufc"]  # categories only
+        if absent := [f"{c}={v}" for c, v in named if v not in set(frame[c].astype(str))]:
             warnings.append(f"glossary: no row holds {absent}; kept")
     if doc := kept.get("metadata_doc"):
         if missing := unknown(doc["columns"]):
@@ -118,7 +118,7 @@ def declared_glossary(batch: dict[str, Any]) -> dict[str, str]:
     indicator ``<indicator> (<unit>)``; over everything, the explicit glossary."""
     doc = (batch.get("metadata_doc") or {}).get("columns", {})
     names = {c: f.get("title_uk") or f.get("display_name") for c, f in doc.items()}
-    out = {c: v for c, v in names.items() if v}
+    out = {c: v if len(v) <= GLOSSARY_VALUE_MAX else v[: GLOSSARY_VALUE_MAX - 1] + "…" for c, v in names.items() if v}  # a name, not a text
     for metric, e in (batch.get("indicators") or {}).items():
         out.setdefault(metric, f"{e['indicator']} ({e['unit']})" if e.get("unit") else e["indicator"])
     return out | (batch.get("user_glossary") or {})

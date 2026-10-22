@@ -68,7 +68,7 @@ function uploadGroup(cards, busy) {
 function datasetTrust(t) {
   /* a dataset card's trust chips, from its Dataset node */
   if (!t) return "";
-  if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "метадані не пройшли перевірку", "Запис датасету більше не збігається з відбитком своїх метаданих: його джерело, надійність і показники ігноруються")}</div>`;
+  if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "метадані не пройшли перевірку", "Запис датасету більше не збігається з відбитком своїх метаданих: його джерело, надійність, показники, глосарій і документ ігноруються")}</div>`;
   const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "джерело"} · ${t.reliability}`, `${word("reliability")} (шкала Адміралтейства): ${word(`reliability_${t.reliability}`)}`) : "") +
     (t.integrity === "unverified" ? chip("warn", "метадані не перевірено", "Записано до появи відбитків метаданих: джерело й оцінку не перевірено") : "") +
     (t.glossary_columns ? chip("", `глосарій · ${plural(t.glossary_columns, "колонка", "колонки", "колонок")}`, "Заявлені назви колонок і категорій: так їх читають інсайти й відповіді") : "") +

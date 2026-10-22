@@ -268,9 +268,7 @@ def test_indicator_registry(engine, demo_csv):
     ds, patterns = record["dataset_id"], sorted(p["id"] for p in engine.ws.patterns())
     margin = engine.graph().nodes[f"M:{ds}:margin"]["props"]
     assert (margin["indicator"], margin["unit"]) == ("gross margin", "%") and "unit" not in engine.graph().nodes[f"M:{ds}:discount"]["props"]
-    assert (
-        '- gross margin (%) (indicator "gross margin", unit "%"): median'
-    )  # the indicator names the metric (#165) in engine.evidence(question).evidence_prompt
+    assert '- margin (indicator "gross margin", unit "%"): median' in engine.evidence(question).evidence_prompt
     with TestClient(create_app(engine)) as client:
         assert client.patch(f"/api/datasets/{ds}", json={"indicators": "margin:net_margin"}).json()["indicators"] == {
             "margin": {"indicator": "net_margin"}

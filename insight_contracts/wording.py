@@ -185,11 +185,17 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
     (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``); None when it is none of them."""
     if column in declared:
         return column
-    for suffix in ("_band", *_DERIVED):
+    if column.endswith("_band"):  # a band of a column or of a cell's derivation
+        return source_column(column.removesuffix("_band"), declared)
+    for suffix in _DERIVED:
         if column.endswith(suffix) and column.removesuffix(suffix) in declared:
             return column.removesuffix(suffix)
-    rest = column.removeprefix("share_")
-    return next((c for c in sorted(declared, key=len, reverse=True) if rest != column and rest.startswith(c + "_")), None)
+    if column.startswith("share_"):
+        # ponytail: the longest declared prefix wins; a declared "region" reads share_region_code_UA when region_code is
+        # not declared, as the profile keeps no share column's source to tell them apart
+        rest = column.removeprefix("share_")
+        return next((c for c in sorted(declared, key=len, reverse=True) if rest.startswith(c + "_")), None)
+    return None
 
 
 def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
@@ -205,7 +211,7 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
         if column.startswith("share_"):
             rest = column.removeprefix("share_")
             # ponytail: a source column the glossary does not name splits at the last "_"; a level holding "_" misreads
-            source = next((c for c in sorted(glossary, key=len, reverse=True) if rest.startswith(c + "_")), rest.rpartition("_")[0])
+            source = source_column(column, glossary) or rest.rpartition("_")[0]
             if source:
                 return f"частка подій комірки, де {column_words(source, glossary, False)} — {rest[len(source) + 1 :]}"
         for suffix, template in _DERIVED.items():
