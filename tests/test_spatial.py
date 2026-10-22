@@ -318,7 +318,11 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
     assert edge.places["P-fine"][5] == edge.places["P-holder"][5] == edge.occupied["fine"][5] == {holder}  # one place for credibility
     lies_in = {r for p, r, _ in edge.in_region if p == "P-fine"}  # and one for IN_REGION: the region the overlay's rows put it in
     assert f"R:5:{holder}" in lies_in and f"R:5:{h3.cell_to_parent(fine, 5)}" not in lies_in
-    assert region_features(np.array([fine]), [f"R:5:{holder}"])[0]["properties"]["rows"] == [0]
+    feature = region_features(np.array([fine]), [f"R:5:{holder}"])[0]["properties"]
+    assert feature["rows"] == [0] and feature["centre"] == [
+        round(h3.cell_to_latlng(holder)[1], 6),
+        round(h3.cell_to_latlng(holder)[0], 6),
+    ]  # its label's point
     assert set(derive_spatial([_geo_dataset("bare", near, {})], (7, 5, 3, 1)).occupied["bare"]) == {8, 7, 5, 3, 1}  # no pattern needed
 
     drawn = region_features(np.array(near + far), [shared, f"R:8:{x}"])  # the console's region outlines, with the cell rows inside

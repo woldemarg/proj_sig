@@ -115,6 +115,22 @@ def test_the_window_leads_with_the_levels_of_its_extent(engine, points_csv):
     assert close == "map" and rows
 
 
+def test_a_map_without_a_located_point_lists_nothing(engine, points_csv):
+    """A projection whose cells hold no event (never a READY level's, which refuses a file without a valid point) lists an
+    empty window instead of dividing by its total."""
+    from unittest import mock
+
+    from insight_graph_service.core import geo_views
+
+    (fine,) = upload_levels(engine, points_csv, geo="auto@7")
+    ds = fine["dataset_id"]
+    proj = dict(geo_views._projection(engine.ws, engine.graph(), ds))
+    proj["per_cell"] = np.zeros_like(proj["per_cell"])
+    with mock.patch.object(geo_views, "_projection", return_value=proj):
+        window = engine.geo_window(ds, "-180,-90,180,90")
+    assert window["themes"] == [] and window["insights"] == 0 and window["points"] == 0 and window["cells"] == len(proj["per_cell"])
+
+
 def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     """``west > east`` is a view across ±180°: the cells on both sides of it, and none elsewhere; a bbox out of range
     is refused."""

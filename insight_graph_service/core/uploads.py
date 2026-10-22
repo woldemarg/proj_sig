@@ -107,7 +107,7 @@ def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: boo
             warnings.append(f"glossary: no row holds {absent}; kept")
     if doc := kept.get("metadata_doc"):
         if missing := unknown(doc["columns"]):
-            warnings.append(f"metadata: {len(missing)} documented columns not in the dataset, left out: {missing}")
+            warnings.append(f"metadata: {len(missing)} documented columns not among this level's, left out: {missing}")
             kept["metadata_doc"] = {**doc, "columns": {k: v for k, v in doc["columns"].items() if k not in missing}}
     return kept, warnings
 

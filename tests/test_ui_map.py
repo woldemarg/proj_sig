@@ -279,6 +279,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.evaluate(f"{labels}.length === 6 && {labels}.every((s) => s.querySelector('.term[title]'))")
         assert "непорожн" in page.inner_text("#map-card .mc-note")  # n_eff read out: the cells it counts
         assert "(згладжено)" in page.get_attribute(f"#map-window .mw-i[data-pid='{chained}'] b", "title")
+        assert page.inner_text(f"#map-window .mw-i[data-pid='{chained}'] em") == words["headline"]  # the row's clause, in the reading's words
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)
         assert page.inner_text("#inspector .lead") == words["what"]

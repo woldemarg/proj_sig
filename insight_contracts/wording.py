@@ -234,8 +234,9 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
 
 def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool, bands: Mapping[str, int]) -> str:
     """One ``attribute = value`` in words: the glossary's phrase for the pair (a cell's mode column reads its source
-    column's pair), a cell's neighbourhood class or band (named by its counter, but the events'), a quantile band 'у i-й
-    з k смуг' (``bands``: band column -> k), else ``<column words> = <value>`` with the value as written."""
+    column's pair), a cell's neighbourhood class or band (named by its counter), a quantile band 'у i-й з k смуг'
+    (``bands``: band column -> k), a blank ('missing', the ingestion's sentinel) 'не вказано', else
+    ``<column words> = <value>`` with the value as written."""
     attribute, value = condition.attribute, condition.value
     pair = f"{attribute.removesuffix('_mode')}={value}" if geo and attribute.endswith("_mode") else condition.expr
     if phrase := glossary.get(condition.expr) or glossary.get(pair):
@@ -244,14 +245,25 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
         return LISA[value]
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
         counter = attribute.removeprefix("neighbours_").removesuffix("_band")
-        return f"сусідні комірки {QUARTERS[value]}" + (f" ({column_words(counter, glossary, geo)})" if counter != "points" else "")
+        return f"сусідні комірки {QUARTERS[value]} ({column_words(counter, glossary, geo)})"  # a cell has one band per counter
     words = column_words(attribute.removesuffix("_band"), glossary, geo)
     if attribute.endswith("_band") and value[:1] == "q" and value[1:].isdigit():
         i, k = int(value[1:]), bands.get(attribute)
         ordinal = _ORDINAL[i - 1] if i <= len(_ORDINAL) else f"{i}-й"
         where = f"{ordinal} чверті" if k == 4 else f"{ordinal} з {k} смуг" if k else f"смузі {i}"
         return f"{words} у {where} (від найменших значень)"
-    return f"{words} = {value}"
+    return f"{words} не вказано" if value == "missing" else f"{words} = {value}"
+
+
+def short_conditions(ins: Insight, glossary: Mapping[str, str], bands: Mapping[str, int]) -> list[str]:
+    """Each condition in the fewest words, for a list row: its value where it reads ``<column> = <value>``, else its
+    phrase (a cell's class or band, a declared pair, a blank), which a code alone would not say."""
+    geo = bool(ins.provenance.get("spatial"))
+    out = []
+    for c in ins.conditions:
+        words = condition_words(c, glossary, geo, bands)
+        out.append(c.value if words.endswith(f" = {c.value}") else words)
+    return out
 
 
 def shift_words(z: float) -> str:
@@ -260,34 +272,42 @@ def shift_words(z: float) -> str:
     return f"{_DEGREE[magnitude_word(round(z, 2))]} {'вище' if z > 0 else 'нижче'}"
 
 
+def _shift_head(s: Shift, glossary: Mapping[str, str], geo: bool) -> str:
+    return f"{column_words(s.metric, glossary, geo)}: {shift_words(s.robust_z)}"
+
+
 def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str:
     overall = " загалом" if first else ""
-    return (
-        f"{column_words(s.metric, glossary, geo)}: {shift_words(s.robust_z)}, "
-        f"медіана {format_value(s.local_median)} проти {format_value(s.global_median)}{overall} ({s.robust_z:+.2f} sd)"
-    )
+    return f"{_shift_head(s, glossary, geo)}, медіана {format_value(s.local_median)} проти {format_value(s.global_median)}{overall} ({s.robust_z:+.2f} sd)"
+
+
+def _covariance_head(cov: Mapping[str, Any], glossary: Mapping[str, str], geo: bool) -> str:
+    word, _ = covariance_change(cov)
+    a, b = (column_words(c, glossary, geo) for c in sorted(cov["pair"]))
+    return f"зв'язок метрик {a} і {b} {_COVARIANCE[word]}"
 
 
 def covariance_words(cov: Mapping[str, Any], glossary: Mapping[str, str], geo: bool) -> str:
     """'зв'язок метрик a і b слабшає: кореляція +0.88 загалом → +0.73 тут' (the predicates of ``text.covariance_change``)."""
-    word, _ = covariance_change(cov)
-    a, b = (column_words(c, glossary, geo) for c in sorted(cov["pair"]))
-    return f"зв'язок метрик {a} і {b} {_COVARIANCE[word]}: кореляція {cov['global_corr']:+.2f} загалом → {cov['local_corr']:+.2f} тут"
+    return f"{_covariance_head(cov, glossary, geo)}: кореляція {cov['global_corr']:+.2f} загалом → {cov['local_corr']:+.2f} тут"
 
 
 def reading(
     ins: Insight, thresholds: PhenomenonThresholds, glossary: Mapping[str, str] | None = None, bands: Mapping[str, int] | None = None
 ) -> dict[str, str]:
     """An insight in words: ``where`` its conditions joined by 'і', ``what`` the target's shift and the next material one
-    (at most two, as the evidence lists them) or the correlation change. ``glossary`` is the dataset's declared one
-    (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already
+    (at most two, as the evidence lists them) or the correlation change, ``headline`` the first clause of ``what`` (the
+    target and its degree, or the correlation change), which a list row shows. ``glossary`` is the dataset's declared
+    one (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already
     prints ``what`` alone; ``sentence`` joins the two."""
     glossary, geo = glossary or {}, bool(ins.provenance.get("spatial"))
     if ins.phenomenon_type == "covariance":
-        what = covariance_words(ins.covariance, glossary, geo)
+        headline, what = _covariance_head(ins.covariance, glossary, geo), covariance_words(ins.covariance, glossary, geo)
     else:
-        what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(thresholds.phenomenon_shifts(ins)[:2]))
-    return {"where": " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions), "what": what}
+        shifts = thresholds.phenomenon_shifts(ins)[:2]
+        headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
+        what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts))
+    return {"where": " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions), "what": what, "headline": headline}
 
 
 def sentence(words: Mapping[str, str]) -> str:
@@ -295,18 +315,23 @@ def sentence(words: Mapping[str, str]) -> str:
     return f"Де {words['where']} — {words['what']}"
 
 
-def theme_reading(props: Mapping[str, Any]) -> str:
+def theme_reading(props: Mapping[str, Any], glossary: Mapping[str, str] | None = None) -> str:
     """A theme in one sentence from its Attractor props: its two strongest signature entries, its insights and scopes
-    (docs/05_latent_anchors.md §5.8)."""
+    (docs/05_latent_anchors.md §5.8); ``glossary`` the declared one of its insights' datasets (``graph.theme_glossary``),
+    so its metrics read in the uploader's words (a signature label is a humanised column name)."""
     n_patterns, distinct_scopes, parts = props["n_patterns"], props["distinct_scopes"], []
+
+    def words(label: str) -> str:
+        return column_words(label.replace(" ", "_"), glossary or {}, False)
+
     for entry in props["signature"][:2]:
         label, up = entry["component"], entry["value"] > 0
         if label.startswith("correlation between "):
             # ponytail: a column name holding " and " splits at its first one
-            pair = label.removeprefix("correlation between ").replace(" and ", " і ", 1)
-            parts.append(f"зв'язок метрик {pair} {'сильнішає' if up else 'слабшає'}")
+            a, _, b = label.removeprefix("correlation between ").partition(" and ")
+            parts.append(f"зв'язок метрик {words(a)} і {words(b)} {'сильнішає' if up else 'слабшає'}")
         else:
-            parts.append(f"{label} {'вище' if up else 'нижче'}")
+            parts.append(f"{words(label)} {'вище' if up else 'нижче'}")
     found = f"{n_patterns} {plural(n_patterns, 'інсайт', 'інсайти', 'інсайтів')} у {distinct_scopes} "
     found += plural(distinct_scopes, "частині", "частинах", "частинах") + " даних"
     return f"Повторювана картина: {', '.join(parts)} — {found}." if parts else f"Тема без інсайтів: {found}."

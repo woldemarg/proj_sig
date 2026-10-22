@@ -96,6 +96,15 @@ def test_dense_gate_accepts_translations_and_rejects_case():
     assert ("region", "US") not in ask("tell us about margins").conditions  # the acronym literal needs an upper-case span
 
 
+def test_a_declared_name_grounds_the_metric():
+    """A metric's declared name (the dataset's glossary, docs/02 §2.1) is a catalog literal: a question in the
+    uploader's words grounds onto the metric by its characters, with no embedding of the word."""
+    dataset = {"id": "DS:ds1", "kind": "Dataset", "label": "ds1", "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржинальність"}}}
+    p = grounded(toy_graph([dataset]))("Де маржинальність нижча?")
+    assert p.targets == ["margin"] and p.direction == -1
+    assert [(x["span"], x["literal"], x["layer"]) for x in p.grounding] == [("маржинальність", "маржинальність", "chars")]  # the literal as declared
+
+
 def test_hub_and_ambiguity_are_rejected():
     ask = grounded(toy_graph([pattern("P5", ["region=hub"])]))
     p = ask("Що обидва?")  # "обидва" is equidistant to margin and phones: Lowe's ratio rejects it

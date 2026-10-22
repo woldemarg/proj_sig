@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
-from graph_query_engine.graph import insight_reading, primary_anchor
+from graph_query_engine.graph import insight_reading, primary_anchor, theme_glossary
 from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, PhenomenonThresholds, attractor_id_of, dataset_node_id, wording
 from insight_contracts.text import humanize
@@ -167,7 +167,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         out["picture"] = picture(graph, node_id)
         out["reading"] = {"what": wording.region_reading(out["picture"])}
     elif node["kind"] == "Attractor":
-        out["reading"] = {"what": wording.theme_reading(node["props"])}
+        out["reading"] = {"what": wording.theme_reading(node["props"], theme_glossary(graph, node_id))}
     return out
 
 
@@ -197,11 +197,11 @@ def _pattern_hover(ins: Insight, reading: dict[str, str], theme: str) -> str:
     )
 
 
-def _attractor_hover(node: dict[str, Any]) -> str:
+def _attractor_hover(graph: DualGraph, node: dict[str, Any]) -> str:
     p = node["props"]
     return (
         f"<b>{wording.name('theme')}</b> {node['id']}<br><b>{escape(node['label'])}</b><br>"
-        f"{escape(wording.theme_reading(p))}<br>"
+        f"{escape(wording.theme_reading(p, theme_glossary(graph, node['id'])))}<br>"
         f"<b>{wording.name('mass')}:</b> {p['mass']} · <b>{wording.name('evidence_mass')}</b> {p['evidence_mass']:.2f}<br>"
         f"<b>колонки:</b> {escape(', '.join(p['dimensions']))}"
     )
@@ -244,7 +244,13 @@ def sphere_points(state: CommittedState, seed: int, thresholds: PhenomenonThresh
     for a, xyz in zip(anchors, coords[len(pats) :]):
         node = g.nodes[a]
         points.append(
-            {"id": a, "kind": "Attractor", "n_patterns": node["props"]["n_patterns"], "xyz": xyz.round(5).tolist(), "hover": _attractor_hover(node)}
+            {
+                "id": a,
+                "kind": "Attractor",
+                "n_patterns": node["props"]["n_patterns"],
+                "xyz": xyz.round(5).tolist(),
+                "hover": _attractor_hover(g, node),
+            }
         )
     placed = drawn | set(anchors)  # between placed nodes run only lattice, membership and anchor-anchor edges
     edges = [

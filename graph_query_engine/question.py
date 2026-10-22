@@ -133,8 +133,9 @@ def build_catalog(graph: DualGraph, embedder: Embedder, known: dict[str, np.ndar
         return None
     texts, types, symbols, case = [], [], [], []
     metrics, values = _vocabulary(graph)
+    declared = [n["props"].get("user_glossary", {}) for n in graph.of_kind("Dataset")]  # a metric's declared name grounds it too
     for name in metrics:
-        for text in dict.fromkeys((name, humanize(name))):  # raw and humanised form (once when equal)
+        for text in dict.fromkeys((name, humanize(name), *(g[name] for g in declared if name in g))):  # raw, humanised, declared (once when equal)
             texts.append(text), types.append("metric"), symbols.append(name), case.append(False)
     for value, attrs in sorted(values.items()):
         texts.append(value), types.append("condition"), symbols.append(attrs), case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
