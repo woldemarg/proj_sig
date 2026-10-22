@@ -442,10 +442,10 @@ function renderCard(p, item, pts) {
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
       ? [["де знайдено", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
-      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 0)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
-    (item ? `<div class="mc-path">${esc(word(`role_${item.role}`))}</div>` : "");
+    (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }
 
@@ -511,7 +511,7 @@ function renderWindow() {
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;

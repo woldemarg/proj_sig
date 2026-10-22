@@ -103,6 +103,15 @@ def test_a_geo_reading_uses_ukrainian_cell_words_and_the_declared_source_column(
     four = toy_insight([("income_band", "q3")], [Shift("points", 0.9, 30, 12, 9)])
     assert w.reading(four, PhenomenonThresholds(), bands={"income_band": 4})["where"] == "income у третій чверті (від найменших значень)"
     assert w.reading(four, PhenomenonThresholds())["what"].startswith("points: слабко вище")  # a table's column is no cell column
+    assert w.source_column("neighbours_t_active_days_band", {"t"}) == "t" and w.source_column("neighbours_points", {"t"}) is None  # a counter's lag
+    days = toy_insight(
+        [("neighbours_t_active_days_band", "q4"), ("kind_mode", "INLAND")],
+        [Shift("points", 0.9, 30, 12, 9)],
+        provenance={"spatial": {"resolution": 7}},
+    )
+    assert w.reading(days, PhenomenonThresholds(), {"kind=INLAND": "вглиб материка"})["where"] == (
+        "сусідні комірки серед найжвавіших (верхня чверть) (кількість днів з подіями в комірці (t)) і вглиб материка"
+    )  # another counter's band names it; a cell's mode column reads the declared pair of its source column
 
 
 def test_a_covariance_insight_reads_as_its_correlation_change():
@@ -182,6 +191,8 @@ def test_test_numbers_read_as_the_method_gives_them():
     }
     solid = numbers(1e-3, {"cells": 400, "n_eff": 300 * effective_n_factor(0.995), "moran_i": 0.995})
     assert "≈300 непорожніх комірок" in solid["n_eff"]  # the clip at 0.99, as effective_n_factor's
+    dense = numbers(1e-3, {"cells": 34, "n_eff": 2.8, "moran_i": 0.85})  # the rounded n_eff gives back 35 cells: never more than the extent's
+    assert "≈34 непорожні комірки" in dense["n_eff"]
     assert numbers(0.2) == {"p_adjusted": "0.20"} and numbers(None)["p_adjusted"].startswith("не перевірялося")
 
 

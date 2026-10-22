@@ -668,33 +668,63 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
 
 
 def test_reword_matches_whole_names_and_a_band_says_its_place():
-    """One pass over the merged glossary, the declared phrase over the derived one: a short name never rewrites a longer
-    name the evidence uses nor part of a word, a name is rewritten wherever it stands (a relationship's pair too), and a
-    quantile band's value keeps its literal with its place among its own dataset's bands (a quarter of four)."""
+    """One pass over each dataset's own glossary, the declared phrase over the derived one: a short name never rewrites a
+    longer name the evidence uses nor part of a word, a name is rewritten wherever it stands (a relationship's pair too),
+    a quantile band's value keeps its literal with its place among its own dataset's bands (a quarter of four), a declared
+    source column reads onto the cell columns derived from it and a declared pair onto the cell's mode column, and one
+    dataset's glossary never rewords another's lines."""
     from types import SimpleNamespace
 
     from graph_query_engine.evidence import Evidence
 
     ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets and the names the items use
     ev.items = [
-        SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "return_rate"}], "covariance": {"pair": ["points", "rate"]}})
+        SimpleNamespace(
+            scope=["price_band=q2", "kind_mode=INLAND"],
+            statistics={"shifts": [{"metric": "return_rate"}], "covariance": {"pair": ["points", "rate"]}},
+            provenance={"dataset_id": "d"},
+        ),
+        SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "rate"}], "covariance": {}}, provenance={"dataset_id": "e"}),
     ]
     ev.datasets = [
         {
             "dataset_id": "d",
-            "glossary": {"points": "number of events in the map cell"},
-            "user_glossary": {"points": "кількість викликів", "rate": "ставка", "price_band": "ціна"},
+            "glossary": {
+                "points": "number of events in the map cell",
+                "share_kind_INLAND": "share of the cell's events whose kind is INLAND",
+                "kind_mode": "the most frequent kind among the cell's events",
+                "neighbours_points_band": "how busy the six surrounding cells are",
+            },
+            "user_glossary": {
+                "points": "кількість викликів",
+                "rate": "ставка",
+                "price_band": "ціна",
+                "kind": "близькість до океану",
+                "kind=INLAND": "вглиб материка",
+            },
             "bands": {"price_band": 5, "qty_band": 4},
         },
         {"dataset_id": "e", "bands": {"price_band": 4}},
     ]
-    assert ev.reword("return rate +1.20 sd; rate +0.50 sd; separate; points -0.70 sd") == (
+    assert ev.reword("return rate +1.20 sd; rate +0.50 sd; separate; points -0.70 sd", "d") == (
         "return rate +1.20 sd; ставка +0.50 sd; separate; кількість викликів -0.70 sd"
     )
-    assert ev.reword("correlation between points and rate weakens") == "correlation between кількість викликів and ставка weakens"
+    assert ev.reword("correlation between points and rate weakens", "d") == "correlation between кількість викликів and ставка weakens"
+    assert ev.reword("rate +0.50 sd", "e") == "rate +0.50 sd"  # the other dataset's glossary leaves it
+    assert (
+        ev.reword("share kind INLAND +1.00 sd", "d") == "частка подій комірки, де близькість до океану — INLAND +1.00 sd"
+    )  # the declared source column
+    assert ev.reword("neighbours points band", "d") == "how busy the six surrounding cells are"  # a band column keeps its derived phrase
     assert (
         ev.reword_condition("price_band=q2", "d") == "ціна is q2 (band 2 of 5)"
-        and ev.reword_condition("price_band=q2", "e") == "ціна is q2 (quarter 2 of 4)"
+        and ev.reword_condition("price_band=q2", "e") == "price band is q2 (quarter 2 of 4)"
     )
     assert ev.reword_condition("qty_band=q3", "d") == "qty band is q3 (quarter 3 of 4)"
-    assert ev.reword_condition("region=US", "d") == "region is US"
+    assert ev.reword_condition("region=US", "d") == "region is US" and ev.reword_condition("kind_mode=INLAND", "d") == "вглиб материка"
+    assert ev.plain_language() == [
+        ("price_band", "ціна"),
+        ("kind_mode", "близькість до океану (найчастіше серед подій комірки)"),
+        ("points", "кількість викликів"),
+        ("rate", "ставка"),
+        ("kind_mode=INLAND", "вглиб материка"),
+    ]  # each item's names in its own dataset's words: the second dataset declares nothing

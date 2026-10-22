@@ -107,10 +107,18 @@ def _section(prompt: str, head: str) -> str:
 
 def _literals(prompt: str) -> set[str]:
     """The words a prompt holds as data, which rule 9 asks to copy, lower-cased: its scopes' values and its baselines'
-    metric names. A PLAIN LANGUAGE phrase is no literal: rule 10 asks to retell it, so its analyst words count."""
-    values = [part.split(" is ")[-1] for scope in re.findall(r"[|] scope: (.*?) [|] support", prompt) for part in scope.split("; ")]
-    lines = _section(prompt, "METRIC BASELINES").splitlines()
-    values += [line[2:].split(": median")[0].split(" (")[0] for line in lines if line.startswith("- ")]
+    metric names. A PLAIN LANGUAGE phrase is no literal: rule 10 asks to retell it, so its analyst words count — a scope
+    condition a pair's phrase replaced (no " is "), a band's place after its value and a baseline reworded to a meaning."""
+    plain = {ln[2:].lower() for ln in _section(prompt, "PLAIN LANGUAGE (").splitlines() if ln.startswith("- ")}
+    values = [
+        re.sub(r"^q\d+ \((?:quarter|band) \d+ of \d+\)$", "", part.partition(" is ")[2])
+        for scope in re.findall(r"[|] scope: (.*?) [|] support", prompt)
+        for part in scope.split("; ")
+        if " is " in part
+    ]
+    for line in _section(prompt, "METRIC BASELINES").splitlines():
+        if line.startswith("- ") and (name := line[2:].split(": median")[0]).lower() not in plain:
+            values.append(name.split(" (")[0])
     return {w.lower() for w in re.findall(r"\w+", " ".join(values))}
 
 

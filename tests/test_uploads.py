@@ -148,7 +148,8 @@ def test_a_geo_level_reads_a_declared_source_column_and_keeps_the_derived_phrase
     graph, thresholds = engine.graph(), engine.settings.thresholds
     words = " ".join(f"{r['where']} {r['what']}" for r in (node_details(graph, n["id"], thresholds)["reading"] for n in graph.of_kind("Pattern")))
     assert "частка подій комірки, де канал звернення — phone" in words
-    assert "PLAIN LANGUAGE (rows are map cells" in engine.evidence("Where is the phone channel more common?").evidence_prompt
+    prompt = engine.evidence("Where is the phone channel more common?").evidence_prompt
+    assert "PLAIN LANGUAGE (rows are map cells" in prompt and "канал звернення" in prompt  # the declared source column, on the cell columns
     (offered,) = geo_datasets(engine.ws)
     assert offered["glossary"]["points"] == "number of events in the map cell"  # the map's suggestions read the derived phrases
     assert graph.nodes[dataset_node_id(fine["dataset_id"])]["props"]["user_glossary"] == json.loads(glossary)

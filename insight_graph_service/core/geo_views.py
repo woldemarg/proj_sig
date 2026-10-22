@@ -491,8 +491,8 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
                     "points": x,
                     "share": round(x / mine, 3),
                     "cells": int(view[p.events].sum()),
-                    "lift": round(lift, 2),
-                    "lift_words": wording.lift_words("window", lift),
+                    "lift": round(lift, 1),  # rounded once: the badge shows it and its words read it
+                    "lift_words": wording.lift_words("window", round(lift, 1)),
                     "also": [{"id": q, "level": proj["patterns"][q].level} for q in hosts.get(pid, [])],
                 },
             )

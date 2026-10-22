@@ -530,6 +530,50 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         assert not errors, errors
 
 
+@pytest.mark.browser
+def test_an_item_reached_by_location_alone_says_so(cfg, demo_csv):
+    """An item the walk reached last over a CO_LOCATED link of the same area, with no condition in common with the
+    question (``located``), is "лише за місцем" on its evidence card and on the map card, whatever its role, never
+    "пов'язана знахідка"; one that shares a condition keeps its role."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    port, app = stack(engine)
+    item = {
+        "key": "P2", "pattern_id": "P-x", "role": "structural", "located": "same_region", "transversal_only": False, "scope": [], "also": [],
+        "scale": "insufficient", "trust": "", "reading": {"where": "де", "what": "що"}, "provenance": {"dataset_id": "ds"},
+        "path": [{"source": "P-seed", "edge_type": "CO_LOCATED", "reverse": False, "weight": 0.5, "target": "P-x"}],
+        "statistics": {"support": 10, "weight": 0.5, "shifts": [], "covariance": {}, "drivers": []},
+    }  # fmt: skip
+    qa = {"answer": "", "answer_mode": "fallback", "llm": {}, "citations": {}, "prompt": "", "provenance_footer": "", "metrics": {}}
+    card = {
+        "reading": item["reading"],
+        "phenomenon_type": "shift",
+        "effect_size": 1.0,
+        "rows": [],
+        "spatial": {},
+        "support": 10,
+        "weight": 0.5,
+        "numbers": {},
+    }
+    turn = lambda it: {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [it]}, "traversal": {}}}}  # noqa: E731
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page()
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof botCard === 'function' && typeof renderCard === 'function'", timeout=20000)
+        text = "(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }"  # the card as read, apostrophes unescaped
+        for role in ("structural", "transversal"):
+            card_text = page.evaluate(text, turn({**item, "role": role}))
+            assert name("located") in card_text and name("role_structural") not in card_text and name("role_transversal") not in card_text
+        page.evaluate("(a) => renderCard(a.card, a.item, null)", {"card": card, "item": item})
+        assert page.text_content("#map-card .mc-path") == name("located")
+        card_text = page.evaluate(text, turn({**item, "located": ""}))
+        assert name("role_structural") in card_text and name("located") not in card_text
+
+
 def test_the_console_knows_the_empty_level_codes():
     """The rail's neutral card reads ``uploads.EMPTY_LEVEL``, copied into ``datasets.js``: the two stay one set."""
     from insight_graph_service.core.uploads import EMPTY_LEVEL

@@ -100,6 +100,17 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
     assert jargon("Медіана вища на 2 sd у q2; підгрупа США, Sd. median_income", prompt) == {"sd": 2, "медіан": 1, "підгруп": 1}
     declared = chr(10).join([*lines, "", "PLAIN LANGUAGE (column and category meanings declared for this dataset):", "- медіанний дохід"])
     assert jargon("Медіанного доходу більше на 2 sd", declared) == {"sd": 1}  # the uploader's own word is the answer's to keep
+    phrased = [  # a pair's phrase on a scope line, a band's place and a baseline reworded to a meaning: phrases to retell, not literals
+        "[P1] role=seed | scope: a hot spot in the first quartile; income band is q2 (quarter 2 of 4) | support 10 rows",
+        "",
+        "METRIC BASELINES (whole dataset):",
+        "- median score of the subgroup: median 3",
+        "",
+        "PLAIN LANGUAGE (column and category meanings declared for this dataset):",
+        "- a hot spot in the first quartile",
+        "- median score of the subgroup",
+    ]
+    assert jargon("У q2 та quartile: median subgroup", chr(10).join(phrased)) == {"median": 1, "quartile": 1, "q2": 1, "subgroup": 1}
 
 
 def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):

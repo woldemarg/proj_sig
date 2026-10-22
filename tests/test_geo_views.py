@@ -47,7 +47,9 @@ def test_the_window_lists_what_is_characteristic_of_the_view(engine, tmp_path):
     mine = mine[mine >= 0]
     x, here = int((lon[mine] <= split).sum()), int((lon[located] <= split).sum())
     expected = len(mine) * here / len(located)
-    assert listed[pid]["points"] == x >= link_min_events(len(mine)) and listed[pid]["lift"] == round((x + 30) / (expected + 30), 2)  # a = 30
+    assert listed[pid]["points"] == x >= link_min_events(len(mine)) and listed[pid]["lift"] == round(
+        (x + 30) / (expected + 30), 1
+    )  # a = 30; one decimal, as its words read it
     counts = np.bincount(located, minlength=len(geo["cells"]))
     quietest = np.flatnonzero(counts == counts[counts > 0].min())[0]  # one cell's view: fewer events than any insight needs
     w, s = cell_centres(geo["cells"][[quietest]])[0] - 1e-6
