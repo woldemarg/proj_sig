@@ -103,7 +103,7 @@ function botCard(turn) {
   ].filter(Boolean);
   return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
     `<div class="bot-meta">${meta}</div>${understood}` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-expanded="${String(i) === turn.pane}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}"${String(i) === turn.pane ? "" : " hidden"}>${body}</div>`).join("") +
     `</div>`;
 }
@@ -188,7 +188,7 @@ function toggleTab(tab) {
   /* an answer's panel tab: opens its pane, or closes it when it is the open one */
   const box = tab.closest(".msg-bot"), open = !tab.classList.contains("active");
   turnOf(tab).pane = open ? tab.dataset.pane : null;  // on the turn: the thread's next render keeps it open
-  box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-expanded", String(open && t === tab)); t.setAttribute("aria-selected", String(open && t === tab)); });
+  box.querySelectorAll(".bot-tabs button").forEach((t) => { t.classList.toggle("active", open && t === tab); t.setAttribute("aria-selected", String(open && t === tab)); });
   box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
 }
 

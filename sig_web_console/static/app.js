@@ -83,8 +83,9 @@ function insightLead(p, tail = "") {
     : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
 }
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
-const KEYED = "#thread .ev, .nb, tr[data-id], .pp-ins, a.cite, a.ic-theme, .ds.clickable";  // clickable without being buttons: tabindex 0
-const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;  // no camera flights or pulses then
+const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
+const MOTION = matchMedia("(prefers-reduced-motion: reduce)");
+const calm = () => MOTION.matches;  // no camera flights or pulses then
 const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}" tabindex="0" role="button"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
 const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
 
@@ -256,7 +257,8 @@ function init() {
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
-    if ((e.key === "Enter" || e.key === " ") && e.target.matches(KEYED)) { e.preventDefault(); e.target.click(); }
+    if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
+    e.preventDefault(); e.target.click();
   });
   document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;

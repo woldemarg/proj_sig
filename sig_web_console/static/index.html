@@ -153,10 +153,12 @@
           <div class="mw-head"><span class="hud-tag">IN VIEW</span><span class="mw-meta" id="mw-meta"></span><button type="button" class="mc-x" id="mw-fold" aria-label="Fold the list">–</button></div>
           <div class="mw-body" id="mw-body"></div>
         </div>
-        <div class="map-zone" id="map-zone" hidden title="Shift-click cells to add or remove them"><span id="map-zone-n"></span><button type="button" id="map-zone-ask">ASK</button><button type="button" id="map-zone-clear" aria-label="Clear the zone">✕</button></div>
-        <div class="map-card" id="map-card" hidden>
-          <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Close">×</button></div>
-          <div id="map-card-body"></div>
+        <div class="map-bottom">  <!-- the zone bar above the insight card: one stack, never overlapping -->
+          <div class="map-zone" id="map-zone" hidden title="Shift-click cells to add or remove them"><span id="map-zone-n"></span><button type="button" id="map-zone-ask">ASK</button><button type="button" id="map-zone-clear" aria-label="Clear the zone">✕</button></div>
+          <div class="map-card" id="map-card" hidden>
+            <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Close">×</button></div>
+            <div id="map-card-body"></div>
+          </div>
         </div>
         <div class="map-cursor mono" id="map-cursor"></div>
       </div>
@@ -168,8 +170,8 @@
         </div>
         <table class="ins" id="ins-table">
           <thead><tr>
-            <th data-k="scope">Where</th><th data-k="target">Metric</th><th data-k="effect" class="num">Effect</th>
-            <th data-k="support" class="num">Rows</th><th data-k="weight" class="num sorted">Evidence</th><th data-k="anchor_label">Theme</th>
+            <th tabindex="0" data-k="scope">Where</th><th tabindex="0" data-k="target">Metric</th><th tabindex="0" data-k="effect" class="num">Effect</th>
+            <th tabindex="0" data-k="support" class="num">Rows</th><th tabindex="0" data-k="weight" class="num sorted">Evidence</th><th tabindex="0" data-k="anchor_label">Theme</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -185,7 +187,7 @@
 
       <aside class="float drawer" id="drawer" hidden aria-label="Details">
         <div class="drawer-head">
-          <div style="flex:1;min-width:0"><div class="kind" id="drawer-kind"></div><h3 id="drawer-title"></h3></div>
+          <div style="flex:1;min-width:0"><div class="kind" id="drawer-kind"></div><h3 id="drawer-title" tabindex="-1"></h3></div>
           <button class="icon-btn" id="drawer-close" aria-label="Close details">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>

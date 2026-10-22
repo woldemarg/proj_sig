@@ -38,8 +38,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
     (busy ? `disabled title="A batch is running: a deletion is refused until processing ends">` : `title="Remove this dataset and its insights from the knowledge base">`) +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Delete</button></div>`;
-  return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}"${b.status === "READY" ? ` tabindex="0" role="button" aria-pressed="${active}"` : ""}>` +
-    `<div class="ds-head"><span class="ds-name" title="${esc(name)}">${esc(name)}</span>${status}</div>` +
+  return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
+    `<div class="ds-head">${b.status === "READY" ? `<button type="button" class="ds-name ds-pick" title="${esc(name)}" aria-pressed="${active}">${esc(name)}</button>` : `<span class="ds-name" title="${esc(name)}">${esc(name)}</span>`}${status}</div>` +
     `<div class="ds-sub">${esc(when)}</div>` +
     datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
     `${body}${del}</div>`;
@@ -99,9 +99,10 @@ function renderRail(html) {
   const box = $("batches"), next = document.createElement("div");
   next.innerHTML = html;
   tick(box); tick(next);  // the same clock on both sides: a running card's time is no change
-  const fresh = [...next.children];
+  const fresh = [...next.children], picked = box.contains(document.activeElement) && document.activeElement.closest(".ds")?.dataset.ds;
   if (box.children.length !== fresh.length) box.replaceChildren(...fresh);
   else [...box.children].forEach((el, i) => swapChanged(el, fresh[i]));
+  if (picked && !box.contains(document.activeElement)) box.querySelector(`.ds[data-ds="${CSS.escape(picked)}"] .ds-pick`)?.focus();  // a replaced card keeps the focus
 }
 
 async function refreshBatches() {

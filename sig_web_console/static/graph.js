@@ -521,6 +521,7 @@ const CONNECTIONS = { "ACTIVATES": "Belongs to theme", "ACTIVATES (in)": "Member
 const NODE_KINDS = { Pattern: "Insight", Attractor: "Theme · latent anchor", Dimension: "Grouping column", Metric: "Metric", Dataset: "Dataset", Batch: "Batch", Region: "Map region" };
 
 async function inspect(id, note = "") {
+  const within = $("drawer").contains(document.activeElement);  // a drawer row followed: the focus stays in the drawer
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
@@ -578,5 +579,6 @@ async function inspect(id, note = "") {
   $("inspector").innerHTML = html;
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));
   $("drawer").hidden = false;
+  if (within) $("drawer-title").focus();
   if (S.cy) { S.cy.$(":selected").unselect(); S.cy.getElementById(id).select(); }
 }
