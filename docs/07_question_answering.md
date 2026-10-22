@@ -207,6 +207,7 @@ Retrieval and the answer run in two services. In the graph service, `Engine.sear
 - a 409 is passed on as sent (`{detail, code}`);
 - a graph service that does not answer within `INSIGHT_GRAPH_TIMEOUT_S` is a 504, which the console shows as *No answer in time* ([8.2](08_interface.md#82-the-single-page-ui));
 - an unreachable graph service, any other status or a payload that breaks the contract is a 502;
+- a question whose client has left by the time the evidence arrives (the console's *Cancel*, *New chat* or its time limit, a closed tab: `request.is_disconnected()`) gets an empty 499, with no LLM call and no line in the query log;
 - otherwise it answers with `narration.answer(payload, llm)`, where `llm` is `None` when `use_llm` is false.
 
 The answer reads only the payload: the model or the evidence-only summary, the citation check against the manifest, the footer; `view` goes to the console untouched. Every answer on a non-empty graph is logged as one JSON line on the logger `evidence_narrator_service.queries`: `at`, `question`, `mode`, `metrics`, `evidence` (the pattern ids of the manifest) and `citations`. `GET /api/chat/health` always answers 200 with the LLM status (`health()`, below) and whether the graph service's `GET /api/health` answers within 2 s. The narrator reaches the graph service at `INSIGHT_GRAPH_URL` with `INSIGHT_GRAPH_TIMEOUT_S` (600 s) and a 5 s connect timeout.

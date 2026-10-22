@@ -11,7 +11,7 @@ import logging
 import time
 
 import pytest
-from conftest import serve
+from conftest import FakeLLM, serve
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -94,6 +94,41 @@ def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):
     with serve(stub) as graph_url, TestClient(create_app(NarratorSettings(insight_graph_url=graph_url, insight_graph_timeout_s=0.2))) as client:
         late = client.post("/api/chat/query", json={"question": QUESTION})
         assert late.status_code == 504 and late.json()["detail"] == "graph service did not answer within 0.2 s"
+
+
+def test_a_question_whose_console_is_gone_calls_no_llm(recorded, caplog):
+    """A question whose client left while the graph searched (Cancel, New chat, a closed tab) gets an empty 499: no LLM
+    call and no query log line; the same question with its client still there is the model's answer, logged."""
+    import asyncio
+
+    llm = FakeLLM()
+    body = json.dumps({"question": QUESTION}).encode()
+    with serve(graph_stub({QUESTION: (200, recorded)})) as graph_url:
+        app = create_app(NarratorSettings(insight_graph_url=graph_url), llm=llm)
+
+        def ask(gone: bool) -> int:
+            inbox, sent = [{"type": "http.request", "body": body, "more_body": False}], []
+
+            async def receive() -> dict:
+                if inbox:
+                    return inbox.pop(0)
+                if gone:
+                    return {"type": "http.disconnect"}
+                await asyncio.sleep(3600)  # still waiting for its answer
+                return {}
+
+            async def send(message: dict) -> None:
+                sent.append(message)
+
+            headers = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
+            scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/api/chat/query"}
+            scope |= {"raw_path": b"/api/chat/query", "query_string": b"", "root_path": "", "headers": headers, "client": ("127.0.0.1", 1)}
+            asyncio.run(app(scope, receive, send))
+            return next(m["status"] for m in sent if m["type"] == "http.response.start")
+
+        with caplog.at_level(logging.INFO, logger="evidence_narrator_service.queries"):
+            assert ask(gone=True) == 499 and not llm.prompts and not caplog.records
+            assert ask(gone=False) == 200 and len(llm.prompts) == 1 and len(caplog.records) == 1
 
 
 def test_health_answers_without_its_dependencies():
