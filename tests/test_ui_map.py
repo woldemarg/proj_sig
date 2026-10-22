@@ -38,8 +38,8 @@ def test_the_drawer_lists_where_a_base_insight_lies(cfg):
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=60000)
         page.evaluate(f"inspect('{pid}')")
-        page.wait_for_function("[...document.querySelectorAll('#inspector h4')].some((h) => h.textContent === 'Where')", timeout=10000)
-        region = page.evaluate("[...document.querySelectorAll('#inspector h4')].find((h) => h.textContent === 'Where').nextElementSibling.dataset.id")
+        page.wait_for_function("[...document.querySelectorAll('#inspector h4')].some((h) => h.textContent === 'Де')", timeout=10000)
+        region = page.evaluate("[...document.querySelectorAll('#inspector h4')].find((h) => h.textContent === 'Де').nextElementSibling.dataset.id")
         assert region.startswith("R:") and region in {r for r, _ in graph.facts(pid).regions.items()}
         page.evaluate(f"inspect('{region}')")
         page.wait_for_function(f"$('drawer-title').textContent.includes('{region.split(':')[2]}')", timeout=10000)
@@ -106,12 +106,12 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(listing)[1] != wide[1]
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
-        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · 2 of 2 levels ready"
+        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · готово рівнів: 2 з 2"
         assert page.evaluate(
             f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
         ) == [
             "california_housing.csv · H3 r5",
-            "california_housing.csv · table",
+            "california_housing.csv · таблиця",
         ]
         engine.process(queued["batch_id"])
         page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
@@ -143,9 +143,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
         assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
         group = f".ds-group[data-upload='{fine['upload_id']}']"
-        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · 2 of 3 levels ready · 1 without findings"
+        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · готово рівнів: 2 з 3 · без знахідок: 1"
         card = page.locator(f"{group} .ds", has_text="H3 r5")
-        assert card.locator(".chip").inner_text() == "No findings" and not card.locator(".chip.bad, .ds-error").count()
+        assert card.locator(".chip").inner_text() == "Без знахідок" and not card.locator(".chip.bad, .ds-error").count()
         # without a READY level the upload failed, as the backend reads it; a table level that finds nothing failed too
         level = "(lv, st, code) => ({ batch_id: lv, upload_id: 'u', filename: 'f.csv', level: lv, status: st, locator: lv === 'table' ? 'auto' : null, error: code && { code, message: code } })"
         bad = f"(cards) => (uploadGroup(cards.map((c) => ({level})(...c)), false).match(/chip bad/g) || []).length"
@@ -213,7 +213,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
 
     from graph_query_engine.graph import primary_anchor
     from graph_query_engine.vertical import scale_chain
-    from insight_contracts.wording import sentence
+    from insight_contracts.wording import name, sentence
     from insight_graph_service.server.views import node_details
 
     sync_api = pytest.importorskip("playwright.sync_api")
@@ -250,7 +250,12 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.wait_for_selector(".insight-card .nb", timeout=10000)
         card = page.locator(".msg-bot").last
         assert card.locator(".ic-theme").get_attribute("data-id") == primary_anchor(graph, chained)["target"]
-        assert any(t.startswith("↑ res 5") for t in card.locator(".insight-card .nb").all_inner_texts())
+        assert any(t.startswith("↑ рівень 5") for t in card.locator(".insight-card .nb").all_inner_texts())
+        walk = ["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "SPECIALIZES (in)", "SIBLING", "SIBLING (in)", "CO_LOCATED", "CO_LOCATED (in)"]
+        assert page.evaluate("Object.keys(WALK)") == walk and page.evaluate("Object.values(WALK)") == [
+            name(k) for k in walk
+        ]  # keys frozen, words TERMS'
+        assert all(i.startswith("P-") for i in card.locator(".insight-card .nb").evaluate_all("(ns) => ns.map((n) => n.dataset.id)"))  # insights only
         words = node_details(graph, chained, engine.settings.thresholds)["reading"]  # one reading, from the overlay: no question yet
         assert page.inner_text("#map-card .mc-scope") == words["where"] and page.inner_text("#map-card .mc-shift") == words["what"]
         assert words["what"] in card.inner_text()
@@ -276,7 +281,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
                 break
         assert graph.insight(ids[0]).dataset_id == other["dataset_id"] and page.evaluate("G.focusId") == row
         page.locator(".msg-bot").last.locator(f".insight-card .nb[data-id='{ids[0]}']").click()
-        page.wait_for_function("!$('drawer').hidden && $('inspector').textContent.includes('Not on this map')", timeout=10000)
+        page.wait_for_function("!$('drawer').hidden && $('inspector').textContent.includes('Не на цій мапі')", timeout=10000)
         assert page.evaluate("G.focusId") is None
         # a base insight asked with its place: H3 cells as the zone, AREA in the prompt, the insight in the answer
         base = next(i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if i["level"] == "table")

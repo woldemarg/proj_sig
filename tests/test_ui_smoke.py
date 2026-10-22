@@ -159,7 +159,8 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         # the answer's panels start closed; a click opens the evidence, a second click closes it; UI chrome stays English
         assert page.evaluate("document.querySelectorAll('.bot-tabs button.active').length") == 0 and page.is_hidden(".bot-pane[data-pane='0']")
         tab = ".bot-tabs button[data-pane='0']"
-        assert page.inner_text(tab).startswith("Evidence & how it was found")
+        assert page.inner_text(tab).startswith("Свідчення і як їх знайдено")
+        assert any("належить до теми" in t for t in page.locator(".ev .chain").all_inner_texts())  # a path's relations in TERMS' words
         page.click(tab)
         assert page.is_visible(".bot-pane[data-pane='0'] .ev") and page.is_hidden(".bot-pane[data-pane='1']")
         page.click(tab)
@@ -167,10 +168,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         # clicking an evidence card opens the details drawer via its citation
         page.click(".answer-box a.cite >> nth=0")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
-        assert "insight" in page.inner_text("#drawer-kind").lower()
+        assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
-        assert "Reproduced" in page.inner_text("#verify-out")
+        assert "Відтворено" in page.inner_text("#verify-out")
         assert "підтвердження" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
         labelled = "[...document.querySelectorAll('#inspector .kv')].slice(0, 2).flatMap((kv) => [...kv.querySelectorAll('dt')])"
         assert page.evaluate(f"{labelled}.length >= 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
@@ -268,30 +269,30 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         lon, lat = page.evaluate(f"centre({{geometry: {{coordinates: [{ring}]}}}})")  # a cell across ±180°: where it is
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
         page.evaluate("loadOverlay('ds-unknown')")  # an overlay that cannot be read says so, not an empty map of regions
-        assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
+        assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Регіони й довіра недоступні")
         assert not page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")  # no trust read: none of this level's insights is drawn
-        assert page.evaluate("GeoMap.offMap(G.data.patterns[0].id)").startswith("Not drawn on this map: its trust could not be read")
+        assert page.evaluate("GeoMap.offMap(G.data.patterns[0].id)").startswith("Не на цій мапі: довіру до нього не вдалося прочитати")
         page.evaluate("loadOverlay(G.ds)")
         assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
         assert page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")
         page.evaluate("loadProjected('ds-unknown')")  # the other levels that cannot be read say so, not an upload without them
-        assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Insights of other levels unavailable")
+        assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Інсайти інших рівнів недоступні")
         page.evaluate("loadProjected(G.ds)")
         assert page.is_hidden("#map-projected-error")
-        assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
+        assert page.inner_text("#map-zone-n") == "ЗОНА · 3 комірки" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         badges = "[...[...document.querySelectorAll('.msg-bot')].at(-1).querySelectorAll('.ev .role')].map((b) => b.textContent)"
-        assert {"in the asked area", "outside the asked area"} & set(page.evaluate(badges))  # each item of the zone's levels says which
+        assert {"у виділеній зоні", "поза виділеною зоною"} & set(page.evaluate(badges))  # each item of the zone's levels says which
         assert page.is_visible(".msg-bot[data-turn='0'] .bot-pane[data-pane='0'] .ev")  # the first answer's open panel survives the next
         page.fill("#question", "Де найбільше households?")  # the chat box asks about the selected zone too
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         page.evaluate("GeoMap.toggleZone('8a2a1072b59ffff')")  # a cell this map does not draw (another level, elsewhere)
-        assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
+        assert page.inner_text("#map-zone-n") == "ЗОНА · 4 комірки · на цій мапі: 3"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
         drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
@@ -304,7 +305,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         off = page.evaluate("api('/api/graph').then((g) => g.nodes.map((n) => n.data).find((d) => d.kind === 'Pattern' && !GeoMap.has(d.id)).id)")
         page.evaluate(f"reveal('{off}')")  # what a click on its citation does
         page.wait_for_function("!G.focusId && document.querySelector('#inspector .drawer-note')", timeout=10000)
-        assert page.inner_text("#inspector .drawer-note").startswith("Not on this map")
+        assert page.inner_text("#inspector .drawer-note").startswith("Не на цій мапі")
         before = page.evaluate("S.chat.length")
         page.evaluate(f"GeoMap.focusPattern('{neighbour}'); GeoMap.pick('{off}')")  # picked, as an IN VIEW row, but not drawn here
         page.wait_for_function(f"S.chat.length === {before + 1}")
@@ -389,7 +390,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               const mid = Object.keys(G.patterns).length;
               await Promise.all([a, b]); await wait(700);  // the old dataset's re-reads land after the switch
               return [mid, G.ds, G.data.features.length, Object.keys(G.patterns).length, G.loading, G.overlay.features.length, G.focusId, note]; } finally { api = orig; } }"""
-        assert page.evaluate(race, [real, "ds-stub", own]) == [0, "ds-stub", 1, 0, False, 0, None, "Not drawn yet: the map is still loading."]
+        assert page.evaluate(race, [real, "ds-stub", own]) == [0, "ds-stub", 1, 0, False, 0, None, "Ще не намальовано: мапа завантажується."]
         page.unroute("**/api/geo/ds-stub/**")
         across = {**stub, "cells": pack(179.0, -179.6)}  # its bbox the points' min and max: a band around the globe
         page.route("**/api/geo/ds-dateline/**", lambda r: r.fulfill(json=across[r.request.url.split("/")[6].split("?")[0]]))
@@ -565,7 +566,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         poll = "async () => { await refreshBatches(); clearTimeout(S.poll); }"
         step = "#batches .ds:not(.clickable) .ds-step"
         page.evaluate(poll)
-        assert re.fullmatch(r"Embedding insights… step 6 of 10 · 1 min 1\d s", page.inner_text(step))
+        assert re.fullmatch(r"Кодування інсайтів… крок 6 з 10 · 1 хв 1\d с", page.inner_text(step))
         kept = "[...document.querySelectorAll('#batches .ds.clickable')]"
         assert page.evaluate(f"{kept}.map((c) => c.dataset.ds).sort().join()") == ",".join(sorted(["D-r7", ds]))
         page.evaluate(f"() => {{ window.__cards = {kept}; window.__opt = $('dataset-filter').options[1]; }}")
@@ -573,7 +574,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         page.evaluate(poll)
         assert page.evaluate(f"{kept}.every((c, i) => c === __cards[i]) && $('dataset-filter').options[1] === __opt")
         shown = page.inner_text(step)
-        assert re.fullmatch(r"Learning themes… step 7 of 10 · [0-2] s", shown)
+        assert re.fullmatch(r"Пошук тем… крок 7 з 10 · [0-2] с", shown)
         page.wait_for_function(f"document.querySelector('{step}').innerText !== {json.dumps(shown)}", timeout=5000)  # ticks between polls
         page.evaluate("() => { __run.status = 'READY'; }")
         page.evaluate(poll)
@@ -626,7 +627,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.evaluate(question)
         page.wait_for_selector(".ask-cancel")
         waited = page.inner_text(".typing .ds-elapsed")
-        assert re.fullmatch(r"\d+ s", waited)
+        assert re.fullmatch(r"\d+ с", waited)
         page.wait_for_function(f"document.querySelector('.typing .ds-elapsed').textContent !== '{waited}'", timeout=3000)  # ticks between renders
         page.click("#new-chat")
         page.evaluate("async () => { await __p; }")
@@ -643,7 +644,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.evaluate("() => { __net.hold.add('/api/chat/query'); }")
         page.evaluate(question)
         page.click(".ask-cancel")
-        assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Cancelled."
+        assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Скасовано."
         assert not page.locator("#thread .bot-card.error").count()
         page.fill("#question", "x")
         assert page.is_enabled("#ask-btn")
@@ -657,6 +658,6 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.route("**/api/chat/query", lambda r: r.fulfill(status=504, content_type="text/html", body="<html>504</html>"))
         page.evaluate(question)
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
-        assert all(t.startswith("No answer in time.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
+        assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
         browser.close()
         assert not errors, errors

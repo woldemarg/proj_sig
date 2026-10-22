@@ -8,10 +8,10 @@ const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is reposit
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
-  offMap: (pid) => (G.loading ? "Not drawn yet: the map is still loading."  // why the drawer of an insight the map does not draw opens
-    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Not drawn on this map: its trust could not be read."
-    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Not drawn on this map: its record fails its integrity check."
-    : "Not on this map: its level draws nowhere here."),
+  offMap: (pid) => (G.loading ? "Ще не намальовано: мапа завантажується."  // why the drawer of an insight the map does not draw opens
+    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Не на цій мапі: довіру до нього не вдалося прочитати."
+    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Не на цій мапі: його запис не пройшов перевірку цілісності."
+    : "Не на цій мапі: його рівень тут нічого не малює."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
@@ -306,7 +306,7 @@ async function loadDataset(ds) {
     colorBy(G.metric);
     const sac = info.sac || {};
     $("map-title").textContent = info.filename || ds;
-    $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
+    $("map-meta").innerHTML = `H3 ${levelName(`res ${info.resolution}`)} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
       (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
@@ -321,7 +321,7 @@ async function loadProjected(ds, seq = G.loadSeq) {
   if (seq !== G.loadSeq) return;  // a dataset loaded since: these rows index other cells
   G.projected = projected;
   $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read
-  $("map-projected-error").textContent = failed && `Insights of other levels unavailable: ${failed}`;
+  $("map-projected-error").textContent = failed && `Інсайти інших рівнів недоступні: ${failed}`;
   mergePatterns();
 }
 
@@ -344,7 +344,7 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   if (seq !== G.loadSeq) return;  // a dataset loaded since
   G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
-  $("map-overlay-error").textContent = failed && `Regions and trust unavailable, so this level's insights are not drawn: ${failed}`;
+  $("map-overlay-error").textContent = failed && `Регіони й довіра недоступні, тож інсайти цього рівня не намальовано: ${failed}`;
   mergePatterns();
   const regions = (G.overlay || empty()).features;
   G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
@@ -403,7 +403,7 @@ function paintZone() {
   const inZone = G.data ? G.data.features.filter((f) => G.zone.has(f.properties.h3)) : [], shown = inZone.length;
   if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: inZone });
   $("map-zone").hidden = !G.zone.size;
-  $("map-zone-n").textContent = `ZONE · ${G.zone.size} cell${G.zone.size === 1 ? "" : "s"}` + (G.data && shown < G.zone.size ? ` · ${shown} on this map` : "");
+  $("map-zone-n").textContent = `ЗОНА · ${plural(G.zone.size, "комірка", "комірки", "комірок")}` + (G.data && shown < G.zone.size ? ` · на цій мапі: ${shown}` : "");
 }
 
 function colorBy(metric) {
@@ -415,7 +415,7 @@ function colorBy(metric) {
   stops.forEach((q, i) => step.push(q, RAMP[Math.min(i + 1, RAMP.length - 1)]));
   G.map.setPaintProperty("cells-fill", "fill-color", ["case", ["==", ["typeof", ["get", metric]], "number"], stops.length ? step : RAMP[3], "#141a26"]);
   $("map-ramp").innerHTML = `<div class="ramp">${RAMP.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` +
-    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · quantiles</span><span>${num(vals[vals.length - 1])}</span></div>`;
+    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
 }
 
 function wireHud() {
@@ -436,12 +436,12 @@ function wireHud() {
 
 function renderCard(p, item, pts) {
   const sp = p.spatial || {};
-  $("map-card-key").textContent = item ? item.key : "INSIGHT";
+  $("map-card-key").textContent = item ? item.key : "ІНСАЙТ";
   $("map-card-body").innerHTML =
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["found at", esc(p.level)], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      ? [["знайдено на рівні", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
       : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 0)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
@@ -465,9 +465,9 @@ function cellPopup(f, lngLat) {
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
   const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
+  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
+    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
     `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   GeoMap.closePopup();
@@ -510,13 +510,13 @@ function renderWindow() {
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
-  $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(shown.length, "theme")} · ${num(d.points, 0)} pts`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
-    `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
+  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
+    `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
   const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : shown.map((t, k) => {
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного: жоден інсайт не має досить подій у вікні понад свою частку на мапі.</div>` : shown.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     const members = t.members.map((id) => byId[id]), m = members.length;  // a group: the related themes folded into it
     const n = t.insights.length + members.reduce((a, x) => a + x.insights.length, 0);
