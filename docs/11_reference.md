@@ -54,6 +54,20 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | broker (`llm_model_broker`) | — | — | the LLM model broker: one OpenAI-compatible endpoint that holds the upstream model, its key and the provider routing ([12.4](12_architecture.md#124-services-and-contracts)) |
 | console (`sig_web_console`) | — | — | the static web UI and its nginx edge, one origin for both APIs ([8](08_interface.md)) |
 
+**In Ukrainian** (`insight_contracts/wording.py`, `TERMS`: key → name and a one-line meaning; the console keeps a copy, `TERMS` in `app.js`, that `tests/test_wording.py` holds equal and checks against this table). A relation's name labels the node at the other end, so `SPECIALIZES` from the narrower insight reads *вужчий за* and from the broader one *вужчий інсайт*. The canonical form stays English ([4.2](04_representation.md#42-the-canonical-form)).
+
+| Family | Key and name |
+|---|---|
+| an insight | `insight` інсайт · `theme` тема · `scope` де · `metric` метрика · `segment` сегмент |
+| its statistics | `sd` sd · `weight` сила свідчення · `support` рядки · `p_adjusted` скоригована p · `stability` стабільність · `drivers` супутні чинники · `covariance` зміна зв'язку · `aliases` інші умови |
+| trust | `reliability` надійність джерела · `reliability_A` цілком надійне · `reliability_B` здебільшого надійне · `reliability_C` досить надійне · `reliability_D` переважно ненадійне · `reliability_E` ненадійне · `reliability_F` надійність не оцінено · `credibility` підтвердження · `credibility_1` підтверджено іншим джерелом · `credibility_2` не підтверджено · `credibility_5` суперечить іншому джерелу · `credibility_6` немає іншого джерела · `integrity` цілісність · `integrity_ok` цілісність підтверджено · `integrity_mismatch` цілісність порушено · `integrity_unverified` цілісність не перевірено |
+| scale label (`scale_<label>`) | `scale_regional` тримається на ширшому рівні · `scale_scale-dependent` змінюється з масштабом · `scale_not_found_coarser` на ширшому рівні не підтверджено · `scale_insufficient` один рівень |
+| how an answer reached it (`role_<role>`) | `role_seed` відповідає питанню · `role_structural` пов'язана знахідка · `role_transversal` через тему · `role_vertical_up` ширший рівень · `role_vertical_down` детальніший рівень · `transversal_only` інший сегмент · `located` лише за місцем |
+| relations (`<TYPE>`, `<TYPE> (in)`) | `ACTIVATES` належить до теми · `ACTIVATES (in)` інсайт теми · `RELATED_TO` пов'язана тема · `RELATED_TO (in)` пов'язана тема · `CO_OCCURS` спільна тема · `CO_OCCURS (in)` спільна тема · `SPECIALIZES` вужчий за · `SPECIALIZES (in)` вужчий інсайт · `CONTRASTS` протилежний зсув · `CONTRASTS (in)` протилежний зсув · `SIBLING` сусідній варіант · `SIBLING (in)` сусідній варіант · `CO_LOCATED` те саме місце · `CO_LOCATED (in)` те саме місце · `IN_REGION` у регіоні · `IN_REGION (in)` інсайт у регіоні · `PARENT_OF` ширший регіон · `PARENT_OF (in)` вужчий регіон · `HAS_SCOPE` колонка умови · `HAS_SCOPE (in)` інсайт за колонкою · `TARGETS` метрика інсайту · `TARGETS (in)` інсайт про метрику |
+| the map | `cell` комірка · `region` регіон · `zone` зона · `points` події · `cells_extent` комірки · `cells_footprint` комірки сліду · `cells_in_view` комірки у вікні · `window_lift` частота у вікні · `place_lift` частота в регіоні · `compactness` суцільність · `n_eff` ефективний обсяг · `moran_i` схожість сусідів · `sac` поправка на сусідство |
+| a theme | `mass` вага теми · `evidence_mass` вага з відповідністю · `dispersion` розкид |
+| score breakdown | `weight_effect` множник зсуву · `weight_support` множник обсягу · `weight_emm` множник зміни зв'язків · `sd_score` оцінка зсуву · `emm_score` оцінка зміни зв'язків · `volume_utility` корисність обсягу |
+
 ## 11.2 Identifiers
 
 | Identifier | Format | Example | Defined in |
