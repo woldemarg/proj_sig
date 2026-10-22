@@ -95,6 +95,7 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
 
 
 IN_REGION_SHOWN = 25  # a pattern's regions in its panel
+NEIGHBOURS_SHOWN = 50  # any other group's strongest: a theme or a region of many insights stays a small panel
 
 
 def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
@@ -119,8 +120,8 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
         items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
     out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}
-    if "IN_REGION" in neighbors:  # a broad pattern lies in hundreds of regions: its strongest, the count beside them
-        neighbors["IN_REGION"] = neighbors["IN_REGION"][:IN_REGION_SHOWN]
+    for key, items in neighbors.items():  # the strongest of each group, its count beside them (a broad pattern lies in hundreds of regions)
+        neighbors[key] = items[: IN_REGION_SHOWN if key == "IN_REGION" else NEIGHBOURS_SHOWN]
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}

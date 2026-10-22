@@ -622,3 +622,16 @@ def test_a_memoised_fact_is_built_once_however_many_readers_ask():
         r.join()
     assert builds == [1] and graph.memoised(("projection", "ds"), build) == 1
     assert DualGraph(snapshot()).memoised(("projection", "ds"), build) == 2
+
+
+def test_a_node_panel_lists_the_strongest_of_each_group_and_counts_the_rest(monkeypatch):
+    """``node_details`` keeps each neighbour group's ``NEIGHBOURS_SHOWN`` strongest (a pattern's regions their own 25)
+    and counts every member, so a theme or a region of many insights stays a small panel."""
+    from insight_graph_service.server import views
+
+    graph = DualGraph(snapshot())
+    full = views.node_details(graph, "A-1")["neighbors"]["ACTIVATES (in)"]
+    monkeypatch.setattr(views, "NEIGHBOURS_SHOWN", 1)
+    panel = views.node_details(graph, "A-1")
+    assert len(full) == panel["neighbor_counts"]["ACTIVATES (in)"] == 2 and panel["neighbors"]["ACTIVATES (in)"] == full[:1]
+    assert full[0]["weight"] >= full[1]["weight"]  # the strongest kept
