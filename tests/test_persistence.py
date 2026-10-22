@@ -220,6 +220,23 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, monke
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
+def test_a_commit_gives_readers_a_new_graph_and_the_old_one_keeps_what_it_derived(engine, demo_csv, demo_df, tmp_path):
+    """Read views are memoised on the committed graph: the next commit's graph derives them afresh, with the new
+    dataset, while a reader that still holds the previous graph keeps its own."""
+    from insight_graph_service.server.views import cytoscape_elements
+
+    engine.ingest_file(demo_csv)
+    old = engine.graph()
+    before = cytoscape_elements(old)
+    shuffled = tmp_path / "shuffled.csv"
+    demo_df.sample(frac=1, random_state=1).to_csv(shuffled, index=False)
+    added = engine.ingest_file(shuffled)["dataset_id"]
+    new = engine.graph()
+    after = cytoscape_elements(new)
+    assert new is not old and len(after["nodes"]) > len(before["nodes"])
+    assert any(n["data"].get("dataset") == added for n in after["nodes"]) and cytoscape_elements(old) is before
+
+
 def test_writes_are_refused_while_a_batch_runs(engine, demo_csv, demo_df, tmp_path, monkeypatch):
     """A reset, a deletion and a PATCH of another dataset during a batch answer ``busy`` at once instead of waiting
     for the batch lock (the web request would hang for the whole batch); readers keep the committed state meanwhile
