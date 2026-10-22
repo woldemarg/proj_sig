@@ -91,10 +91,10 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         boxes = """() => { const r = (q) => { const e = document.querySelector(q); return e && !e.hidden && e.getClientRects().length ? e.getBoundingClientRect() : null; };
             const panels = ['.map-hud', '#map-window', '#map-card', '#map-zone'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             return { overlaps: panels.flatMap((a, i) => panels.slice(i + 1).filter((b) => cut(a, b))).length, map: r('#map').height, canvas: r('.canvas').bottom, chat: r('.chat').top }; }"""
-        for width in (1500, 1200, 1000, 750, 390):
-            page.set_viewport_size({"width": width, "height": 844})
+        for width, height in ((1500, 844), (1200, 844), (1200, 600), (1001, 600), (1000, 844), (750, 844), (390, 844)):  # a short window too
+            page.set_viewport_size({"width": width, "height": height})
             page.wait_for_timeout(300)
             got = page.evaluate(boxes)
-            assert got["overlaps"] == 0 and got["map"] >= 300 and (width > 1000 or got["canvas"] <= got["chat"] + 1), (width, got)
+            assert got["overlaps"] == 0 and got["map"] >= 300 and (width > 1000 or got["canvas"] <= got["chat"] + 1), (width, height, got)
         browser.close()
         assert not errors, errors
