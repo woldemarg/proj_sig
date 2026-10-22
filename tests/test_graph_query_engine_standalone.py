@@ -639,21 +639,32 @@ def test_a_node_panel_lists_the_strongest_of_each_group_and_counts_the_rest(monk
 
 def test_reword_matches_whole_names_and_a_band_says_its_place():
     """One pass over the merged glossary, the declared phrase over the derived one: a short name never rewrites a longer
-    name holding it nor part of a word, and a quantile band's value keeps its literal with its place (a quarter of four)."""
+    name the evidence uses nor part of a word, a name is rewritten wherever it stands (a relationship's pair too), and a
+    quantile band's value keeps its literal with its place among its own dataset's bands (a quarter of four)."""
+    from types import SimpleNamespace
+
     from graph_query_engine.evidence import Evidence
 
-    ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets
+    ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets and the names the items use
+    ev.items = [
+        SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "return_rate"}], "covariance": {"pair": ["points", "rate"]}})
+    ]
     ev.datasets = [
         {
             "dataset_id": "d",
             "glossary": {"points": "number of events in the map cell"},
             "user_glossary": {"points": "кількість викликів", "rate": "ставка", "price_band": "ціна"},
             "bands": {"price_band": 5, "qty_band": 4},
-        }
+        },
+        {"dataset_id": "e", "bands": {"price_band": 4}},
     ]
     assert ev.reword("return rate +1.20 sd; rate +0.50 sd; separate; points -0.70 sd") == (
         "return rate +1.20 sd; ставка +0.50 sd; separate; кількість викликів -0.70 sd"
     )
-    assert ev.reword_condition("price_band=q2") == "ціна is q2 (band 2 of 5)"
-    assert ev.reword_condition("qty_band=q3") == "qty band is q3 (quarter 3 of 4)"
-    assert ev.reword_condition("region=US") == "region is US"
+    assert ev.reword("correlation between points and rate weakens") == "correlation between кількість викликів and ставка weakens"
+    assert (
+        ev.reword_condition("price_band=q2", "d") == "ціна is q2 (band 2 of 5)"
+        and ev.reword_condition("price_band=q2", "e") == "ціна is q2 (quarter 2 of 4)"
+    )
+    assert ev.reword_condition("qty_band=q3", "d") == "qty band is q3 (quarter 3 of 4)"
+    assert ev.reword_condition("region=US", "d") == "region is US"

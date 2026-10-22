@@ -134,7 +134,11 @@ def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThr
     every surface that describes an insight reads it here."""
     ins = graph.insight(pattern_id)
     declared = graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("user_glossary", {})
-    dims = (graph.nodes.get(dimension_node_id(ins.dataset_id, c.attribute)) for c in ins.conditions if c.attribute.endswith("_band"))
+    return wording.reading(ins, thresholds, declared, band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions)))
+
+
+def band_counts(graph: DualGraph, dataset_id: str, attributes: Iterable[str]) -> dict[str, int]:
+    """The band count of each quantile-band column among ``attributes``, from its Dimension node."""
     # ponytail: a band column with missing values counts "missing" as a band; the band count is one too high then
-    bands = {d["props"]["name"]: d["props"]["cardinality"] for d in dims if d and d["props"].get("cardinality")}
-    return wording.reading(ins, thresholds, declared, bands)
+    dims = (graph.nodes.get(dimension_node_id(dataset_id, a)) for a in attributes if a.endswith("_band"))
+    return {d["props"]["name"]: d["props"]["cardinality"] for d in dims if d and d["props"].get("cardinality")}

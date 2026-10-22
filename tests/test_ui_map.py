@@ -120,7 +120,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
-        assert page.locator(chips).all_inner_texts()[-2:] == ["глосарій · 2 колонки", "документ · 1 колонка"]
+        assert page.locator(chips).all_inner_texts()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]
         # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
         patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)
         assert patched.status_code == 200

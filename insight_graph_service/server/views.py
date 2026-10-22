@@ -95,9 +95,9 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
 
 
 def _declared(props: dict[str, Any]) -> dict[str, Any]:
-    """What a dataset card says of its declared language: the columns its glossary and its metadata document name, and
-    the document's description of the dataset."""
-    out = {"glossary_columns": len({k.split("=", 1)[0] for k in props.get("user_glossary", {})})}
+    """What a dataset card says of its declared language: the columns its explicit glossary and its metadata document
+    name, and the document's description of the dataset."""
+    out = {"glossary_columns": props.get("glossary_columns", 0)}
     if doc := props.get("metadata_doc"):
         out |= {"metadata_columns": len(doc["columns"]), "about": doc["dataset"].get("description", "")}
     return {k: v for k, v in out.items() if v}

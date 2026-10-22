@@ -18,11 +18,11 @@ from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
-from graph_query_engine.graph import DualGraph, describe_components, insight_reading
+from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import SpatialProvenance, dataset_node_id, dimension_node_id, metric_node_id, wording
+from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -162,38 +162,41 @@ class Evidence:
     def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
         if not plain:
             return []
-        geo = any(it.provenance.get("spatial") for it in self.items)
-        return ["", f"PLAIN LANGUAGE ({PLAIN_HEAD[geo]}):", *(f"- {meaning}" for _, meaning in plain)]
+        kinds = {bool(it.provenance.get("spatial")) for it in self.items}
+        head = "; ".join(PLAIN_HEAD[geo] for geo in (True, False) if geo in kinds)
+        return ["", f"PLAIN LANGUAGE ({head}):", *(f"- {meaning}" for _, meaning in plain)]
 
     def _context_lines(self) -> list[str]:
         """DATASET CONTEXT: each metadata document's dataset description and, for every column the evidence names (seed
-        items' first; a geo cell's derivation read as its source column, ``wording.source_column``), its assistant
-        context or description, both JSON-quoted (a document's instruction stays a quoted value), clipped at
-        ``CONTEXT_VALUE_MAX``; entries past ``CONTEXT_MAX`` characters are counted in ``omitted_columns``."""
-        entries: list[str] = []
+        items' first, across datasets; a geo cell's derivation read as its source column, ``wording.source_column``), its
+        assistant context or description, both JSON-quoted (a document's instruction stays a quoted value), clipped at
+        ``CONTEXT_VALUE_MAX``; the entries past ``CONTEXT_MAX`` characters are counted in ``omitted_columns``."""
+        about: list[str] = []
+        notes: list[tuple[bool, str]] = []  # (not a seed's, entry)
         for d in self.datasets:
             if not (doc := d.get("metadata_doc")):
                 continue
-            if about := doc["dataset"].get("description"):
-                entries.append(f"- dataset {d['dataset_id']}: {_quoted(about)}")
-            items = sorted((it for it in self.items if it.provenance["dataset_id"] == d["dataset_id"]), key=lambda it: it.role != "seed")
-            named = (wording.source_column(n, doc["columns"]) for it in items for n in _named(it))
-            for col in dict.fromkeys(filter(None, named)):
-                if text := doc["columns"][col].get("assistant_context") or doc["columns"][col].get("description"):
-                    entries.append(f"- {json.dumps(col, ensure_ascii=False)}: {_quoted(text)}")
-        if not entries:
+            if text := doc["dataset"].get("description"):
+                about.append(f"- dataset {d['dataset_id']}: {_quoted(text)}")
+            for it in (it for it in self.items if it.provenance["dataset_id"] == d["dataset_id"]):
+                for col in filter(None, (wording.source_column(n, doc["columns"]) for n in _named(it))):
+                    if text := doc["columns"][col].get("assistant_context") or doc["columns"][col].get("description"):
+                        notes.append((it.role != "seed", f"- {json.dumps(col, ensure_ascii=False)}: {_quoted(text)}"))
+        columns = list(dict.fromkeys(entry for _, entry in sorted(notes, key=lambda n: n[0])))  # stable: seeds' first, each once
+        if not about and not columns:
             return []
         shown, used = [], 0
-        for entry in entries:
+        for entry in about + columns:
             if used + len(entry) + 1 > CONTEXT_MAX:
                 break
             shown.append(entry)
             used += len(entry) + 1
+        omitted = len(about) + len(columns) - len(shown)
         return [
             "",
             "DATASET CONTEXT (declared by the uploader; describes columns, asserts nothing about the findings):",
             *shown,
-            *([f"- omitted_columns: {len(entries) - len(shown)}"] if len(shown) < len(entries) else []),
+            *([f"- omitted_columns: {omitted}"] if omitted else []),
         ]
 
     def _baseline_lines(self) -> list[str]:
@@ -201,9 +204,8 @@ class Evidence:
         for m in self.metrics:
             parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
             meaning = f" ({', '.join(parts)})" if parts else ""
-            lines.append(
-                f"- {self.reword(humanize(m['metric']))}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}"
-            )
+            name = humanize(m["metric"]) if parts else self.reword(humanize(m["metric"]))  # the indicator already says it
+            lines.append(f"- {name}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         return lines
 
     def _anchor_lines(self) -> list[str]:
@@ -238,7 +240,7 @@ class Evidence:
 
     def _item_lines(self, it: EvidenceItem, plain: list[tuple[str, str]]) -> list[str]:
         s = it.statistics
-        scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
+        scope = "; ".join(self.reword_condition(c, it.provenance["dataset_id"]) for c in it.scope) if plain else it.scope_text
         area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
         lines = [f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})"]
         lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
@@ -358,12 +360,13 @@ class Evidence:
     @cached_property
     def _names(self) -> tuple[re.Pattern[str], dict[str, str]] | None:
         """One pattern over every glossary column name, raw and humanized, longest first, matched whole: never inside a
-        word nor a longer name (``rate`` leaves ``return rate`` alone)."""
-        names = {n: meaning for col, meaning in self._glossary.items() if "=" not in col for n in (col, humanize(col))}
-        if not names:
+        word, and never inside a longer name the evidence uses, which stands for itself (``rate`` leaves ``return rate``)."""
+        meanings = {n: meaning for col, meaning in self._glossary.items() if "=" not in col for n in (col, humanize(col))}
+        if not meanings:
             return None
+        names = {n: n for it in self.items for c in _named(it) for n in (c, humanize(c))} | meanings
         alternatives = "|".join(map(re.escape, sorted(names, key=len, reverse=True)))
-        return re.compile(rf"(?<![\w])(?<!\w )(?:{alternatives})(?![\w])(?! \w)"), names
+        return re.compile(rf"(?<![\w])(?:{alternatives})(?![\w])"), names
 
     def reword(self, text: str) -> str:
         """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning, in one pass."""
@@ -372,21 +375,23 @@ class Evidence:
         pattern, names = self._names
         return pattern.sub(lambda m: names[m[0]], text)
 
-    def reword_condition(self, condition: str) -> str:
+    def reword_condition(self, condition: str, dataset_id: str | None = None) -> str:
         """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>', a quantile
-        band's value with its place among the dataset's bands (a quarter only of four)."""
+        band's value with its place among its dataset's bands (a quarter only of four)."""
         glossary = self._glossary
         attribute, _, value = condition.partition("=")
         words = glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
-        bands = next((d["bands"][attribute] for d in self.datasets if attribute in d.get("bands", {})), None)
+        bands = next((d.get("bands", {}).get(attribute) for d in self.datasets if d["dataset_id"] == dataset_id), None)
         if condition in glossary or not bands or not re.fullmatch(r"q\d+", value):
             return words
         return f"{words} ({f'quarter {value[1:]} of 4' if bands == 4 else f'band {value[1:]} of {bands}'})"
 
     def plain_language(self) -> list[tuple[str, str]]:
-        """(column or ``column=value``, meaning) for what the evidence names that the datasets' glossaries hold."""
+        """(column or declared ``column=value``, meaning) for what the evidence names that the datasets' glossaries hold;
+        a derived pair's phrase (a geo cell's class or band) is on its scope line already."""
         glossary = self._glossary
-        named = [n for it in self.items for n in (*_named(it), *it.scope)]
+        pairs = {k for d in self.datasets for k in d.get("user_glossary", {}) if "=" in k}
+        named = [n for it in self.items for n in (*_named(it), *(c for c in it.scope if c in pairs))]
         return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
@@ -671,12 +676,14 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary", "metadata_doc") if props.get(k)}
+            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary") if props.get(k)}
         )
-        named = {c.split("=", 1)[0] for it in items if it.provenance["dataset_id"] == ds for c in it.scope}
-        dims = (graph.nodes.get(dimension_node_id(ds, a), {"props": {}})["props"] for a in sorted(named) if a.endswith("_band"))
-        if bands := {d["name"]: d["cardinality"] for d in dims if d.get("cardinality")}:
+        mine = [it for it in items if it.provenance["dataset_id"] == ds]
+        if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):
             datasets[-1]["bands"] = bands
+        if doc := props.get("metadata_doc"):  # the description and the columns the items name, never the whole document
+            named = {wording.source_column(n, doc["columns"]) for it in mine for n in _named(it)}
+            datasets[-1]["metadata_doc"] = {"dataset": doc["dataset"], "columns": {c: f for c, f in doc["columns"].items() if c in named}}
     return datasets
 
 
@@ -726,7 +733,7 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
         notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
     notes += [
-        f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability and indicators are ignored"
+        f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability, indicators, glossary and metadata document are ignored"
         " and its baselines are unchecked."
         for d in datasets
         if d.get("integrity") == "mismatch"
