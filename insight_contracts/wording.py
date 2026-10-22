@@ -104,6 +104,7 @@ TERMS: dict[str, tuple[str, str]] = {
     "points": ("події", "точки з файлу, що потрапили в комірки інсайту"),
     "cells_extent": ("комірки", "комірки мапи, з яких складається інсайт на своєму рівні"),
     "cells_footprint": ("комірки сліду", "комірки цього рівня, що тримають 80 % подій інсайту, знайденого на іншому рівні"),
+    "cells_inside": ("комірки всередині", "комірки цього рівня, чиї центри лежать у комірках інсайту, знайденого на іншому рівні мапи"),
     "cells_in_view": ("комірки у вікні", "комірки у вікні мапи, де є події інсайту"),
     "window_lift": (
         "частота у вікні",
@@ -302,8 +303,10 @@ def lift_words(kind: str, lift: float) -> str:
 def value_words(ins: Insight) -> dict[str, str]:
     """What an insight's test numbers say: ``p_adjusted`` its bucket and the exact value, and for a geo insight
     ``n_eff``, the effective sample size of its median test with the cells it counts. ``n_eff`` is the cells holding a
-    value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ = max(0, Moran's I)``: a sparse cell holds no value, so ``n_eff``
-    below the extent's cells says nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing."""
+    value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ`` Moran's I clipped to [0, 0.99] as
+    ``spatial.effective_n_factor`` clips it: a sparse cell holds no value, so ``n_eff`` below the extent's cells says
+    nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing. With ``I > 0`` the counted cells come back from
+    the rounded ``n_eff`` and ``I``, so they read as approximate."""
     p = ins.p_adjusted
     if p is None:
         out = {"p_adjusted": "не перевірялося (зміна зв'язку)"}
@@ -312,13 +315,10 @@ def value_words(ins: Insight) -> dict[str, str]:
         out = {"p_adjusted": format_p(p) + exact}
     spatial = ins.provenance.get("spatial") or {}
     if spatial.get("n_eff") is not None:
-        n_eff, rho = spatial["n_eff"], max(0.0, spatial.get("moran_i") or 0.0)
-        valued = round(n_eff * (1 + rho) / (1 - rho)) if rho < 1 else None
-        if rho > 0:
-            counted = f"{valued} {plural(valued, 'непорожня комірка', 'непорожні комірки', 'непорожніх комірок')} метрики, " if valued else ""
-            out["n_eff"] = f"{n_eff:g}: {counted}зменшено за схожістю сусідніх комірок (Moran's I {spatial['moran_i']:.2f})"
-        else:
-            out["n_eff"] = (
-                f"{n_eff:g}: без зменшення за автокореляцією; враховано {valued} {plural(valued, 'непорожню комірку', 'непорожні комірки', 'непорожніх комірок')} метрики"
-            )
+        moran = spatial.get("moran_i") or 0.0
+        rho = min(max(moran, 0.0), 0.99)
+        valued = round(spatial["n_eff"] * (1 + rho) / (1 - rho))
+        tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
+        cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
+        out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"
     return out

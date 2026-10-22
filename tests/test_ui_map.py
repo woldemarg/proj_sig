@@ -256,7 +256,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert words["what"] in card.inner_text()
         labels = "[...document.querySelectorAll('#map-card .mc-grid > span')]"  # every number named by term(key), n_eff read out
         assert page.evaluate(f"{labels}.length === 6 && {labels}.every((s) => s.querySelector('.term[title]'))")
-        assert page.inner_text("#map-card .mc-note").startswith("ефективний обсяг ")
+        assert "непорожн" in page.inner_text("#map-card .mc-note")  # n_eff read out: the cells it counts
         assert "(згладжено)" in page.get_attribute(f"#map-window .mw-i[data-pid='{chained}'] b", "title")
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)

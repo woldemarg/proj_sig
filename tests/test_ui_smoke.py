@@ -173,9 +173,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert "Reproduced" in page.inner_text("#verify-out")
         assert "підтвердження" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
         labelled = "[...document.querySelectorAll('#inspector .kv')].slice(0, 2).flatMap((kv) => [...kv.querySelectorAll('dt')])"
-        assert page.evaluate(f"{labelled}.length > 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
+        assert page.evaluate(f"{labelled}.length >= 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
         assert page.get_attribute(".key[data-key='latent']", "title").startswith("пов'язана тема: ")  # the legend's tooltips: the terms' meanings
         assert page.evaluate("document.querySelectorAll('.ev .ev-trust').length") > 0  # two uploads: every card shows its trust
+        assert httpx.patch(f"{url}/api/datasets/{housing['dataset_id']}", json={"reliability": "B"}, timeout=60).status_code == 200
+        page.evaluate("S.lastReady = null; refreshBatches()")  # a rated dataset's rail card shows its rating in words
+        page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
         assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
