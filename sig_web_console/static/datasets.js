@@ -69,7 +69,7 @@ function datasetTrust(t) {
   /* a dataset card's trust chips, from its Dataset node */
   if (!t) return "";
   if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "metadata failed its check", "The batch record no longer matches its metadata digest: its source, reliability and indicators are ignored")}</div>`;
-  const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "source"} · ${t.reliability}`, `Source and its reliability (Admiralty code): ${RELIABILITY[t.reliability] || ""}`) : "") +
+  const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "source"} · ${t.reliability}`, `Source and its reliability (Admiralty code): ${word(`reliability_${t.reliability}`)}`) : "") +
     (t.integrity === "unverified" ? chip("warn", "metadata unverified", "Recorded before metadata digests: its source and rating are not checked") : "");
   return chips ? `<div class="ds-src">${chips}</div>` : "";
 }

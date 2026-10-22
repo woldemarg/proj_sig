@@ -54,11 +54,12 @@ const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot dr
 // (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
 const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
 const INTEGRITY = { ok: "ok", mismatch: "bad", unverified: "warn" };
-// the legend's entries -> the terms whose meaning is their tooltip (index.html data-key), and a note of the drawing's own
-const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIALIZES"], latent: ["RELATED_TO", "CO_OCCURS"], contrast: ["CONTRASTS"],
-  sibling: ["SIBLING"], colocated: ["CO_LOCATED"], activates: ["ACTIVATES"], region: ["region", "IN_REGION", "PARENT_OF"], schema: ["HAS_SCOPE", "TARGETS"],
+// the legend's entries (index.html data-key) -> the terms whose meaning is their tooltip, then what the drawing's line says
+const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIALIZES", "стрілка веде до ширшого інсайту"],
+  latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
+  colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
+  region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
   seed: ["role_seed"], cross: ["transversal_only"] };
-const LEGEND_NOTE = { lattice: "стрілка веде до ширшого інсайту", latent: "пунктир — спільні теми", activates: "пунктир — слабка належність: лише для охоплення, пошук нею не йде" };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
 const TERMS = {
@@ -130,6 +131,7 @@ const TERMS = {
   "points": ["події", "точки з файлу, що потрапили в комірки інсайту"],
   "cells_extent": ["комірки", "комірки мапи, з яких складається інсайт на своєму рівні"],
   "cells_footprint": ["комірки сліду", "комірки цього рівня, що тримають 80 % подій інсайту, знайденого на іншому рівні"],
+  "cells_inside": ["комірки всередині", "комірки цього рівня, чиї центри лежать у комірках інсайту, знайденого на іншому рівні мапи"],
   "cells_in_view": ["комірки у вікні", "комірки у вікні мапи, де є події інсайту"],
   "window_lift": ["частота у вікні", "у скільки разів частіше події інсайту трапляються у вікні мапи (комірки з центром у рамці), ніж очікувано за його часткою на всій мапі; згладжено 30 подіями"],
   "place_lift": ["частота в регіоні", "у скільки разів частіше події інсайту трапляються в цьому регіоні, ніж очікувано за часткою регіону на всій мапі"],
@@ -247,7 +249,7 @@ function clearAnswer() {
 function init() {
   document.querySelectorAll(".key[data-key]").forEach((el) => {  // the legend's tooltips: the terms' meanings
     const keys = LEGEND_TERMS[el.dataset.key];
-    if (keys) el.title = [...keys.map((k) => `${word(k)}: ${TERMS[k][1]}`), LEGEND_NOTE[el.dataset.key]].filter(Boolean).join("\n");
+    if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
   $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop

@@ -165,22 +165,24 @@ def test_the_glossary_names_every_term():
 
 def test_test_numbers_read_as_the_method_gives_them():
     """p in its bucket with the exact value; n_eff with the cells it counts: below the extent's cells and with I ≤ 0 it
-    reduces nothing and claims no independence; with I > 0 the cells it counts come back from the factor."""
-    sparse = toy_insight(
-        [("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=1.2e-5, provenance={"spatial": {"cells": 420, "n_eff": 180.0, "moran_i": -0.1}}
-    )
-    words = w.value_words(sparse)
-    assert words["p_adjusted"] == "< 0.001 (1.2e-05)"
-    assert words["n_eff"] == "180: без зменшення за автокореляцією; враховано 180 непорожніх комірок метрики" and "незалежн" not in words["n_eff"]
-    alike = toy_insight(
-        [("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.0, provenance={"spatial": {"cells": 420, "n_eff": 120.0, "moran_i": 0.2}}
-    )
-    assert w.value_words(alike) == {
+    reduces nothing and claims no independence; with I > 0 the counted cells come back from the factor, ρ clipped at
+    0.99 as discovery clips it."""
+    from subgroup_miner.spatial import effective_n_factor
+
+    def numbers(p, spatial=None):
+        return w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=p, provenance={"spatial": spatial} if spatial else {}))
+
+    sparse = numbers(1.2e-5, {"cells": 420, "n_eff": 180.0, "moran_i": -0.1})
+    assert sparse == {"p_adjusted": "< 0.001 (1.2e-05)", "n_eff": "180: 180 непорожніх комірок метрики, без зменшення за автокореляцією"}
+    assert "незалежн" not in sparse["n_eff"]
+    alike = numbers(0.0, {"cells": 420, "n_eff": 120.0, "moran_i": 0.2})
+    assert alike == {
         "p_adjusted": "< 0.001 (< 1e-300)",
-        "n_eff": "120: 180 непорожніх комірок метрики, зменшено за схожістю сусідніх комірок (Moran's I 0.20)",
+        "n_eff": "120: ≈180 непорожніх комірок метрики, зменшено за схожістю сусідніх комірок (Moran's I 0.20)",
     }
-    assert w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.2)) == {"p_adjusted": "0.20"}
-    assert w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=None))["p_adjusted"].startswith("не перевірялося")
+    solid = numbers(1e-3, {"cells": 400, "n_eff": 300 * effective_n_factor(0.995), "moran_i": 0.995})
+    assert "≈300 непорожніх комірок" in solid["n_eff"]  # the clip at 0.99, as effective_n_factor's
+    assert numbers(0.2) == {"p_adjusted": "0.20"} and numbers(None)["p_adjusted"].startswith("не перевірялося")
 
 
 def test_the_console_claims_no_cause_and_significance_only_on_the_sac_line():

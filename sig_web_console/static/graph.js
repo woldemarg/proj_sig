@@ -459,7 +459,7 @@ function shiftRows(shifts) {
   return shifts.map((s) => {
     const dir = s.robust_z >= 0 ? "up" : "down";
     return `<div class="shift-row"><span>${esc(human(s.metric))} <span class="muted">${num(s.local_median, 4)} vs ${num(s.global_median, 4)}</span></span>` +
-      `<b class="effect ${dir}" title="${esc(TERMS.sd[1])}">${signed(s.robust_z)} sd</b>` +
+      `<b class="effect ${dir}">${signed(s.robust_z)} ${term("sd")}</b>` +
       `<div class="meter"><i class="${dir}" style="width:${Math.min(100, Math.round((Math.abs(s.robust_z) / max) * 100))}%"></i></div></div>`;
   }).join("");
 }
@@ -511,7 +511,7 @@ function scaleRows(c, labels) {
 
 function whereRows(places) {
   /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
-  const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% of it` : "", r.lift_words || "", r.n !== undefined ? `${num(r.n, 0)} events` : ""].filter(Boolean).join(" · ");
+  const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% of it` : "", r.lift_words ? `${word("place_lift")}: ${r.lift_words}` : "", r.n !== undefined ? `${num(r.n, 0)} events` : ""].filter(Boolean).join(" · ");
   return `<h4>Where</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
 }
 
