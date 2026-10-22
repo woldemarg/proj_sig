@@ -74,6 +74,9 @@ def parse_columns(spec: str | None) -> list[str]:
     return [c.strip() for c in (spec or "").split(",") if c.strip()]
 
 
+READING_FIX = b"reading=2"  # a file read otherwise than before: its own dataset id (docs/02_discovery.md §2.1)
+
+
 def dataset_fingerprint(
     digest: Any, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
 ) -> str:
@@ -91,7 +94,7 @@ def dataset_fingerprint(
 
 
 def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
-    """(the file as a frame, the sha256 of its bytes). ``shared``: the levels of one upload read one parse, kept until
+    """(the file as a frame, the sha256 of its bytes, with ``READING_FIX`` for a file whose table ``_parse`` changed). ``shared``: the levels of one upload read one parse, kept until
     ``forget_tables`` (each gets a shallow copy: no level writes into the columns it reads); any other read, a re-check
     of the source among them, parses the file as it is now."""
     ext = path.suffix.lower()
@@ -109,8 +112,8 @@ def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
 
 def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
     """One parse. A CSV's delimiter is sniffed from its first line and the C parser reads the whole file at once, as
-    pandas' Python parser reads it: the same columns, types and values. A file with a BOM keeps the Python parser,
-    which leaves the BOM in the first name."""
+    pandas' Python parser reads it: the same columns, types and values, a leading BOM dropped. The digest of a file
+    whose table that reading changed (a BOM; a TSV whose chunks typed a column apart) carries ``READING_FIX``."""
     try:
         with open(path, "rb") as f:
             bom = f.read(3) == b"\xef\xbb\xbf"
@@ -119,12 +122,18 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
         if ext == ".parquet":
             return pd.read_parquet(path), digest
         if ext == ".tsv":
-            return pd.read_csv(path, sep="\t", engine="c"), digest
-        if bom:
-            return pd.read_csv(path, sep=None, engine="python"), digest
-        with open(path, encoding="utf-8", newline="") as f:
+            frame = pd.read_csv(path, sep="\t", engine="c")
+            if len(frame.select_dtypes("object").columns):  # chunks may have typed a column apart: the whole file decides
+                whole = pd.read_csv(path, sep="\t", engine="c", low_memory=False)
+                if not whole.equals(frame):
+                    frame = whole
+                    digest.update(READING_FIX)
+            return frame, digest
+        with open(path, encoding="utf-8-sig", newline="") as f:  # a BOM before a quote would be sniffed as the delimiter
             sep = csv.Sniffer().sniff(f.readline()).delimiter
-        return pd.read_csv(path, sep=sep, engine="c", low_memory=False), digest  # one dtype per column, from all its rows
+        if bom:
+            digest.update(READING_FIX)
+        return pd.read_csv(path, sep=sep, engine="c", low_memory=False), digest  # one dtype per column; drops a BOM
     except Exception as exc:  # parser errors, encoding errors, empty files
         raise IngestionError("unreadable_file", f"Could not parse {Path(path).name}: {exc}") from exc
 
