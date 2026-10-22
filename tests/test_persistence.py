@@ -416,3 +416,26 @@ def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_pat
         with pytest.raises(IngestionError) as exc:
             load_dataset(table, cfg, **option)
         assert exc.value.code == "invalid_options"
+
+
+def test_an_upload_reads_its_file_once_for_all_its_levels(cfg, points_csv, demo_csv, tmp_path):
+    """The upload's ``@auto`` choice, each level and each dataset id read one parse of the stored file, the C parser's
+    frame equal to pandas' Python parser's; the frame goes once no batch is left; a file read anew gets the same id."""
+    from unittest import mock
+
+    import pandas as pd
+
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from subgroup_miner import ingestion
+
+    semicolons = tmp_path / "semi.txt"
+    semicolons.write_text('city;value;note\n"Kyiv";0.1234567890123456789;"a; b"\nLviv;1e-310;c\n', encoding="utf-8")
+    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons):
+        pd.testing.assert_frame_equal(ingestion.read_table(path), pd.read_csv(path, sep=None, engine="python"), check_exact=True)
+    assert ingestion.dataset_fingerprint(points_csv, {}) == ingestion.dataset_fingerprint(points_csv.read_bytes(), {})
+    engine = make_engine(cfg)
+    ingestion.forget_tables()
+    with mock.patch.object(ingestion.pd, "read_csv", wraps=pd.read_csv) as parse:
+        levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert len(levels) == 3 and all(r["status"] == "READY" for r in levels)
+    assert parse.call_count == 1 and ingestion._read.cache_info().currsize == 0  # one parse, then gone

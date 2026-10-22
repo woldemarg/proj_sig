@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import functools
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,10 +75,10 @@ def parse_columns(spec: str | None) -> list[str]:
 
 
 def dataset_fingerprint(
-    payload: bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
+    payload: Path | bytes, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
 ) -> str:
-    """Content-addressed dataset id: same bytes + same derivation options -> same id."""
-    h = hashlib.sha256(payload)
+    """Content-addressed dataset id: same bytes (a file's, hashed as ``read_table`` reads it) + same derivation options -> same id."""
+    h = _read(str(payload), _stamp(payload))[1].copy() if isinstance(payload, Path) else hashlib.sha256(payload)
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
         h.update(repr(sorted(categories)).encode("utf-8"))
@@ -88,16 +90,41 @@ def dataset_fingerprint(
 
 
 def read_table(path: Path) -> pd.DataFrame:
+    """The file as a frame, read once for every level of its upload (``forget_tables`` once they are done): a shallow
+    copy, as no level writes into the columns it reads."""
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise IngestionError("unsupported_file", f"Unsupported file type '{ext}'. Supported: {sorted(SUPPORTED_EXTENSIONS)}")
+    return _read(str(path), _stamp(path))[0].copy(deep=False)
+
+
+def _stamp(path: Path) -> tuple[int, int]:
+    st = path.stat()
+    return st.st_mtime_ns, st.st_size
+
+
+@functools.lru_cache(maxsize=1)  # ponytail: the last file only, uploads run one at a time
+def _read(path: str, stamp: tuple[int, int]) -> tuple[pd.DataFrame, Any]:
+    """(the frame, the sha256 of the bytes) of one file version. A CSV's delimiter is sniffed from its first line, as
+    pandas' Python parser sniffs it, and read by the C parser with Python's float parsing: the same frame, faster."""
+    name = Path(path).name
     try:
-        if ext == ".parquet":
-            return pd.read_parquet(path)
-        sep = "\t" if ext == ".tsv" else None
-        return pd.read_csv(path, sep=sep, engine="python" if sep is None else "c")
+        with open(path, "rb") as f:
+            digest = hashlib.file_digest(f, "sha256")
+        if name.lower().endswith(".parquet"):
+            return pd.read_parquet(path), digest
+        if name.lower().endswith(".tsv"):
+            return pd.read_csv(path, sep="\t", engine="c"), digest
+        with open(path, encoding="utf-8", newline="") as f:
+            sep = csv.Sniffer().sniff(f.readline()).delimiter
+        return pd.read_csv(path, sep=sep, engine="c"), digest
     except Exception as exc:  # parser errors, encoding errors, empty files
-        raise IngestionError("unreadable_file", f"Could not parse {path.name}: {exc}") from exc
+        raise IngestionError("unreadable_file", f"Could not parse {name}: {exc}") from exc
+
+
+def forget_tables() -> None:
+    """Drop the frame kept for the levels of an upload (the engine calls it when no batch waits)."""
+    _read.cache_clear()
 
 
 def select_present(
@@ -202,7 +229,7 @@ def load_dataset(
         warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(path.read_bytes(), present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
+        dataset_id=dataset_fingerprint(path, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,

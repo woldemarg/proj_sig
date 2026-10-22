@@ -45,7 +45,7 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, load_dataset, parse_indicators
+from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, forget_tables, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
 
@@ -136,6 +136,16 @@ class Engine:
             yield
         finally:
             self._lock.release()
+
+    @contextmanager
+    def _reading(self) -> Iterator[None]:
+        """A batch reads its stored file through ``read_table``'s cache, shared by the levels of one upload; the cache
+        goes once no batch is left to read it."""
+        try:
+            yield
+        finally:
+            if not self.ws.unfinished_batches():
+                forget_tables()
 
     def committed(self) -> CommittedState:
         """The committed read state. One object per commit, so a reader never mixes two commits; readers never
@@ -424,7 +434,7 @@ class Engine:
     def process(self, batch_id: str) -> dict[str, Any]:
         """One batch through its stages (docs/09_operations.md §9.1): read, mined and embedded outside any transaction, then
         committed in one whose READY record is the commit point; readers switch to its graph only after that."""
-        with self._lock:
+        with self._lock, self._reading():
             record = self.ws.load_batch(batch_id)
             if record is None:
                 raise PipelineError("unknown_batch", batch_id)

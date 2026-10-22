@@ -128,9 +128,10 @@ def select_levels(lat: np.ndarray, lon: np.ndarray, region_levels: tuple[int, ..
     finest_region = max(region_levels, default=-1)
     region_of = {res: max((lv for lv in region_levels if lv <= res), default=None) for res in GEO_AUTO_RESOLUTIONS}
     cap_of = {res: res if lv is None or res > finest_region else lv for res, lv in region_of.items()}  # where cap_cells count
+    pairs, back = distinct_points(lat, lon)
     for res in sorted({*GEO_AUTO_RESOLUTIONS, *cap_of.values()}, reverse=True):
         # each point indexed at each level as build_cells does: H3 children do not tile their parent
-        counts[res] = pd.Series([h3.latlng_to_cell(a, b, res) for a, b in zip(lat, lon)]).value_counts()
+        counts[res] = pd.Series(np.array([h3.latlng_to_cell(a, b, res) for a, b in pairs], dtype=object)[back]).value_counts()
     candidates = {
         res: {
             "cells": len(counts[res]),
@@ -329,7 +330,8 @@ def build_cells(
     ok = np.isfinite(lat) & np.isfinite(lon)
     if not ok.any():
         raise SpatialError(f"No valid point in {location}")
-    ids = np.array([h3.latlng_to_cell(a, b, resolution) for a, b in zip(lat[ok], lon[ok])], dtype=object)
+    pairs, back = distinct_points(lat[ok], lon[ok])
+    ids = np.array([h3.latlng_to_cell(a, b, resolution) for a, b in pairs], dtype=object)[back]
     codes, cells = pd.factorize(ids, sort=True)
     cells = np.asarray(cells, dtype=object)
     point_cell = np.full(len(frame), -1, dtype=np.int64)
@@ -458,10 +460,19 @@ def _kind_of(col: str, level: str, categorical: dict[str, pd.Series]) -> str:
     return f" (every such event also has: {', '.join(hints[:3])})" if hints else ""
 
 
+def distinct_points(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(the distinct (lat, lon) pairs, each point's row among them): a place many events share is indexed once."""
+    pairs, back = np.unique(np.column_stack([lat, lon]), axis=0, return_inverse=True)
+    return pairs, back.ravel()
+
+
 def _level_counts(text: pd.Series, codes: np.ndarray, n_cells: int) -> pd.DataFrame:
-    """Points per (cell, level); columns ordered by overall frequency."""
+    """Points per (cell, level); columns ordered by overall frequency (a missing value counts in none)."""
     order = text.value_counts().index
-    return pd.crosstab(codes, text.to_numpy()).reindex(index=range(n_cells), columns=order, fill_value=0)
+    level = order.get_indexer(text)
+    kept = level >= 0
+    counts = np.bincount(codes[kept] * len(order) + level[kept], minlength=n_cells * len(order))
+    return pd.DataFrame(counts.reshape(n_cells, len(order)), index=pd.RangeIndex(n_cells), columns=order)
 
 
 def _categorical_roles(columns: dict[str, pd.Series], codes: np.ndarray, n_cells: int, dense: np.ndarray) -> tuple[list[str], list[str]]:
