@@ -131,10 +131,21 @@ def create_app(engine: Engine) -> FastAPI:
         records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
         for record in records:  # one worker thread: the levels run in turn
             run(engine.process, record["batch_id"])
+        run(warm)  # after the last level
         levels = {record["level"]: record["batch_id"] for record in records}
         return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
 
+    def warm() -> None:  # a commit's first reads, built before a console asks: the graph view it loads at READY, then the map
+        if not (engine.problem or engine.ws.unfinished_batches()):
+            cytoscape_elements(engine.graph(), None, False)
+            engine.warm_map()
+
+    def written(result: dict[str, Any]) -> dict[str, Any]:  # a write's response, its commit's reads queued
+        run(warm)
+        return result
+
     run(engine.startup_sync)  # on the batch thread: Neo4j writes stay sequential
+    run(warm)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:  # on the event loop: answers while the batch and search threads are busy
@@ -262,23 +273,25 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
-        return engine.update_dataset_metadata(
-            dataset_id,
-            source=body.source,
-            reliability=body.reliability,
-            indicators=body.indicators,
-            glossary=body.glossary,
-            metadata=body.metadata,
-            supersedes=body.supersedes,
+        return written(
+            engine.update_dataset_metadata(
+                dataset_id,
+                source=body.source,
+                reliability=body.reliability,
+                indicators=body.indicators,
+                glossary=body.glossary,
+                metadata=body.metadata,
+                supersedes=body.supersedes,
+            )
         )
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
-        return engine.delete_dataset(dataset_id)
+        return written(engine.delete_dataset(dataset_id))
 
     @app.delete("/api/uploads/{upload_id}")
     def delete_upload(upload_id: str) -> dict[str, Any]:
-        return engine.delete_upload(upload_id)
+        return written(engine.delete_upload(upload_id))
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:

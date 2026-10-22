@@ -615,6 +615,12 @@ class Engine:
     def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
         return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds)
 
+    def warm_map(self) -> None:
+        """``geo_views.warm`` over the committed graph (the server queues it on the batch thread after a commit and at a
+        start); nothing on a degraded workspace."""
+        if not self.problem:
+            geo_views.warm(self.ws, self.graph(), self.settings.thresholds)
+
     @_healthy
     def export_geosparql(self) -> str:
         return geo_views.export_geosparql(self.ws, self.graph())
