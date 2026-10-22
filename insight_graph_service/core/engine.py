@@ -122,6 +122,7 @@ class Engine:
         self.ws = Workspace(settings)
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
+        self._spatial_memo: dict[tuple, Any] = {}  # derive_spatial's parts of each READY geo dataset and table placement
         self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
         self._publishing: str | None = None  # the batch past its commit point whose graph readers do not see yet
         self._open()
@@ -273,14 +274,12 @@ class Engine:
             representation=self.ws.representation() or {},
             ontology=ontology,
             settings=self.settings,
-            spatial=derive_spatial(geo, self.settings.region_levels, tables),
+            spatial=derive_spatial(geo, self.settings.region_levels, tables, self._spatial_memo),
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
         return snapshot, self._committed_state(DualGraph(snapshot), self._load_frame(records, vectors, ontology))
 
-    # ponytail: every commit places every table level again (0.1 s for 41 patterns of 320,000 events); a memo by
-    # (table, placed_by) belongs with the commit memo of #104
     def _table_placement(self, table: dict[str, Any], batches: dict[str, dict[str, Any]]) -> TableDataset | None:
         """A READY table level with the finest READY geo level of its upload and point columns that holds one row per
         point (docs/06_graph_and_storage.md §6.1): a matching row count alone links nothing, nor do the file's other coordinates,
@@ -651,6 +650,7 @@ class Engine:
 
     def _fail(self, record: dict[str, Any], exc: Exception, t0: float) -> dict[str, Any]:
         """Record the failure of a batch (called inside ``except``; ``Workspace.transaction`` has rolled its writes back)."""
+        self._spatial_memo.clear()  # it may hold the part of a dataset the rollback removed
         if self.ws.pending_path.exists():  # the rollback failed too (logged): its marker blocks every write until a restart
             record["warnings"].append("rollback failed; restart the service to retry it, no write runs until then")
         code = getattr(exc, "code", "internal_error")
@@ -811,6 +811,7 @@ class Engine:
         """Delete the workspace; with ``NEO4J_ENABLED`` the mirror is cleared too (failure = warning). Refused with
         ``busy``, never queued, while a batch or a deletion runs or an upload waits. Also the way out of a degraded start."""
         with self._writing():
+            self._spatial_memo.clear()
             busy = [b["batch_id"] for b in self.ws.unfinished_batches()]
             if busy:
                 raise PipelineError("busy", f"batches in progress: {busy}")

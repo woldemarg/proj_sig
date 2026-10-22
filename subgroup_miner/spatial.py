@@ -618,7 +618,60 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
     return edges, partial
 
 
-def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = ()) -> SpatialStructure:
+@dataclass
+class _DatasetPart:
+    """What ``derive_spatial`` derives of one geo dataset alone (its files never change once READY): ``places`` holds its
+    patterns' places, regions, IN_REGION, props and compactness and the dataset's occupied cells (``plane``)."""
+
+    res: int
+    plane: SpatialStructure
+    covered: Counter[str]
+    raw: dict[str, set[str]]
+    grown: dict[str, set[str]]
+    ring: dict[str, set[str]]
+    shares: dict[tuple[str, str], float]
+
+
+def _dataset_part(d: GeoDataset, levels: tuple[int, ...]) -> _DatasetPart:
+    out = SpatialStructure()
+    raw, grown, ring, shares = {}, {}, {}, {}
+    covered: Counter[str] = Counter()
+    res = h3.get_resolution(str(d.cells[0]))
+    own = [lv for lv in levels if lv <= res]
+    # each cell in the region holding its centre, as the points were indexed (docs/06_graph_and_storage.md §6.1)
+    grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
+    occupied = {lv: dict(zip(*np.unique(grid[lv], return_counts=True), strict=True)) for lv in own}
+    out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
+    extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
+    union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
+    for lv in own:  # each dataset's cells inside a region that some pattern covers
+        for cell, n in zip(*np.unique(grid[lv][union], return_counts=True), strict=True):
+            covered[region_node_id(lv, str(cell))] += int(n)
+    for pid, rows in d.covers.items():
+        rows = np.unique(np.asarray(rows, dtype=np.int64))
+        out.places[pid] = {lv: frozenset(cells[rows].tolist()) for lv, cells in grid.items()}
+        raw[pid] = {str(c) for c in d.cells[rows]}
+        near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
+        grown[pid] = {str(c) for c in d.cells[near]}
+        ring[pid] = {n for c in raw[pid] for n in h3.grid_ring(c, 1)}
+        out.compactness[pid] = round(compactness(rows, d.nbr_ptr, d.nbr_idx), 4)
+        for lv in own:
+            regions, counts = np.unique(grid[lv][rows], return_counts=True)
+            for cell, n in zip(regions, counts, strict=True):
+                rid = region_node_id(lv, str(cell))
+                share = float(n / min(len(rows), occupied[lv][cell]))
+                if share >= GEO_REGION_MIN_SHARE:  # the threshold reads the exact share, the edge stores it rounded
+                    share = round(share, 4)
+                    out.in_region.append((pid, rid, share))
+                    out.edge_props[(pid, rid)] = {"basis": "cells", "share": share, "n": int(n)}  # n: its cells there
+                    shares[(pid, rid)] = share
+                    _add_region(out, levels, lv, str(cell))
+    return _DatasetPart(res, out, covered, raw, grown, ring, shares)
+
+
+def derive_spatial(
+    datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = (), memo: dict[tuple, Any] | None = None
+) -> SpatialStructure:
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
     A pattern is IN_REGION of a region at every listed level not finer than its dataset (its own level included) when
@@ -632,53 +685,47 @@ def derive_spatial(datasets: list[GeoDataset], levels: tuple[int, ...], tables: 
     IN_REGION of one region at the nearest listed level at least two coarser. Each pattern keeps its ``COLOCATED_TOP``
     strongest partners (relation first, then weight) of its own dataset and as many of the other datasets; a pair that
     either side keeps is an edge. A table level's patterns are IN_REGION by their events (``place_table``): never
-    CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis."""
+    CO_LOCATED, in ``places`` or in ``occupied``. ``edge_props`` holds every IN_REGION's props, of either basis.
+
+    ``memo`` (the caller's, kept between calls): each geo dataset's own part (``_dataset_part``) by its id and the levels,
+    each table's placement by its id, its ``placed_by`` and the levels; read when present, filled when not, and left
+    holding only what this call used. The result holds copies, so the memo stays as built."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
     raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
     covered: Counter[str] = Counter()
+    memo = {} if memo is None else memo
+    used = set()
     for d in datasets:
         if not len(d.cells):
             continue
-        res = h3.get_resolution(str(d.cells[0]))
-        own = [lv for lv in levels if lv <= res]
-        # each cell in the region holding its centre, as the points were indexed (docs/06_graph_and_storage.md §6.1)
-        grid = event_regions(d.cells, (res, *own))  # its own resolution too, listed or not
-        occupied = {lv: dict(zip(*np.unique(grid[lv], return_counts=True), strict=True)) for lv in own}
-        out.occupied[d.dataset_id] = {lv: frozenset(cells.tolist()) for lv, cells in grid.items()}
-        extents = [np.asarray(r, dtype=np.int64) for r in d.covers.values()]
-        union = np.unique(np.concatenate(extents)) if extents else np.empty(0, dtype=np.int64)
-        for lv in own:  # each dataset's cells inside a region that some pattern covers
-            for cell, n in zip(*np.unique(grid[lv][union], return_counts=True), strict=True):
-                covered[region_node_id(lv, str(cell))] += int(n)
-        for pid, rows in d.covers.items():
-            rows = np.unique(np.asarray(rows, dtype=np.int64))
-            res_of[pid], dataset_of[pid] = res, d.dataset_id
-            out.places[pid] = {lv: frozenset(cells[rows].tolist()) for lv, cells in grid.items()}
-            raw[pid] = {str(c) for c in d.cells[rows]}
-            near = np.concatenate([rows, *(d.nbr_idx[d.nbr_ptr[r] : d.nbr_ptr[r + 1]] for r in rows)]) if len(rows) else rows
-            grown[pid] = {str(c) for c in d.cells[near]}
-            ring[pid] = {n for c in raw[pid] for n in h3.grid_ring(c, 1)}
-            out.compactness[pid] = round(compactness(rows, d.nbr_ptr, d.nbr_idx), 4)
-            for lv in own:
-                regions, counts = np.unique(grid[lv][rows], return_counts=True)
-                for cell, n in zip(regions, counts, strict=True):
-                    rid = region_node_id(lv, str(cell))
-                    share = float(n / min(len(rows), occupied[lv][cell]))
-                    if share >= GEO_REGION_MIN_SHARE:  # the threshold reads the exact share, the edge stores it rounded
-                        share = round(share, 4)
-                        out.in_region.append((pid, rid, share))
-                        out.edge_props[(pid, rid)] = {"basis": "cells", "share": share, "n": int(n)}  # n: its cells there
-                        shares[(pid, rid)] = share
-                        _add_region(out, levels, lv, str(cell))
+        used.add(key := ("geo", d.dataset_id, levels))
+        part = memo[key] if key in memo else memo.setdefault(key, _dataset_part(d, levels))
+        for pid in part.plane.places:
+            res_of[pid], dataset_of[pid] = part.res, d.dataset_id
+        out.occupied.update({k: dict(v) for k, v in part.plane.occupied.items()})  # copies: the memo stays as built
+        out.places.update({k: dict(v) for k, v in part.plane.places.items()})
+        out.compactness.update(part.plane.compactness)
+        out.in_region.extend(part.plane.in_region)
+        out.edge_props.update({k: dict(v) for k, v in part.plane.edge_props.items()})
+        for rid, props in part.plane.regions.items():
+            out.regions.setdefault(rid, dict(props))
+        covered.update(part.covered)
+        raw.update(part.raw)
+        grown.update(part.grown)
+        ring.update(part.ring)
+        shares.update(part.shares)
     for table in tables:
-        placed, partial = place_table(table, levels)
+        used.add(key := ("table", table.dataset_id, table.placed_by, levels))
+        placed, partial = memo[key] if key in memo else memo.setdefault(key, place_table(table, levels))
         out.partial |= partial
         for pid, rid, share, props in placed:
             out.in_region.append((pid, rid, share))
-            out.edge_props[(pid, rid)] = props
+            out.edge_props[(pid, rid)] = dict(props)
             _, lv, cell = rid.split(":")  # R:<level>:<h3>
             _add_region(out, levels, int(lv), cell)
+    for stale in set(memo) - used:  # a deleted dataset, or a table placed by another level now
+        del memo[stale]
     members = Counter(rid for _, rid, _ in out.in_region)
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])

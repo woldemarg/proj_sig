@@ -56,11 +56,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def atomic_write_json(path: Path, payload: Any, *, compact: bool = False) -> None:
+def atomic_write_json(path: Path, payload: Any) -> None:
+    """``payload`` written compact by the C encoder (``json.dump`` to a file and any indent take the Python one)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, default=str, **({"separators": (",", ":")} if compact else {"indent": 1}))
+        f.write(json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")))
     replace_file(tmp, path)
 
 
@@ -256,8 +257,8 @@ class Workspace:
         )
 
     def save_geo_cells(self, dataset_id: str, payload: dict[str, Any]) -> None:
-        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch: compact, as only the map reads it."""
-        atomic_write_json(self.geo_cells_path(dataset_id), payload, compact=True)
+        """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch."""
+        atomic_write_json(self.geo_cells_path(dataset_id), payload)
 
     def geo_cells_path(self, dataset_id: str) -> Path:
         """The map's GeoJSON of a geo dataset (``save_geo_cells``); absent for any other dataset."""
