@@ -91,6 +91,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | `insight_contracts/` (shared kernel, standard library only) | `insight.py` | `Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `record_digest`, `SpatialProvenance`, `PhenomenonThresholds` (what counts as part of a phenomenon) | [3](03_insights.md) |
 | | `graph.py` | edge types and planes, node ids, `GraphNode` / `GraphEdge`, `SNAPSHOT_VERSION` and the snapshot schema | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `text.py` | how an insight reads: scope, shift, correlation and validation phrases, number formatting, headlines | [4.2](04_representation.md#42-the-canonical-form) |
+| | `wording.py` | what people read, in Ukrainian: the name and meaning of every term (`TERMS`), the readings of an insight, a theme, a region and a lift | [8.5](08_interface.md#85-text-shown-to-people) |
 | | `payload.py` | `EvidencePayload`, the contract between the graph service and the narrator | [12.4](12_architecture.md#124-services-and-contracts) |
 | `subgroup_miner/` | `config.py` | `MinerConfig` | [2.6](02_discovery.md#26-configuration), [3.5](03_insights.md#35-configuration) |
 | | `ingestion.py` | file validation, categories, bands, dataset id | [2.1](02_discovery.md#21-ingestion) |
