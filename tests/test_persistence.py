@@ -419,8 +419,8 @@ def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_pat
 
 
 def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_csv, tmp_path):
-    """``read_file`` gives the frame pandas' Python parser gave — columns, types and values, a leading BOM kept in the
-    first name, one type per column from all its rows — and the dataset id the bytes always gave."""
+    """``read_file`` gives the frame pandas' Python parser gave — columns, types and values, one type per column from all
+    its rows — and the dataset id the bytes always gave."""
     import hashlib
 
     import pandas as pd
@@ -430,18 +430,48 @@ def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_
 
     semicolons = tmp_path / "semi.txt"
     semicolons.write_text('city;value;note\n"Kyiv";0.1234567890123456789;"a; b"\nLviv;1e-310;c\n', encoding="utf-8")
-    boms = []
-    for i, header in enumerate(["region,value", '"region",value', ",value", "a,a"]):  # plain, quoted, empty, repeated
-        boms.append(tmp_path / f"bom{i}.csv")
-        boms[-1].write_bytes(f"\ufeff{header}\nEU,1\nUS,2\n".encode())
     mixed = tmp_path / "mixed.csv"  # a code column numeric-looking for its first 300,000 rows
     mixed.write_text("code,value\n" + "".join(f"{i % 900:05d},{i}\n" for i in range(300_000)) + "x00042,1\n")
-    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, *boms, mixed):
+    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, mixed):
         pd.testing.assert_frame_equal(ingestion.read_file(path)[0], pd.read_csv(path, sep=None, engine="python"), check_exact=True)
     assert (
         ingestion.dataset_fingerprint(ingestion.read_file(points_csv)[1], {})
         == "ds-" + hashlib.sha256(points_csv.read_bytes() + b"[]").hexdigest()[:12]
     )
+
+
+def test_a_file_read_otherwise_than_before_gets_its_own_dataset_id(tmp_path):
+    """A BOM is dropped from the first name and a TSV whose chunks typed a column apart is read whole; such a file's id
+    mixes in ``READING_FIX`` (its old dataset reads ``source_changed``, a new upload is no duplicate), any other keeps its id."""
+    import hashlib
+
+    import pandas as pd
+
+    from subgroup_miner import ingestion
+
+    def plain_id(path, fix=b""):
+        return "ds-" + hashlib.sha256(path.read_bytes() + fix + b"[]").hexdigest()[:12]
+
+    def read(path):
+        frame, digest = ingestion.read_file(path)
+        return frame, ingestion.dataset_fingerprint(digest, {})
+
+    for i, header in enumerate(["region,value", '"region",value', ",value", "a,a", '"region";"value"']):  # plain, quoted, empty, repeated, ;
+        bare = tmp_path / f"bare{i}.csv"
+        bare.write_text(f"{header}\nEU,1\nUS,2\n".replace(",", ";" if ";" in header else ","), encoding="utf-8")
+        bom = tmp_path / f"bom{i}.csv"
+        bom.write_bytes(b"\xef\xbb\xbf" + bare.read_bytes())
+        frame, ds = read(bom)
+        pd.testing.assert_frame_equal(frame, pd.read_csv(bare, sep=None, engine="python"), check_exact=True)  # as without the BOM
+        assert ds == plain_id(bom, ingestion.READING_FIX) != plain_id(bom) and read(bare)[1] == plain_id(bare)
+    mixed = tmp_path / "mixed.tsv"  # a code column numeric-looking for its first 300,000 rows
+    mixed.write_text("code\tvalue\n" + "".join(f"{i}\t{i}\n" for i in range(300_000)) + "x42\t1\n")
+    frame, ds = read(mixed)
+    assert frame["code"].map(type).eq(str).all() and ds == plain_id(mixed, ingestion.READING_FIX)
+    clean = tmp_path / "clean.tsv"
+    clean.write_bytes(b"\xef\xbb\xbfregion\tflag\tvalue\nEU\tTrue\t1\nUS\t\t2\n")  # a BOM the C parser always dropped, an object column
+    frame, ds = read(clean)
+    assert list(frame.columns) == ["region", "flag", "value"] and ds == plain_id(clean)
 
 
 def test_an_upload_parses_its_file_once_and_a_recheck_reads_it_anew(cfg, points_csv, demo_csv):
