@@ -10,7 +10,7 @@ the response sizes, raw and gzipped, and the stored snapshot's and cell files' s
 
 ``synthetic``: ``SYNTHETIC_POINTS`` synthetic deliveries over California (``write_synthetic_points``); ``california``:
 the map demo's table. ``--console``: while the levels process, a second client asks what an open console asks (the
-batch list every 0.9 s, the reads above after every new READY). ``--browser``: the console in headless Chromium, as
+batch list every 2.5 s, the reads above after every new READY). ``--browser``: the console in headless Chromium, as
 ``tests/test_ui_smoke.py`` drives it (skipped without one): the time to the graph and to the map, the map's time to
 idle after each step of a zoom sequence, the most DOM markers on the map, frames per second during an animated zoom,
 long tasks. Writes ``.scratch/results/perf_benchmark_<label>.json`` and prints a table.
@@ -36,7 +36,7 @@ from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 
 TERMINAL = {"READY", "FAILED", "SKIPPED"}
-POLL_S = 0.9  # the console's batch poll
+POLL_S = 2.5  # the console's batch poll while a batch runs (datasets.js)
 SYNTHETIC_POINTS = 300_000
 # The synthetic set's own territory and calendar, chosen without regard to any real data (AGENTS.md, §Boundaries):
 CALIFORNIA = (32.6, -124.3, 41.9, -114.2)  # south, west, north, east (the map demo's state)
