@@ -442,8 +442,10 @@ def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_
 
 def test_a_file_read_otherwise_than_before_gets_its_own_dataset_id(tmp_path):
     """A BOM is dropped from the first name and a TSV whose chunks typed a column apart is read whole; such a file's id
-    mixes in ``READING_FIX`` (its old dataset reads ``source_changed``, a new upload is no duplicate), any other keeps its id."""
+    mixes in ``READING_FIX`` (its old dataset reads ``source_changed``, a new upload is no duplicate), any other keeps its
+    id, and a TSV whose text columns hold one type each is parsed once."""
     import hashlib
+    from unittest import mock
 
     import pandas as pd
 
@@ -466,12 +468,14 @@ def test_a_file_read_otherwise_than_before_gets_its_own_dataset_id(tmp_path):
         assert ds == plain_id(bom, ingestion.READING_FIX) != plain_id(bom) and read(bare)[1] == plain_id(bare)
     mixed = tmp_path / "mixed.tsv"  # a code column numeric-looking for its first 300,000 rows
     mixed.write_text("code\tvalue\n" + "".join(f"{i}\t{i}\n" for i in range(300_000)) + "x42\t1\n")
-    frame, ds = read(mixed)
-    assert frame["code"].map(type).eq(str).all() and ds == plain_id(mixed, ingestion.READING_FIX)
+    with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:
+        frame, ds = read(mixed)
+    assert frame["code"].map(type).eq(str).all() and ds == plain_id(mixed, ingestion.READING_FIX) and parse.call_count == 2
     clean = tmp_path / "clean.tsv"
     clean.write_bytes(b"\xef\xbb\xbfregion\tflag\tvalue\nEU\tTrue\t1\nUS\t\t2\n")  # a BOM the C parser always dropped, an object column
-    frame, ds = read(clean)
-    assert list(frame.columns) == ["region", "flag", "value"] and ds == plain_id(clean)
+    with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:
+        frame, ds = read(clean)
+    assert list(frame.columns) == ["region", "flag", "value"] and ds == plain_id(clean) and parse.call_count == 1  # one type per column: once
 
 
 def test_an_upload_parses_its_file_once_and_a_recheck_reads_it_anew(cfg, points_csv, demo_csv):

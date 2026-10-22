@@ -123,7 +123,9 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
             return pd.read_parquet(path), digest
         if ext == ".tsv":
             frame = pd.read_csv(path, sep="\t", engine="c")
-            if len(frame.select_dtypes("object").columns):  # chunks may have typed a column apart: the whole file decides
+            # a chunk typed a column apart when it holds values of more than one type (pandas' mixed-type warning): then
+            # the whole file decides; a text column of one type is read once
+            if any(pd.api.types.infer_dtype(frame[c], skipna=True).startswith("mixed") for c in frame):
                 whole = pd.read_csv(path, sep="\t", engine="c", low_memory=False)
                 if not whole.equals(frame):
                     frame = whole
