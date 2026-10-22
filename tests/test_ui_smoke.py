@@ -8,14 +8,12 @@ import time
 
 import httpx
 import pytest
-from conftest import FakeLLM, make_engine, serve, upload_levels
-from dev import chromium, compose
+from conftest import make_engine, serve, stack
+from dev import chromium
 
-from evidence_narrator_service.app import create_app as create_narrator
-from evidence_narrator_service.settings import NarratorSettings
 from graph_query_engine.vertical import ZONES_MAX
+from insight_contracts.wording import TERMS, name
 from insight_graph_service.core.settings import PROJECT_ROOT
-from insight_graph_service.server.app import create_app
 
 
 def _wait_ready(client):
@@ -26,15 +24,6 @@ def _wait_ready(client):
             return batches
         time.sleep(0.2)
     raise AssertionError("batch did not finish")
-
-
-def stack(engine):
-    """The graph service and the narrator on one local port, as the console reaches them."""
-    from scratch import free_port
-
-    port = free_port()
-    narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())
-    return port, compose(create_app(engine), narrator)
 
 
 @pytest.fixture
@@ -168,10 +157,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("S.cy.nodes('.hl-anchor').length") > 0
         assert page.evaluate("S.cy.nodes('.hl-seed').length") > 0
         assert page.evaluate("document.querySelectorAll('.ev').length") > 0
-        # the answer's panels start closed; a click opens the evidence, a second click closes it; UI chrome stays English
+        # the answer's panels start closed; a click opens the evidence, a second click closes it
         assert page.evaluate("document.querySelectorAll('.bot-tabs button.active').length") == 0 and page.is_hidden(".bot-pane[data-pane='0']")
         tab = ".bot-tabs button[data-pane='0']"
-        assert page.inner_text(tab).startswith("Evidence & how it was found")
+        assert page.inner_text(tab).startswith("Свідчення і як їх знайдено")
+        assert any("належить до теми" in t for t in page.locator(".ev .chain").all_inner_texts())  # a path's relations in TERMS' words
         page.click(tab)
         assert page.is_visible(".bot-pane[data-pane='0'] .ev") and page.is_hidden(".bot-pane[data-pane='1']")
         page.click(tab)
@@ -179,12 +169,21 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         # clicking an evidence card opens the details drawer via its citation
         page.click(".answer-box a.cite >> nth=0")
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
-        assert "insight" in page.inner_text("#drawer-kind").lower()
+        assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
+        heads = page.evaluate("[...document.querySelectorAll('#inspector .nb-group summary')].map((s) => s.firstChild.textContent.trim())")
+        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава"}
+        assert relations and relations <= {name(k)[0].upper() + name(k)[1:] for k in TERMS}  # the relations in TERMS' words, as the chain's
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
-        assert "Reproduced" in page.inner_text("#verify-out")
-        assert "Credibility" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
+        assert "Відтворено" in page.inner_text("#verify-out")
+        assert "підтвердження" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
+        labelled = "[...document.querySelectorAll('#inspector .kv')].slice(0, 2).flatMap((kv) => [...kv.querySelectorAll('dt')])"
+        assert page.evaluate(f"{labelled}.length >= 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
+        assert page.get_attribute(".key[data-key='latent']", "title").startswith("пов'язана тема: ")  # the legend's tooltips: the terms' meanings
         assert page.evaluate("document.querySelectorAll('.ev .ev-trust').length") > 0  # two uploads: every card shows its trust
+        assert httpx.patch(f"{url}/api/datasets/{housing['dataset_id']}", json={"reliability": "B"}, timeout=60).status_code == 200
+        page.evaluate("S.lastReady = null; refreshBatches()")  # a rated dataset's rail card shows its rating in words
+        page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
         assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
@@ -274,30 +273,30 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         lon, lat = page.evaluate(f"centre({{geometry: {{coordinates: [{ring}]}}}})")  # a cell across ±180°: where it is
         assert abs(lon + 179.47) < 0.5 and abs(lat - 0.46) < 0.5
         page.evaluate("loadOverlay('ds-unknown')")  # an overlay that cannot be read says so, not an empty map of regions
-        assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Regions and trust unavailable")
+        assert page.is_visible("#map-overlay-error") and page.inner_text("#map-overlay-error").startswith("Регіони й довіра недоступні")
         assert not page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")  # no trust read: none of this level's insights is drawn
-        assert page.evaluate("GeoMap.offMap(G.data.patterns[0].id)").startswith("Not drawn on this map: its trust could not be read")
+        assert page.evaluate("GeoMap.offMap(G.data.patterns[0].id)").startswith("Не на цій мапі: довіру до нього не вдалося прочитати")
         page.evaluate("loadOverlay(G.ds)")
         assert page.is_hidden("#map-overlay-error") and page.evaluate("G.overlay.features.length") > 0
         assert page.evaluate("G.data.patterns.some((p) => GeoMap.has(p.id))")
         page.evaluate("loadProjected('ds-unknown')")  # the other levels that cannot be read say so, not an upload without them
-        assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Insights of other levels unavailable")
+        assert page.is_visible("#map-projected-error") and page.inner_text("#map-projected-error").startswith("Інсайти інших рівнів недоступні")
         page.evaluate("loadProjected(G.ds)")
         assert page.is_hidden("#map-projected-error")
-        assert page.inner_text("#map-zone-n") == "ZONE · 3 cells" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
+        assert page.inner_text("#map-zone-n") == "ЗОНА · 3 комірки" and sorted(page.evaluate("GeoMap.zone()")) == sorted(c["h3"] for c in cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.click("#map-zone-ask")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         badges = "[...[...document.querySelectorAll('.msg-bot')].at(-1).querySelectorAll('.ev .role')].map((b) => b.textContent)"
-        assert {"in the asked area", "outside the asked area"} & set(page.evaluate(badges))  # each item of the zone's levels says which
+        assert {"у виділеній зоні", "поза виділеною зоною"} & set(page.evaluate(badges))  # each item of the zone's levels says which
         assert page.is_visible(".msg-bot[data-turn='0'] .bot-pane[data-pane='0'] .ev")  # the first answer's open panel survives the next
         page.fill("#question", "Де найбільше households?")  # the chat box asks about the selected zone too
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 3 and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         page.evaluate("GeoMap.toggleZone('8a2a1072b59ffff')")  # a cell this map does not draw (another level, elsewhere)
-        assert page.inner_text("#map-zone-n") == "ZONE · 4 cells · 3 on this map"
+        assert page.inner_text("#map-zone-n") == "ЗОНА · 4 комірки · на цій мапі: 3"
         page.click("#map-zone-clear")
         assert page.is_hidden("#map-zone")
         drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
@@ -310,7 +309,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         off = page.evaluate("api('/api/graph').then((g) => g.nodes.map((n) => n.data).find((d) => d.kind === 'Pattern' && !GeoMap.has(d.id)).id)")
         page.evaluate(f"reveal('{off}')")  # what a click on its citation does
         page.wait_for_function("!G.focusId && document.querySelector('#inspector .drawer-note')", timeout=10000)
-        assert page.inner_text("#inspector .drawer-note").startswith("Not on this map")
+        assert page.inner_text("#inspector .drawer-note").startswith("Не на цій мапі")
         before = page.evaluate("S.chat.length")
         page.evaluate(f"GeoMap.focusPattern('{neighbour}'); GeoMap.pick('{off}')")  # picked, as an IN VIEW row, but not drawn here
         page.wait_for_function(f"S.chat.length === {before + 1}")
@@ -395,7 +394,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               const mid = Object.keys(G.patterns).length;
               await Promise.all([a, b]); await wait(700);  // the old dataset's re-reads land after the switch
               return [mid, G.ds, G.data.features.length, Object.keys(G.patterns).length, G.loading, G.overlay.features.length, G.focusId, note]; } finally { api = orig; } }"""
-        assert page.evaluate(race, [real, "ds-stub", own]) == [0, "ds-stub", 1, 0, False, 0, None, "Not drawn yet: the map is still loading."]
+        assert page.evaluate(race, [real, "ds-stub", own]) == [0, "ds-stub", 1, 0, False, 0, None, "Ще не намальовано: мапа завантажується."]
         page.unroute("**/api/geo/ds-stub/**")
         across = {**stub, "cells": pack(179.0, -179.6)}  # its bbox the points' min and max: a band around the globe
         page.route("**/api/geo/ds-dateline/**", lambda r: r.fulfill(json=across[r.request.url.split("/")[6].split("?")[0]]))
@@ -457,41 +456,6 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.click("#new-chat")  # a fresh chat with no data: the welcome card offers no questions
         page.wait_for_selector(".welcome", timeout=10000)
         assert page.evaluate("document.querySelectorAll('.chip-q').length") == 0
-        browser.close()
-        assert not errors, errors
-
-
-@pytest.mark.browser
-def test_the_drawer_lists_where_a_base_insight_lies(cfg):
-    """A table level placed by its map: its insight's drawer has a Where section of its places, each a region whose
-    drawer counts it among the insights it holds."""
-    sync_api = pytest.importorskip("playwright.sync_api")
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    engine = make_engine(cfg)
-    with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
-        levels = engine.upload("california_housing.csv", f, geo="auto@5", table=True, bins="median_income_median:4,median_income:4")
-    done = [engine.process(r["batch_id"]) for r in levels]
-    table = next(r["dataset_id"] for r in done if r["level"] == "table")
-    graph = engine.graph()
-    pid = next(p for p, ins in graph.insights.items() if ins.dataset_id == table and graph.facts(p).regions)
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=exe)
-        page = browser.new_page(viewport={"width": 1500, "height": 900})
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=60000)
-        page.evaluate(f"inspect('{pid}')")
-        page.wait_for_function("[...document.querySelectorAll('#inspector h4')].some((h) => h.textContent === 'Where')", timeout=10000)
-        region = page.evaluate("[...document.querySelectorAll('#inspector h4')].find((h) => h.textContent === 'Where').nextElementSibling.dataset.id")
-        assert region.startswith("R:") and region in {r for r, _ in graph.facts(pid).regions.items()}
-        page.evaluate(f"inspect('{region}')")
-        page.wait_for_function(f"$('drawer-title').textContent.includes('{region.split(':')[2]}')", timeout=10000)
-        held = engine.graph().nodes[region]["props"]["patterns"]
-        assert f"{held} insight" in page.inner_text("#inspector .lead")  # its members of both bases
         browser.close()
         assert not errors, errors
 
@@ -566,159 +530,6 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         assert not errors, errors
 
 
-@pytest.mark.browser
-def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, demo_csv):
-    """The form's base-level box goes with a geo option alone; the same file submitted again with it skips the geo level
-    and commits the table level, whose insights reach the open map's list and overlay without a reload; the levels' cards
-    stand together; a deletion is offered only once no batch runs."""
-    sync_api = pytest.importorskip("playwright.sync_api")
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    engine, housing, bins = make_engine(cfg), PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "median_income_median:4"
-    with housing.open("rb") as f:
-        (level,) = engine.upload(housing.name, f, geo="auto@5", bins=bins)
-    geo = engine.process(level["batch_id"])
-    queued = engine.submit(demo_csv)  # not run until the end: a batch runs all along
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=exe)
-        page = browser.new_page(viewport={"width": 1500, "height": 900})
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0", timeout=60000)
-        deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
-        assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
-        page.click(".adv summary")
-        assert page.is_disabled("#table")
-        page.fill("#geo", "auto@5")
-        assert page.is_enabled("#table") and page.is_checked("#table")
-        page.fill("#bins", f"{bins},median_income:4")  # the table's own band beside the cells'
-        page.evaluate("$('geo').value = ''; window.dispatchEvent(new PageTransitionEvent('pageshow'))")  # a form the browser restored
-        assert page.is_disabled("#table")
-        page.evaluate("$('geo').value = 'auto@5'; window.dispatchEvent(new PageTransitionEvent('pageshow'))")
-        assert page.is_enabled("#table")
-        grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
-        assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
-        page.click("#view-switch button[data-view='map']")
-        page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
-        held = "G.overlay.features.reduce((a, f) => a + f.properties.patterns, 0)"
-        before = page.evaluate(held)
-        assert page.evaluate("G.projected.length") == 0
-        page.evaluate("window.__samePage = true")
-        page.set_input_files("#file", str(housing))
-        page.click("#upload-btn")
-        page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
-        page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
-        assert page.evaluate(held) > before and page.evaluate("window.__samePage")
-        # zoomed onto the busiest cell, the list reads the view anew and leads with the map's own level
-        listing = "[W.data.first, W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()]"
-        wide = page.evaluate(listing)
-        assert wide[0] == "coarse" and wide[1]
-        page.evaluate(
-            "G.map.jumpTo({ center: centre(G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))), zoom: 13 })"
-        )
-        page.wait_for_function("W.data && W.data.first === 'map'", timeout=10000)
-        assert page.evaluate(listing)[1] != wide[1]
-        levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
-        assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
-        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · 2 of 2 levels ready"
-        assert page.evaluate(
-            f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
-        ) == [
-            "california_housing.csv · H3 r5",
-            "california_housing.csv · table",
-        ]
-        engine.process(queued["batch_id"])
-        page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
-        browser.close()
-        assert not errors, errors
-
-
-@pytest.mark.browser
-def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
-    """A level with nothing to mine is a neutral card its group counts apart; the map holds one cell popup, closed by a
-    focus from it (which shows the insight's card) and by another tab; Esc closes the popup, then the focus, then the
-    drawer, one a press, and leaves the question field alone."""
-    sync_api = pytest.importorskip("playwright.sync_api")
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    engine = make_engine(cfg)
-    fine, coarse, _ = upload_levels(engine, points_csv, geo="auto@8,5", table=True)
-    assert coarse["status"] == "FAILED" and coarse["error"]["code"] == "invalid_schema"  # too few cells at 5
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=exe)
-        page = browser.new_page(viewport={"width": 1500, "height": 900})
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        requested: list[str] = []
-        page.on("request", lambda r: requested.append(r.url))
-        page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
-        assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
-        group = f".ds-group[data-upload='{fine['upload_id']}']"
-        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · 2 of 3 levels ready · 1 without findings"
-        card = page.locator(f"{group} .ds", has_text="H3 r5")
-        assert card.locator(".chip").inner_text() == "No findings" and not card.locator(".chip.bad, .ds-error").count()
-        # without a READY level the upload failed, as the backend reads it; a table level that finds nothing failed too
-        level = "(lv, st, code) => ({ batch_id: lv, upload_id: 'u', filename: 'f.csv', level: lv, status: st, locator: lv === 'table' ? 'auto' : null, error: code && { code, message: code } })"
-        bad = f"(cards) => (uploadGroup(cards.map((c) => ({level})(...c)), false).match(/chip bad/g) || []).length"
-        assert page.evaluate(bad, [["8", "FAILED", "no_viable_insights"], ["5", "FAILED", "no_candidates"]]) == 2
-        assert page.evaluate(bad, [["7", "FAILED", "no_viable_insights"]]) == 1
-        assert page.evaluate(bad, [["8", "READY", None], ["table", "FAILED", "no_candidates"]]) == 1
-        turn = "{question: 'q', qa: {view: {evidence: {attractors: [], items: [{pattern_id: 'P-none', scope: [], statistics: {}, provenance: {dataset_id: GeoMap.current()}}]}}}}"
-        assert page.evaluate("GeoMap.suggestions().length") and page.evaluate(  # an answer on the map's dataset: its questions, no cell read
-            f"JSON.stringify(followUps({turn})) === JSON.stringify(GeoMap.suggestions().slice(0, 3))"
-        )
-        page.evaluate(
-            "() => { window.__api = api; window.api = (path, opts) => (path.endsWith('/cells') ? (window.__down = true, Promise.reject(new Error('down'))) : __api(path, opts)); }"
-        )
-        page.click("#view-switch button[data-view='map']")  # the cells cannot be read: the map stays stale and the next open tries again
-        page.wait_for_function("window.__down && !G.refreshing && !G.loading", timeout=30000)
-        assert page.evaluate("G.stale && !G.data")
-        page.evaluate("() => { window.api = __api; }")
-        page.click("#view-switch button[data-view='graph']")
-        page.click("#view-switch button[data-view='map']")
-        page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
-        assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
-        stored = json.loads(engine.ws.geo_cells_path(fine["dataset_id"]).read_text(encoding="utf-8"))["features"]
-        rebuilt = page.evaluate("G.data.features")  # the package rebuilds every cell: its ring and the fields its popup shows
-        assert [f["properties"] for f in rebuilt] == [{k: v for k, v in f["properties"].items() if not k.endswith("_band")} for f in stored]
-        assert all(
-            abs(a - b) <= 1e-5
-            for f, g in zip(rebuilt, stored)
-            for p, q in zip(f["geometry"]["coordinates"][0], g["geometry"]["coordinates"][0])
-            for a, b in zip(p, q)
-        )
-        busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
-        popup = f"cellPopup({busiest}, centre({busiest}))"
-        pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")
-        page.evaluate(f"{popup}; {popup}")
-        assert page.locator(".sig-pop").count() == 1  # one popup at a time
-        page.click(".sig-pop .pp-ins >> nth=0")  # a focus from the popup closes it: the card shows
-        assert page.locator(".sig-pop").count() == 0 and page.is_visible("#map-card")
-        page.evaluate(f"inspect('{pid}')")
-        page.wait_for_selector("#drawer:not([hidden])")
-        page.evaluate(popup)
-        layers = "[document.querySelectorAll('.sig-pop').length, GeoMap.focused(), !$('drawer').hidden]"
-        assert page.evaluate(layers) == [1, True, True]
-        page.focus("#question")
-        page.keyboard.press("Escape")  # a text field keeps its Esc
-        assert page.evaluate(layers) == [1, True, True]
-        page.focus("#lyr-cells")  # a checkbox does not
-        for left in ([0, True, True], [0, False, True], [0, False, False]):
-            page.keyboard.press("Escape")
-            assert page.evaluate(layers) == left
-        page.evaluate(popup)
-        page.click("#view-switch button[data-view='graph']")  # another tab closes it
-        assert page.locator(".sig-pop").count() == 0
-        browser.close()
-        assert not errors, errors
-
-
 def test_the_console_knows_the_empty_level_codes():
     """The rail's neutral card reads ``uploads.EMPTY_LEVEL``, copied into ``datasets.js``: the two stay one set."""
     from insight_graph_service.core.uploads import EMPTY_LEVEL
@@ -726,104 +537,6 @@ def test_the_console_knows_the_empty_level_codes():
     js = (PROJECT_ROOT / "sig_web_console" / "static" / "datasets.js").read_text(encoding="utf-8")
     copied = re.search(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js).group(1)
     assert set(re.findall(r'"(\w+)"', copied)) == EMPTY_LEVEL
-
-
-@pytest.mark.browser
-def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
-    """From the IN VIEW list to the insight's card: its theme is the one the list shows it under, its Walk on holds its
-    scale chain's levels; asked from the card, the question carries the H3 cells it is drawn by, the answer has the
-    AREA line and the insight, whose citation focuses it on the same map; New chat clears the focus and the list's mark;
-    Show in graph on a base insight under a geo filter shows its node."""
-    import pandas as pd
-
-    from graph_query_engine.graph import primary_anchor
-    from graph_query_engine.vertical import scale_chain
-
-    sync_api = pytest.importorskip("playwright.sync_api")
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    engine = make_engine(cfg)
-    with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as f:
-        levels = engine.upload("california_housing.csv", f, geo="auto@6,5", table=True, bins="median_income_median:4,median_income:4")
-    fine, _, table = (engine.process(r["batch_id"]) for r in levels)
-    pd.read_csv(PROJECT_ROOT / "data" / "demo" / "california_housing.csv").iloc[::2].to_csv(half := tmp_path / "half.csv", index=False)
-    other = engine.process(engine.submit(half, geo="auto@6", bins="median_income_median:4")["batch_id"])  # another upload: off this map
-    graph = engine.graph()
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=exe)
-        page = browser.new_page(viewport={"width": 1500, "height": 900})
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
-        page.select_option("#dataset-filter", fine["dataset_id"])
-        page.click("#view-switch button[data-view='map']")
-        page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
-        page.evaluate("if (W.folded) $('mw-fold').click()")
-        # a geo insight with a coarser step: its card names its theme and walks its scale chain
-        chained = next(
-            i["id"]
-            for t in page.evaluate("W.data.themes")
-            for i in t["insights"]
-            if graph.facts(i["id"]).resolution == 6 and (chain := scale_chain(graph, [i["id"]])) and chain[0].up
-        )
-        page.evaluate(f"GeoMap.pick('{chained}')")
-        page.wait_for_selector(".insight-card .nb", timeout=10000)
-        card = page.locator(".msg-bot").last
-        assert card.locator(".ic-theme").get_attribute("data-id") == primary_anchor(graph, chained)["target"]
-        assert any(t.startswith("↑ res 5") for t in card.locator(".insight-card .nb").all_inner_texts())
-        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
-        page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
-        card.locator(".ic-theme").click()
-        assert page.evaluate(f"W.fold[{theme!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{theme}']").count() == 1
-        # a neighbour of another upload, which this map does not draw: walked on, the focus goes and its drawer says so
-        offmap = "[...document.querySelectorAll('.msg-bot:last-child .insight-card .nb')].map((e) => e.dataset.id).filter((id) => !GeoMap.has(id))"
-        for row in [i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if graph.facts(i["id"]).resolution == 6]:
-            page.evaluate(f"GeoMap.pick('{row}')")
-            page.wait_for_function(f"S.chat.at(-1).insight && S.chat.at(-1).insight.node.id === '{row}'", timeout=10000)
-            if ids := page.evaluate(offmap):
-                break
-        assert graph.insight(ids[0]).dataset_id == other["dataset_id"] and page.evaluate("G.focusId") == row
-        page.locator(".msg-bot").last.locator(f".insight-card .nb[data-id='{ids[0]}']").click()
-        page.wait_for_function("!$('drawer').hidden && $('inspector').textContent.includes('Not on this map')", timeout=10000)
-        assert page.evaluate("G.focusId") is None
-        # a base insight asked with its place: H3 cells as the zone, AREA in the prompt, the insight in the answer
-        base = next(i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if i["level"] == "table")
-        page.evaluate(
-            "() => { window.__asked = []; const real = api; window.api = (path, opts) => { if (path === '/api/chat/query') __asked.push(JSON.parse(opts.body)); return real(path, opts); }; }"
-        )
-        page.evaluate(f"GeoMap.pick('{base}')")
-        page.wait_for_function("S.chat.at(-1).insight && S.chat.at(-1).insight.node.id === " + repr(base), timeout=10000)
-        page.locator(".msg-bot").last.locator(".ic-ask").click()
-        page.wait_for_function("S.chat.at(-1).qa", timeout=30000)
-        (asked,) = page.evaluate("__asked")
-        assert asked["cells"] and all(isinstance(c, str) and re.fullmatch(r"[0-9a-f]{15}", c) for c in asked["cells"])
-        assert asked["cells"] == page.evaluate(f"GeoMap.placeOf('{base}')")
-        assert "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
-        assert base in page.evaluate("S.chat.at(-1).qa.view.evidence.items.map((i) => i.pattern_id)")
-        answer = page.locator(".msg-bot").last
-        cite = answer.locator(f"a.cite[data-pid='{base}']")
-        if cite.count():  # its citation in the text, else its evidence card
-            cite.first.click()
-        else:
-            answer.locator(".bot-tabs button[data-pane='0']").click()
-            answer.locator(
-                f".ev[data-i='{page.evaluate(f'S.chat.at(-1).qa.view.evidence.items.findIndex((i) => i.pattern_id === {base!r})')}']"
-            ).click()
-        page.wait_for_function(f"G.focusId === '{base}'", timeout=10000)
-        assert page.evaluate("G.ds") == fine["dataset_id"]  # the map stays on its dataset
-        page.click("#new-chat")
-        assert page.evaluate("G.focusId") is None and page.locator("#map-window .mw-i.on").count() == 0
-        # Show in graph on a base insight under the geo filter: the filter gives way, the node is in the graph
-        page.evaluate(f"GeoMap.pick('{base}')")
-        page.wait_for_selector(".msg-bot >> nth=-1 >> .ic-graph", timeout=10000)
-        page.locator(".msg-bot").last.locator(".ic-graph").click()
-        page.wait_for_function(f"$('dataset-filter').value === '' && S.cy.getElementById('{base}').nonempty()", timeout=20000)
-        assert table["dataset_id"] == graph.insight(base).dataset_id
-        browser.close()
-        assert not errors, errors
 
 
 # /api/batches with an upload's two levels first, r7 READY and r5 running: its stage and stage_times are what a test sets on window.__run
@@ -857,7 +570,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         poll = "async () => { await refreshBatches(); clearTimeout(S.poll); }"
         step = "#batches .ds:not(.clickable) .ds-step"
         page.evaluate(poll)
-        assert re.fullmatch(r"Embedding insights… step 6 of 10 · 1 min 1\d s", page.inner_text(step))
+        assert re.fullmatch(r"Індексування інсайтів… крок 6 з 10 · 1 хв 1\d с", page.inner_text(step))
         kept = "[...document.querySelectorAll('#batches .ds.clickable')]"
         assert page.evaluate(f"{kept}.map((c) => c.dataset.ds).sort().join()") == ",".join(sorted(["D-r7", ds]))
         page.evaluate(f"() => {{ window.__cards = {kept}; window.__opt = $('dataset-filter').options[1]; }}")
@@ -865,7 +578,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
         page.evaluate(poll)
         assert page.evaluate(f"{kept}.every((c, i) => c === __cards[i]) && $('dataset-filter').options[1] === __opt")
         shown = page.inner_text(step)
-        assert re.fullmatch(r"Learning themes… step 7 of 10 · [0-2] s", shown)
+        assert re.fullmatch(r"Пошук тем… крок 7 з 10 · [0-2] с", shown)
         page.wait_for_function(f"document.querySelector('{step}').innerText !== {json.dumps(shown)}", timeout=5000)  # ticks between polls
         page.evaluate("() => { __run.status = 'READY'; }")
         page.evaluate(poll)
@@ -918,7 +631,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.evaluate(question)
         page.wait_for_selector(".ask-cancel")
         waited = page.inner_text(".typing .ds-elapsed")
-        assert re.fullmatch(r"\d+ s", waited)
+        assert re.fullmatch(r"\d+ с", waited)
         page.wait_for_function(f"document.querySelector('.typing .ds-elapsed').textContent !== '{waited}'", timeout=3000)  # ticks between renders
         page.click("#new-chat")
         page.evaluate("async () => { await __p; }")
@@ -935,7 +648,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.evaluate("() => { __net.hold.add('/api/chat/query'); }")
         page.evaluate(question)
         page.click(".ask-cancel")
-        assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Cancelled."
+        assert page.evaluate("!S.busy") and page.inner_text("#thread .msg-bot") == "Скасовано."
         assert not page.locator("#thread .bot-card.error").count()
         page.fill("#question", "x")
         assert page.is_enabled("#ask-btn")
@@ -949,6 +662,6 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.route("**/api/chat/query", lambda r: r.fulfill(status=504, content_type="text/html", body="<html>504</html>"))
         page.evaluate(question)
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
-        assert all(t.startswith("No answer in time.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
+        assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
         browser.close()
         assert not errors, errors

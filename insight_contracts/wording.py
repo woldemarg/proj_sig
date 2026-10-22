@@ -9,11 +9,11 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
-from insight_contracts.text import covariance_change, format_value, humanize, magnitude_word
+from insight_contracts.text import covariance_change, format_p, format_value, humanize, magnitude_word
 
 # key -> (name, meaning). A relation's key is its edge type, "<TYPE> (in)" for the incoming direction (the drawer's
 # neighbour groups and a reversed path step use the same keys); its name labels the node at the other end.
@@ -80,7 +80,7 @@ TERMS: dict[str, tuple[str, str]] = {
     "RELATED_TO (in)": ("пов'язана тема", "теми, чиї інсайти найбільше схожі одна на одну за змістом; не сусідство на мапі"),
     "CO_OCCURS": ("спільна тема", "теми, що мають спільні інсайти"),
     "CO_OCCURS (in)": ("спільна тема", "теми, що мають спільні інсайти"),
-    "SPECIALIZES": ("вужчий за", "ця знахідка — вужча частина тієї: її умови і ще одна"),
+    "SPECIALIZES": ("ширший інсайт", "ширша знахідка, частина якої — ця: ті самі умови без однієї"),
     "SPECIALIZES (in)": ("вужчий інсайт", "вужча частина цієї знахідки: її умови і ще одна"),
     "CONTRASTS": ("протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"),
     "CONTRASTS (in)": ("протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"),
@@ -104,6 +104,7 @@ TERMS: dict[str, tuple[str, str]] = {
     "points": ("події", "точки з файлу, що потрапили в комірки інсайту"),
     "cells_extent": ("комірки", "комірки мапи, з яких складається інсайт на своєму рівні"),
     "cells_footprint": ("комірки сліду", "комірки цього рівня, що тримають 80 % подій інсайту, знайденого на іншому рівні"),
+    "cells_inside": ("комірки всередині", "комірки цього рівня, чиї центри лежать у комірках інсайту, знайденого на іншому рівні мапи"),
     "cells_in_view": ("комірки у вікні", "комірки у вікні мапи, де є події інсайту"),
     "window_lift": (
         "частота у вікні",
@@ -167,6 +168,13 @@ _DERIVED = {
 }
 
 
+JARGON = (  # analyst words a plain-language answer leaves out (system-prompt rule 10, narration.jargon): English whole words,
+    # Ukrainian stems
+    *("sd", "MAD", "median", "quartile", "q1", "q2", "q3", "q4", "LISA", "subgroup", "seed", "transversal", "latent", "anchor"),
+    *("медіан", "квартил", "підгруп", "якор", "якір", "латентн", "трансверсальн", "атрактор"),
+)
+
+
 def name(key: str) -> str:
     """The Ukrainian name of a term; an unknown key reads as itself (a new edge type or label never raises)."""
     return TERMS.get(key, (key, ""))[0]
@@ -177,6 +185,24 @@ def plural(n: int, one: str, few: str, many: str) -> str:
     if n % 10 == 1 and n % 100 != 11:
         return one
     return few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+
+
+def source_column(column: str, declared: Collection[str]) -> str | None:
+    """The declared column a dataset column stands for: itself, a band's (``<c>_band``), a geo cell's derivation
+    (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``); None when it is none of them."""
+    if column in declared:
+        return column
+    if column.endswith("_band"):  # a band of a column or of a cell's derivation
+        return source_column(column.removesuffix("_band"), declared)
+    for suffix in _DERIVED:
+        if column.endswith(suffix) and column.removesuffix(suffix) in declared:
+            return column.removesuffix(suffix)
+    if column.startswith("share_"):
+        # ponytail: the longest declared prefix wins; a declared "region" reads share_region_code_UA when region_code is
+        # not declared, as the profile keeps no share column's source to tell them apart
+        rest = column.removeprefix("share_")
+        return next((c for c in sorted(declared, key=len, reverse=True) if rest.startswith(c + "_")), None)
+    return None
 
 
 def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
@@ -192,7 +218,7 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
         if column.startswith("share_"):
             rest = column.removeprefix("share_")
             # ponytail: a source column the glossary does not name splits at the last "_"; a level holding "_" misreads
-            source = next((c for c in sorted(glossary, key=len, reverse=True) if rest.startswith(c + "_")), rest.rpartition("_")[0])
+            source = source_column(column, glossary) or rest.rpartition("_")[0]
             if source:
                 return f"частка подій комірки, де {column_words(source, glossary, False)} — {rest[len(source) + 1 :]}"
         for suffix, template in _DERIVED.items():
@@ -221,8 +247,9 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
 
 
 def shift_words(z: float) -> str:
-    """Direction and degree of a robust shift, gender-neutral: 'помітно вище' (the buckets of ``text.magnitude_word``)."""
-    return f"{_DEGREE[magnitude_word(z)]} {'вище' if z > 0 else 'нижче'}"
+    """Direction and degree of a robust shift, gender-neutral: 'помітно вище' (the buckets of ``text.magnitude_word``, on
+    the shift as it is shown, to two decimals: -0.998 shows as -1.00 sd and reads помірно)."""
+    return f"{_DEGREE[magnitude_word(round(z, 2))]} {'вище' if z > 0 else 'нижче'}"
 
 
 def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str:
@@ -260,10 +287,11 @@ def sentence(words: Mapping[str, str]) -> str:
     return f"Де {words['where']} — {words['what']}"
 
 
-def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, distinct_scopes: int) -> str:
-    """A theme in one sentence from its two strongest signature entries (docs/05_latent_anchors.md §5.8)."""
-    parts = []
-    for entry in signature[:2]:
+def theme_reading(props: Mapping[str, Any]) -> str:
+    """A theme in one sentence from its Attractor props: its two strongest signature entries, its insights and scopes
+    (docs/05_latent_anchors.md §5.8)."""
+    n_patterns, distinct_scopes, parts = props["n_patterns"], props["distinct_scopes"], []
+    for entry in props["signature"][:2]:
         label, up = entry["component"], entry["value"] > 0
         if label.startswith("correlation between "):
             # ponytail: a column name holding " and " splits at its first one
@@ -276,12 +304,11 @@ def theme_reading(signature: Sequence[Mapping[str, Any]], n_patterns: int, disti
     return f"Повторювана картина: {', '.join(parts)} — {found}." if parts else f"Тема без інсайтів: {found}."
 
 
-def region_reading(region_id: str, picture: Mapping[str, int]) -> str:
-    """A map region in one sentence: its H3 cell as a literal and what it holds (``vertical.picture``); no place name."""
-    _, resolution, cell = region_id.split(":", 2)
+def region_reading(picture: Mapping[str, int]) -> str:
+    """What a map region holds (``vertical.picture``) in one sentence; the drawer's title names the region, no place name."""
     p, d, t = picture["patterns"], picture["datasets"], picture["themes"]
     return (
-        f"Регіон {cell} (рівень {resolution}): {p} {plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
+        f"{p} {plural(p, 'інсайт', 'інсайти', 'інсайтів')} "
         f"з {d} {plural(d, 'датасету', 'датасетів', 'датасетів')}, {t} {plural(t, 'тема', 'теми', 'тем')}."
     )
 
@@ -296,3 +323,27 @@ def lift_words(kind: str, lift: float) -> str:
         count = f"{int(times)} {plural(int(times), 'раз', 'рази', 'разів')}" if times.is_integer() else f"{times} раза"
         words = f"у {count} частіше, ніж очікувано за часткою на всій мапі"
     return words + (" (згладжено)" if kind == "window" else "")
+
+
+def value_words(ins: Insight) -> dict[str, str]:
+    """What an insight's test numbers say: ``p_adjusted`` its bucket and the exact value, and for a geo insight
+    ``n_eff``, the effective sample size of its median test with the cells it counts. ``n_eff`` is the cells holding a
+    value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ`` Moran's I clipped to [0, 0.99] as
+    ``spatial.effective_n_factor`` clips it: a sparse cell holds no value, so ``n_eff`` below the extent's cells says
+    nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing. With ``I > 0`` the counted cells come back from
+    the rounded ``n_eff`` and ``I``, so they read as approximate."""
+    p = ins.p_adjusted
+    if p is None:
+        out = {"p_adjusted": "не перевірялося (зміна зв'язку)"}
+    else:
+        exact = f" ({p:.1e})" if 0 < p < 0.05 else " (< 1e-300)" if p == 0 else ""  # above 0.05 the bucket is the number
+        out = {"p_adjusted": format_p(p) + exact}
+    spatial = ins.provenance.get("spatial") or {}
+    if spatial.get("n_eff") is not None:
+        moran = spatial.get("moran_i") or 0.0
+        rho = min(max(moran, 0.0), 0.99)
+        valued = round(spatial["n_eff"] * (1 + rho) / (1 - rho))
+        tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
+        cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
+        out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"
+    return out

@@ -123,24 +123,24 @@ Without an LLM everything still works: answers fall back to a cited, evidence-on
 SIG owns its seven node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
 
 ### Using the console
-1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Demo: table** (the synthetic retail orders) or **Demo: map** (California housing block groups, analysed as H3 cells).
-   - Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
-   - A dataset card's *Delete* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
+1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Демо: таблиця** (the synthetic retail orders) or **Демо: мапа** (California housing block groups, analysed as H3 cells).
+   - Under *Параметри колонок*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
+   - A dataset card's *Видалити* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. **Watch the batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
-3. **Explore.** *Graph*, *3D Sphere* and *Insights* are views of the same knowledge base under one legend.
+3. **Explore.** *Граф*, *3D-сфера* and *Інсайти* are views of the same knowledge base under one legend.
    - The legend's link switches show the layers in both views. Hierarchy and theme links are on by default; contrasts, siblings, memberships and columns come on demand.
    - Hovering a legend entry spotlights it.
    - Click any node or row for the details drawer: a one-line reading, shifts, evidence facts, the canonical form, connections and provenance.
-4. **3D Sphere.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
+4. **3D-сфера.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
 5. **Chat** with the data, or click a suggestion.
    - Answers are in Ukrainian. Every data literal (`margin`, `phones`, `US`, ids) stays exactly as the data holds it.
    - The answer cites its `[P#]` evidence, and a citation opens the details drawer.
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
-   - The *Prompt* tab shows the exact evidence the model saw.
+   - The *Промпт* tab shows the exact evidence the model saw.
 
-6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ a base level without geography* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+6. **Мапа** (a geo dataset — rows are points). Upload with *Параметри колонок → Просторовий аналіз (комірки H3)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
 
-   **Demo: map** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
+   **Демо: мапа** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
 
 **Without the UI**, use the HTTP API through the console's port:
 ```powershell
@@ -196,17 +196,17 @@ Latent anchors learned, each a recurring phenomenon across scopes:
 "Why is margin lower for phones in the US?" with `use_llm: false` gives the evidence-only answer (`answer_mode: "fallback"`):
 ```text
 Спостереження:
-- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (медіана 14.75 проти 19.45) | n=438 [P1]
-- category=phones, channel=online, region=US | discount +2.25 sd (медіана 19.35 проти 10.74); margin -1.10 sd (медіана 14.72 проти 19.45) | n=205 [P2]
+- Де category = phones і region = US — discount: помітно вище, медіана 19.19 проти 10.74 загалом (+2.21 sd); margin: помірно нижче, медіана 14.75 проти 19.45 (-1.10 sd); 438 рядків [P1]
+- Де category = phones і channel = online і region = US — discount: помітно вище, медіана 19.35 проти 10.74 загалом (+2.25 sd); margin: помірно нижче, медіана 14.72 проти 19.45 (-1.10 sd); 205 рядків [P2]
 …
-- category=tablets, channel=retail, region=EU | discount +2.14 sd (медіана 18.91 проти 10.74); margin -1.03 sd (медіана 15.03 проти 19.45) | n=134 [P4] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
-- category=tablets, channel=retail, region=APAC | discount +2.09 sd (медіана 18.74 проти 10.74); margin -1.00 sd (медіана 15.17 проти 19.45) | n=108 [P5] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
+- Де category = tablets і channel = retail і region = EU — discount: помітно вище, медіана 18.91 проти 10.74 загалом (+2.14 sd); margin: помірно нижче, медіана 15.03 проти 19.45 (-1.03 sd); 134 рядки [P4] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
+- Де category = tablets і channel = retail і region = APAC — discount: помітно вище, медіана 18.74 проти 10.74 загалом (+2.09 sd); margin: слабко нижче, медіана 15.17 проти 19.45 (-1.00 sd); 108 рядків [P6] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
 …
 Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).
 ```
 The citation check passed: all 10 evidence items cited, 0 unknown keys (`grounded: true`). With the broker configured, the LLM writes the same evidence as a Ukrainian answer with `[P#]` citations (`answer_mode: "llm"`), checked the same way.
 
-The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882`.
+The prompt (the *Промпт* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882`.
 - **No shared scope.** The seed `US∧phones` shares no condition with the tablet patterns.
 - **Lattice vs anchor.** The lattice reaches them only through 2–4 hops among many other patterns. The anchor `discount ↑ · margin ↓` connects them in two hops.
 - **The prompt** is plain ASCII. It defines "sd" once and states every shift as a phrase plus a signed number ([7.4](docs/07_question_answering.md#74-the-evidence-object)).

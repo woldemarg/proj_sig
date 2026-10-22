@@ -35,6 +35,7 @@ def _texts() -> list[tuple[str, str]]:
         (-2.5, "помітно нижче"),
         (3.0, "різко вище"),
         (-9.0, "різко нижче"),
+        (-0.998, "помірно нижче"),  # shown as -1.00 sd
     ],
 )
 def test_a_shift_reads_by_the_buckets_of_magnitude_word(z, words):
@@ -116,12 +117,15 @@ def test_a_covariance_insight_reads_as_its_correlation_change():
 
 def test_a_theme_and_a_region_read_in_plain_words():
     signature = [{"component": "discount", "value": 1.0}, {"component": "margin", "value": -0.49}, {"component": "x", "value": 0.1}]
-    assert w.theme_reading(signature, 9, 9) == "Повторювана картина: discount вище, margin нижче — 9 інсайтів у 9 частинах даних."
-    assert w.theme_reading([{"component": "correlation between a and b", "value": -0.3}], 1, 1) == (
+    assert (
+        w.theme_reading({"signature": signature, "n_patterns": 9, "distinct_scopes": 9})
+        == "Повторювана картина: discount вище, margin нижче — 9 інсайтів у 9 частинах даних."
+    )
+    assert w.theme_reading({"signature": [{"component": "correlation between a and b", "value": -0.3}], "n_patterns": 1, "distinct_scopes": 1}) == (
         "Повторювана картина: зв'язок метрик a і b слабшає — 1 інсайт у 1 частині даних."
     )
     picture = {"patterns": 3, "datasets": 1, "themes": 2}
-    assert w.region_reading("R:5:85283473fffffff", picture) == "Регіон 85283473fffffff (рівень 5): 3 інсайти з 1 датасету, 2 теми."
+    assert w.region_reading(picture) == "3 інсайти з 1 датасету, 2 теми."
 
 
 def test_lifts_say_which_one_they_are():
@@ -132,7 +136,7 @@ def test_lifts_say_which_one_they_are():
 
 def test_relations_label_the_other_end():
     """SPECIALIZES points from the narrower insight to the broader one: from the broader, the other end is narrower."""
-    assert w.name("SPECIALIZES") == "вужчий за" and "ширш" not in w.name("SPECIALIZES (in)")
+    assert w.name("SPECIALIZES") == "ширший інсайт" and "ширш" not in w.name("SPECIALIZES (in)")
     assert w.name("PARENT_OF") == "ширший регіон" and w.name("PARENT_OF (in)") == "вужчий регіон"
     assert w.name("NEW_EDGE (in)") == "NEW_EDGE (in)"  # an unknown term reads as its key
 
@@ -157,3 +161,56 @@ def test_the_glossary_names_every_term():
     doc = (ROOT / "docs" / "11_reference.md").read_text(encoding="utf-8")
     glossary = doc[doc.index("## 11.1") : doc.index("## 11.2")]
     assert not [name for name, _ in w.TERMS.values() if name not in glossary]
+
+
+def test_test_numbers_read_as_the_method_gives_them():
+    """p in its bucket with the exact value; n_eff with the cells it counts: below the extent's cells and with I ≤ 0 it
+    reduces nothing and claims no independence; with I > 0 the counted cells come back from the factor, ρ clipped at
+    0.99 as discovery clips it."""
+    from subgroup_miner.spatial import effective_n_factor
+
+    def numbers(p, spatial=None):
+        return w.value_words(toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=p, provenance={"spatial": spatial} if spatial else {}))
+
+    sparse = numbers(1.2e-5, {"cells": 420, "n_eff": 180.0, "moran_i": -0.1})
+    assert sparse == {"p_adjusted": "< 0.001 (1.2e-05)", "n_eff": "180: 180 непорожніх комірок метрики, без зменшення за автокореляцією"}
+    assert "незалежн" not in sparse["n_eff"]
+    alike = numbers(0.0, {"cells": 420, "n_eff": 120.0, "moran_i": 0.2})
+    assert alike == {
+        "p_adjusted": "< 0.001 (< 1e-300)",
+        "n_eff": "120: ≈180 непорожніх комірок метрики, зменшено за схожістю сусідніх комірок (Moran's I 0.20)",
+    }
+    solid = numbers(1e-3, {"cells": 400, "n_eff": 300 * effective_n_factor(0.995), "moran_i": 0.995})
+    assert "≈300 непорожніх комірок" in solid["n_eff"]  # the clip at 0.99, as effective_n_factor's
+    assert numbers(0.2) == {"p_adjusted": "0.20"} and numbers(None)["p_adjusted"].startswith("не перевірялося")
+
+
+def test_the_console_claims_no_cause_and_significance_only_on_the_sac_line():
+    static = ROOT / "sig_web_console" / "static"
+    text = "\n".join(p.read_text(encoding="utf-8") for p in [*static.glob("*.js"), static / "index.html"])
+    assert not [b for b in ("комірки незалежні", "частка бутстреп", "поділена на MAD", "доводить", "спричиняє") if b in text]
+    significant = [ln for ln in text.splitlines() if "значущ" in ln]  # the SAC term's meaning and the HUD's SAC line only
+    assert significant and all(ln.lstrip().startswith('"sac":') or 'term("sac")' in ln for ln in significant)
+
+
+ENGLISH_CHROME = (  # the console's former chrome: none of it is left (#101)
+    "Evidence & how it was found", "Searching the graph", "Cancelled.", "No answer in time", "Regions and trust unavailable",
+    "Insights of other levels unavailable", "Not on this map", "No findings", "levels ready", "Re-check from the raw data",
+    "Clear highlight", "Ask your data", "New chat", "Walk on", "Reproduced", "Drop a table here", "Server unreachable",
+    "Score breakdown", "Show in graph", "Treat as categories", "Two planes", "IN VIEW", "Colour cells by", "Deleted ", "corr. change",
+)  # fmt: skip
+
+
+def test_the_console_speaks_ukrainian_and_explains_every_error_code():
+    static = ROOT / "sig_web_console" / "static"
+    text = "\n".join(
+        re.sub(r"//[^\n]*|/\*.*?\*/", "", p.read_text(encoding="utf-8"), flags=re.S) for p in [*static.glob("*.js"), static / "index.html"]
+    )
+    assert not [s for s in ENGLISH_CHROME if s in text]
+    assert {"invalid_options", "metadata_mismatch"} <= set(re.findall(r"^\s+(\w+): \[", text.split("const ERROR_HELP = {")[1].split("};")[0], re.M))
+
+
+@pytest.mark.skipif(not (ROOT / "docs").is_dir(), reason="the graph service image holds no docs (.dockerignore)")
+def test_the_interface_chapter_quotes_the_ukrainian_chrome():
+    doc = (ROOT / "docs" / "08_interface.md").read_text(encoding="utf-8")
+    assert not [s for s in ENGLISH_CHROME if f"*{s}" in doc or f"«{s}" in doc]

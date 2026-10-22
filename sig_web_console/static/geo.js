@@ -8,10 +8,10 @@ const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is reposit
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid]),
-  offMap: (pid) => (G.loading ? "Not drawn yet: the map is still loading."  // why the drawer of an insight the map does not draw opens
-    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Not drawn on this map: its trust could not be read."
-    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Not drawn on this map: its record fails its integrity check."
-    : "Not on this map: its level draws nowhere here."),
+  offMap: (pid) => (G.loading ? "Ще не намальовано: мапа завантажується."  // why the drawer of an insight the map does not draw opens
+    : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Не на цій мапі: довіру до нього не вдалося прочитати."
+    : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Не на цій мапі: його запис не пройшов перевірку цілісності."
+    : "Не на цій мапі: його рівень тут нічого не малює."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
@@ -90,7 +90,10 @@ const GeoMap = {
 
   placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : []),  // its cells' H3 ids: a zone a question can carry
 
-  openTheme(aid) { W.fold[aid ?? ""] = true; renderWindow(); },  // the IN VIEW list opens the theme a card names
+  openTheme(aid) {  // the IN VIEW list opens the theme a card names, or the group it is folded into
+    const group = ((W.data && W.data.themes) || []).find((t) => t.id === aid || t.members.includes(aid));
+    W.fold[(group ? group.id : aid) ?? ""] = true; renderWindow();
+  },
 
   unfocus() {
     GeoMap.closePopup();
@@ -231,7 +234,7 @@ function ensureMap() {
       if (!pointer) requestAnimationFrame(() => {
         const ev = pointer, f = m.queryRenderedFeatures(ev.point, { layers: ["cells-fill"] })[0];
         pointer = null;
-        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${num(f.properties.points, 0)} pts` : "");
+        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${plural(f.properties.points, "подія", "події", "подій")}` : "");
         m.getCanvas().style.cursor = f ? "pointer" : "";
       });
       pointer = e;
@@ -303,8 +306,8 @@ async function loadDataset(ds) {
     colorBy(G.metric);
     const sac = info.sac || {};
     $("map-title").textContent = info.filename || ds;
-    $("map-meta").innerHTML = `H3 res ${info.resolution} · ${num(info.cells, 0)} cells · ${num(info.points, 0)} points` +
-      (sac.validated ? `<br><span title="Validated candidates significant without / with the effective-sample-size correction for spatial autocorrelation">SAC: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> significant of ${sac.validated} (n<sub>eff</sub>)</span>` : "");
+    $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
+      (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     paintZone();
     return true;
@@ -318,7 +321,7 @@ async function loadProjected(ds, seq = G.loadSeq) {
   if (seq !== G.loadSeq) return;  // a dataset loaded since: these rows index other cells
   G.projected = projected;
   $("map-projected-error").hidden = !failed;  // not an upload without other levels: they could not be read
-  $("map-projected-error").textContent = failed && `Insights of other levels unavailable: ${failed}`;
+  $("map-projected-error").textContent = failed && `Інсайти інших рівнів недоступні: ${failed}`;
   mergePatterns();
 }
 
@@ -327,7 +330,7 @@ function mergePatterns() {
      (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
      (/projected, intact only) */
   const trust = (G.overlay && G.overlay.patterns) || {};
-  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch");
+  const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch").map((p) => ({ ...p, reading: trust[p.id].reading, numbers: trust[p.id].numbers }));
   G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
   G.byRow = G.data.features.map(() => []);
   Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
@@ -341,7 +344,7 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   if (seq !== G.loadSeq) return;  // a dataset loaded since
   G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
-  $("map-overlay-error").textContent = failed && `Regions and trust unavailable, so this level's insights are not drawn: ${failed}`;
+  $("map-overlay-error").textContent = failed && `Регіони й довіра недоступні, тож інсайти цього рівня не намальовано: ${failed}`;
   mergePatterns();
   const regions = (G.overlay || empty()).features;
   G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
@@ -400,7 +403,7 @@ function paintZone() {
   const inZone = G.data ? G.data.features.filter((f) => G.zone.has(f.properties.h3)) : [], shown = inZone.length;
   if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: inZone });
   $("map-zone").hidden = !G.zone.size;
-  $("map-zone-n").textContent = `ZONE · ${G.zone.size} cell${G.zone.size === 1 ? "" : "s"}` + (G.data && shown < G.zone.size ? ` · ${shown} on this map` : "");
+  $("map-zone-n").textContent = `ЗОНА · ${plural(G.zone.size, "комірка", "комірки", "комірок")}` + (G.data && shown < G.zone.size ? ` · на цій мапі: ${shown}` : "");
 }
 
 function colorBy(metric) {
@@ -412,7 +415,7 @@ function colorBy(metric) {
   stops.forEach((q, i) => step.push(q, RAMP[Math.min(i + 1, RAMP.length - 1)]));
   G.map.setPaintProperty("cells-fill", "fill-color", ["case", ["==", ["typeof", ["get", metric]], "number"], stops.length ? step : RAMP[3], "#141a26"]);
   $("map-ramp").innerHTML = `<div class="ramp">${RAMP.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` +
-    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · quantiles</span><span>${num(vals[vals.length - 1])}</span></div>`;
+    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
 }
 
 function wireHud() {
@@ -430,23 +433,19 @@ function wireHud() {
   $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
 }
 
-function shiftText(p, item) {
-  if (item && item.phenomenon_type === "covariance") return esc(item.relationship || "correlation change");
-  const z = item ? item.statistics.effect_size : p.effect_size;
-  return `<b class="${z >= 0 ? "up" : "down"}">${esc(human(p.target))} ${signed(z)} sd</b>`;
-}
 
 function renderCard(p, item, pts) {
   const sp = p.spatial || {};
-  $("map-card-key").textContent = item ? item.key : "INSIGHT";
+  $("map-card-key").textContent = item ? item.key : "ІНСАЙТ";
   $("map-card-body").innerHTML =
-    `<div class="mc-scope">${p.scope.map((s) => esc(human(s))).join(" · ")}</div>` +
-    `<div class="mc-shift">${shiftText(p, item)}</div>` +
+    `<div class="mc-scope">${esc(p.reading.where)}</div>` +
+    `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["found at", esc(p.level)], ["cells", num(p.rows.length, 0)], ["points", pts ? num(pts.n_points, 0) : "…"], ["footprint", `${num(sp.footprint_share * 100, 0)}%`], ["rows", num(p.support, 0)], ["weight", num(p.weight)]]
-      : [["cells", num(p.rows.length, 0)], ["compactness", num(sp.compactness)], ["points", pts ? num(pts.n_points, 0) : "…"], ["n<sub>eff</sub>", num(sp.n_eff, 0)], ["Moran's I", num(sp.moran_i)], ["weight", num(p.weight)]])
+      ? [["де знайдено", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 0)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (item && item.path_text ? `<div class="mc-path">${esc(item.path_text)}</div>` : "");
+    (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
+    (item ? `<div class="mc-path">${esc(word(`role_${item.role}`))}</div>` : "");
   $("map-card").hidden = false;
 }
 
@@ -455,8 +454,7 @@ function trustTags(pid) {
   const t = G.overlay && G.overlay.patterns[pid];
   if (!t) return "";
   const [cls, words] = cred(t.credibility);
-  return `<i class="pp-tag ${cls}" title="${esc(words)}">credibility ${esc(t.credibility ?? "–")}</i>` +
-    (t.scale ? `<i class="pp-tag" title="${esc(SCALE[t.scale] || t.scale)}">${esc(human(t.scale))}</i>` : "");
+  return `<i class="pp-tag ${cls}">${TERMS[`credibility_${t.credibility}`] ? term(`credibility_${t.credibility}`) : esc(words)}</i>` + (t.scale ? `<i class="pp-tag">${term(`scale_${t.scale}`)}</i>` : "");
 }
 
 function cellPopup(f, lngLat) {
@@ -465,12 +463,12 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button">${shiftText(q, null)}<span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(q.level)}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
+  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub">Region</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
+  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Insights covering this cell (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">Cell</div>` : ""}<table>${rows}</table></div>` +
-    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати з зони" : "+ Додати до зони"}</button>` +
+    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
+    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   GeoMap.closePopup();
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
@@ -502,6 +500,8 @@ async function loadWindow() {
 const windowItem = (pid) => ((W.data && W.data.themes) || []).flatMap((t) => t.insights).find((i) => i.id === pid) || null;
 const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the headline after its scope: "score +1.20 sd"
 
+const reading = (pid) => { const r = (G.patterns[pid] || {}).reading; return r ? `${r.where} — ${r.what}` : ""; };  // a row's insight as the map holds it
+
 function renderWindow() {
   const el = $("map-window"), d = W.data;
   el.hidden = !d || !G.ds;
@@ -509,13 +509,19 @@ function renderWindow() {
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
-  $("mw-meta").textContent = `${plural(d.insights, "insight")} · ${plural(d.themes.length, "theme")} · ${num(d.points, 0)} pts`;
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Nothing characteristic here: no insight has enough of its events in view, above its share of the map.</div>` : d.themes.map((t, k) => {
+  const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
+  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id))} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
+    `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
+    `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
+    `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
+  const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного: жоден інсайт не має досить подій у вікні понад свою частку на мапі.</div>` : shown.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
-    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.insights.length}</b></button>` +
-      (open ? t.insights.map((i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(i.label)} · ${num(i.points, 0)} of its points in view (${num(i.share * 100, 0)}% of them) · ${num(i.cells, 0)} cells">` +
-        `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="also found at ${esc(i.also.map((a) => a.level).join(", "))}"` : ""}>${esc(i.level)}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
-        `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
-        `<b title="lift: (its events in view + 30) / (the events its map-wide share puts here + 30)">×${num(i.lift, 1)}</b></button>`).join("") : "") + `</div>`;
+    const members = t.members.map((id) => byId[id]), m = members.length;  // a group: the related themes folded into it
+    const n = t.insights.length + members.reduce((a, x) => a + x.insights.length, 0);
+    const tip = m ? `${t.reading}\n+${m} — ${TERMS.RELATED_TO[0]}: ${TERMS.RELATED_TO[1]}` : t.reading || t.label;
+    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(tip)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}${m ? ` +${m}` : ""}</span><b>${n}</b></button>` +
+      (open ? t.insights.map(row).join("") + members.map((x) => `<div class="mw-sub" title="${esc(x.reading)}">${esc(x.label)}</div>` + x.insights.map(row).join("")).join("") : "") + `</div>`;
   }).join("");
 }

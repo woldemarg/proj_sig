@@ -37,6 +37,7 @@ from insight_contracts import (
 )
 from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
+from insight_graph_service.core.uploads import declared_glossary
 from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
@@ -93,6 +94,9 @@ def _schema_plane(
                 **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+                **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
+                **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
+                **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
             },
         )
         nodes[batch_node_id(bid)] = GraphNode(
@@ -427,7 +431,19 @@ def compute_integrity(record: dict[str, Any]) -> str:
     return _checked(record, "record_digest", record_digest)
 
 
-BATCH_DIGEST_FIELDS = ("dataset_id", "upload_id", "level", "filename", "source", "reliability", "indicators", "supersedes", "profile")
+BATCH_DIGEST_FIELDS = (
+    "dataset_id",
+    "upload_id",
+    "level",
+    "filename",
+    "source",
+    "reliability",
+    "indicators",
+    "user_glossary",
+    "metadata_doc",
+    "supersedes",
+    "profile",
+)
 
 
 def metadata_digest(batch: dict[str, Any]) -> str:
@@ -443,8 +459,9 @@ def compute_metadata_integrity(batch: dict[str, Any]) -> str:
 
 
 def _distrust(batch: dict[str, Any]) -> dict[str, Any]:
-    """A batch record whose metadata failed its check, without what it declares: source, rating, registry, glossary."""
-    out = {k: v for k, v in batch.items() if k not in ("source", "reliability", "indicators")}
+    """A batch record whose metadata failed its check, without what it declares: source, rating, registry, glossaries,
+    metadata document."""
+    out = {k: v for k, v in batch.items() if k not in ("source", "reliability", "indicators", "user_glossary", "metadata_doc")}
     geo = out.get("profile", {}).get("geo", {})
     if "glossary" in geo:
         out["profile"] = {**out["profile"], "geo": {k: v for k, v in geo.items() if k != "glossary"}}

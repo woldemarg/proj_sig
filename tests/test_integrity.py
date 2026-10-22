@@ -117,7 +117,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv
     found = engine.search("Why is margin lower for phones in the US?")
     assert all(it.trust.startswith("source unknown (its dataset's metadata failed the integrity check)") for it in found.evidence.items)
     assert any(ds in n and "its metadata no longer matches its digest" in n for n in found.evidence.notes)
-    assert "(джерело невідоме," in found.payload().evidence_summary
+    assert "- довіра всіх свідчень: джерело невідоме" in found.payload().evidence_summary  # every item shares it: one line
     assert f"- метадані датасету {ds} не пройшли перевірку цілісності" in found.payload().evidence_summary  # as the NOTE says
     with pytest.raises(PipelineError) as refused:
         engine.update_dataset_metadata(ds, indicators="")  # any PATCH would sign the forged rating as genuine
@@ -219,7 +219,9 @@ def test_a_changed_geo_record_is_not_drawn_on_the_map(cfg, points_csv):
     assert engine.geo_pattern(ds, intact)["n_points"] > 0
     assert forged not in {i["id"] for t in engine.geo_window(ds, "-180,-90,180,90")["themes"] for i in t["insights"]}
     assert engine.geo_overlay(ds)["patterns"][forged]["integrity"] == "mismatch"  # what the console's map reads to leave it out
-    listed = [it for group in node_details(engine.graph(), intact)["neighbors"].values() for it in group if it["id"] == forged]
+    listed = [
+        it for group in node_details(engine.graph(), intact, engine.settings.thresholds)["neighbors"].values() for it in group if it["id"] == forged
+    ]
     assert listed and {it["integrity"] for it in listed} == {"mismatch"}  # its neighbour's Walk on leaves it out (M9AC-F07)
 
 
@@ -418,3 +420,29 @@ def test_credibility_from_independent_sources_phase_a():
     assert levels([a, ins("V", "v2", -1.4)], [member("A", "A-1"), member("V", "A-1")])[0] == {"A": 6, "V": 6}  # not independent
     stronger = replace(a, p_value=0.04, p_adjusted=0.049, stability=0.51, weight=0.21)
     assert levels([stronger, b], [member("A", "A-1"), member("B", "A-1")])[0] == {"A": 1, "B": 1}  # p, stability, weight: unread
+
+
+def test_a_changed_declared_language_is_caught_and_ignored(cfg, demo_csv):
+    """The glossary and the metadata document are signed with the record (``BATCH_DIGEST_FIELDS``): either changed by hand
+    is a ``metadata_mismatch`` whose Dataset node declares neither, whose prompt has no PLAIN LANGUAGE nor DATASET
+    CONTEXT, and which no PATCH may sign again."""
+    from test_uploads import DOC, QUESTION
+
+    from insight_graph_service.core.snapshot import metadata_digest
+
+    engine = make_engine(cfg)
+    ds = engine.process(engine.submit(demo_csv, glossary='{"category": "товарна категорія"}', metadata=DOC)["batch_id"])["dataset_id"]
+    prompt = engine.evidence(QUESTION).evidence_prompt
+    assert "PLAIN LANGUAGE" in prompt and "DATASET CONTEXT" in prompt
+    record = engine.ws.ready_batch_for(ds)
+    for field in ("user_glossary", "metadata_doc"):
+        assert metadata_digest({**record, field: {"forged": "x"}}) != record["metadata_digest"], field
+    engine.ws.save_batch({**record, "user_glossary": {"category": "forged"}})  # by hand, past the API
+    engine = make_engine(cfg)  # an ordinary restart rebuilds the snapshot
+    props = engine.graph().nodes[f"DS:{ds}"]["props"]
+    assert props["integrity"] == "mismatch" and "user_glossary" not in props and "metadata_doc" not in props
+    prompt = engine.evidence(QUESTION).evidence_prompt
+    assert "PLAIN LANGUAGE" not in prompt and "DATASET CONTEXT" not in prompt and "forged" not in prompt
+    with pytest.raises(PipelineError) as refused:
+        engine.update_dataset_metadata(ds, glossary="")
+    assert refused.value.code == "metadata_mismatch"

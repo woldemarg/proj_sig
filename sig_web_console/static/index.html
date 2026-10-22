@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="uk">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SIG · Insight Graph</title>
+  <title>SIG · граф інсайтів</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235b4ce0'/%3E%3Cstop offset='1' stop-color='%23b44ce0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='4' fill='url(%23g)'/%3E%3Cpolygon points='8,3 12.3,5.5 12.3,10.5 8,13 3.7,10.5 3.7,5.5' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/vendor/maplibre-gl.css">
   <link rel="stylesheet" href="/style.css">
@@ -11,152 +11,159 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="brand-mark">SIG</span><span>Insight Graph <small>· latent transversal insights</small></span></div>
+  <div class="brand"><span class="brand-mark">SIG</span><span>Граф інсайтів <small>· знахідки й теми у ваших даних</small></span></div>
   <div class="spacer"></div>
   <div class="pills" id="health"></div>
-  <button class="icon-btn" id="theme-btn" title="Toggle light / dark" aria-label="Toggle theme">
+  <button class="icon-btn" id="theme-btn" title="Світла / темна тема" aria-label="Перемкнути тему">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
   </button>
 </header>
 
 <main class="app">
   <!-- ------------------------------------------------ datasets -->
-  <aside class="rail" aria-label="Datasets">
+  <aside class="rail" aria-label="Датасети">
     <div class="rail-top">
-      <p class="section-title">Add data</p>
+      <p class="section-title">Додати дані</p>
       <form id="upload-form">
         <label class="drop" id="drop">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-          <span class="big">Drop a table here</span>
-          <span class="muted">or click to choose · CSV, TSV, Parquet</span>
+          <span class="big">Перетягніть таблицю сюди</span>
+          <span class="muted">або натисніть, щоб вибрати · CSV, TSV, Parquet</span>
           <span class="file" id="file-name"></span>
           <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
         </label>
         <details class="adv">
-          <summary>Column options</summary>
-          <label class="small" for="categories">Treat as categories</label>
-          <input class="field" id="categories" placeholder="e.g. Store, Holiday_Flag">
-          <div class="hint">Number-coded columns to slice by (IDs, flags).</div>
-          <label class="small" for="bins">Split numbers into bands</label>
-          <input class="field" id="bins" placeholder="e.g. median_income:4">
-          <div class="hint">Quantile bands become a dimension; the source column stops being a metric.</div>
-          <label class="small" for="geo">Spatial analysis (H3 cells)</label>
-          <input class="field" id="geo" placeholder="e.g. auto@auto · geometry · lat,lon">
-          <div class="hint">Rows are points: analyse H3 cells instead — <span class="mono">auto</span> finds a GeoJSON/WKT point or lat/lon columns; <span class="mono">@7</span> is the resolution, <span class="mono">@7,5</span> one dataset per level, <span class="mono">@auto</span> levels read from the points.</div>
-          <label class="small chk"><input type="checkbox" id="table" checked disabled> + a base level without geography</label>
-          <div class="hint">With spatial analysis: the rows mined as a plain table too, one more dataset of the same file; its insights are placed on the map's regions by their points.</div>
-          <label class="small" for="indicators">What the metrics measure</label>
-          <input class="field" id="indicators" placeholder="e.g. price:retail_price:UAH, qty:units_sold">
-          <div class="hint"><span class="mono">metric:indicator[:unit]</span> — what a metric measures, for comparing datasets. With spatial analysis the metrics are the cells' (<span class="mono">price_median</span>). Not part of the analysis.</div>
-          <label class="small" for="source">Source</label>
-          <input class="field" id="source" maxlength="120" placeholder="e.g. field reports, sensor network">
-          <label class="small" for="reliability">Source reliability</label>
+          <summary>Параметри колонок</summary>
+          <label class="small" for="categories">Вважати категоріями</label>
+          <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
+          <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
+          <label class="small" for="bins">Розбити числа на смуги</label>
+          <input class="field" id="bins" placeholder="напр. median_income:4">
+          <div class="hint">Квантильні смуги стають колонкою для групування; вихідна колонка перестає бути метрикою.</div>
+          <label class="small" for="geo">Просторовий аналіз (комірки H3)</label>
+          <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
+          <div class="hint">Рядки — точки: аналізувати комірки H3 — <span class="mono">auto</span> знаходить точку GeoJSON/WKT або колонки lat/lon; <span class="mono">@7</span> — рівень, <span class="mono">@7,5</span> — датасет на кожен рівень, <span class="mono">@auto</span> — рівні за розподілом точок.</div>
+          <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
+          <div class="hint">Разом із просторовим аналізом: рядки аналізуються ще й як звичайна таблиця, ще один датасет того самого файлу; його інсайти лягають на регіони мапи за своїми точками.</div>
+          <label class="small" for="indicators">Що вимірюють метрики</label>
+          <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
+          <div class="hint"><span class="mono">metric:indicator[:unit]</span> — що вимірює метрика, щоб порівнювати датасети. З просторовим аналізом метрики — комірок (<span class="mono">price_median</span>). В аналізі не бере участі.</div>
+          <label class="small" for="glossary">Що означають колонки</label>
+          <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
+          <div class="hint">JSON: назва колонки чи пари <span class="mono">колонка=значення</span> → слова, якими її читати. Перекриває документ і показники.</div>
+          <label class="small" for="metadata">Документ метаданих</label>
+          <div><label class="btn ghost sm" for="metadata">Обрати файл</label> <span class="file" id="metadata-name"></span></div>
+          <input type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown" hidden>
+          <div class="hint">Текстовий опис датасету: заголовок, потім <span class="mono">Columns:</span> і блок на колонку з рядками <span class="mono">Ключ: значення</span>. Модель читає його як довідку про колонки.</div>
+          <label class="small" for="source">Джерело</label>
+          <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
+          <label class="small" for="reliability">Надійність джерела</label>
           <select class="field" id="reliability">
-            <option value="">Not stated (F)</option>
-            <option value="A">A — completely reliable</option>
-            <option value="B">B — usually reliable</option>
-            <option value="C">C — fairly reliable</option>
-            <option value="D">D — not usually reliable</option>
-            <option value="E">E — unreliable</option>
+            <option value="">Не вказано (F)</option>
+            <option value="A">A — цілком надійне</option>
+            <option value="B">B — здебільшого надійне</option>
+            <option value="C">C — досить надійне</option>
+            <option value="D">D — переважно ненадійне</option>
+            <option value="E">E — ненадійне</option>
           </select>
-          <div class="hint">Where the data comes from and how far you trust it (Admiralty code). Shown to the model with the dataset; not part of the analysis.</div>
+          <div class="hint">Звідки дані та наскільки ви їм довіряєте (шкала Адміралтейства). Модель бачить це разом із датасетом; в аналізі не бере участі.</div>
         </details>
         <div class="rail-actions">
-          <button type="submit" class="btn" id="upload-btn" disabled>Analyse</button>
-          <button type="button" class="btn ghost" id="demo-btn" title="A synthetic retail table with planted phenomena">Demo: table</button>
-          <button type="button" class="btn ghost" id="demo-geo-btn" title="California housing: 20,640 located block groups analysed as H3 cells">Demo: map</button>
+          <button type="submit" class="btn" id="upload-btn" disabled>Аналізувати</button>
+          <button type="button" class="btn ghost" id="demo-btn" title="Синтетична таблиця роздрібних продажів із закладеними явищами">Демо: таблиця</button>
+          <button type="button" class="btn ghost" id="demo-geo-btn" title="Житло Каліфорнії: 20 640 кварталів із координатами, проаналізованих як комірки H3">Демо: мапа</button>
         </div>
       </form>
       <div id="upload-msg" class="msg"></div>
-      <button type="button" class="btn ghost sm" id="reset-btn" hidden>Reset workspace</button>
+      <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
     </div>
     <div class="rail-list">
-      <p class="section-title">Datasets <span class="muted">— click one to focus the views on it</span></p>
+      <p class="section-title">Датасети <span class="muted">— натисніть на датасет, щоб показати лише його</span></p>
       <div id="batches"></div>
     </div>
-    <div class="col-resize" data-col="rail" title="Drag to resize · double-click to reset"></div>
+    <div class="col-resize" data-col="rail" title="Тягніть, щоб змінити ширину · подвійний клік — скинути"></div>
   </aside>
 
   <!-- ------------------------------------------------ canvas -->
-  <section class="canvas" aria-label="Knowledge graph">
+  <section class="canvas" aria-label="Граф знань">
     <div class="canvas-bar">
       <div class="tabs" id="view-switch" role="tablist">
-        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true">Graph</button>
-        <button type="button" data-view="sphere" role="tab" aria-selected="false">3D Sphere</button>
-        <button type="button" data-view="table" role="tab" aria-selected="false">Insights <span class="count" id="ins-count"></span></button>
-        <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Map</button>
+        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true">Граф</button>
+        <button type="button" data-view="sphere" role="tab" aria-selected="false">3D-сфера</button>
+        <button type="button" data-view="table" role="tab" aria-selected="false">Інсайти <span class="count" id="ins-count"></span></button>
+        <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Мапа</button>
       </div>
       <div class="spacer"></div>
-      <select class="field" id="dataset-filter" aria-label="Dataset"><option value="">All datasets</option></select>
-      <select class="field graph-only" id="layout" aria-label="Layout">
-        <option value="dual">Two planes</option>
-        <option value="force">Force</option>
+      <select class="field" id="dataset-filter" aria-label="Датасет"><option value="">Усі датасети</option></select>
+      <select class="field graph-only" id="layout" aria-label="Розкладка">
+        <option value="dual">Дві площини</option>
+        <option value="force">Силове розміщення</option>
       </select>
-      <button class="btn ghost sm" id="fit-btn" title="Fit the graph / reset the sphere camera">Fit</button>
-      <button class="btn ghost sm" id="legend-btn" title="Show or hide the legend" aria-pressed="true">Legend</button>
-      <button class="btn ghost sm" id="clear-btn" title="Remove answer highlight" hidden>Clear highlight</button>
+      <button class="btn ghost sm" id="fit-btn" title="Вмістити граф / скинути камеру сфери">Вмістити</button>
+      <button class="btn ghost sm" id="legend-btn" title="Показати чи сховати легенду" aria-pressed="true">Легенда</button>
+      <button class="btn ghost sm" id="clear-btn" title="Прибрати виділення відповіді" hidden>Прибрати виділення</button>
     </div>
 
     <div class="canvas-body">
     <!-- one legend for the graph, the sphere and the table; the link entries are the layer toggles of both views -->
-    <aside class="legend-col" id="legend" aria-label="Legend and layers">
+    <aside class="legend-col" id="legend" aria-label="Легенда і шари">
       <div class="lg-caption" id="view-caption"></div>
-      <section class="lg"><h5>Nodes <small>hover to spot</small></h5>
-        <div class="key" data-key="anchor"><i class="sw anchor"></i><span>Theme</span><b data-n="anchor"></b></div>
-        <div class="key" data-key="up"><i class="sw up"></i><span>Metric higher</span><b data-n="up"></b></div>
-        <div class="key" data-key="down"><i class="sw down"></i><span>Metric lower</span><b data-n="down"></b></div>
-        <div class="key" data-key="cov"><i class="sw cov"></i><span>Correlation change</span><b data-n="cov"></b></div>
+      <section class="lg"><h5>Вузли графа <small>наведіть, щоб виділити</small></h5>
+        <div class="key" data-key="anchor"><i class="sw anchor"></i><span>Тема</span><b data-n="anchor"></b></div>
+        <div class="key" data-key="up"><i class="sw up"></i><span>Метрика вища</span><b data-n="up"></b></div>
+        <div class="key" data-key="down"><i class="sw down"></i><span>Метрика нижча</span><b data-n="down"></b></div>
+        <div class="key" data-key="cov"><i class="sw cov"></i><span>Зміна зв'язку</span><b data-n="cov"></b></div>
       </section>
-      <section class="lg"><h5>Links <small>click to show / hide</small></h5>
-        <button type="button" class="key toggle on" data-key="lattice" title="SPECIALIZES — a narrower subgroup of a broader one (the arrow points to the broader insight)"><i class="ln lattice"></i><span>Hierarchy</span><b data-n="lattice"></b></button>
-        <button type="button" class="key toggle on" data-key="latent" title="RELATED_TO — neighbouring themes (mutual nearest centroids); CO_OCCURS (dashed) — themes that share member insights"><i class="ln rel"></i><span>Theme links</span><b data-n="latent"></b></button>
-        <button type="button" class="key toggle" data-key="contrast" title="CONTRASTS — overlapping scope, opposite shift"><i class="ln contrast"></i><span>Contrasts</span><b data-n="contrast"></b></button>
-        <button type="button" class="key toggle" data-key="sibling" title="SIBLING — same parent, another value of one column"><i class="ln sibling"></i><span>Siblings</span><b data-n="sibling"></b></button>
-        <button type="button" class="key toggle" data-key="colocated" title="CO_LOCATED — geo insights whose H3 cells overlap (one-ring dilated)"><i class="ln colocated"></i><span>Same place</span><b data-n="colocated"></b></button>
-        <button type="button" class="key toggle on" data-key="activates" title="ACTIVATES — insight belongs to theme; dashed = weak membership (kept for coverage, not walked)"><i class="ln act"></i><span>Memberships</span><b data-n="activates"></b></button>
-        <button type="button" class="key toggle" data-key="region" title="Map regions — H3 cells at the listed region levels: IN_REGION (dashed) from the insights lying in one, PARENT_OF to the next coarser"><i class="sw region"></i><span>Map regions</span><b data-n="region"></b></button>
-        <button type="button" class="key toggle" data-key="schema" title="Dimension and metric columns (graph only)"><i class="sw col"></i><span>Columns</span><b data-n="schema"></b></button>
+      <section class="lg"><h5>Зв'язки <small>натисніть, щоб показати / сховати</small></h5>
+        <button type="button" class="key toggle on" data-key="lattice"><i class="ln lattice"></i><span>Вужчі й ширші</span><b data-n="lattice"></b></button>
+        <button type="button" class="key toggle on" data-key="latent"><i class="ln rel"></i><span>Пов'язані теми</span><b data-n="latent"></b></button>
+        <button type="button" class="key toggle" data-key="contrast"><i class="ln contrast"></i><span>Протилежні зсуви</span><b data-n="contrast"></b></button>
+        <button type="button" class="key toggle" data-key="sibling"><i class="ln sibling"></i><span>Сусідні варіанти</span><b data-n="sibling"></b></button>
+        <button type="button" class="key toggle" data-key="colocated"><i class="ln colocated"></i><span>Те саме місце</span><b data-n="colocated"></b></button>
+        <button type="button" class="key toggle on" data-key="activates"><i class="ln act"></i><span>Належність до теми</span><b data-n="activates"></b></button>
+        <button type="button" class="key toggle" data-key="region"><i class="sw region"></i><span>Регіони мапи</span><b data-n="region"></b></button>
+        <button type="button" class="key toggle" data-key="schema"><i class="sw col"></i><span>Колонки</span><b data-n="schema"></b></button>
       </section>
-      <section class="lg"><h5>Answer</h5>
-        <div class="key" data-key="seed"><i class="ring seed"></i><span>Seed</span><b data-n="seed"></b></div>
-        <div class="key" data-key="ev"><i class="ring ev"></i><span>Evidence</span><b data-n="ev"></b></div>
-        <div class="key" data-key="cross"><i class="ring cross"></i><span>Other segment</span><b data-n="cross"></b></div>
-        <div class="key" data-key="path"><i class="ln path"></i><span>Answer path</span><b data-n="path"></b></div>
+      <section class="lg"><h5>Відповідь</h5>
+        <div class="key" data-key="seed"><i class="ring seed"></i><span>Відповідає питанню</span><b data-n="seed"></b></div>
+        <div class="key" data-key="ev"><i class="ring ev"></i><span>Свідчення</span><b data-n="ev"></b></div>
+        <div class="key" data-key="cross"><i class="ring cross"></i><span>Інший сегмент</span><b data-n="cross"></b></div>
+        <div class="key" data-key="path"><i class="ln path"></i><span>Шлях відповіді</span><b data-n="path"></b></div>
       </section>
     </aside>
 
     <div class="view">
       <div id="cy"></div>
-      <div id="sphere" role="img" aria-label="Latent insight sphere" hidden></div>
+      <div id="sphere" role="img" aria-label="Сфера інсайтів і тем" hidden></div>
       <div class="map-wrap" id="map-view" hidden>
         <div id="map"></div>
         <div class="map-hud">
-          <div class="hud-tag">GEO-LTIR · SPATIAL INSIGHTS</div>
+          <div class="hud-tag">МАПА · ПРОСТОРОВІ ІНСАЙТИ</div>
           <div class="hud-title" id="map-title"></div>
           <div class="hud-meta" id="map-meta"></div>
           <div class="msg err" id="map-overlay-error" hidden></div>
           <div class="msg err" id="map-projected-error" hidden></div>
-          <label class="hud-lbl" for="map-metric">Colour cells by</label>
+          <label class="hud-lbl" for="map-metric">Колір комірок за</label>
           <select class="hud-field" id="map-metric"></select>
           <div id="map-ramp"></div>
           <div class="hud-layers">
-            <label><input type="checkbox" id="lyr-cells" checked> Cells</label>
-            <label><input type="checkbox" id="lyr-lisa" checked> <i class="lg-hot"></i>Hot / <i class="lg-cold"></i>cold spots</label>
-            <label><input type="checkbox" id="lyr-pts" checked> Events</label>
-            <label><input type="checkbox" id="lyr-borders" checked> Borders</label>
-            <label><input type="checkbox" id="lyr-labels" checked> Places</label>
-            <label title="Region outlines at the level that fits the zoom, with their insight counts"><input type="checkbox" id="lyr-regions" checked> <i class="lg-region"></i>Regions</label>
+            <label><input type="checkbox" id="lyr-cells" checked> Комірки</label>
+            <label><input type="checkbox" id="lyr-lisa" checked> <i class="lg-hot"></i>Гарячі / <i class="lg-cold"></i>холодні точки</label>
+            <label><input type="checkbox" id="lyr-pts" checked> Події</label>
+            <label><input type="checkbox" id="lyr-borders" checked> Кордони</label>
+            <label><input type="checkbox" id="lyr-labels" checked> Населені пункти</label>
+            <label title="Межі регіонів рівня, що пасує до масштабу, з кількістю інсайтів"><input type="checkbox" id="lyr-regions" checked> <i class="lg-region"></i>Регіони</label>
           </div>
-          <div class="hud-keys"><span><i class="lg-up"></i>metric higher</span><span><i class="lg-down"></i>metric lower</span><span><i class="lg-focus"></i>focus</span></div>
+          <div class="hud-keys"><span><i class="lg-up"></i>метрика вища</span><span><i class="lg-down"></i>метрика нижча</span><span><i class="lg-focus"></i>у фокусі</span></div>
         </div>
-        <div class="map-window" id="map-window" hidden aria-label="Themes and insights in view">
-          <div class="mw-head"><span class="hud-tag">IN VIEW</span><span class="mw-meta" id="mw-meta"></span><button type="button" class="mc-x" id="mw-fold" aria-label="Fold the list">–</button></div>
+        <div class="map-window" id="map-window" hidden aria-label="Теми й інсайти у вікні">
+          <div class="mw-head"><span class="hud-tag">У ВІКНІ</span><span class="mw-meta" id="mw-meta"></span><button type="button" class="mc-x" id="mw-fold" aria-label="Згорнути список">–</button></div>
           <div class="mw-body" id="mw-body"></div>
         </div>
         <div class="map-bottom">  <!-- the zone bar above the insight card: one stack, never overlapping -->
-          <div class="map-zone" id="map-zone" hidden title="Shift-click cells to add or remove them"><span id="map-zone-n"></span><button type="button" id="map-zone-ask">ASK</button><button type="button" id="map-zone-clear" aria-label="Clear the zone">✕</button></div>
+          <div class="map-zone" id="map-zone" hidden title="Shift-клік по комірці додає або прибирає її"><span id="map-zone-n"></span><button type="button" id="map-zone-ask">ЗАПИТАТИ</button><button type="button" id="map-zone-clear" aria-label="Прибрати зону">✕</button></div>
           <div class="map-card" id="map-card" hidden>
-            <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Close">×</button></div>
+            <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Закрити">×</button></div>
             <div id="map-card-body"></div>
           </div>
         </div>
@@ -165,13 +172,13 @@
 
       <div class="table-wrap" id="table-view" hidden>
         <div class="table-tools">
-          <input class="field" id="table-search" placeholder="Filter insights by scope, metric or theme…">
+          <input class="field" id="table-search" placeholder="Фільтр інсайтів за умовою, метрикою чи темою…">
           <span class="muted" id="table-summary"></span>
         </div>
         <table class="ins" id="ins-table">
           <thead><tr>
-            <th tabindex="0" data-k="scope">Where</th><th tabindex="0" data-k="target">Metric</th><th tabindex="0" data-k="effect" class="num">Effect</th>
-            <th tabindex="0" data-k="support" class="num">Rows</th><th tabindex="0" data-k="weight" class="num sorted">Evidence</th><th tabindex="0" data-k="anchor_label">Theme</th>
+            <th tabindex="0" data-k="scope">Де</th><th tabindex="0" data-k="target">Метрика</th><th tabindex="0" data-k="effect" class="num">Зсув</th>
+            <th tabindex="0" data-k="support" class="num">Рядки</th><th tabindex="0" data-k="weight" class="num sorted">Сила свідчення</th><th tabindex="0" data-k="anchor_label">Тема</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -180,15 +187,15 @@
       <div class="canvas-empty" id="empty-hint" hidden>
         <div class="inner">
           <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
-          <h3>No insights yet</h3>
-          <p>Add a table on the left — or try a demo: a retail table, or a map of located records — and SIG will discover statistically validated insights, group them into themes and draw the graph here.</p>
+          <h3>Інсайтів ще немає</h3>
+          <p>Додайте таблицю ліворуч — або спробуйте демо: таблицю продажів чи мапу записів із координатами, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
         </div>
       </div>
 
-      <aside class="float drawer" id="drawer" hidden aria-label="Details">
+      <aside class="float drawer" id="drawer" hidden aria-label="Подробиці">
         <div class="drawer-head">
           <div style="flex:1;min-width:0"><div class="kind" id="drawer-kind"></div><h3 id="drawer-title" tabindex="-1"></h3></div>
-          <button class="icon-btn" id="drawer-close" aria-label="Close details">
+          <button class="icon-btn" id="drawer-close" aria-label="Закрити подробиці">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
@@ -199,24 +206,24 @@
   </section>
 
   <!-- ------------------------------------------------ chat -->
-  <aside class="chat" aria-label="Ask">
-    <div class="col-resize" data-col="chat" title="Drag to resize · double-click to reset"></div>
+  <aside class="chat" aria-label="Питання">
+    <div class="col-resize" data-col="chat" title="Тягніть, щоб змінити ширину · подвійний клік — скинути"></div>
     <div class="chat-head">
       <div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.5l-.8-2-1.9-.8 1.9-.8z"/></svg></div>
-      <div style="flex:1;min-width:0"><div class="title">Ask your data</div><div class="sub">Answers cite the insights they rely on</div></div>
-      <button class="linkish" id="new-chat" title="Start a new conversation">New chat</button>
+      <div style="flex:1;min-width:0"><div class="title">Питання до даних</div><div class="sub">Відповіді посилаються на інсайти, на які спираються</div></div>
+      <button class="linkish" id="new-chat" title="Почати нову розмову">Нова розмова</button>
     </div>
     <div class="thread" id="thread" aria-live="polite"></div>
     <form class="composer" id="ask-form">
       <div class="composer-box">
-        <textarea id="question" rows="1" placeholder="Ask about a metric, a segment or a pattern…"></textarea>
-        <button class="send" id="ask-btn" type="submit" aria-label="Send" disabled>
+        <textarea id="question" rows="1" placeholder="Спитайте про метрику, сегмент чи закономірність…"></textarea>
+        <button class="send" id="ask-btn" type="submit" aria-label="Надіслати" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
         </button>
       </div>
       <div class="composer-foot">
-        <label class="switch"><input type="checkbox" id="use-llm" checked><span class="track"></span><span id="llm-label">Gemma 4 explanation</span></label>
-        <span>Enter to send · Shift+Enter new line</span>
+        <label class="switch"><input type="checkbox" id="use-llm" checked><span class="track"></span><span id="llm-label">пояснення моделлю</span></label>
+        <span>Enter — надіслати · Shift+Enter — новий рядок</span>
       </div>
     </form>
   </aside>

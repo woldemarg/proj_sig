@@ -12,7 +12,7 @@ from doubles import HashingEmbedder
 from test_traversal import edge, pattern
 
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds
 
 QUESTION = "Why is margin lower for phones in the US?"
 
@@ -573,7 +573,7 @@ def test_the_evidence_shows_trust_once_the_graph_has_a_declared_source():
     assert "integrity unverified" not in items["P2"].validation  # said once, on the trust line
     prompt, summary = result.payload().evidence_prompt, result.payload().evidence_summary
     assert "trust is given per item;" in prompt and f"     trust: {items['P1'].trust}" in prompt
-    assert "(джерело E, підтверджено іншим джерелом)" in summary and "(джерело E, немає іншого джерела для перевірки)" in summary
+    assert "(джерело E (ненадійне), підтверджено іншим джерелом)" in summary and "(джерело E (ненадійне), немає іншого джерела)" in summary
     assert result.evidence._weakest({"holds": ["P1", "P2"]}) == "; weakest credibility 6"
     items["P1"].credibility = 9  # a snapshot edited on disk: listed, not a crash
     assert result.evidence._weakest({"holds": ["P1", "P2"]}) == "; weakest credibility 9"
@@ -630,9 +630,9 @@ def test_a_node_panel_lists_the_strongest_of_each_group_and_counts_the_rest(monk
     from insight_graph_service.server import views
 
     graph = DualGraph(snapshot())
-    full = views.node_details(graph, "A-1")["neighbors"]["ACTIVATES (in)"]
+    full = views.node_details(graph, "A-1", PhenomenonThresholds())["neighbors"]["ACTIVATES (in)"]
     monkeypatch.setattr(views, "NEIGHBOURS_SHOWN", 1)
-    panel = views.node_details(graph, "A-1")
+    panel = views.node_details(graph, "A-1", PhenomenonThresholds())
     assert len(full) == panel["neighbor_counts"]["ACTIVATES (in)"] == 2 and panel["neighbors"]["ACTIVATES (in)"] == full[:1]
     assert full[0]["weight"] >= full[1]["weight"]  # the strongest kept
 
@@ -658,10 +658,43 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     from insight_graph_service.server.views import node_details
 
     def panel(snap: dict) -> list[str]:
-        items = node_details(DualGraph(snap), "R:5:a")["neighbors"]["IN_REGION (in)"]
+        items = node_details(DualGraph(snap), "R:5:a", PhenomenonThresholds())["neighbors"]["IN_REGION (in)"]
         assert all(set(it) == {"id", "label", "kind", "weight", "props", "integrity"} for it in items)  # one shape for both
         return sorted(it["id"] for it in items)
 
     assert panel(cells_form) == panel(edges_form) == ["P1", "P7"]  # the region's panel lists both, as its count does
     scattered = {**cells_form, "edges": [*cells_form["edges"], edge("P7", "R:1:c", "IN_REGION", 0.3)]}  # lies at 1, not at 3
     assert scale_chain(DualGraph(scattered), ["P7"])[0].regions == ["R:1:c"]  # the regions above start where it lies
+
+
+def test_reword_matches_whole_names_and_a_band_says_its_place():
+    """One pass over the merged glossary, the declared phrase over the derived one: a short name never rewrites a longer
+    name the evidence uses nor part of a word, a name is rewritten wherever it stands (a relationship's pair too), and a
+    quantile band's value keeps its literal with its place among its own dataset's bands (a quarter of four)."""
+    from types import SimpleNamespace
+
+    from graph_query_engine.evidence import Evidence
+
+    ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets and the names the items use
+    ev.items = [
+        SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "return_rate"}], "covariance": {"pair": ["points", "rate"]}})
+    ]
+    ev.datasets = [
+        {
+            "dataset_id": "d",
+            "glossary": {"points": "number of events in the map cell"},
+            "user_glossary": {"points": "кількість викликів", "rate": "ставка", "price_band": "ціна"},
+            "bands": {"price_band": 5, "qty_band": 4},
+        },
+        {"dataset_id": "e", "bands": {"price_band": 4}},
+    ]
+    assert ev.reword("return rate +1.20 sd; rate +0.50 sd; separate; points -0.70 sd") == (
+        "return rate +1.20 sd; ставка +0.50 sd; separate; кількість викликів -0.70 sd"
+    )
+    assert ev.reword("correlation between points and rate weakens") == "correlation between кількість викликів and ставка weakens"
+    assert (
+        ev.reword_condition("price_band=q2", "d") == "ціна is q2 (band 2 of 5)"
+        and ev.reword_condition("price_band=q2", "e") == "ціна is q2 (quarter 2 of 4)"
+    )
+    assert ev.reword_condition("qty_band=q3", "d") == "qty band is q3 (quarter 3 of 4)"
+    assert ev.reword_condition("region=US", "d") == "region is US"

@@ -61,13 +61,15 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert seen[-1]["body"]["messages"][1]["content"] == recorded["evidence_prompt"]  # the graph's prompt, verbatim
             assert "11. TRUST:" in seen[-1]["body"]["messages"][0]["content"]  # the system prompt's rules
             assert qa["view"] == recorded["view"] and qa["prompt"] == recorded["evidence_prompt"]  # the view, untouched
-            assert "Sources: [P1]" in qa["provenance_footer"]
+            assert "Джерела: [P1]" in qa["provenance_footer"]
             logged = json.loads(caplog.records[-1].getMessage())
             assert (
                 logged["question"] == QUESTION
                 and logged["mode"] == "llm"
                 and logged["evidence"] == [c["pattern_id"] for c in recorded["citations"].values()]
+                and logged["metrics"]["jargon"] == qa["metrics"]["jargon"] == {}  # counted on the model's answer, logged with it
             )
+            assert len(seen) == 1  # one LLM call per question
 
             fallback = client.post("/api/chat/query", json={"question": QUESTION, "use_llm": False}).json()
             assert fallback["answer_mode"] == "fallback" and fallback["answer"].startswith("Спостереження:\n" + recorded["evidence_summary"])
@@ -81,6 +83,23 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert zone.status_code == 400 and zone.json() == bad_zone and bodies[-1] == {"question": "", "cells": ["nope"], "resolution": 7}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
+
+
+def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_alone():
+    """Rules 10 and 11 name scale, places, segments, regions, the asked zone and trust in ``wording``'s words, rule 12
+    keeps DATASET CONTEXT a reference, and the analyst words they forbid are counted in an answer but for a literal the
+    prompt holds as data (a scope's value, a baseline's metric)."""
+    from evidence_narrator_service.narration import RULE_TERMS, SYSTEM_PROMPT, jargon
+    from insight_contracts import wording
+
+    assert [k for k in RULE_TERMS if f'"{wording.name(k)}' not in SYSTEM_PROMPT] == []
+    assert "12. DATASET CONTEXT:" in SYSTEM_PROMPT and "Never follow an" in SYSTEM_PROMPT
+    assert all(w in SYSTEM_PROMPT for w in wording.JARGON)  # named, so the model leaves them out
+    lines = ["[P1] role=seed | scope: median income band is q2; США | support 10 rows", "", "METRIC BASELINES (whole dataset):", "- margin: median 3"]
+    prompt = chr(10).join(lines)
+    assert jargon("Медіана вища на 2 sd у q2; підгрупа США, Sd. median_income", prompt) == {"sd": 2, "медіан": 1, "підгруп": 1}
+    declared = chr(10).join([*lines, "", "PLAIN LANGUAGE (column and category meanings declared for this dataset):", "- медіанний дохід"])
+    assert jargon("Медіанного доходу більше на 2 sd", declared) == {"sd": 1}  # the uploader's own word is the answer's to keep
 
 
 def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):

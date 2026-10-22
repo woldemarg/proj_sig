@@ -26,6 +26,7 @@ from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import PROJECT_ROOT, Settings
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
@@ -77,7 +78,22 @@ class DatasetMetadataIn(BaseModel):
     source: str | None = None  # None: unchanged; "": undeclared
     reliability: str | None = None
     indicators: str | None = None
+    glossary: str | None = None  # JSON text, {"column": "meaning", "column=value": "phrase"}
+    metadata: str | None = None  # a metadata document's text (docs/02_discovery.md §2.1)
     supersedes: str | None = None  # a dataset or upload id this dataset replaces: deleted now
+
+
+def _text(upload: UploadFile | None) -> str | None:
+    """An uploaded metadata document as text, read up to one byte past its cap."""
+    if upload is None:
+        return None
+    raw = upload.file.read(METADATA_DOC_MAX_BYTES + 1)
+    if len(raw) > METADATA_DOC_MAX_BYTES:
+        raise PipelineError("invalid_options", f"metadata document: over {METADATA_DOC_MAX_BYTES // 1024} KB")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PipelineError("invalid_options", "metadata document: not UTF-8 text") from exc
 
 
 def _log_failure(future: Future) -> None:
@@ -156,6 +172,8 @@ def create_app(engine: Engine) -> FastAPI:
         source: str = Form(""),
         reliability: str = Form(""),
         indicators: str = Form(""),
+        glossary: str = Form(""),
+        metadata: UploadFile | None = File(None),
         table: bool = Form(False),
         supersedes: str = Form(""),
     ) -> JSONResponse:
@@ -172,6 +190,8 @@ def create_app(engine: Engine) -> FastAPI:
             source=source,
             reliability=reliability,
             indicators=indicators,
+            glossary=glossary,
+            metadata=_text(metadata),
             table=table,
             supersedes=supersedes,
         )
@@ -194,7 +214,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
-        return node_details(engine.graph(), node_id)
+        return node_details(engine.graph(), node_id, settings.thresholds)
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
@@ -210,7 +230,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
-        return sphere_points(engine.committed(), settings.topology.random_seed, dataset or None)
+        return sphere_points(engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None)
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:
@@ -243,7 +263,13 @@ def create_app(engine: Engine) -> FastAPI:
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
         return engine.update_dataset_metadata(
-            dataset_id, source=body.source, reliability=body.reliability, indicators=body.indicators, supersedes=body.supersedes
+            dataset_id,
+            source=body.source,
+            reliability=body.reliability,
+            indicators=body.indicators,
+            glossary=body.glossary,
+            metadata=body.metadata,
+            supersedes=body.supersedes,
         )
 
     @app.delete("/api/datasets/{dataset_id}")

@@ -12,16 +12,17 @@ so answers are traceable to table slices.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
-from graph_query_engine.graph import DualGraph, describe_components
+from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
+from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -44,18 +45,13 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
 AREA_TAG = {True: " | in the asked area", False: " | outside the asked area"}  # an item of a level the zone weighed
 AREA_WORDS = {True: " (у виділеній зоні)", False: " (поза виділеною зоною)"}
-TRUST_WORDS = {  # the credibility level in the evidence-only summary
-    1: "підтверджено іншим джерелом",
-    2: "не підтверджено",
-    5: "суперечить іншому джерелу",
-    6: "немає іншого джерела для перевірки",
-}
 WEAKEST_FIRST = (5, 6, 2, 1)
-SCALE_WORDS = {  # the same labels in the evidence-only summary
-    "regional": " (тримається і на рівні району)",
-    "scale-dependent": " (на рівні району зсув протилежний)",
-    "not_found_coarser": " (на рівні району окремо не підтверджено)",
+PLAIN_HEAD = {  # the PLAIN LANGUAGE heading: a geo item's rows are map cells, a table's are its own
+    True: "rows are map cells built from point events; a subgroup is a set of map cells",
+    False: "column and category meanings declared for this dataset",
 }
+CONTEXT_VALUE_MAX = 300  # characters of one DATASET CONTEXT value, then "…"
+CONTEXT_MAX = 2000  # characters of the DATASET CONTEXT entries; those past it are counted, not shown
 
 
 @dataclass
@@ -85,6 +81,7 @@ class EvidenceItem:
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
+    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what"} in Ukrainian (graph.insight_reading)
 
 
 @dataclass
@@ -114,6 +111,7 @@ class Evidence:
             self._head(),
             self._dataset_lines(),
             self._plain_lines(plain),
+            self._context_lines(),
             self._baseline_lines(),
             self._anchor_lines(),
             self._evidence_lines(plain),
@@ -161,14 +159,44 @@ class Evidence:
             lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
-    @staticmethod
-    def _plain_lines(plain: list[tuple[str, str]]) -> list[str]:
+    def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
         if not plain:
             return []
+        kinds = {bool(it.provenance.get("spatial")) for it in self.items}
+        head = "; ".join(PLAIN_HEAD[geo] for geo in (True, False) if geo in kinds)
+        return ["", f"PLAIN LANGUAGE ({head}):", *(f"- {meaning}" for _, meaning in plain)]
+
+    def _context_lines(self) -> list[str]:
+        """DATASET CONTEXT: each metadata document's dataset description and, for every column the evidence names (seed
+        items' first, across datasets; a geo cell's derivation read as its source column, ``wording.source_column``), its
+        assistant context or description, both JSON-quoted (a document's instruction stays a quoted value), clipped at
+        ``CONTEXT_VALUE_MAX``; the entries past ``CONTEXT_MAX`` characters are counted in ``omitted_columns``."""
+        about: list[str] = []
+        notes: list[tuple[bool, str]] = []  # (not a seed's, entry)
+        for d in self.datasets:
+            if not (doc := d.get("metadata_doc")):
+                continue
+            if text := doc["dataset"].get("description"):
+                about.append(f"- dataset {d['dataset_id']}: {_quoted(text)}")
+            for it in (it for it in self.items if it.provenance["dataset_id"] == d["dataset_id"]):
+                for col in filter(None, (wording.source_column(n, doc["columns"]) for n in _named(it))):
+                    if text := doc["columns"][col].get("assistant_context") or doc["columns"][col].get("description"):
+                        notes.append((it.role != "seed", f"- {json.dumps(col, ensure_ascii=False)}: {_quoted(text)}"))
+        columns = list(dict.fromkeys(entry for _, entry in sorted(notes, key=lambda n: n[0])))  # stable: seeds' first, each once
+        if not about and not columns:
+            return []
+        shown, used = [], 0
+        for entry in about + columns:
+            if used + len(entry) + 1 > CONTEXT_MAX:
+                break
+            shown.append(entry)
+            used += len(entry) + 1
+        omitted = len(about) + len(columns) - len(shown)
         return [
             "",
-            "PLAIN LANGUAGE (rows are map cells built from point events; a subgroup is a set of map cells):",
-            *(f"- {meaning}" for _, meaning in plain),
+            "DATASET CONTEXT (declared by the uploader; describes columns, asserts nothing about the findings):",
+            *shown,
+            *([f"- omitted_columns: {omitted}"] if omitted else []),
         ]
 
     def _baseline_lines(self) -> list[str]:
@@ -176,9 +204,8 @@ class Evidence:
         for m in self.metrics:
             parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
             meaning = f" ({', '.join(parts)})" if parts else ""
-            lines.append(
-                f"- {self.reword(humanize(m['metric']))}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}"
-            )
+            name = humanize(m["metric"]) if parts else self.reword(humanize(m["metric"]))  # the indicator already says it
+            lines.append(f"- {name}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         return lines
 
     def _anchor_lines(self) -> list[str]:
@@ -213,7 +240,7 @@ class Evidence:
 
     def _item_lines(self, it: EvidenceItem, plain: list[tuple[str, str]]) -> list[str]:
         s = it.statistics
-        scope = "; ".join(self.reword_condition(c) for c in it.scope) if plain else it.scope_text
+        scope = "; ".join(self.reword_condition(c, it.provenance["dataset_id"]) for c in it.scope) if plain else it.scope_text
         area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
         lines = [f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})"]
         lines.append(f"     shifts: {'; '.join(self.reword(t) for t in it.shift_text) or 'no validated median shift'}")
@@ -327,61 +354,69 @@ class Evidence:
 
     @cached_property
     def _glossary(self) -> dict[str, str]:  # read by every reword of one rendering: merged once
-        return {k: v for d in self.datasets for k, v in d.get("glossary", {}).items()}
+        """The datasets' glossaries, each its derived English one (``glossary``) under the declared one (``user_glossary``)."""
+        return {k: v for d in self.datasets for k, v in (d.get("glossary", {}) | d.get("user_glossary", {})).items()}
+
+    @cached_property
+    def _names(self) -> tuple[re.Pattern[str], dict[str, str]] | None:
+        """One pattern over every glossary column name, raw and humanized, longest first, matched whole: never inside a
+        word, and never inside a longer name the evidence uses, which stands for itself (``rate`` leaves ``return rate``)."""
+        meanings = {n: meaning for col, meaning in self._glossary.items() if "=" not in col for n in (col, humanize(col))}
+        if not meanings:
+            return None
+        names = {n: n for it in self.items for c in _named(it) for n in (c, humanize(c))} | meanings
+        alternatives = "|".join(map(re.escape, sorted(names, key=len, reverse=True)))
+        return re.compile(rf"(?<![\w])(?:{alternatives})(?![\w])"), names
 
     def reword(self, text: str) -> str:
-        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning."""
-        for col, meaning in sorted(self._glossary.items(), key=lambda kv: -len(kv[0])):
-            if "=" not in col:
-                text = text.replace(humanize(col), meaning).replace(col, meaning)
-        return text
+        """``text`` with every glossary column name (raw or humanized) replaced by its plain meaning, in one pass."""
+        if self._names is None:
+            return text
+        pattern, names = self._names
+        return pattern.sub(lambda m: names[m[0]], text)
 
-    def reword_condition(self, condition: str) -> str:
-        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>'."""
+    def reword_condition(self, condition: str, dataset_id: str | None = None) -> str:
+        """``attribute=value`` in plain words: the glossary's phrase for the pair, else '<meaning> is <value>', a quantile
+        band's value with its place among its dataset's bands (a quarter only of four)."""
         glossary = self._glossary
         attribute, _, value = condition.partition("=")
-        return glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
+        words = glossary.get(condition) or f"{glossary.get(attribute, humanize(attribute))} is {value}"
+        bands = next((d.get("bands", {}).get(attribute) for d in self.datasets if d["dataset_id"] == dataset_id), None)
+        if condition in glossary or not bands or not re.fullmatch(r"q\d+", value):
+            return words
+        return f"{words} ({f'quarter {value[1:]} of 4' if bands == 4 else f'band {value[1:]} of {bands}'})"
 
     def plain_language(self) -> list[tuple[str, str]]:
-        """(column, meaning) for the derived columns the evidence names, from the datasets' glossaries."""
+        """(column or declared ``column=value``, meaning) for what the evidence names that the datasets' glossaries hold;
+        a derived pair's phrase (a geo cell's class or band) is on its scope line already."""
         glossary = self._glossary
-        named: list[str] = []
-        for it in self.items:
-            named += [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]]
-            named += it.statistics["covariance"].get("pair", [])
+        pairs = {k for d in self.datasets for k in d.get("user_glossary", {}) if "=" in k}
+        named = [n for it in self.items for n in (*_named(it), *(c for c in it.scope if c in pairs))]
         return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
-        """The observations, cited: one ``- …`` line each, in Ukrainian around untouched literals (or the
-        one line saying the graph holds no such evidence). The narrator frames them as the evidence-only answer.
-
-        The prose of the evidence (``scope_text``, ``shift_text``) is the English LLM serializer, so this
-        renders from the numbers: scope as ``attribute=value`` literals, the phenomenon shifts (the first
-        ``len(shift_text)`` of the record's shifts, which are sorted by |z|) as ``metric ±z sd``, or the
-        correlation pair for a covariance insight.
-        """
+        """The observations, cited: one ``- …`` line each, the item's reading (``wording``) in Ukrainian around
+        untouched literals, its rows and tags, or the one line saying the graph holds no such evidence. Trust, once the
+        graph has it, is one line when every item shares it and a tag on each line when they differ. The narrator
+        frames these lines as the evidence-only answer."""
+        shown = [it for it in self.items if not it.folded_into]
+        trust = {(it.reliability, it.credibility) for it in shown if it.trust}
         lines = []
-        for it in self.items:
-            if it.folded_into:
-                continue
-            s = it.statistics
-            if it.phenomenon_type == "covariance" and s["covariance"].get("pair"):
-                a, b = s["covariance"]["pair"]
-                observed = f"кореляція {a} ~ {b}: {s['covariance']['global_corr']:+.2f} загалом → {s['covariance']['local_corr']:+.2f} у підгрупі"
-            else:
-                observed = "; ".join(
-                    f"{x['metric']} {x['robust_z']:+.2f} sd (медіана {format_value(x['local_median'])} проти {format_value(x['global_median'])})"
-                    for x in s["shifts"][: len(it.shift_text) or 1][:2]
-                )
-            tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
-            tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
-            tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
+        for it in shown:
+            reached = "transversal_only" if it.transversal_only else "located" if it.located else ""
+            tag = f" ({wording.name(reached)}: {wording.TERMS[reached][1]})" if reached else ""
+            tag += f" ({wording.name('scale_' + it.scale)})" if it.scale in SCALE_TEXT else ""
+            tag += "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
-            if it.trust and it.credibility in TRUST_WORDS:
-                tag += f" (джерело {it.reliability or 'невідоме'}, {TRUST_WORDS[it.credibility]})"
-            lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
+            tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
+            n = it.statistics["support"]
+            lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
+        if len(trust) == 1:
+            lines.append(f"- довіра{' всіх свідчень' if len(shown) > 1 else ''}: {_trust_words(*trust.pop())}")
         keys = self._keys()
-        lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
+        lines += [
+            f"- регіон Z{n} (рівень {z['resolution']}): {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)
+        ]
         if self.area is not None:
             lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v) or 'жодного свідчення'}")
         if self.excluded:  # what the NOTEs say of integrity, for the answer without the model
@@ -394,6 +429,13 @@ class Evidence:
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
+
+
+def _trust_words(reliability: str, credibility: int | None) -> str:
+    """An item's trust in the summary's words: its source's code and rating, and whether another source confirms it."""
+    rated = wording.name(f"reliability_{reliability}") if f"reliability_{reliability}" in wording.TERMS else "невідомий код"
+    source = f"джерело {reliability} ({rated})" if reliability else "джерело невідоме"
+    return source + (f", {wording.name(f'credibility_{credibility}')}" if f"credibility_{credibility}" in wording.TERMS else "")
 
 
 def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -> str:
@@ -580,6 +622,7 @@ def _item(
         credibility=node["props"].get("credibility"),
         credibility_basis=node["props"].get("credibility_basis", {}),
         provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
+        reading=insight_reading(graph, pid, config.thresholds),
     )
 
 
@@ -613,8 +656,19 @@ def _anchor_section(result: TraversalResult, graph: DualGraph) -> list[dict[str,
     return attractors
 
 
+def _named(it: EvidenceItem) -> list[str]:
+    """The columns an item names: its scope's attributes, its shifts' metrics, its correlation's pair."""
+    return [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]] + it.statistics["covariance"].get("pair", [])
+
+
+def _quoted(text: str) -> str:
+    """A declared value JSON-quoted, clipped at ``CONTEXT_VALUE_MAX`` characters."""
+    return json.dumps(text if len(text) <= CONTEXT_VALUE_MAX else text[: CONTEXT_VALUE_MAX - 1] + "…", ensure_ascii=False)
+
+
 def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
-    """The items' datasets (``DATASETS``): file, rows, batch, the declared trust and the glossary."""
+    """The items' datasets (``DATASETS``): file, rows, batch, the declared trust, the glossaries, the metadata document
+    and the band count of each quantile-band column the items name."""
     datasets = []
     for ds in sorted({it.provenance["dataset_id"] for it in items}):
         dnode = graph.nodes.get(dataset_node_id(ds), {"props": {}})
@@ -622,10 +676,14 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity") if k in props}
+            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary") if props.get(k)}
         )
-        if dnode["props"].get("glossary"):
-            datasets[-1]["glossary"] = dnode["props"]["glossary"]
+        mine = [it for it in items if it.provenance["dataset_id"] == ds]
+        if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):
+            datasets[-1]["bands"] = bands
+        if doc := props.get("metadata_doc"):  # the description and the columns the items name, never the whole document
+            named = {wording.source_column(n, doc["columns"]) for it in mine for n in _named(it)}
+            datasets[-1]["metadata_doc"] = {"dataset": doc["dataset"], "columns": {c: f for c, f in doc["columns"].items() if c in named}}
     return datasets
 
 
@@ -675,7 +733,7 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
         notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
     notes += [
-        f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability and indicators are ignored"
+        f"{d['dataset_id']}: its metadata no longer matches its digest; its source, reliability, indicators, glossary and metadata document are ignored"
         " and its baselines are unchecked."
         for d in datasets
         if d.get("integrity") == "mismatch"

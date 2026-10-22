@@ -3,24 +3,25 @@
 
 const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
 const STAGE_TEXT = {
-  UPLOADED: "Queued", VALIDATING: "Reading the file", PROFILING: "Profiling columns", DISCOVERING: "Searching subgroups",
-  VALIDATING_INSIGHTS: "Validating insights", EMBEDDING: "Embedding insights", UPDATING_ONTOLOGY: "Learning themes",
-  BUILDING_GRAPH: "Building the graph", PERSISTING: "Saving", READY: "Ready",
+  UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
+  VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
+  BUILDING_GRAPH: "Побудова графа", PERSISTING: "Збереження", READY: "Готово",
 };
 const STAGES = Object.keys(STAGE_TEXT);  // in processing order
 const TERMINAL = new Set(["READY", "FAILED", "SKIPPED"]);
 const ERROR_HELP = {
-  no_candidates: ["No subgroups to analyse", "There are no usable columns to group rows by (text columns with a handful of values).", "Mark number-coded columns such as IDs or flags under “Treat as categories”, or split a numeric column into bands."],
-  invalid_schema: ["The table can’t be analysed", "It needs at least one grouping column, one numeric column and enough rows.", "Check the file, or mark code-like columns as categories."],
-  no_numeric_targets: ["No numeric columns", "SIG measures shifts in numeric columns and found none it can use.", "Make sure numbers aren’t stored as text."],
-  no_viable_insights: ["Nothing significant found", "Subgroups were tested, but none passed the significance, stability and effect-size checks.", "Try more rows or other grouping columns."],
-  unsupported_file: ["Unsupported file", "Use CSV, TSV or Parquet (up to the upload limit).", ""],
-  unreadable_file: ["Couldn’t read the file", "The parser failed — check the delimiter and encoding.", ""],
-  invalid_options: ["Option problem", "A column named in the options doesn’t exist or isn’t numeric, or a map zone could not be read.", "Check the spelling of the column names, or the zone’s cells or shape."],
-  representation_mismatch: ["Workspace mismatch", "This workspace was built with a different embedding setup.", "Reset the workspace to change the embedding model or weights."],
-  duplicate_patterns: ["Already ingested", "These insights are already in the graph.", ""],
-  interrupted: ["Interrupted", "Processing stopped before finishing; nothing partial was kept.", "Upload the file again."],
-  chat_timeout: ["No answer in time.", "The graph and the language model did not answer within the time limit.", "Ask about one dataset or a smaller zone, or turn the explanation off to get the evidence alone."],
+  no_candidates: ["Немає за чим групувати", "У таблиці немає придатних колонок, щоб групувати рядки (текстових колонок із кількома значеннями).", "Позначте колонки з кодами (ID, прапорці) у «Вважати категоріями» або розбийте числову колонку на смуги."],
+  invalid_schema: ["Таблицю не можна проаналізувати", "Потрібні щонайменше одна колонка для групування, одна числова колонка і достатньо рядків.", "Перевірте файл або позначте колонки з кодами як категорії."],
+  no_numeric_targets: ["Немає числових колонок", "SIG вимірює зсуви числових колонок і не знайшов жодної придатної.", "Перевірте, чи числа не збережено як текст."],
+  no_viable_insights: ["Стійких знахідок немає", "Сегменти перевірено, але жоден не пройшов перевірок тесту медіани, стабільності й сили зсуву.", "Спробуйте більше рядків або інші колонки для групування."],
+  unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
+  unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
+  invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, або зону мапи не вдалося прочитати.", "Перевірте назви колонок і формат значень або комірки чи форму зони."],
+  metadata_mismatch: ["Метадані змінено", "Запис датасету більше не збігається з цифровим відбитком своїх метаданих: джерело, надійність і показники ігноруються, а їхні зміни відхиляються.", "Завантажте файл ще раз із потрібними метаданими."],
+  representation_mismatch: ["Робочий простір несумісний", "Цей робочий простір побудовано з іншою моделлю опису інсайтів або іншими вагами.", "Скиньте робочий простір, щоб змінити модель або ваги."],
+  duplicate_patterns: ["Уже завантажено", "Ці інсайти вже є в графі.", ""],
+  interrupted: ["Перервано", "Обробку зупинено до завершення; нічого часткового не збережено.", "Завантажте файл ще раз."],
+  chat_timeout: ["Відповіді вчасно немає.", "Граф і мовна модель не відповіли в межах ліміту часу.", "Спитайте про один датасет чи меншу зону або вимкніть пояснення, щоб отримати самі свідчення."],
 };
 const CHAT_TIMEOUT_S = 800;  // a little over nginx's 780 s for /api/chat/
 // chat content is Ukrainian; data literals (column names, values) stay exactly as the data holds them.
@@ -50,17 +51,16 @@ const MARKS = {
   region: 'node[kind="Region"], edge[type="IN_REGION"], edge[type="PARENT_OF"]',
 };
 const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot draw
-// trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4) in the console's words
-const RELIABILITY = { A: "completely reliable", B: "usually reliable", C: "fairly reliable", D: "not usually reliable", E: "unreliable", F: "reliability cannot be judged" };
-const CREDIBILITY = {  // level -> chip class, words
-  1: ["ok", "confirmed by another source"], 2: ["warn", "not confirmed by another source"],
-  5: ["bad", "contradicted by another source"], 6: ["", "no independent source covers this"],
-};
-const INTEGRITY = { ok: ["ok", "its statistics match their digest"], mismatch: ["bad", "its statistics no longer match their digest"], unverified: ["warn", "recorded before digests"] };
-const SCALE = {
-  regional: "regional — holds at a coarser level", "scale-dependent": "scale-dependent — reverses at a coarser level",
-  not_found_coarser: "not found at the coarser level", insufficient: "no coarser level analysed",
-};
+// trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
+// (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
+const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
+const INTEGRITY = { ok: "ok", mismatch: "bad", unverified: "warn" };
+// the legend's entries (index.html data-key) -> the terms whose meaning is their tooltip, then what the drawing's line says
+const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIALIZES", "стрілка веде до ширшого інсайту"],
+  latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
+  colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
+  region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
+  seed: ["role_seed"], cross: ["transversal_only"] };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
 const TERMS = {
@@ -109,7 +109,7 @@ const TERMS = {
   "RELATED_TO (in)": ["пов'язана тема", "теми, чиї інсайти найбільше схожі одна на одну за змістом; не сусідство на мапі"],
   "CO_OCCURS": ["спільна тема", "теми, що мають спільні інсайти"],
   "CO_OCCURS (in)": ["спільна тема", "теми, що мають спільні інсайти"],
-  "SPECIALIZES": ["вужчий за", "ця знахідка — вужча частина тієї: її умови і ще одна"],
+  "SPECIALIZES": ["ширший інсайт", "ширша знахідка, частина якої — ця: ті самі умови без однієї"],
   "SPECIALIZES (in)": ["вужчий інсайт", "вужча частина цієї знахідки: її умови і ще одна"],
   "CONTRASTS": ["протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"],
   "CONTRASTS (in)": ["протилежний зсув", "частини даних перетинаються, а зсув у них протилежний"],
@@ -132,6 +132,7 @@ const TERMS = {
   "points": ["події", "точки з файлу, що потрапили в комірки інсайту"],
   "cells_extent": ["комірки", "комірки мапи, з яких складається інсайт на своєму рівні"],
   "cells_footprint": ["комірки сліду", "комірки цього рівня, що тримають 80 % подій інсайту, знайденого на іншому рівні"],
+  "cells_inside": ["комірки всередині", "комірки цього рівня, чиї центри лежать у комірках інсайту, знайденого на іншому рівні мапи"],
   "cells_in_view": ["комірки у вікні", "комірки у вікні мапи, де є події інсайту"],
   "window_lift": ["частота у вікні", "у скільки разів частіше події інсайту трапляються у вікні мапи (комірки з центром у рамці), ніж очікувано за його часткою на всій мапі; згладжено 30 подіями"],
   "place_lift": ["частота в регіоні", "у скільки разів частіше події інсайту трапляються в цьому регіоні, ніж очікувано за часткою регіону на всій мапі"],
@@ -149,8 +150,13 @@ const TERMS = {
   "emm_score": ["оцінка зміни зв'язків", "середньоквадратична зміна рангових кореляцій між метриками, зменшена для малих частин даних"],
   "volume_utility": ["корисність обсягу", "√p · (1 − p) для частки рядків p: найбільша, коли інсайт охоплює третину даних"]
 };
-const cred = (level) => CREDIBILITY[level] || ["warn", "not rated"];
-const RELATION = { overlaps: "zones overlap", adjacent: "zones touch", same_region: "same region, zones apart" };
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const levelName = (level) => (level === "table" ? "таблиця" : String(level).replace(/^res /, "рівень "));  // the server's level codes, as shown
+const word = (key) => (TERMS[key] || [key])[0];  // a term's name; an unknown key reads as itself
+// a term as the console names it, its meaning in the tooltip: the one writer of the dictionary's tooltips (docs/08_interface.md §8.5)
+const term = (key) => (TERMS[key] ? `<span class="term" title="${esc(TERMS[key][1])}">${esc(TERMS[key][0])}</span>` : esc(key));
+const cred = (level) => [CREDIBILITY[level] ?? "warn", TERMS[`credibility_${level}`] ? word(`credibility_${level}`) : "не оцінено"];
+const RELATION = { overlaps: "ділянки перетинаються", adjacent: "ділянки торкаються", same_region: "той самий регіон, ділянки окремо" };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
 const $ = (id) => document.getElementById(id);
@@ -159,23 +165,17 @@ const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const human = (s) => String(s || "").replace(/_/g, " ");
-const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
+const PLURAL = new Intl.PluralRules("uk");
+const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+
+const plural = (n, one, few, many) => `${num(n, 0)} ${form(n, one, few, many)}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
-const scopeText = (p) => p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and ");
-function insightLead(p, tail = "") {
-  /* an insight in one sentence (docs/08_interface.md §8.5): its target's shift, or its correlation change */
-  const cov = p.covariance && p.covariance.pair ? p.covariance : null;
-  return p.phenomenon_type === "covariance" && cov
-    ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>${tail}.`
-    : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
-}
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
 const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
 const MOTION = matchMedia("(prefers-reduced-motion: reduce)");
 const calm = () => MOTION.matches;  // no camera flights or pulses then
 const nbRow = (id, text, note = "") => `<div class="nb" data-id="${esc(id)}" tabindex="0" role="button"><span>${esc(text)}</span><span class="muted">${esc(note)}</span></div>`;
-const picture = (r) => `${plural(r.patterns, "insight")} · ${plural(r.datasets, "dataset")} · ${plural(r.themes, "theme")}`;  // what a region holds
+const picture = (r) => `${plural(r.patterns, "інсайт", "інсайти", "інсайтів")} · ${plural(r.datasets, "датасет", "датасети", "датасетів")} · ${plural(r.themes, "тема", "теми", "тем")}`;  // what a region holds
 
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
@@ -192,7 +192,7 @@ function setTheme(t) {
   renderSphere();  // same palette in 3D
 }
 
-const CPU_HINT = "Embeddings run on the CPU: slower ingests. On a Mac run the graph service on the host, where it uses the GPU (MPS; README, Mac: GPU); with an NVIDIA GPU start the stack with compose.gpu.yaml.";
+const CPU_HINT = "Модель опису інсайтів працює на CPU: завантаження повільніші. На Mac запустіть сервіс графа на хості, де він бере GPU (MPS; README, Mac: GPU); з GPU NVIDIA запускайте стек із compose.gpu.yaml.";
 
 async function refreshHealth() {
   try {
@@ -200,17 +200,17 @@ async function refreshHealth() {
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
-    const llmTxt = llm.reachable ? (llm.model_available ? model : `${model} not found`) : `${model} offline`;
+    const llmTxt = llm.reachable ? (llm.model_available ? model : `${model}: моделі немає`) : `${model} недоступна`;
     const cpu = h.embedding_device === "cpu";  // amber: on a Mac, Docker sees no GPU (README, Mac: GPU)
-    const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `embeddings · ${h.embedding_device}`;
+    const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `модель · ${h.embedding_device}`;
     $("health").innerHTML =
-      `<span class="pill ${llmCls}" title="Language model · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
-      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Graph database mirror"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j off"}</span>` +
-      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Embedding model and device"}"><i class="dot"></i>${esc(emb)}</span>`;
-    $("llm-label").textContent = `${model} explanation`;
+      `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
+      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
+      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}"><i class="dot"></i>${esc(emb)}</span>`;
+    $("llm-label").textContent = `пояснення ${model}`;
     $("reset-btn").hidden = !h.problem;  // a degraded workspace: only a reset makes it usable again
-    if (h.problem) setUploadMsg(`The workspace can’t be used: ${h.problem}`, true);
-  } catch (e) { $("health").innerHTML = `<span class="pill bad"><i class="dot"></i>Server unreachable</span>`; }
+    if (h.problem) setUploadMsg(`Робочим простором користуватися не можна: ${h.problem}`, true);
+  } catch (e) { $("health").innerHTML = `<span class="pill bad"><i class="dot"></i>Сервер недоступний</span>`; }
 }
 
 function setLegend(show) {
@@ -252,9 +252,14 @@ function clearAnswer() {
 }
 
 function init() {
+  document.querySelectorAll(".key[data-key]").forEach((el) => {  // the legend's tooltips: the terms' meanings
+    const keys = LEGEND_TERMS[el.dataset.key];
+    if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
+  });
   $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop
   const drop = $("drop");
+  $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => { const f = $("file").files[0]; $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f; });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
@@ -267,14 +272,14 @@ function init() {
     $(id).addEventListener("click", async () => {  // both wait for the request: a double click queues one demo
       const demos = [$("demo-btn"), $("demo-geo-btn")];
       demos.forEach((b) => { b.disabled = true; });
-      setUploadMsg("Preparing the demo dataset…");
-      try { await api(path, { method: "POST" }); setUploadMsg("Demo queued — progress is shown below."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
+      setUploadMsg("Готую демо-датасет…");
+      try { await api(path, { method: "POST" }); setUploadMsg("Демо в черзі — поступ видно нижче."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
       demos.forEach((b) => { b.disabled = false; });
     });
   }
   $("reset-btn").addEventListener("click", async () => {
-    if (!confirm("Reset the workspace?\n\nEvery dataset, insight and theme is deleted; upload the data again afterwards.")) return;
-    try { await api("/api/reset", { method: "POST" }); setUploadMsg("The workspace was reset."); } catch (err) { setUploadMsg(err.message, true); }
+    if (!confirm("Скинути робочий простір?\n\nУсі датасети, інсайти й теми буде видалено; дані доведеться завантажити знову.")) return;
+    try { await api("/api/reset", { method: "POST" }); setUploadMsg("Робочий простір скинуто."); } catch (err) { setUploadMsg(err.message, true); }
     S.lastReady = null; refreshBatches(); refreshHealth();
   });
   // canvas

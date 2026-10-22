@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import make_engine, serve, upload_levels
+from conftest import make_engine, serve, stack, upload_levels
 from dev import chromium
-from test_ui_smoke import stack
 
 
 @pytest.mark.browser
