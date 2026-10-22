@@ -81,16 +81,13 @@ function botCard(turn) {
   const evid = items.map((it, i) => {
     if (it.folded_into) return "";  // another level of the same finding: shown on its host's card
     const s = it.statistics;
-    const sh = it.phenomenon_type === "covariance"  // its median shifts are not validated: show the correlation change
-      ? esc(it.relationship || "correlation change")
-      : s.shifts.slice(0, 2).map((x) => `${esc(human(x.metric))} ${signed(x.robust_z)} sd`).join(" · ");
     return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc({ seed: "match", structural: "lattice", transversal: "via theme", vertical_up: "coarser level", vertical_down: "finer level" }[it.role] || it.role)}</span>` +
       (it.transversal_only ? `<span class="role cross">other segment</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="The same finding at another level of this upload">also ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Its map cells against the zone the question asked about">${area[it.key] ? "in the asked area" : "outside the asked area"}</span>` : "") +
       (it.scale && it.scale !== "insufficient" && SCALE[it.scale] ? `<span class="role" title="${esc(SCALE[it.scale])}">${esc(human(it.scale))}</span>` : "") + `</div>` +
-      `<div class="ev-scope">${esc(it.scope.map((c) => human(c).replace("=", " = ")).join(" · "))}</div>` +
-      `<div class="ev-stats">${sh} · ${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
+      `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
+      `<div class="ev-stats">${num(s.support, 0)} rows · evidence ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
   const hypo = b.transversal_only ? `<div class="hypo"><b>Трансверсальна перевірка:</b> ${b.transversal_only.length} із цих інсайтів не мають жодної спільної умови з відправною точкою і знайдені лише через тему.</div>` : "";
   const keyOf = Object.fromEntries(items.map((i) => [i.pattern_id, i.key]));
@@ -164,7 +161,7 @@ function insightCard(turn) {
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
     `<div class="ic-tags">${w ? chip("", w.level) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Open the theme">theme · ${esc(theme.label)}</a>` : ""}</div>` +
-    `<p><b>${esc(scopeText(p))}</b></p><p>${insightLead(p)}</p>` +
+    `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
     `<div class="ev-stats">${num(p.support, 0)} rows (${num(p.support_fraction * 100, 1)}%) · evidence ${num(p.weight)}` +
     (w ? ` · in this view ${num(w.points, 0)} of its points (${num(w.share * 100, 0)}%) · lift ×${num(w.lift, 1)}` : "") + `</div>` +
     (links.length ? `<h4>Walk on</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +

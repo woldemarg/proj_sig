@@ -117,7 +117,7 @@ def test_a_changed_batch_record_is_caught_and_its_metadata_ignored(cfg, demo_csv
     found = engine.search("Why is margin lower for phones in the US?")
     assert all(it.trust.startswith("source unknown (its dataset's metadata failed the integrity check)") for it in found.evidence.items)
     assert any(ds in n and "its metadata no longer matches its digest" in n for n in found.evidence.notes)
-    assert "(джерело невідоме," in found.payload().evidence_summary
+    assert "- довіра всіх свідчень: джерело невідоме" in found.payload().evidence_summary  # every item shares it: one line
     assert f"- метадані датасету {ds} не пройшли перевірку цілісності" in found.payload().evidence_summary  # as the NOTE says
     with pytest.raises(PipelineError) as refused:
         engine.update_dataset_metadata(ds, indicators="")  # any PATCH would sign the forged rating as genuine
@@ -219,7 +219,9 @@ def test_a_changed_geo_record_is_not_drawn_on_the_map(cfg, points_csv):
     assert engine.geo_pattern(ds, intact)["n_points"] > 0
     assert forged not in {i["id"] for t in engine.geo_window(ds, "-180,-90,180,90")["themes"] for i in t["insights"]}
     assert engine.geo_overlay(ds)["patterns"][forged]["integrity"] == "mismatch"  # what the console's map reads to leave it out
-    listed = [it for group in node_details(engine.graph(), intact)["neighbors"].values() for it in group if it["id"] == forged]
+    listed = [
+        it for group in node_details(engine.graph(), intact, engine.settings.thresholds)["neighbors"].values() for it in group if it["id"] == forged
+    ]
     assert listed and {it["integrity"] for it in listed} == {"mismatch"}  # its neighbour's Walk on leaves it out (M9AC-F07)
 
 

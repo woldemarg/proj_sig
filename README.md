@@ -196,11 +196,11 @@ Latent anchors learned, each a recurring phenomenon across scopes:
 "Why is margin lower for phones in the US?" with `use_llm: false` gives the evidence-only answer (`answer_mode: "fallback"`):
 ```text
 Спостереження:
-- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (медіана 14.75 проти 19.45) | n=438 [P1]
-- category=phones, channel=online, region=US | discount +2.25 sd (медіана 19.35 проти 10.74); margin -1.10 sd (медіана 14.72 проти 19.45) | n=205 [P2]
+- Де category = phones і region = US — discount: помітно вище, медіана 19.19 проти 10.74 загалом (+2.21 sd); margin: помірно нижче, медіана 14.75 проти 19.45 (-1.10 sd); 438 рядків [P1]
+- Де category = phones і channel = online і region = US — discount: помітно вище, медіана 19.35 проти 10.74 загалом (+2.25 sd); margin: помірно нижче, медіана 14.72 проти 19.45 (-1.10 sd); 205 рядків [P2]
 …
-- category=tablets, channel=retail, region=EU | discount +2.14 sd (медіана 18.91 проти 10.74); margin -1.03 sd (медіана 15.03 проти 19.45) | n=134 [P4] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
-- category=tablets, channel=retail, region=APAC | discount +2.09 sd (медіана 18.74 проти 10.74); margin -1.00 sd (медіана 15.17 проти 19.45) | n=108 [P5] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
+- Де category = tablets і channel = retail і region = EU — discount: помітно вище, медіана 18.91 проти 10.74 загалом (+2.14 sd); margin: помірно нижче, медіана 15.03 проти 19.45 (-1.03 sd); 134 рядки [P4] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
+- Де category = tablets і channel = retail і region = APAC — discount: помітно вище, медіана 18.74 проти 10.74 загалом (+2.09 sd); margin: слабко нижче, медіана 15.17 проти 19.45 (-1.00 sd); 108 рядків [P6] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
 …
 Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).
 ```

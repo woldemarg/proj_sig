@@ -86,7 +86,7 @@ def check_citations(answer: str, key_to_pattern: dict[str, str]) -> dict[str, An
     }
 
 
-EMPTY_GRAPH = "The knowledge graph is empty — upload a dataset first."
+EMPTY_GRAPH = "Граф знань порожній — спершу завантажте датасет."
 
 
 def _explain(llm: ChatModel | None, payload: EvidencePayload) -> tuple[str, str, dict[str, Any]]:
@@ -110,8 +110,8 @@ def answer(payload: EvidencePayload, llm: ChatModel | None) -> QAResult:
     start = time.perf_counter()
     text, mode, llm_meta = _explain(llm, payload)
     citations = check_citations(text, {key: c["pattern_id"] for key, c in payload.citations.items()})
-    footer = "Sources: " + "; ".join(
-        f"[{key}] {c['pattern_id']} = {c['expression']} (dataset {c['dataset_id']}, {c['filename']}, batch {c['batch_id']})"
+    footer = "Джерела: " + "; ".join(
+        f"[{key}] {c['pattern_id']} = {c['expression']} (датасет {c['dataset_id']}, {c['filename']}, батч {c['batch_id']})"
         for key, c in payload.citations.items()
     )
     metrics = {

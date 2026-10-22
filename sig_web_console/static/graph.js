@@ -528,9 +528,9 @@ async function inspect(id, note = "") {
   $("drawer-kind").textContent = NODE_KINDS[n.kind] || n.kind;
   let html = note ? `<p class="hint drawer-note">${esc(note)}</p>` : "";
   if (n.kind === "Pattern") {
-    $("drawer-title").textContent = scopeText(p);
+    $("drawer-title").textContent = d.reading.where;  // the insight in words (insight_contracts/wording.py), as every surface reads it
     const cov = p.covariance && p.covariance.pair ? p.covariance : null;
-    html += `<p class="lead">${insightLead(p, " in this subgroup")}</p>`;
+    html += `<p class="lead">${esc(d.reading.what)}</p>`;
     html += p.phenomenon_type === "covariance" ? `<h4>Median differences (not validated)</h4>${shiftRows(p.shifts)}` : `<h4>Shifts</h4>${shiftRows(p.shifts)}`;
     html += `<h4>Evidence</h4>` + kv([
       ["Rows", `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% of data)`],
@@ -554,7 +554,7 @@ async function inspect(id, note = "") {
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
     $("drawer-title").textContent = n.label;
-    html += `<p class="lead">A recurring pattern learned from <b>${num(p.n_patterns, 0)}</b> insights across <b>${num(p.distinct_scopes, 0)}</b> different subgroups.</p>`;
+    html += `<p class="lead">${esc(d.reading.what)}</p>`;
     html += `<h4>Signature</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
     html += `<h4>Details</h4>` + kv([
       ["Columns involved", esc(p.dimensions.map(human).join(", "))], ["Metrics", esc(p.targets.map(human).join(", "))],
@@ -564,7 +564,7 @@ async function inspect(id, note = "") {
   } else if (n.kind === "Region") {
     const pic = d.picture || {};
     $("drawer-title").textContent = `res ${p.resolution} · ${p.h3}`;
-    html += `<p class="lead">An H3 cell at resolution ${num(p.resolution, 0)} that holds ${esc(picture(pic))}.</p>`;
+    html += `<p class="lead">${esc(d.reading.what)}</p>`;
     html += kv([["Cells covered", num(p.cells_covered, 0)], ["Region id", `<span class="mono">${esc(n.id)}</span>`]]);
   } else {
     $("drawer-title").textContent = n.label;

@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from insight_contracts import SNAPSHOT_VERSION, Insight, SpatialProvenance, dataset_node_id
+from insight_contracts import SNAPSHOT_VERSION, Insight, PhenomenonThresholds, SpatialProvenance, dataset_node_id, dimension_node_id, wording
 from insight_contracts.text import describe_component
 
 
@@ -126,3 +126,13 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
     for coverage only, docs/06_graph_and_storage.md §6.2); None when it has none."""
     acts = (e for e in graph.out.get(pattern_id, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak"))
     return max(acts, key=lambda e: e["weight"], default=None)
+
+
+def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThresholds) -> dict[str, str]:
+    """The insight in words, ``{"where", "what"}`` (``wording.reading``), with the band count of each quantile-band
+    condition from its Dimension node: every surface that describes an insight reads it here."""
+    ins = graph.insight(pattern_id)
+    dims = (graph.nodes.get(dimension_node_id(ins.dataset_id, c.attribute)) for c in ins.conditions if c.attribute.endswith("_band"))
+    # ponytail: a band column with missing values counts "missing" as a band; the band count is one too high then
+    bands = {d["props"]["name"]: d["props"]["cardinality"] for d in dims if d and d["props"].get("cardinality")}
+    return wording.reading(ins, thresholds, bands=bands)

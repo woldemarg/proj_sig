@@ -194,7 +194,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
-        return node_details(engine.graph(), node_id)
+        return node_details(engine.graph(), node_id, settings.thresholds)
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
@@ -210,7 +210,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
-        return sphere_points(engine.committed(), settings.topology.random_seed, dataset or None)
+        return sphere_points(engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None)
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:
