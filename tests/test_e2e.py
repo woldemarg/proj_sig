@@ -56,7 +56,7 @@ def _check_grounded_answer(engine):
     assert {" AND ".join(sorted(it["scope"])) for it in cross} & EROSION_ANALOGUES
     h = qa.view["highlight"]
     assert h["seeds"] and h["anchors"] and h["edges"] and set(h["evidence"]) <= set(h["traversed"])
-    assert "Sources:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
+    assert "Джерела:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
     prompt = llm.prompts[-1]
     assert "EVIDENCE (statistical findings computed from the uploaded data" in prompt and "verified" not in prompt and "[P1]" in prompt
     assert prompt.isascii()  # no byte-fallback symbols reach the LLM (docs/07_question_answering.md §7.4)
@@ -258,7 +258,7 @@ def test_chain_eval_apparatus(hashed_engine):
 def test_llm_failure_keeps_knowledge(hashed_engine):
     qa = ask(hashed_engine, QUESTION, FakeLLM(ok=False))
     assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
-    assert "category=phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
+    assert "category = phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
     assert qa.llm["error"] and qa.citations["grounded"]
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 

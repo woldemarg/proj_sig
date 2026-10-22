@@ -573,7 +573,7 @@ def test_the_evidence_shows_trust_once_the_graph_has_a_declared_source():
     assert "integrity unverified" not in items["P2"].validation  # said once, on the trust line
     prompt, summary = result.payload().evidence_prompt, result.payload().evidence_summary
     assert "trust is given per item;" in prompt and f"     trust: {items['P1'].trust}" in prompt
-    assert "(джерело E, підтверджено іншим джерелом)" in summary and "(джерело E, немає іншого джерела для перевірки)" in summary
+    assert "(джерело E (ненадійне), підтверджено іншим джерелом)" in summary and "(джерело E (ненадійне), немає іншого джерела)" in summary
     assert result.evidence._weakest({"holds": ["P1", "P2"]}) == "; weakest credibility 6"
     items["P1"].credibility = 9  # a snapshot edited on disk: listed, not a crash
     assert result.evidence._weakest({"holds": ["P1", "P2"]}) == "; weakest credibility 9"

@@ -17,11 +17,11 @@ from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
-from graph_query_engine.graph import DualGraph, describe_components
+from graph_query_engine.graph import DualGraph, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id
+from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -44,18 +44,7 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
 AREA_TAG = {True: " | in the asked area", False: " | outside the asked area"}  # an item of a level the zone weighed
 AREA_WORDS = {True: " (у виділеній зоні)", False: " (поза виділеною зоною)"}
-TRUST_WORDS = {  # the credibility level in the evidence-only summary
-    1: "підтверджено іншим джерелом",
-    2: "не підтверджено",
-    5: "суперечить іншому джерелу",
-    6: "немає іншого джерела для перевірки",
-}
 WEAKEST_FIRST = (5, 6, 2, 1)
-SCALE_WORDS = {  # the same labels in the evidence-only summary
-    "regional": " (тримається і на рівні району)",
-    "scale-dependent": " (на рівні району зсув протилежний)",
-    "not_found_coarser": " (на рівні району окремо не підтверджено)",
-}
 
 
 @dataclass
@@ -85,6 +74,7 @@ class EvidenceItem:
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
+    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what"} in Ukrainian (graph.insight_reading)
 
 
 @dataclass
@@ -352,36 +342,28 @@ class Evidence:
         return [(n, glossary[n]) for n in dict.fromkeys(named) if n in glossary]
 
     def summary(self) -> str:
-        """The observations, cited: one ``- …`` line each, in Ukrainian around untouched literals (or the
-        one line saying the graph holds no such evidence). The narrator frames them as the evidence-only answer.
-
-        The prose of the evidence (``scope_text``, ``shift_text``) is the English LLM serializer, so this
-        renders from the numbers: scope as ``attribute=value`` literals, the phenomenon shifts (the first
-        ``len(shift_text)`` of the record's shifts, which are sorted by |z|) as ``metric ±z sd``, or the
-        correlation pair for a covariance insight.
-        """
+        """The observations, cited: one ``- …`` line each, the item's reading (``wording``) in Ukrainian around
+        untouched literals, its rows and tags, or the one line saying the graph holds no such evidence. Trust, once the
+        graph has it, is one line when every item shares it and a tag on each line when they differ. The narrator
+        frames these lines as the evidence-only answer."""
+        shown = [it for it in self.items if not it.folded_into]
+        trust = {(it.reliability, it.credibility) for it in shown if it.trust}
         lines = []
-        for it in self.items:
-            if it.folded_into:
-                continue
-            s = it.statistics
-            if it.phenomenon_type == "covariance" and s["covariance"].get("pair"):
-                a, b = s["covariance"]["pair"]
-                observed = f"кореляція {a} ~ {b}: {s['covariance']['global_corr']:+.2f} загалом → {s['covariance']['local_corr']:+.2f} у підгрупі"
-            else:
-                observed = "; ".join(
-                    f"{x['metric']} {x['robust_z']:+.2f} sd (медіана {format_value(x['local_median'])} проти {format_value(x['global_median'])})"
-                    for x in s["shifts"][: len(it.shift_text) or 1][:2]
-                )
-            tag = " (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)" if it.transversal_only else ""
-            tag = tag or (" (знайдено лише за місцем: той самий район)" if it.located else "")
-            tag += SCALE_WORDS.get(it.scale, "") + "".join(f" (також [{key}])" for key in it.also)
+        for it in shown:
+            reached = "transversal_only" if it.transversal_only else "located" if it.located else ""
+            tag = f" ({wording.name(reached)}: {wording.TERMS[reached][1]})" if reached else ""
+            tag += f" ({wording.name('scale_' + it.scale)})" if it.scale in SCALE_TEXT else ""
+            tag += "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
-            if it.trust and it.credibility in TRUST_WORDS:
-                tag += f" (джерело {it.reliability or 'невідоме'}, {TRUST_WORDS[it.credibility]})"
-            lines.append(f"- {', '.join(it.scope)} | {observed} | n={s['support']:,} [{it.key}]{tag}")
+            tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
+            n = it.statistics["support"]
+            lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
+        if len(trust) == 1:
+            lines.append(f"- довіра всіх свідчень: {_trust_words(*trust.pop())}")
         keys = self._keys()
-        lines += [f"- зона Z{n}: {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)]
+        lines += [
+            f"- регіон Z{n} (рівень {z['resolution']}): {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)
+        ]
         if self.area is not None:
             lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v) or 'жодного свідчення'}")
         if self.excluded:  # what the NOTEs say of integrity, for the answer without the model
@@ -394,6 +376,12 @@ class Evidence:
         if not self.items:
             lines.append("- У графі немає відповідних свідчень.")
         return "\n".join(lines)
+
+
+def _trust_words(reliability: str, credibility: int | None) -> str:
+    """An item's trust in the summary's words: its source's code and rating, and whether another source confirms it."""
+    source = f"джерело {reliability} ({wording.name('reliability_' + reliability)})" if reliability else "джерело невідоме"
+    return source + (f", {wording.name(f'credibility_{credibility}')}" if f"credibility_{credibility}" in wording.TERMS else "")
 
 
 def _credibility_text(level: int, basis: dict[str, Any], keys: dict[str, str]) -> str:
@@ -580,6 +568,7 @@ def _item(
         credibility=node["props"].get("credibility"),
         credibility_basis=node["props"].get("credibility_basis", {}),
         provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
+        reading=insight_reading(graph, pid, config.thresholds),
     )
 
 

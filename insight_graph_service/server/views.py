@@ -11,15 +11,15 @@ from fastapi import HTTPException
 
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
-from graph_query_engine.graph import primary_anchor
+from graph_query_engine.graph import insight_reading, primary_anchor
 from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
-from insight_contracts import Insight, attractor_id_of, dataset_node_id
+from insight_contracts import Insight, PhenomenonThresholds, attractor_id_of, dataset_node_id, wording
 from insight_contracts.text import humanize
 
 
 def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> str:
     if node["kind"] == "Region":
-        return f"res {node['props']['resolution']}\n{members} insight{'' if members == 1 else 's'}"
+        return f"рівень {node['props']['resolution']}\n{members} {wording.plural(members, 'інсайт', 'інсайти', 'інсайтів')}"
     if node["kind"] != "Pattern":
         return node["label"]
     ins = graph.insight(node["id"])
@@ -98,7 +98,7 @@ IN_REGION_SHOWN = 25  # a pattern's regions in its panel
 NEIGHBOURS_SHOWN = 50  # any other group's strongest: a theme or a region of many insights stays a small panel
 
 
-def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
+def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThresholds) -> dict[str, Any]:
     node = graph.nodes.get(node_id)
     if node is None:
         raise HTTPException(404, f"unknown node {node_id}")
@@ -135,6 +135,7 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
     for key, items in neighbors.items():  # the strongest of each group, its count beside them (a broad pattern lies in hundreds of regions)
         neighbors[key] = items[: IN_REGION_SHOWN if key == "IN_REGION" else NEIGHBOURS_SHOWN]
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
+        out["reading"] = insight_reading(graph, node_id, thresholds)
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
         out["places"] = [
@@ -152,6 +153,10 @@ def node_details(graph: DualGraph, node_id: str) -> dict[str, Any]:
         out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)
+        out["reading"] = {"what": wording.region_reading(node_id, out["picture"])}
+    elif node["kind"] == "Attractor":
+        props = node["props"]
+        out["reading"] = {"what": wording.theme_reading(props["signature"], props["n_patterns"], props["distinct_scopes"])}
     return out
 
 
@@ -170,32 +175,28 @@ def project_to_sphere(vectors: np.ndarray, seed: int) -> np.ndarray:
     return y / norms * minmax_scale(np.log(norms**2), feature_range=(0.1, 1))
 
 
-def _pattern_hover(ins: Insight, theme: str) -> str:
+def _pattern_hover(ins: Insight, reading: dict[str, str], theme: str) -> str:
     # the data's names are escaped: plotly renders hover text as HTML
-    shifts = "<br>".join(
-        f"&nbsp;&nbsp;{escape(s.metric)}: {s.local_median:.4g} vs {s.global_median:.4g} (z {s.robust_z:+.2f})" for s in ins.shifts[:3]
-    )
     return (
-        f"<b>Insight</b> {ins.id}<br>"
-        f"<b>Scope:</b> {escape(' ∧ '.join(c.expr for c in ins.conditions))}<br>"
-        f"<b>Target:</b> {escape(ins.target)} ({ins.phenomenon_type})<br>{shifts}<br>"
-        f"<b>Support:</b> {ins.support} rows · <b>evidence</b> {ins.weight:.2f}<br>"
-        f"<b>Theme:</b> {theme}<br>"
-        f"<b>Dataset:</b> {escape(ins.provenance.get('filename', ''))}"
+        f"<b>{wording.name('insight')}</b> {ins.id}<br>"
+        f"<b>{wording.name('scope')}:</b> {escape(reading['where'])}<br>{escape(reading['what'])}<br>"
+        f"<b>{wording.name('support')}:</b> {ins.support} · <b>{wording.name('weight')}</b> {ins.weight:.2f}<br>"
+        f"<b>{wording.name('theme')}:</b> {theme}<br>"
+        f"<b>датасет:</b> {escape(ins.provenance.get('filename', ''))}"
     )
 
 
 def _attractor_hover(node: dict[str, Any]) -> str:
     p = node["props"]
     return (
-        f"<b>Theme</b> {node['id']}<br><b>{escape(node['label'])}</b><br>"
-        f"<b>Insights:</b> {p['n_patterns']} over {p['distinct_scopes']} scopes<br>"
-        f"<b>Mass:</b> {p['mass']} · <b>evidence mass</b> {p['evidence_mass']:.2f}<br>"
-        f"<b>Columns:</b> {escape(', '.join(p['dimensions']))}"
+        f"<b>{wording.name('theme')}</b> {node['id']}<br><b>{escape(node['label'])}</b><br>"
+        f"{escape(wording.theme_reading(p['signature'], p['n_patterns'], p['distinct_scopes']))}<br>"
+        f"<b>{wording.name('mass')}:</b> {p['mass']} · <b>{wording.name('evidence_mass')}</b> {p['evidence_mass']:.2f}<br>"
+        f"<b>колонки:</b> {escape(', '.join(p['dimensions']))}"
     )
 
 
-def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) -> dict[str, Any]:
+def sphere_points(state: CommittedState, seed: int, thresholds: PhenomenonThresholds, dataset: str | None = None) -> dict[str, Any]:
     """The sphere as data: every pattern and the attractors they activate, placed by one projection of one commit
     (vectors and centroids share the frame), plus the edges between them; ``message`` when there is nothing to draw."""
     g, frame = state.graph, state.frame
@@ -204,9 +205,9 @@ def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) 
     acts = [e for e in g.edges if e["type"] == "ACTIVATES" and e["source"] in drawn]
     anchors = sorted({e["target"] for e in acts}, key=attractor_id_of)
     if not pats:
-        return {"points": [], "edges": [], "message": "No insights to project — upload a dataset first."}
+        return {"points": [], "edges": [], "message": "Немає інсайтів для проєкції — спершу завантажте датасет."}
     if len(pats) + len(anchors) < 4:
-        return {"points": [], "edges": [], "message": "A 3D projection needs at least 4 points (insights + themes)."}
+        return {"points": [], "edges": [], "message": "Для 3D-проєкції потрібно щонайменше 4 точки (інсайти й теми)."}
     vectors = [frame.patterns[n["id"]] for n in pats] + [frame.attractors[attractor_id_of(a)] for a in anchors]
     coords = project_to_sphere(np.stack(vectors).astype(np.float64), seed)
     points = []
@@ -214,7 +215,9 @@ def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) 
         ins = g.insight(n["id"])
         anchor = primary_anchor(g, n["id"])
         theme = (
-            f"{escape(g.nodes[anchor['target']]['label'])} (alignment {float(anchor['weight']):.2f})" if anchor else "none (weak memberships only)"
+            f"{escape(g.nodes[anchor['target']]['label'])} (відповідність {float(anchor['weight']):.2f})"
+            if anchor
+            else "немає (лише слабкі зв'язки з темами)"
         )
         cls = "cov" if ins.phenomenon_type == "covariance" else "up" if ins.effect_size > 0 else "down"
         points.append(
@@ -224,7 +227,7 @@ def sphere_points(state: CommittedState, seed: int, dataset: str | None = None) 
                 "cls": cls,
                 "weight": ins.weight,
                 "xyz": xyz.round(5).tolist(),
-                "hover": _pattern_hover(ins, theme),
+                "hover": _pattern_hover(ins, insight_reading(g, n["id"], thresholds), theme),
             }
         )
     for a, xyz in zip(anchors, coords[len(pats) :]):

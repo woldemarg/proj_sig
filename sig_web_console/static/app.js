@@ -162,14 +162,7 @@ const human = (s) => String(s || "").replace(/_/g, " ");
 const plural = (n, word) => `${num(n, 0)} ${word}${n === 1 ? "" : "s"}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
-const scopeText = (p) => p.conditions.map((c) => `${human(c.attribute)} = ${c.value}`).join(" and ");
-function insightLead(p, tail = "") {
-  /* an insight in one sentence (docs/08_interface.md §8.5): its target's shift, or its correlation change */
-  const cov = p.covariance && p.covariance.pair ? p.covariance : null;
-  return p.phenomenon_type === "covariance" && cov
-    ? `The relationship between <b>${esc(human(cov.pair[0]))}</b> and <b>${esc(human(cov.pair[1]))}</b> changes here: correlation ${num(cov.global_corr)} overall → <b>${num(cov.local_corr)}</b>${tail}.`
-    : `<b>${esc(human(p.target))}</b> is ${p.effect_size > 0 ? "higher" : "lower"} here — median ${num(p.local, 4)} vs ${num(p.baseline, 4)} overall (${signed(p.effect_size)} sd).`;
-}
+const uk = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14) ? few : many);  // 1 / 2–4 / 5+
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
 const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
 const MOTION = matchMedia("(prefers-reduced-motion: reduce)");

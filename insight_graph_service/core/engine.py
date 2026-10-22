@@ -592,15 +592,15 @@ class Engine:
 
     @_healthy
     def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
-        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id)
+        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds)
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
-        return geo_views.geo_projected(self.ws, self.graph(), dataset_id)
+        return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
 
     @_healthy
     def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
-        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox)
+        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds)
 
     @_healthy
     def export_geosparql(self) -> str:

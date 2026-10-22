@@ -61,7 +61,7 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert seen[-1]["body"]["messages"][1]["content"] == recorded["evidence_prompt"]  # the graph's prompt, verbatim
             assert "11. TRUST:" in seen[-1]["body"]["messages"][0]["content"]  # the system prompt's rules
             assert qa["view"] == recorded["view"] and qa["prompt"] == recorded["evidence_prompt"]  # the view, untouched
-            assert "Sources: [P1]" in qa["provenance_footer"]
+            assert "Джерела: [P1]" in qa["provenance_footer"]
             logged = json.loads(caplog.records[-1].getMessage())
             assert (
                 logged["question"] == QUESTION

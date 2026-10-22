@@ -11,7 +11,7 @@ from insight_graph_service.server.views import project_to_sphere, sphere_points
 
 
 def sphere(engine):
-    return sphere_points(engine.committed(), engine.settings.topology.random_seed)
+    return sphere_points(engine.committed(), engine.settings.topology.random_seed, engine.settings.thresholds)
 
 
 def test_the_sphere_holds_every_insight_and_its_themes(hashed_engine):
@@ -44,4 +44,4 @@ def test_the_projection_is_deterministic_and_the_api_serves_it(hashed_engine, tm
     with TestClient(create_app(hashed_engine)) as client:
         assert client.get("/api/sphere").json()["points"]
     cfg = make_config(tmp_path / "empty")
-    assert "upload a dataset" in sphere(make_engine(cfg))["message"]
+    assert "завантажте датасет" in sphere(make_engine(cfg))["message"]
