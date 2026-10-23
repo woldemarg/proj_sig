@@ -906,18 +906,20 @@ def cell_boundary(cell: str) -> list[list[float]]:
 
 def region_features(cells: np.ndarray, regions: list[str]) -> list[dict[str, Any]]:
     """GeoJSON features of regions (``R:<res>:<h3>``, none finer than ``cells``, one dataset's), each with the rows of the
-    cells whose centre it holds (``event_regions``), as a base pattern's events and a zone are placed."""
+    cells whose centre it holds (``event_regions``), as a base pattern's events and a zone are placed, and its H3
+    ``centre`` (lon, lat): the one centre the map's labels and its window share."""
     held = event_regions(cells, tuple({int(rid.split(":")[1]) for rid in regions})) if len(cells) else {}
     out = []
     for rid in regions:
         _, res, cell = rid.split(":")
         lv = int(res)
         rows = np.flatnonzero(held[lv] == cell).tolist()
+        lat, lng = h3.cell_to_latlng(cell)
         out.append(
             {
                 "type": "Feature",
                 "geometry": {"type": "Polygon", "coordinates": [cell_boundary(cell)]},
-                "properties": {"id": rid, "resolution": lv, "rows": rows},
+                "properties": {"id": rid, "resolution": lv, "rows": rows, "centre": [round(lng, 6), round(lat, 6)]},
             }
         )
     return out

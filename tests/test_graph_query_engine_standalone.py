@@ -667,6 +667,37 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     assert scale_chain(DualGraph(scattered), ["P7"])[0].regions == ["R:1:c"]  # the regions above start where it lies
 
 
+def test_a_theme_reads_its_metrics_in_the_declared_words():
+    """A theme's reading, in the panel and on the sphere, names its metrics as the datasets of its insights declare them
+    (``graph.theme_glossary``: the first insight's dataset wins a name both declare)."""
+    from insight_graph_service.server.views import node_details
+
+    nodes = [
+        pattern("P1", ["region=US"], dataset="ds1"),
+        pattern("P2", ["region=EU"], dataset="ds2"),
+        {"id": "DS:ds1", "kind": "Dataset", "label": "a", "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржа"}}},
+        {
+            "id": "DS:ds2",
+            "kind": "Dataset",
+            "label": "b",
+            "props": {"dataset_id": "ds2", "user_glossary": {"margin": "прибуток", "discount": "знижка"}},
+        },
+        {
+            "id": "A-1",
+            "kind": "Attractor",
+            "label": "margin lower, discount higher",
+            "props": {
+                "signature": [{"component": "margin", "value": -1.0}, {"component": "discount", "value": 0.5}],
+                "n_patterns": 2,
+                "distinct_scopes": 2,
+            },
+        },
+    ]
+    graph = DualGraph({"nodes": nodes, "edges": [edge("P1", "A-1", "ACTIVATES", 0.9), edge("P2", "A-1", "ACTIVATES", 0.8)]})
+    what = node_details(graph, "A-1", PhenomenonThresholds())["reading"]["what"]
+    assert what == "Повторювана картина: маржа нижче, знижка вище — 2 інсайти у 2 частинах даних."
+
+
 def test_reword_matches_whole_names_and_a_band_says_its_place():
     """One pass over each dataset's own glossary, the declared phrase over the derived one: a short name never rewrites a
     longer name the evidence uses nor part of a word, a name is rewritten wherever it stands (a relationship's pair too),

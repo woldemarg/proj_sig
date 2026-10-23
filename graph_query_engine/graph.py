@@ -157,12 +157,33 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
 
 
 def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThresholds) -> dict[str, str]:
-    """The insight in words, ``{"where", "what"}`` (``wording.reading``), with its dataset's declared glossary
+    """The insight in words, ``{"where", "what", "headline"}`` (``wording.reading``), with its dataset's declared glossary
     (``user_glossary`` of its Dataset node) and the band count of each quantile-band condition from its Dimension node:
     every surface that describes an insight reads it here."""
+    return wording.reading(graph.insight(pattern_id), thresholds, *declared_words(graph, pattern_id))
+
+
+def declared_words(graph: DualGraph, pattern_id: str) -> tuple[dict[str, str], dict[str, int]]:
+    """What an insight's words are read with: its dataset's declared glossary and the band count of each quantile-band
+    condition (``band_counts``)."""
     ins = graph.insight(pattern_id)
     declared = graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("user_glossary", {})
-    return wording.reading(ins, thresholds, declared, band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions)))
+    return declared, band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions))
+
+
+def theme_glossary(graph: DualGraph, attractor_id: str) -> dict[str, str]:
+    """The declared glossaries of the datasets of a theme's insights, merged (the first insight's dataset wins a name
+    both declare), for its reading; derived once per graph."""
+
+    def build() -> dict[str, str]:
+        out: dict[str, str] = {}
+        for e in graph.inc.get(attractor_id, []):
+            if e["type"] == "ACTIVATES" and e["source"] in graph.insights:
+                node = graph.nodes.get(dataset_node_id(graph.insights[e["source"]].dataset_id), {"props": {}})
+                out = node["props"].get("user_glossary", {}) | out
+        return out
+
+    return graph.memoised(("theme_glossary", attractor_id), build)
 
 
 def band_counts(graph: DualGraph, dataset_id: str, attributes: Iterable[str]) -> dict[str, int]:

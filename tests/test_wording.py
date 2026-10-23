@@ -76,6 +76,7 @@ def test_a_reading_names_the_target_and_the_next_material_shift():
         "Де category = phones і region = US — discount: помітно вище, медіана 19.19 проти 10.74 загалом (+2.21 sd); "
         "margin: помірно нижче, медіана 14.75 проти 19.45 (-1.10 sd)"
     )
+    assert w.reading(ins, PhenomenonThresholds(), {"discount": "знижка"})["headline"] == "знижка: помітно вище"  # a list row's clause
     declared = {"category": "категорія товару", "region=US": "замовлення у США"}
     assert w.reading(ins, PhenomenonThresholds(), declared)["where"] == "категорія товару = phones і замовлення у США"
 
@@ -93,7 +94,7 @@ def test_a_geo_reading_uses_ukrainian_cell_words_and_the_declared_source_column(
     )
     r = w.reading(ins, PhenomenonThresholds(), {"vehicle_type": "вид транспорту", "speed": "швидкість"}, {"income_band": 5})
     assert r["where"] == (
-        "гаряча точка (багато подій тут і поруч) і сусідні комірки серед найжвавіших (верхня чверть) і "
+        "гаряча точка (багато подій тут і поруч) і сусідні комірки серед найжвавіших (верхня чверть) (кількість подій у комірці) і "
         "income у другій з 5 смуг (від найменших значень)"
     )
     assert r["what"].startswith("частка подій комірки, де вид транспорту — bicycle: помірно вище")
@@ -105,13 +106,21 @@ def test_a_geo_reading_uses_ukrainian_cell_words_and_the_declared_source_column(
     assert w.reading(four, PhenomenonThresholds())["what"].startswith("points: слабко вище")  # a table's column is no cell column
     assert w.source_column("neighbours_t_active_days_band", {"t"}) == "t" and w.source_column("neighbours_points", {"t"}) is None  # a counter's lag
     days = toy_insight(
-        [("neighbours_t_active_days_band", "q4"), ("kind_mode", "INLAND")],
+        [("neighbours_t_active_days_band", "q4"), ("kind_mode", "INLAND"), ("corps_mode", "missing")],
         [Shift("points", 0.9, 30, 12, 9)],
         provenance={"spatial": {"resolution": 7}},
     )
     assert w.reading(days, PhenomenonThresholds(), {"kind=INLAND": "вглиб материка"})["where"] == (
         "сусідні комірки серед найжвавіших (верхня чверть) (кількість днів з подіями в комірці (t)) і вглиб материка"
-    )  # another counter's band names it; a cell's mode column reads the declared pair of its source column
+        " і corps (найчастіше серед подій комірки) не вказано"
+    )  # a band names its counter; a cell's mode column reads the declared pair of its source column; a blank is no value
+    assert w.short_conditions(days, {"kind=INLAND": "вглиб материка"}, {}) == [
+        "сусідні комірки серед найжвавіших (верхня чверть) (кількість днів з подіями в комірці (t))",
+        "вглиб материка",
+        "corps (найчастіше серед подій комірки) не вказано",
+    ]  # a list row: the phrase where a code says nothing
+    plain = toy_insight([("city", "Kyiv"), ("kind_mode", "INLAND")], [Shift("m", 1, 2, 1, 1)], provenance={"spatial": {"resolution": 7}})
+    assert w.short_conditions(plain, {}, {}) == ["Kyiv", "INLAND"]  # a value says it all
 
 
 def test_a_covariance_insight_reads_as_its_correlation_change():
@@ -122,6 +131,7 @@ def test_a_covariance_insight_reads_as_its_correlation_change():
         covariance={"pair": ["discount", "margin"], "global_corr": -0.54, "local_corr": 0.30},
     )
     assert w.reading(cov, PhenomenonThresholds())["what"] == "зв'язок метрик discount і margin змінює знак: кореляція -0.54 загалом → +0.30 тут"
+    assert w.reading(cov, PhenomenonThresholds())["headline"] == "зв'язок метрик discount і margin змінює знак"
 
 
 def test_a_theme_and_a_region_read_in_plain_words():
@@ -132,6 +142,20 @@ def test_a_theme_and_a_region_read_in_plain_words():
     )
     assert w.theme_reading({"signature": [{"component": "correlation between a and b", "value": -0.3}], "n_patterns": 1, "distinct_scopes": 1}) == (
         "Повторювана картина: зв'язок метрик a і b слабшає — 1 інсайт у 1 частині даних."
+    )
+    declared = {"discount": "знижка", "margin": "маржа", "delivery_days": "днів доставки"}  # the labels are humanised names
+    assert w.theme_reading({"signature": signature, "n_patterns": 9, "distinct_scopes": 9}, declared).startswith(
+        "Повторювана картина: знижка вище, маржа нижче"
+    )
+    corr = {"signature": [{"component": "correlation between delivery days and margin", "value": 0.4}], "n_patterns": 1, "distinct_scopes": 1}
+    assert w.theme_reading(corr, declared).startswith("Повторювана картина: зв'язок метрик днів доставки і маржа сильнішає")
+    geo = {
+        "signature": [{"component": "share fuel type Дизель", "value": 0.8}, {"component": "points", "value": -0.2}],
+        "n_patterns": 2,
+        "distinct_scopes": 2,
+    }
+    assert w.theme_reading(geo, {"fuel_type": "Тип пального"}).startswith(  # a cell's derived columns read as in its insights
+        "Повторювана картина: частка подій комірки, де Тип пального — Дизель вище, кількість подій у комірці нижче"
     )
     picture = {"patterns": 3, "datasets": 1, "themes": 2}
     assert w.region_reading(picture) == "3 інсайти з 1 датасету, 2 теми."

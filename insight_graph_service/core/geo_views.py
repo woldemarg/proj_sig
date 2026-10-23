@@ -18,7 +18,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from graph_query_engine.graph import DualGraph, insight_reading, primary_anchor
+from graph_query_engine.graph import DualGraph, declared_words, insight_reading, primary_anchor, theme_glossary
 from graph_query_engine.vertical import affinity, picture, restating, scale_chain, scale_label, shown_regions
 from insight_contracts import Insight, PhenomenonThresholds, wording
 from insight_graph_service.core.errors import PipelineError
@@ -448,6 +448,8 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
     proj = _projection(ws, graph, dataset_id)
     view = window_view(proj["centres"], bbox)
     total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
+    if not total:  # a map without a located point lists nothing: the expected count below would divide by it
+        return {"cells": int(view.sum()), "points": 0, "first": "map", "insights": 0, "themes": []}
     wide = len(np.unique(proj["detail"][view])) * proj["detail_area"] > WINDOW_DETAIL_REGIONS
     listed: dict[str, tuple[Projected, int, int, float]] = {}
     for pid, p in proj["patterns"].items():
@@ -471,7 +473,7 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
             {
                 "id": aid,
                 "label": node["label"] if node else "без теми",
-                "reading": wording.theme_reading(node["props"]) if node else "",
+                "reading": wording.theme_reading(node["props"], theme_glossary(graph, aid)) if node else "",
                 "insights": [],
                 "members": [],
             },
@@ -483,7 +485,7 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
                     "id": pid,
                     "label": graph.nodes[pid]["label"],
                     "level": p.level,
-                    "values": [c.value for c in ins.conditions],
+                    "values": wording.short_conditions(ins, *declared_words(graph, pid)),  # a value, or the phrase a code needs
                     "target": ins.target,
                     "effect": round(ins.effect_size, 3),
                     "ptype": ins.phenomenon_type,

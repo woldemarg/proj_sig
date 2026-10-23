@@ -355,7 +355,8 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   paintRegions();
 }
 
-const centre = (f) => {  // the mean of a ring's vertices, longitudes taken around its first one: a cell across ±180° stays whole
+const centre = (f) => {  // the region's H3 centre, the one its window membership uses; a ring's mean for a feature without one
+  if ((f.properties || {}).centre) return f.properties.centre;
   const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = r.reduce((a, c) => a + unwrap(c[0], x0), 0) / r.length;
   return [unwrap(lon, 0), r.reduce((a, c) => a + c[1], 0) / r.length];
 };
@@ -513,7 +514,7 @@ function renderWindow() {
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
   const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
-    `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(human(insightTail(i)))}</em></span>` +
+    `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(((G.patterns[i.id] || {}).reading || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
   const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
   $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного: жоден інсайт не має досить подій у вікні понад свою частку на мапі.</div>` : shown.map((t, k) => {
