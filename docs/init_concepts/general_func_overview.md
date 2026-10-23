@@ -176,7 +176,7 @@ SIG **не використовує WRAcc** **[факт]**. Вендорован
 
 $$
 \begin{aligned}
-\lvert z_k(S)\rvert &= \min\!\left(\frac{0.6745\,\lvert \operatorname{med}_S(y_k) - \operatorname{med}(y_k)\rvert}{\mathrm{MAD}_k + 10^{-6}},\; 10\right) && \text{зсув у робастних стандартних відхиленнях} \\
+\lvert z_k(S)\rvert &= \min\!\left(\frac{0.6745\,\lvert \mathrm{med}_S(y_k) - \mathrm{med}(y_k)\rvert}{\mathrm{MAD}_k + 10^{-6}},\; 10\right) && \text{зсув у робастних стандартних відхиленнях} \\
 \mathrm{SD}(S) &= \sum_{k \in \text{три найбільші}} \lvert z_k(S)\rvert \\
 \mathrm{EMM}(S) &= \frac{\lVert C - C_S \rVert_F}{\sqrt{m(m-1)}}\;\sqrt{\frac{\max(0,\, n - n_{\min})}{N - n_{\min}}} \\
 \mathrm{vol}(S) &= \sqrt{\frac{n}{N}}\left(1 - \frac{n}{N}\right) && \max \mathrm{vol}(S) = 0.3849\ \text{при}\ \tfrac{n}{N} = \tfrac{1}{3}
@@ -201,7 +201,7 @@ $$
 \begin{aligned}
 w &= 0.05 + 0.95 \prod_k f_k^{\,a_k / \sum_j a_j} && a = (0.35,\ 0.25,\ 0.10,\ 0.10)\ \text{для (ефект, стабільність, підтримка, EMM)} \\
 f_{\text{effect}} &= 1 - \exp\!\left(-\lvert z_{\text{primary}}\rvert / 1.5\right) && z_{\text{primary}}\ \text{— знаковий робастний зсув первинної метрики} \\
-f_{\text{stability}} &= \operatorname{clip}\bigl(1 - \min(\mathrm{CV}, 0.9),\, 0,\, 1\bigr) && \text{для коваріаційного інсайту не вимірюється і випадає з добутку} \\
+f_{\text{stability}} &= \mathrm{clip}\bigl(1 - \min(\mathrm{CV}, 0.9),\, 0,\, 1\bigr) && \text{для коваріаційного інсайту не вимірюється і випадає з добутку} \\
 f_{\text{support}} &= \mathrm{vol}(S) / 0.3849 && \text{частка максимуму vol} \\
 f_{\text{emm}} &= 0.5 + 0.5\bigl(1 - \exp(-\mathrm{EMM}(S)/0.08)\bigr) && \text{бонус: відсутність зміни кореляцій не обнуляє вагу}
 \end{aligned}
@@ -282,8 +282,8 @@ SIG обирає інший компроміс **[факт]**: **повний п
 
 $$
 \begin{aligned}
-s &= \operatorname{enc}(\text{scope}), \qquad t = \operatorname{enc}(\text{target}), \qquad p = \operatorname{normalize}\Bigl(\textstyle\sum_k \mathrm{coef}_k\, \operatorname{enc}(\mathrm{label}_k)\Bigr) \\
-v &= \operatorname{normalize}\bigl([\,0.45\,s;\ 0.55\,t;\ 1.0\,p\,]\bigr), \qquad \dim v = 3 \cdot 384 = 1152 \\
+s &= \mathrm{enc}(\text{scope}), \qquad t = \mathrm{enc}(\text{target}), \qquad p = \mathrm{normalize}\Bigl(\textstyle\sum_k \mathrm{coef}_k\, \mathrm{enc}(\mathrm{label}_k)\Bigr) \\
+v &= \mathrm{normalize}\bigl([\,0.45\,s;\ 0.55\,t;\ 1.0\,p\,]\bigr), \qquad \dim v = 3 \cdot 384 = 1152 \\
 \cos(v, v') &= 0.135\, s\!\cdot\! s' + 0.201\, t\!\cdot\! t' + 0.664\, p\!\cdot\! p'
 \end{aligned}
 $$
@@ -623,7 +623,7 @@ $$
 
 $$
 \begin{aligned}
-\lvert z_k(S)\rvert &= \min\!\left(\frac{0.6745\,\lvert \operatorname{med}_S(y_k) - \operatorname{med}(y_k)\rvert}{\mathrm{MAD}_k + 10^{-6}},\; 10\right) \\
+\lvert z_k(S)\rvert &= \min\!\left(\frac{0.6745\,\lvert \mathrm{med}_S(y_k) - \mathrm{med}(y_k)\rvert}{\mathrm{MAD}_k + 10^{-6}},\; 10\right) \\
 \mathrm{SD}(S) &= \sum_{k \in \text{три найбільші}} \lvert z_k(S)\rvert \\
 \mathrm{EMM}(S) &= \frac{\lVert C - C_S \rVert_F}{\sqrt{m(m-1)}}\;\sqrt{\frac{\max(0,\, n - n_{\min})}{N - n_{\min}}} \\
 \mathrm{vol}(S) &= \sqrt{\frac{n}{N}}\left(1 - \frac{n}{N}\right), \qquad n_{\min} = \max\bigl(5m,\ \lfloor 0.005\,N \rfloor\bigr)
@@ -635,7 +635,7 @@ $$
 $$
 \begin{aligned}
 w &= 0.05 + 0.95 \prod_k f_k^{\,a_k / \sum_j a_j}, \qquad a = (0.35,\ 0.25,\ 0.10,\ 0.10) \\
-f_{\text{effect}} &= 1 - \exp\!\left(-\lvert z_{\text{primary}}\rvert / 1.5\right), \qquad f_{\text{stability}} = \operatorname{clip}\bigl(1 - \min(\mathrm{CV}, 0.9),\, 0,\, 1\bigr) \\
+f_{\text{effect}} &= 1 - \exp\!\left(-\lvert z_{\text{primary}}\rvert / 1.5\right), \qquad f_{\text{stability}} = \mathrm{clip}\bigl(1 - \min(\mathrm{CV}, 0.9),\, 0,\, 1\bigr) \\
 f_{\text{support}} &= \mathrm{vol}(S) / 0.3849, \qquad f_{\text{emm}} = 0.5 + 0.5\bigl(1 - \exp(-\mathrm{EMM}(S)/0.08)\bigr)
 \end{aligned}
 $$
@@ -659,8 +659,8 @@ $$
 
 $$
 \begin{aligned}
-s &= \operatorname{enc}(\text{scope}), \qquad t = \operatorname{enc}(\text{target}), \qquad p = \operatorname{normalize}\Bigl(\textstyle\sum_k \mathrm{coef}_k\, \operatorname{enc}(\mathrm{label}_k)\Bigr) \\
-v &= \operatorname{normalize}\bigl([\,0.45\,s;\ 0.55\,t;\ 1.0\,p\,]\bigr), \qquad \dim v = 1152 \\
+s &= \mathrm{enc}(\text{scope}), \qquad t = \mathrm{enc}(\text{target}), \qquad p = \mathrm{normalize}\Bigl(\textstyle\sum_k \mathrm{coef}_k\, \mathrm{enc}(\mathrm{label}_k)\Bigr) \\
+v &= \mathrm{normalize}\bigl([\,0.45\,s;\ 0.55\,t;\ 1.0\,p\,]\bigr), \qquad \dim v = 1152 \\
 \cos(v, v') &= 0.135\, s\!\cdot\! s' + 0.201\, t\!\cdot\! t' + 0.664\, p\!\cdot\! p'
 \end{aligned}
 $$
