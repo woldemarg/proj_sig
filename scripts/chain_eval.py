@@ -17,21 +17,17 @@ pattern (the ball). Results: ``.scratch/results/chain_eval_<label>.json``.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
+from experiment import phenomenon_of, planted_scopes
 from scipy.sparse.csgraph import dijkstra
+from scratch import demo_engine, save_result
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
-
-from experiment import phenomenon_of, planted_scopes  # noqa: E402
-
-from insight_contracts.graph import LATENT_EDGES, STRUCTURAL_EDGES  # noqa: E402
-from insight_graph_service.core.engine import Engine  # noqa: E402
-from insight_graph_service.core.workspace import utc_now  # noqa: E402
+from insight_contracts.graph import LATENT_EDGES, STRUCTURAL_EDGES
+from insight_graph_service.core.engine import Engine
+from insight_graph_service.core.workspace import utc_now
 
 HOPS = (0, 1, 2, 3, 4)
 
@@ -92,7 +88,7 @@ def layer_measures(d: np.ndarray, sets: list[list[int]], disjoint: list[tuple[in
 
 def run_chain_eval(engine: Engine) -> dict[str, Any]:
     """The measures per layer on the committed graph's planted sets."""
-    g = engine.prepared().graph
+    g = engine.committed().graph
     patterns = [node["id"] for node in g.of_kind("Pattern")]
     index = {p: i for i, p in enumerate(patterns)}
     anchors = sorted({e["target"] for e in g.edges if e["type"] == "ACTIVATES"})
@@ -145,8 +141,6 @@ def format_table(result: dict[str, Any]) -> str:
 def main() -> int:
     """The chain eval on a scratch workspace holding the synthetic demo; the result is saved under .scratch/results."""
     import argparse
-
-    from scratch import demo_engine, save_result
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="current")

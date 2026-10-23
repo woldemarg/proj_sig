@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
@@ -24,7 +25,7 @@ import pandas as pd
 from scipy.stats import norm, zscore
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, Insight, Rejection, Shift, pattern_id
+from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
@@ -55,9 +56,6 @@ class DatasetProfile:
     global_mads: dict[str, float]
     dimension_cardinality: dict[str, int]
     dimension_entropy: dict[str, float]
-
-    def to_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
 
 
 @dataclass
@@ -232,8 +230,9 @@ def run_discovery(
         forced = [c for c in categoricals if c in spatial.conditions]
         dims = forced + [d for d in dims if d not in forced]
     space = eda.step3_generate_search_space(profile, dims, compute_budget=config.compute_budget)
-    global_medians = {n: float(np.median(data[n].dropna())) for n in numerics}
-    global_mads = {n: float(eda.calculate_mad(data[n].dropna())) for n in numerics}
+    global_medians, global_mads = {}, {}
+    for n in numerics:
+        global_medians[n], global_mads[n] = _global_stats(data[n])
     prof = DatasetProfile(
         rows=int(profile["total_rows"]),
         columns=int(df.shape[1]),
@@ -369,32 +368,20 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics, cand.restated)
         shifts: list[Shift] = []  # never empty: a cohort without a shift entered the rank on its covariance pair
         for metric, magnitude in cand.top_shifts:
-            local_median = float(np.median(rows[metric].dropna()))
-            sign = np.sign(local_median - prof.global_medians[metric]) or 1.0
-            shifts.append(Shift(metric, float(sign * magnitude), local_median, prof.global_medians[metric], prof.global_mads[metric]))
+            shifts.append(_shift(metric, float(np.median(rows[metric].dropna())), prof.global_medians[metric], prof.global_mads[metric], magnitude))
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
-                gm, gd = prof.global_medians[metric], prof.global_mads[metric]
-                sign = np.sign(local_median - gm) or 1.0
-                shifts.append(Shift(metric, float(sign * eda.robust_z_score(local_median, gm, gd)), local_median, gm, gd, "covariance_pair"))
+                shifts.append(_shift(metric, local_median, prof.global_medians[metric], prof.global_mads[metric], source="covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
         primary = shifts[0]
         values = rows[primary.metric].to_numpy(dtype=float)
-        rho = subgroup_moran(values, cand.row_indices, spatial) if spatial else 0.0  # the subgroup's own dependence, not the map's
-        n_eff_factor = effective_n_factor(rho)
-        p_value = _median_test(values, primary.global_median, primary.global_mad, n_eff_factor)
+        p_value, rho, n_eff_factor = _median_evidence(values, cand.row_indices, spatial, primary.global_median, primary.global_mad)
         pid = pattern_id(dataset_id, cand.conditions)
         provenance_extra = {}
         if spatial:
-            p_iid = _median_test(values, primary.global_median, primary.global_mad)
-            provenance_extra["spatial"] = {
-                "resolution": spatial.resolution,
-                "cells": cand.row_count,
-                "moran_i": round(rho, 4),
-                "n_eff": round(int(np.isfinite(values).sum()) * n_eff_factor, 1),
-                "p_adjusted_iid": min(1.0, p_iid * result.n_tests),
-            }
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests)
+            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
         insights.append(
             Insight(
                 id=pid,
@@ -439,6 +426,97 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
             )
         )
     return insights
+
+
+NOT_RECOMPUTED = (
+    "the metrics shifted (mining is not re-run)",
+    "phenomenon_type (it reads the bootstrap)",
+    "stability",
+    "sd_score",
+    "sd_raw_score",
+    "emm_score",
+    "volume_utility",
+    "weight",
+    "drivers",
+    "covariance",
+)
+
+
+def cohort_rows(data: pd.DataFrame, conditions: list[tuple[str, str]]) -> np.ndarray:
+    """The sorted positions of the rows that meet every ``attribute == value`` condition, compared as text."""
+    mask = np.ones(len(data), dtype=bool)
+    for attribute, value in conditions:
+        mask &= (data[attribute].astype(str) == value).to_numpy() if attribute in data else False
+    return np.flatnonzero(mask)
+
+
+def selector_conditions(expression: str) -> list[tuple[str, str]] | None:
+    """``a=='x' AND b=='y'`` (an EDA selector) as conditions, a value holding `` AND `` included; None when the
+    conditions found do not make up the whole expression."""
+    found = list(re.finditer(r"(.+?)=='(.*?)'(?: AND |$)", expression))
+    return [m.groups() for m in found] if found and "".join(m.group(0) for m in found) == expression else None
+
+
+def _global_stats(column: pd.Series) -> tuple[float, float]:
+    """A metric's whole-table median and MAD (the EDA's robust scale)."""
+    values = column.dropna()
+    return float(np.median(values)), float(eda.calculate_mad(values))
+
+
+def _median_evidence(
+    values: np.ndarray, rows: np.ndarray, spatial: SpatialContext | None, global_median: float, global_mad: float
+) -> tuple[float, float, float]:
+    """(p, the subgroup's Moran's I, its n_eff factor) of the primary metric's median test, as an insight records them."""
+    rho = subgroup_moran(values, rows, spatial) if spatial else 0.0  # the subgroup's own dependence, not the map's
+    factor = effective_n_factor(rho)
+    return _median_test(values, global_median, global_mad, factor), rho, factor
+
+
+def _shift(metric: str, local_median: float, global_median: float, global_mad: float, magnitude: float | None = None, source: str = "eda") -> Shift:
+    """A metric's signed shift inside a subgroup: ``magnitude`` (the EDA's own, pass 1) or the robust z of the local median,
+    signed by the side of the global median it lies on. Mining and its recomputation both build shifts here."""
+    sign = np.sign(local_median - global_median) or 1.0
+    z = eda.robust_z_score(local_median, global_median, global_mad) if magnitude is None else magnitude
+    return Shift(metric, float(sign * z), local_median, global_median, global_mad, source)
+
+
+def _spatial_stats(values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int) -> dict[str, Any]:
+    """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
+    one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
+    p_iid = _median_test(values, primary.global_median, primary.global_mad)
+    return {
+        "cells": cells,
+        "moran_i": round(rho, 4),
+        "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
+        "p_adjusted_iid": min(1.0, p_iid * n_tests),
+    }
+
+
+def recompute_statistics(
+    frame: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, metrics: list[str], spatial: SpatialContext | None, n_tests: int
+) -> dict[str, Any]:
+    """One insight's rows and numbers again from its table: the rows its ``conditions`` select (and those its EDA
+    ``expression`` selects), the support, each of ``metrics``' shift (the first is the primary), the primary's median
+    test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance.
+    Not recomputed: ``NOT_RECOMPUTED``."""
+    profile = eda.step1_profile_data(frame)
+    data = profile["data_safe"]
+    rows = cohort_rows(data, conditions)
+    selector = selector_conditions(expression)
+    out: dict[str, Any] = {"rows": rows, "expression_rows": None if selector is None else cohort_rows(data, selector), "support": len(rows)}
+    out["support_fraction"] = len(rows) / max(int(profile["total_rows"]), 1)
+    if not len(rows):
+        return out
+    cohort, shifts = data.iloc[rows], []
+    for metric in metrics:
+        shifts.append(_shift(metric, float(np.median(cohort[metric].dropna())), *_global_stats(data[metric])))
+    primary = shifts[0]
+    values = cohort[primary.metric].to_numpy(dtype=float)
+    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
+    out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
+    if spatial:
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests)
+    return out
 
 
 def covers_of(result: DiscoveryResult) -> dict[str, np.ndarray]:

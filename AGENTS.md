@@ -30,22 +30,23 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 | Path | Role |
 |---|---|
-| `insight_contracts/` | the shared kernel, **standard library only**: `insight` (the `Insight` and its parts, `PhenomenonThresholds`), `graph` (edge types, node ids, the snapshot contract), `text` (how an insight reads), `payload` (`EvidencePayload`, the graph service → narrator contract) |
+| `insight_contracts/` | the shared kernel, **standard library only**: `insight` (the `Insight` and its parts, `PhenomenonThresholds`), `graph` (edge types, node ids, the snapshot contract), `text` (how an insight reads, in the English the canonical form embeds), `wording` (the Ukrainian names, meanings and readings people see), `payload` (`EvidencePayload`, the graph service → narrator contract) |
 | `subgroup_miner/` | table → validated, weighted insights: `ingestion`, `spatial` (the geo option: points → H3 cells, LISA, extents; the only module that imports `h3`), `discovery` (the EDA adapter), `selection` (validity rules, weight), `lattice`, `describe`, `config`; **vendored** `vendor/eda/main_upd.py` (divergences in `vendor/PROVENANCE.md`) |
 | `attractor_topology/` | insights → vectors → latent attractors: `canonical`, `encoder` (Qwen3 only), `ontology` (the lac adapter), `models`, `config`; **vendored** `vendor/lac/` (`vendor/PROVENANCE.md`) |
-| `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `evidence`, `search`, `ports`, `config` |
-| `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
+| `graph_query_engine/` | question → evidence over the dual graph: `graph` (`DualGraph`, `LatentFrame`), `question`, `seeds`, `traversal`, `vertical`, `evidence`, `search`, `ports`, `config` |
+| `insight_graph_service/` | the graph service. `core/` (no web framework): `settings`, `engine`, `uploads`, `verify`, `geo_views`, `errors`, `batch`, `snapshot`, `workspace`, `chunk_journal` (vendored, `core/PROVENANCE.md`), `fileio`, `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/`: `app`, `views`. Its `Dockerfile` (targets `runtime`, `test`) |
 | `evidence_narrator_service/` | the chat service: `narration`, `llm_client`, `settings`, `app`; imports only `insight_contracts` |
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
-| `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js`, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
+| `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js` the shell with `datasets.js`, `graph.js`, `chat.js`, `geo.js` beside it, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
 | `compose.yaml`, `.dockerignore`, `constraints.txt` | the service suite in start order (`docs/12_architecture.md` §12.5); the exact package versions every image installs with |
-| `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder); markers `model`, `browser` |
-| `docs/` | the specification: eleven chapters read in pipeline order and the architecture chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
+| `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
+| `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
+| `.claude/skills/` | the repository's agent skills (open `SKILL.md` format): `sig-review` |
 | `scripts/check.py` | the quality gate (Rule 0) |
 | `scripts/compose_check.py` | the Docker check: builds and starts the suite on its own volumes and ports, runs the workflow through the console (`--tests`: the gate inside the image; `--fresh`: clean room) |
 | `scripts/dev.py` | host development: console, graph service and narrator on one port, routed as `nginx.conf` routes them |
-| `scripts/` (others) | measurements on throwaway workspaces under `.scratch/` (never `workspace/`): `multilingual_benchmark.py`, `eval_answers.py` (live LLM through the broker), `experiment.py` (the hypothesis benchmark), `attractor_benchmark.py` (the attractor lifecycle against static clustering on planted datasets), `calibration.py` (chapter 5's calibration sequence under the current settings), `chain_eval.py` (the query-free evidence chains), `export_chain_demo.py` (the demo graph as JSON for the lac chain eval); shared helpers in `scratch.py`; results in `.scratch/results/` |
+| `scripts/` (others) | measurements on throwaway workspaces under `.scratch/` (never `workspace/`): `multilingual_benchmark.py`, `eval_answers.py` (live LLM through the broker), `experiment.py` (the hypothesis benchmark), `attractor_benchmark.py` (the attractor lifecycle against static clustering on planted datasets), `geo_benchmark.py` (planted point scenarios through the geo option), `geo_coverage.py` (how far an upload's base insights find their place through their events), `poisoning_eval.py` (the red team of the trust model; `--llm` is a paid run), `calibration.py` (chapter 5's calibration sequence under the current settings), `chain_eval.py` (the query-free evidence chains), `export_chain_demo.py` (the demo graph as JSON for the lac chain eval); shared helpers in `scratch.py`; results in `.scratch/results/` |
 | `data/` | local data: `housing.csv` |
 | `models/` | the embedding model of host runs, `Qwen3-Embedding-0.6B/`, provisioned and verified by `python -m insight_graph_service.core.model_store`; the stack's seed for its `sig-models` volume |
 | `workspace/` | the knowledge base of host runs. Gitignored. **The user's working knowledge base — never delete or reset it without being asked** |
@@ -58,6 +59,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 - The Python environment that `.venv` may be layered on is not ours to modify; install into `.venv` only and add the dependency to the owning package's `requirements.txt` (each library and service has one; `requirements-dev.txt` collects them plus the test tools).
 - Keep the bounded contexts (`docs/12_architecture.md`): the libraries import only `insight_contracts`; graph construction (`core/snapshot.py`) and retrieval read no files — the engine passes them their data; the workspace layout belongs to `core/workspace.py` (no other module builds a path below the workspace root); the core imports no web or HTTP framework; the narrator reaches the graph service only through `POST /api/search` (the `EvidencePayload`) and its health probe `GET /api/health`. `tests/test_architecture.py` lists who may import whom — extend that table only with a reason.
 - The configured Neo4j database and the LLM provider account belong to the user. Settings classes read only the process environment, so tests never see `.env`; tests run with `neo4j_enabled=False` and the LLM stub.
+- **Real data never enters the repository, in any form.** A real export the user uploads is secret: not its bytes, file name, column names, category values, time span, screenshots or per-row results — in no file, branch (`audit-assets` included), test, golden, docs page, issue, PR or committed measurement. Public texts carry aggregates only (counts, medians, shares). Measurements and screenshots meant for the repository use the shipped data (`data/demo/`, the synthetic demo) or a synthetic set with its own generator and schema that shares no column, category, distribution or structure with any real export.
 
 ---
 
@@ -94,8 +96,8 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | multilingual benchmark | `python scripts/multilingual_benchmark.py --label <name>` |
 | live answers | `python scripts/eval_answers.py` (calls the LLM behind the broker: a paid call) |
 
-- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere) and `fileio`'s Windows sharing retry (`fileio.retry_sharing`).
-- The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s; with `EMBEDDING_DEVICE=auto` on CUDA, or MPS on Apple silicon, when available; the containers use the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
+- Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere).
+- The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s; with `EMBEDDING_DEVICE=auto` on CUDA, or MPS on Apple silicon, when available; the graph service container runs `auto` as well: the GPU when `compose.gpu.yaml` attaches one, else the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
 - `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` (Windows temp-dir permissions); do not remove it.
 - Processing a batch is sequential and checkpointed (`docs/09_operations.md`); when debugging a stuck or failed batch, read `workspace/registry/batches/<id>.json` first (`error`, `failed_stage`, `warnings`).
 
@@ -103,9 +105,10 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 - Order: targeted tests for the changed area → `check.py --quick` → **`check.py`** (Rule 0).
 - Behaviour changes, regressions and non-trivial edge cases get a test in the file that owns the transition (test map: `docs/10_verification.md` §10.1). Prefer extending an existing fixture over inventing a new workspace.
+- The golden test (`tests/test_golden.py`) records the demo graph and one evidence prompt in `tests/golden/`. A change that moves either regenerates them with `python -m pytest tests/test_golden.py --update-golden` and explains the diff in its PR; a conflict in `tests/golden/` is never merged by hand — rebase and regenerate.
 - Planted-phenomenon tests (`test_discovery_contract.py`, `test_e2e.py`, `test_hypothesis_apparatus`) are the statistical regression suite: a change that makes them fail is a change to the mathematics and needs the owning chapter updated and a justification, not a loosened assertion.
 - Each library has a standalone test (`tests/test_*_standalone.py`) that uses it without the services (`tests/test_architecture.py` keeps its imports to the kernel); keep it passing when a library's API changes.
-- Browser test: Playwright with the locally installed Chromium (`tests/test_ui_smoke.py::_chromium` takes the newest Chromium in Playwright's browser cache — `PLAYWRIGHT_BROWSERS_PATH`, else the platform default — whatever revision the installed Playwright pins; without one, as in the containers, the test skips); it runs the console against the `scripts/dev.py` composite. UI changes keep its selectors working or update them in the same change.
+- Browser test: Playwright with the locally installed Chromium (`scripts/dev.py::chromium` takes the newest Chromium in Playwright's browser cache — `PLAYWRIGHT_BROWSERS_PATH`, else the platform default — whatever revision the installed Playwright pins; without one, as in the containers, the test skips); it runs the console against the `scripts/dev.py` composite. UI changes keep its selectors working or update them in the same change.
 - Never add network calls to tests. The LLM endpoint is the stub server, Neo4j the fake driver.
 
 ## 5) Statistical and representational changes
@@ -137,11 +140,12 @@ Code surface → doc owner:
 | `insight_contracts/insight.py`, `subgroup_miner/selection.py`, admission (`core/batch.py`) | `03_insights.md` |
 | `attractor_topology/canonical.py`, `encoder.py`, `models.py`, `insight_contracts/text.py` | `04_representation.md` |
 | `attractor_topology/ontology.py`, `vendor/lac/`, the anchor descriptions in `core/snapshot.py` | `05_latent_anchors.md`, `PROVENANCE.md` |
-| `subgroup_miner/lattice.py`, `core/snapshot.py`, `core/workspace.py`, `fileio.py`, `neo4j_mirror.py`, `cypher/` | `06_graph_and_storage.md` |
+| `subgroup_miner/lattice.py`, `core/snapshot.py`, `core/workspace.py`, `core/uploads.py`, `core/verify.py`, `fileio.py`, `neo4j_mirror.py`, `cypher/` | `06_graph_and_storage.md` |
 | `graph_query_engine/`, `evidence_narrator_service/` | `07_question_answering.md` |
-| `sig_web_console/`, `insight_graph_service/server/` | `08_interface.md` |
+| `sig_web_console/`, `insight_graph_service/server/`, `insight_contracts/wording.py` | `08_interface.md` |
 | `core/engine.py`, `core/settings.py`, `core/model_store.py` | `09_operations.md` (+ `11_reference.md` §11.3 for fields) |
 | `core/demo.py`, `scripts/`, `tests/` | `10_verification.md` |
+| the trust model as a whole: the three axes, the integrity checks, the poisoning audit (the rules themselves stay in 06 and 07) | `13_trust.md` |
 
 ## 7) Data, secrets and the user's state
 
@@ -162,6 +166,8 @@ Consolidation pass (after the implementation todos, before handoff), scoped to t
 - grep for references to anything you removed or renamed (code, tests, docs, README, `.env.sample`, `app.js`);
 - sweep legacy terms (glossary: `docs/11_reference.md` §11.1) and re-measure quoted numbers if the statistics changed;
 - run **`scripts/check.py`** and confirm it passed.
+
+Review: asked to review a commit, a PR, a branch or a milestone, follow `.claude/skills/sig-review/SKILL.md` (in Claude Code `/sig-review <target>`). A review writes reports to `review-reports/`, never code.
 
 Before handoff: Rule 0 passed in this session; docs updated per §5–6; summary states what changed, why, what was verified (with the real command output, not a paraphrase of success), and any residual risk — including whether the user's `workspace/` will start degraded after a version bump.
 

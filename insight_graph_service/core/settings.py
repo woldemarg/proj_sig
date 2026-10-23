@@ -28,6 +28,10 @@ class Settings:
     max_upload_mb: int = 200
     geo_max_points: int = 5000  # points per pattern sent to the map (GET /api/geo/{dataset}/patterns/{pattern})
 
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
     # admission into the graph (docs/03_insights.md §3.2, rules R4 and R7)
     min_insight_weight: float = 0.2
     max_insights_per_batch: int = 200
@@ -44,13 +48,22 @@ class Settings:
     web_host: str = "127.0.0.1"
     web_port: int = 8765
 
+    # the region levels of the spatial plane (docs/06_graph_and_storage.md §6.1): H3 resolutions, finest first
+    geo_region_levels: str = "7,5,3,1"
+
     miner: MinerConfig = MinerConfig()
     topology: TopologyConfig = TopologyConfig()
     query: QueryConfig = QueryConfig()
 
     def __post_init__(self) -> None:
+        if not all(0 <= lv <= 15 for lv in self.region_levels):
+            raise ValueError(f"GEO_REGION_LEVELS: H3 resolutions 0-15, got {self.geo_region_levels!r}")
         if not self.miner.thresholds == self.topology.thresholds == self.query.thresholds:
             raise ValueError("miner, topology and query must share one PhenomenonThresholds (build them with load_settings)")
+
+    @property
+    def region_levels(self) -> tuple[int, ...]:
+        return tuple(int(x) for x in self.geo_region_levels.split(",") if x.strip())
 
     @property
     def thresholds(self) -> PhenomenonThresholds:

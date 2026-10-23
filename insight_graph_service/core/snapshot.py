@@ -11,8 +11,11 @@ match the living ontology.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -23,17 +26,21 @@ from insight_contracts import (
     GraphEdge,
     GraphNode,
     Insight,
+    PhenomenonThresholds,
     attractor_id_of,
     attractor_node_id,
     batch_node_id,
     dataset_node_id,
     dimension_node_id,
     metric_node_id,
+    record_digest,
 )
 from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
+from insight_graph_service.core.uploads import declared_glossary
 from insight_graph_service.core.workspace import utc_now
-from subgroup_miner.lattice import colocation_edges, structural_edges
+from subgroup_miner.lattice import structural_edges
+from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -53,13 +60,20 @@ def attractor_signature(members: list[tuple[dict[str, Any], float]]) -> list[tup
     return sorted(((k, v / total) for k, v in agg.items()), key=lambda kv: -abs(kv[1]))
 
 
-def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], settings: Settings) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
-    """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them."""
+def _schema_plane(
+    batches: dict[str, dict[str, Any]], insights: list[Insight], settings: Settings, integrity: dict[str, str]
+) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
+    """Dataset / Batch / Dimension / Metric nodes of READY batches, plus the edges into them; ``integrity``: batch id ->
+    its metadata's check."""
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
     scope_attributes: dict[str, set[str]] = defaultdict(set)  # closed intents may use non-selected columns
     for ins in insights:
         scope_attributes[ins.dataset_id].update(c.attribute for c in ins.conditions)
+    levels: dict[str, set[str]] = defaultdict(set)  # an upload's levels: those its batch records stand for, of any status
+    for b in batches.values():
+        if b.get("upload_id"):
+            levels[b["upload_id"]].add(b["level"])
     for bid, b in batches.items():
         if b.get("status") != "READY":
             continue
@@ -74,7 +88,15 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                 "filename": b.get("filename"),
                 "rows": profile.get("rows"),
                 "columns": profile.get("columns"),
+                **({"source": b["source"]} if b.get("source") else {}),
+                "reliability": b.get("reliability", "F"),
+                "integrity": integrity[bid],
+                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
+                **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+                **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
+                **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
+                **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
             },
         )
         nodes[batch_node_id(bid)] = GraphNode(
@@ -109,6 +131,7 @@ def _schema_plane(batches: dict[str, dict[str, Any]], insights: list[Insight], s
                     "name": name,
                     "global_median": profile.get("global_medians", {}).get(name),
                     "global_mad": profile.get("global_mads", {}).get(name),
+                    **b.get("indicators", {}).get(name, {}),
                 },
             )
 
@@ -224,6 +247,117 @@ def co_occurrence_edges(activates: list[GraphEdge]) -> list[GraphEdge]:
     ]
 
 
+def _common(a: dict[int, frozenset[str]], b: dict[int, frozenset[str]]) -> tuple[frozenset[str], frozenset[str]]:
+    """Both places' cells at the finest resolution both have (nothing without one)."""
+    level = max(a.keys() & b.keys(), default=None)
+    return (a[level], b[level]) if level is not None else (frozenset(), frozenset())
+
+
+def credibility(
+    insights: list[Insight],
+    batches: dict[str, dict[str, Any]],
+    activates: list[GraphEdge],
+    tampered: set[str],
+    thresholds: PhenomenonThresholds,
+    spatial: SpatialStructure,
+) -> dict[str, dict[str, Any]]:
+    """Each pattern's ``credibility`` and ``credibility_basis`` from independent confirmation (docs/06_graph_and_storage.md
+    §6.2). Another source is another declared ``source`` (compared casefolded) outside the pattern's own upload; metrics
+    compare by the ``indicators`` registry, and by unit when both give one. Phase A (``rule: anchor``, a pattern without a
+    place): 5: a pattern of another declared source shifts a metric of the same indicator materially the opposite way in
+    the same subgroup (one's conditions contain the other's); 1: one shares a non-weak anchor and shifts a metric of the
+    same indicator the same way; 2: another dataset (declared or not, not of the same upload) shifts a metric of the same
+    name; 6: none. Phase B (``rule: place``, a geo pattern), its cells against the other's at the finest resolution both
+    datasets have (``spatial.places``): only a pattern whose place overlaps by ``GEO_REGION_MIN_SHARE`` of the smaller counts; 5 needs that share of
+    the larger (a comparable place, in any subgroup), and 2 also comes from another dataset's events over that share of
+    the place. 5 wins over 1. A version and the one it ``supersedes`` are one source.
+    Never read: p, stability, weight; a tampered pattern confirms nothing."""
+    batch = {ins.id: batches.get(ins.batch_id, {}) for ins in insights}
+    anchors: dict[str, set[str]] = defaultdict(set)
+    for e in activates:
+        if not e.props["weak"]:
+            anchors[e.source].add(e.target)
+    of = {ins.id: ins for ins in insights}
+    shifts = {ins.id: {s.metric: s for s in thresholds.phenomenon_shifts(ins)} for ins in insights}
+    source = {pid: (batch[pid].get("source") or "").casefold() or None for pid in of}
+    indicator = {  # per phenomenon metric: (indicator, unit or None), compared casefolded like the source
+        pid: {
+            m: (e["indicator"].casefold(), (e.get("unit") or "").casefold() or None)
+            for m in shifts[pid]
+            if (e := (batch[pid].get("indicators") or {}).get(m, {})).get("indicator")
+        }
+        for pid in of
+    }
+    conditions = {pid: frozenset(c.expr for c in ins.conditions) for pid, ins in of.items()}
+    own = {pid: {ins.dataset_id, batch[pid].get("upload_id")} - {None} for pid, ins in of.items()}  # what a supersedes names
+    place_at, occupied = spatial.places, spatial.occupied
+    dataset_batch = {b.get("dataset_id"): b for b in batches.values() if b.get("status") == "READY"}
+    by_name, by_indicator = defaultdict(set), defaultdict(set)
+    for pid in of:
+        if pid not in tampered:
+            for m in shifts[pid]:
+                by_name[m].add(pid)
+            for i, _ in indicator[pid].values():
+                by_indicator[i].add(pid)
+
+    def independent(pid: str, other: dict[str, Any], dataset: str) -> bool:
+        """``dataset`` (batch record ``other``) is outside the pattern's dataset, upload, declared source and versions."""
+        upload, theirs = batch[pid].get("upload_id"), (other.get("source") or "").casefold() or None
+        return not (
+            dataset == of[pid].dataset_id
+            or (upload and other.get("upload_id") == upload)
+            or (source[pid] is not None and source[pid] == theirs)
+            or other.get("supersedes") in own[pid]
+            or batch[pid].get("supersedes") in {dataset, other.get("upload_id")} - {None}
+        )
+
+    def overlap(pid: str, q: str, over) -> bool:
+        a, b = _common(place_at[pid], place_at.get(q, {}))
+        return bool(a and b) and len(a & b) >= GEO_REGION_MIN_SHARE * over(len(a), len(b))
+
+    out = {}
+    # ponytail: every pair sharing a metric is compared (4000 such patterns: ~6 s a compile); index by condition past a few thousand
+    for pid in of:
+        mine, geo = shifts[pid], pid in place_at
+        found: dict[int, set[str]] = defaultdict(set)
+        for q in set().union(*(by_name[m] for m in mine), *(by_indicator[i] for i, _ in indicator[pid].values())):
+            if not independent(pid, batch[q], of[q].dataset_id) or (geo and not overlap(pid, q, min)):
+                continue  # one source in two datasets, a version and the one it replaces, or (with a place) elsewhere
+            declared = source[pid] is not None and source[q] is not None
+            pairs = [  # read by 1 and 5 only, which need both sources declared
+                (mine[m], shifts[q][n])
+                for m, (i, u) in indicator[pid].items()
+                for n, (j, v) in indicator[q].items()
+                if declared and i == j and (u is None or v is None or u == v)
+            ]
+            if (
+                declared
+                and (overlap(pid, q, max) if geo else conditions[pid] <= conditions[q] or conditions[q] <= conditions[pid])
+                and any(a.robust_z * b.robust_z < 0 and thresholds.material(a) and thresholds.material(b) for a, b in pairs)
+            ):
+                found[5].add(q)
+            elif declared and anchors[pid] & anchors[q] and any(a.robust_z * b.robust_z > 0 for a, b in pairs):
+                found[1].add(q)
+            elif set(mine) & set(shifts[q]):
+                found[2].add(q)
+        level = next((lv for lv in (5, 1, 2) if found[lv]), 6)
+        patterns = sorted(found.get(level, ()))
+        names = {source[q] or of[q].dataset_id: batch[q].get("source") or of[q].dataset_id for q in reversed(patterns)}  # one per source
+        if geo and level in (2, 6):  # another dataset's events over the place
+            for ds in sorted(occupied):
+                a, b = _common(place_at[pid], occupied[ds])
+                other = dataset_batch.get(ds, {})
+                if a and len(a & b) >= GEO_REGION_MIN_SHARE * len(a) and independent(pid, other, ds):
+                    level = 2
+                    names.setdefault((other.get("source") or "").casefold() or ds, other.get("source") or ds)
+        basis: dict[str, Any] = {"rule": "place" if geo else "anchor", "patterns": patterns, "sources": sorted(names.values())}
+        basis |= {"comparability": c} if (c := {1: "indicator", 5: "indicator", 2: "nominal"}.get(level)) else {}
+        if level == 5 and found[1]:
+            basis["confirmed_by"] = sorted(found[1])
+        out[pid] = {"credibility": level, "credibility_basis": basis}
+    return out
+
+
 def _attractor_nodes(
     ontology: LatentOntology, members: dict[int, list[Member]], seq_to_batch: dict[Any, str], rep: dict[str, Any]
 ) -> dict[str, GraphNode]:
@@ -262,6 +396,78 @@ def _attractor_nodes(
     return nodes
 
 
+def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], structural: list[GraphEdge]) -> list[GraphEdge]:
+    """Region nodes (added to ``nodes``), IN_REGION (``basis`` cells for a geo pattern, events with their props for a base
+    one), PARENT_OF and CO_LOCATED edges, each geo pattern's ``compactness`` and a base pattern's ``geo: partial``; a
+    CO_LOCATED pair the lattice already links is left out."""
+    for rid, props in spatial.regions.items():
+        nodes[rid] = GraphNode(rid, "Region", f"res {props['resolution']} {props['h3']}", dict(props))
+    for pid, value in spatial.compactness.items():
+        if pid in nodes:
+            nodes[pid].props["compactness"] = value
+    for pid in spatial.partial & nodes.keys():  # a base pattern too little located to be placed
+        nodes[pid].props["geo"] = "partial"
+    linked = {frozenset((e.source, e.target)) for e in structural}
+    edges = [GraphEdge(p, r, EdgeType.IN_REGION, share, spatial.edge_props[(p, r)]) for p, r, share in spatial.in_region if p in nodes]
+    edges += [GraphEdge(child, parent, EdgeType.PARENT_OF) for child, parent in spatial.parent_of]
+    edges += [
+        GraphEdge(a, b, EdgeType.CO_LOCATED, weight, {"relation": relation})
+        for a, b, relation, weight in spatial.co_located
+        if a in nodes and b in nodes and frozenset((a, b)) not in linked
+    ]
+    return edges
+
+
+def _checked(record: dict[str, Any], key: str, digest: Callable[[dict[str, Any]], str]) -> str:
+    """``ok`` when ``record[key]`` matches the digest of the record, ``mismatch`` when it does not, ``unverified`` for a
+    record stored before digests."""
+    if key not in record:
+        return "unverified"
+    return "ok" if record[key] == digest(record) else "mismatch"
+
+
+def compute_integrity(record: dict[str, Any]) -> str:
+    """A pattern's ``integrity``: its journal record against its ``record_digest``."""
+    return _checked(record, "record_digest", record_digest)
+
+
+BATCH_DIGEST_FIELDS = (
+    "dataset_id",
+    "upload_id",
+    "level",
+    "filename",
+    "source",
+    "reliability",
+    "indicators",
+    "user_glossary",
+    "metadata_doc",
+    "supersedes",
+    "profile",
+)
+
+
+def metadata_digest(batch: dict[str, Any]) -> str:
+    """SHA-256 of a batch record's canonical JSON over what the graph reads of its dataset (``BATCH_DIGEST_FIELDS``), as
+    the record is stored: a source, rating, registry or profile changed in the record, or removed, no longer matches."""
+    covered = json.loads(json.dumps({k: batch[k] for k in BATCH_DIGEST_FIELDS if k in batch}, default=str))  # as atomic_write_json stores it
+    return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def compute_metadata_integrity(batch: dict[str, Any]) -> str:
+    """``ok`` / ``mismatch`` / ``unverified`` for a batch record's ``metadata_digest``, as ``compute_integrity`` for a pattern."""
+    return _checked(batch, "metadata_digest", metadata_digest)
+
+
+def _distrust(batch: dict[str, Any]) -> dict[str, Any]:
+    """A batch record whose metadata failed its check, without what it declares: source, rating, registry, glossaries,
+    metadata document."""
+    out = {k: v for k, v in batch.items() if k not in ("source", "reliability", "indicators", "user_glossary", "metadata_doc")}
+    geo = out.get("profile", {}).get("geo", {})
+    if "glossary" in geo:
+        out["profile"] = {**out["profile"], "geo": {k: v for k, v in geo.items() if k != "glossary"}}
+    return out
+
+
 def build_snapshot(
     *,
     records: list[dict[str, Any]],
@@ -271,23 +477,34 @@ def build_snapshot(
     representation: dict[str, Any],
     ontology: LatentOntology,
     settings: Settings,
+    spatial: SpatialStructure | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
-    ``profile``); ``representation``: the recorded vector contract."""
+    ``profile``); ``representation``: the recorded vector contract; ``spatial``: the derived spatial plane of the geo
+    patterns (``subgroup_miner.spatial.derive_spatial``)."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
     # The journal record is the pattern contract. Readers rehydrate it with Insight.from_record.
-    nodes = {ins.id: GraphNode(ins.id, "Pattern", headline(ins), dict(by_pid[ins.id])) for ins in insights}
-    schema_nodes, edges = _schema_plane(batches, insights, settings)
+    nodes = {
+        ins.id: GraphNode(ins.id, "Pattern", headline(ins), {**by_pid[ins.id], "integrity": compute_integrity(by_pid[ins.id])}) for ins in insights
+    }
+    integrity = {bid: compute_metadata_integrity(b) for bid, b in batches.items() if b.get("status") == "READY"}
+    batches = {bid: _distrust(b) if integrity.get(bid) == "mismatch" else b for bid, b in batches.items()}  # declares nothing
+    schema_nodes, edges = _schema_plane(batches, insights, settings, integrity)
     nodes.update(schema_nodes)
     structural = structural_edges(insights, settings.miner)
-    edges += structural + colocation_edges(insights, structural)
+    spatial = spatial or SpatialStructure()
+    edges += structural + _spatial_plane(spatial, nodes, structural)
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
-    nodes.update(_attractor_nodes(ontology, members, seq_to_batch, representation))
+    tampered = {pid for pid in by_pid if nodes[pid].props["integrity"] == "mismatch"}
+    for pid, trust in credibility(insights, batches, activates, tampered, settings.thresholds, spatial).items():
+        nodes[pid].props.update(trust)
+    intact = {aid: [m for m in mem if nodes[m[0]["id"]].props["integrity"] != "mismatch"] for aid, mem in members.items()}
+    nodes.update(_attractor_nodes(ontology, intact, seq_to_batch, representation))  # a tampered member describes no anchor
     for rel in ontology.topology():
         edges.append(
             GraphEdge(
@@ -303,6 +520,7 @@ def build_snapshot(
         "representation": representation,
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
+        "own_cells": {pid: sorted(cells) for pid, cells in spatial.own_cells.items() if pid in nodes},
         "stats": {
             "patterns": len(insights),
             "attractors": n_attr,

@@ -21,9 +21,6 @@ class MinerConfig:
     # spatial ingestion, only for an upload with a geo option (docs/02_discovery.md §2.9)
     geo_resolution: int = 7  # H3 resolution when the geo option names none
     min_cell_points: int = 5  # below it a cell keeps its counters but not its medians and shares (NaN)
-    geo_share_max_levels: int = 8  # categoricals with at most this many levels also become per-level share metrics
-    geo_mode_max_levels: int = 40  # categoricals with more levels are not aggregated
-    geo_colocation_min: float = 0.3  # CO_LOCATED edge: overlap of the one-ring-dilated extents
 
     # discovery (docs/02_discovery.md) — EDA defaults preserved
     compute_budget: int = 5000  # step3 compute_budget

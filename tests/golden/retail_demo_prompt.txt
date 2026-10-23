@@ -1,0 +1,61 @@
+QUESTION: Why is margin lower for phones in the US?
+PARSED: target=margin | direction=down | scope=category=phones,region=US
+UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset.
+
+DATASETS:
+- ds-2ee0d2bafe4b file=retail_synthetic.csv batch=<batch> rows=5000
+
+METRIC BASELINES (whole dataset):
+- discount: median 10.74, MAD 2.58
+- margin: median 19.45, MAD 2.89
+- delivery days: median 3.4, MAD 0.8
+- return rate: median 0.0555, MAD 0.0101
+
+LATENT ANCHORS VISITED (recurring phenomena learned across patterns):
+- A-7 "discount up and margin down": 9 patterns over 9 distinct scopes; related: A-5 (9 shared members, 1.00; centroid 0.90), A-4 (centroid 0.38)
+- A-5 "discount up and margin down" (same description as A-7; shares 9 members with it): 9 patterns over 9 distinct scopes; related: A-7 (9 shared members, 1.00; centroid 0.90), A-0 (centroid 0.57), A-6 (centroid 0.41)
+- A-0 "delivery days up and return rate up": 9 patterns over 9 distinct scopes; related: A-1 (8 shared members, 1.00; centroid 0.76), A-6 (centroid 0.69), A-5 (centroid 0.57)
+
+EVIDENCE (statistical findings computed from the uploaded data; cite as [P#]):
+[P1] role=seed | scope: category is phones and region is US | support 438 rows (8.8%)
+     shifts: discount: strong increase, +2.21 sd (median 19.19 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.75 vs 19.45 overall)
+     validation: bootstrap stability 0.98 | adjusted p < 0.001 | insight weight 0.80 | confounders: none detected
+     retrieved via: seed (matched the question)
+[P2] role=transversal | scope: category is tablets and region is APAC | support 266 rows (5.3%)
+     shifts: discount: strong increase, +2.10 sd (median 18.78 vs 10.74 overall); delivery days: moderate increase, +1.26 sd (median 4.9 vs 3.4 overall); margin: moderate decrease, -1.07 sd (median 14.86 vs 19.45 overall)
+     validation: bootstrap stability 0.96 | adjusted p < 0.001 | insight weight 0.78 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 -CO_OCCURS(1.00)-> A-5 <-ACTIVATES(0.99)- P-307b61369c91 [scope-disjoint from seeds: no shared condition]
+[P3] role=transversal | scope: category is phones, channel is online, and region is US | support 205 rows (4.1%)
+     shifts: discount: strong increase, +2.25 sd (median 19.35 vs 10.74 overall); margin: moderate decrease, -1.10 sd (median 14.72 vs 19.45 overall)
+     validation: bootstrap stability 0.98 | adjusted p < 0.001 | insight weight 0.78 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.98)- P-4684602e780d
+[P4] role=transversal | scope: category is phones, channel is retail, and region is US | support 173 rows (3.5%)
+     shifts: discount: strong increase, +2.12 sd (median 18.84 vs 10.74 overall); margin: moderate decrease, -1.09 sd (median 14.76 vs 19.45 overall)
+     validation: bootstrap stability 0.95 | adjusted p < 0.001 | insight weight 0.75 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.99)- P-c2bc1cfb26aa
+[P5] role=transversal | scope: category is tablets, channel is retail, and region is EU | support 134 rows (2.7%)
+     shifts: discount: strong increase, +2.14 sd (median 18.91 vs 10.74 overall); margin: moderate decrease, -1.03 sd (median 15.03 vs 19.45 overall)
+     validation: bootstrap stability 0.94 | adjusted p < 0.001 | insight weight 0.74 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.98)- P-56a9b977f373 [scope-disjoint from seeds: no shared condition]
+[P6] role=transversal | scope: category is tablets and channel is retail | support 381 rows (7.6%)
+     shifts: discount: moderate increase, +1.62 sd (median 16.94 vs 10.74 overall); margin: mild decrease, -0.64 sd (median 16.69 vs 19.45 overall)
+     validation: bootstrap stability 0.94 | adjusted p < 0.001 | insight weight 0.75 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.97)- P-e2d7e5f7853f [scope-disjoint from seeds: no shared condition]
+[P7] role=transversal | scope: category is tablets, channel is retail, and region is APAC | support 108 rows (2.2%)
+     shifts: discount: strong increase, +2.09 sd (median 18.74 vs 10.74 overall); margin: mild decrease, -1.00 sd (median 15.17 vs 19.45 overall)
+     validation: bootstrap stability 0.96 | adjusted p < 0.001 | insight weight 0.73 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.98)- P-fe1d5fa7b958 [scope-disjoint from seeds: no shared condition]
+[P8] role=transversal | scope: category is phones, channel is partner, and region is US | support 60 rows (1.2%)
+     shifts: discount: strong increase, +2.22 sd (median 19.21 vs 10.74 overall); margin: moderate decrease, -1.08 sd (median 14.82 vs 19.45 overall)
+     validation: bootstrap stability 0.94 | adjusted p < 0.001 | insight weight 0.71 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.98)- P-90a6019067df
+[P9] role=transversal | scope: category is tablets, channel is partner, and region is APAC | support 41 rows (0.8%)
+     shifts: discount: strong increase, +2.05 sd (median 18.57 vs 10.74 overall); margin: moderate decrease, -1.13 sd (median 14.61 vs 19.45 overall)
+     validation: bootstrap stability 0.94 | adjusted p < 0.001 | insight weight 0.68 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 <-ACTIVATES(0.97)- P-742cdfd09839 [scope-disjoint from seeds: no shared condition]
+[P10] role=transversal | scope: category is tablets, channel is online, and region is APAC | support 117 rows (2.3%)
+     shifts: delivery days: strong increase, +2.28 sd (median 6.1 vs 3.4 overall); discount: strong increase, +2.22 sd (median 19.25 vs 10.74 overall); return rate: moderate increase, +1.73 sd (median 0.0814 vs 0.0555 overall); margin: moderate decrease, -1.17 sd (median 14.45 vs 19.45 overall)
+     validation: bootstrap stability 0.97 | adjusted p < 0.001 | insight weight 0.75 | confounders: none detected
+     retrieved via: P-18a4adbb5575 -ACTIVATES(0.97)-> A-7 -CO_OCCURS(1.00)-> A-5 <-ACTIVATES(0.99)- P-307b61369c91 <-SPECIALIZES(1.00)- P-71e7ef544eab [scope-disjoint from seeds: no shared condition]
+
+NOTE: P2, P5, P6, P7, P9, P10 share no scope condition with the seeds; they were reached through latent anchors (the same phenomenon in a different part of the data).

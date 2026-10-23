@@ -10,8 +10,8 @@ disjoint) patterns, then optional structural expansion there. Best-first search
 maximises the product of edge factors (alignment, relation weight, structural
 decay); node ranking multiplies by the pattern's Insight.weight.
 
-Two baselines make the research hypothesis inspectable (docs/07_question_answering.md §7.6):
-structural-only BFS and naive nearest-neighbour text retrieval.
+A structural-only baseline makes the research hypothesis inspectable (docs/07_question_answering.md §7.6); the naive
+nearest-neighbour text baseline is a measurement of ``scripts/experiment.py``, not part of an answer.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ import heapq
 import itertools
 from dataclasses import asdict, dataclass, field
 from typing import Any
-
-import numpy as np
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
@@ -33,6 +31,10 @@ LATENT = {e.value for e in LATENT_EDGES}
 UNDIRECTED = {e.value for e in UNDIRECTED_EDGES}
 WEIGHTED_HOPS = {"CONTRASTS", "CO_LOCATED"}  # hops whose weight (scope / cell overlap) scales the path score
 SEED_SCORE_FLOOR = 1e-3
+LATTICE_EDGES = frozenset({"SPECIALIZES", "CONTRASTS", "CO_LOCATED"})  # the structural hops walked; SIBLING stays in the graph
+STRUCTURAL_HOPS = 1
+STRUCTURAL_EDGE_DECAY = 0.85
+LOCATED_RELATIONS = frozenset({"adjacent", "same_region"})  # CO_LOCATED relations that mean the same area, not the same zone
 
 
 @dataclass
@@ -57,7 +59,8 @@ class Retrieved:
     path: list[PathStep]
     structural_distance: int | None = None  # lattice hops (incl. SIBLING) to nearest seed
     scope_overlap: float = 0.0  # max Jaccard of scope conditions with any seed
-    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed
+    transversal_only: bool = False  # reached via latent plane AND scope-disjoint from every seed, not ``located``, not a seed's upload
+    located: str = ""  # adjacent | same_region: the last step is such a CO_LOCATED link and no condition is shared
 
 
 @dataclass
@@ -70,22 +73,22 @@ class TraversalResult:
     visited_count: int
     max_depth: int
     baselines: dict[str, Any] = field(default_factory=dict)
+    excluded: list[Retrieved] = field(default_factory=list)  # tampered patterns ranked within the budget: given no place in it
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "seeds": [asdict(s) for s in self.seeds],
-            "patterns": [asdict(r) for r in self.patterns],
-            "attractors": [asdict(r) for r in self.attractors],
-            "used_edges": self.used_edges,
-            "traversed_nodes": self.traversed_nodes,
-            "visited_count": self.visited_count,
-            "max_depth": self.max_depth,
-            "baselines": self.baselines,
-        }
+        return {k: v for k, v in asdict(self).items() if k != "excluded"}  # the tampered patterns stay out of the console's view
 
 
 def _conds(graph: DualGraph, pid: str) -> set[str]:
     return {c.expr for c in graph.insight(pid).conditions}
+
+
+def _located(graph: DualGraph, node: str, path: list[PathStep]) -> str:
+    """The relation of the CO_LOCATED link the walk reached ``node`` by last, when it means only the same area."""
+    if not path or path[-1].edge_type != "CO_LOCATED":
+        return ""
+    relation = next((e["props"].get("relation", "") for e, _ in graph.incident(node, ["CO_LOCATED"]) if e["id"] == path[-1].edge_id), "")
+    return relation if relation in LOCATED_RELATIONS else ""
 
 
 def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None) -> dict[str, int]:
@@ -106,7 +109,6 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
 
 
 def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> TraversalResult:
-    lattice = config.lattice_edges
     counter = itertools.count()
     heap: list[tuple] = []
     for s in seeds:
@@ -137,13 +139,11 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             return path + [PathStep(node, other, e["type"], float(w), hop, e["id"], reverse=reverse)]
 
         if phase in ("P0", "P1"):
-            if s_cnt < config.structural_hops:
-                for e, other in graph.incident(node, lattice):
-                    if e["type"] in ("SPECIALIZES", "GENERALIZES") and e["source"] != node:
-                        continue  # both directions are materialised; follow out-edges only
+            if s_cnt < STRUCTURAL_HOPS:
+                for e, other in graph.incident(node, LATTICE_EDGES):
                     if phase == "P1" and other in seed_ids:
                         continue
-                    factor = config.structural_edge_decay * (e["weight"] if e["type"] in WEIGHTED_HOPS else 1.0)
+                    factor = STRUCTURAL_EDGE_DECAY * (e["weight"] if e["type"] in WEIGHTED_HOPS else 1.0)
                     push(score * factor, other, phase, s_cnt + 1, l_cnt, seed, step(e, other, e["weight"]))
             if phase == "P0":
                 for e, other in graph.incident(node, ["ACTIVATES"]):
@@ -160,6 +160,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
 
     closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth)
     seed_conds = [_conds(graph, s) for s in seed_ids]
+    seed_uploads = {graph.facts(s).upload for s in seed_ids} - {None}  # another level of a seed's upload is no other segment
     best: dict[str, Retrieved] = {}
     attractors: dict[str, Retrieved] = {}
     for (node, phase, _s, _l), (score, seed, path) in final.items():
@@ -185,12 +186,16 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             structural_distance=closure.get(node),
             scope_overlap=round(overlap, 3),
         )
-        r.transversal_only = route == "transversal" and overlap == 0.0
+        if route != "seed" and overlap == 0.0:
+            r.located = _located(graph, node, path)
+            r.transversal_only = route == "transversal" and not r.located and graph.facts(node).upload not in seed_uploads
         if node not in best or r.score > best[node].score:
             best[node] = r
 
     ordered = sorted(best.values(), key=lambda r: (r.route != "seed", -r.score))
-    patterns = ordered[: len(seed_ids) + config.max_retrieved]
+    budget = len(seed_ids) + config.max_retrieved
+    tampered = {r.node_id for r in ordered if graph.tampered(r.node_id)}  # seeds never are
+    patterns = [r for r in ordered if r.node_id not in tampered][:budget]  # a tampered pattern takes no slot an intact one could
     used: dict[str, None] = {}
     nodes: dict[str, None] = {}
     for r in patterns:
@@ -209,10 +214,5 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         traversed_nodes=list(nodes),
         visited_count=len(final),
         max_depth=max((len(r.path) for r in patterns), default=0),
+        excluded=[r for r in ordered[:budget] if r.node_id in tampered],
     )
-
-
-def naive_nearest(question_vec: np.ndarray, doc_vectors: dict[str, np.ndarray], k: int) -> list[tuple[str, float]]:
-    """Baseline 2: nearest canonical-document texts to the question text (plain vector RAG)."""
-    scored = sorted(((pid, float(v @ question_vec)) for pid, v in doc_vectors.items()), key=lambda x: -x[1])
-    return scored[:k]

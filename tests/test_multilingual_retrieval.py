@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from conftest import make_config, make_engine
+from doubles import HashingEmbedder
 from test_traversal import pattern
 
 from graph_query_engine.graph import DualGraph
@@ -95,6 +96,21 @@ def test_dense_gate_accepts_translations_and_rejects_case():
     assert ("region", "US") not in ask("tell us about margins").conditions  # the acronym literal needs an upper-case span
 
 
+def test_a_declared_name_grounds_the_metric():
+    """A metric's declared name (the dataset's glossary, docs/02 §2.1) is a catalog literal: a question in the
+    uploader's words grounds onto the metric by its characters, with no embedding of the word."""
+    dataset = {"id": "DS:ds1", "kind": "Dataset", "label": "ds1", "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржинальність"}}}
+    p = grounded(toy_graph([dataset]))("Де маржинальність нижча?")
+    assert p.targets == ["margin"] and p.direction == -1
+    assert [(x["span"], x["literal"], x["layer"]) for x in p.grounding] == [("маржинальність", "маржинальність", "chars")]  # the literal as declared
+    twice = {**dataset, "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржинальність", "return_rate": "маржинальність"}}}
+    p = grounded(toy_graph([twice]))("Де маржинальність нижча?")
+    assert p.targets == [] and p.grounding == []  # one name declared for two metrics says neither
+    ask = grounded(toy_graph([{**dataset, "props": {"dataset_id": "ds1", "user_glossary": {"margin": "Кількість замовлень"}}}]))
+    assert ask("Де кількості замовлень більше?").targets == ["margin"]  # said, inflected
+    assert ask("Чому кількох підприємств більше?").targets == [] and ask("Де більшість замовлень?").targets == []  # n-grams alike, not said
+
+
 def test_hub_and_ambiguity_are_rejected():
     ask = grounded(toy_graph([pattern("P5", ["region=hub"])]))
     p = ask("Що обидва?")  # "обидва" is equidistant to margin and phones: Lowe's ratio rejects it
@@ -160,7 +176,7 @@ def test_ukrainian_comparatives_and_directed_drivers():
 
 def seeds(engine, question):
     graph = engine.graph()
-    parsed = parse_query(question, graph, engine.settings.query, engine.prepared().catalog)
+    parsed = parse_query(question, graph, engine.settings.query, engine.committed().catalog)
     return sorted(s.pattern_id for s in resolve_seeds(parsed, graph, engine.encoder, engine.frame().patterns, engine.settings.query))
 
 
@@ -173,26 +189,29 @@ def test_b1_b2_code_switched_questions_seed_identically(hashed_engine):
         assert seeds(hashed_engine, en) == seeds(hashed_engine, uk), uk
 
 
-def test_catalog_is_persisted_and_reloaded(tmp_path, demo_csv):
-    cfg = make_config(tmp_path / "ws")
+def test_catalog_is_persisted_and_reloaded(cfg, demo_csv):
     writer = make_engine(cfg)
     assert writer.ingest_file(demo_csv)["status"] == "READY"
-    built = writer.prepared().catalog  # the first question after the commit embeds the literals and saves their vectors
+    built = writer.committed().catalog  # the commit embeds the literals and saves their vectors
     assert writer.ws.load_literals(writer.encoder.spec.fingerprint).keys() == set(built.texts)
     assert writer.ws.load_literals("another-fingerprint") == {}
-    reader = make_engine(cfg, recover=False)
-    calls = []
-    original = reader.encoder.embedder.embed
-    reader.encoder.embedder.embed = lambda texts: calls.append(list(texts)) or original(texts)
-    catalog = reader.prepared().catalog
+    calls: list[list[str]] = []
+
+    class Counting(HashingEmbedder):
+        def embed(self, texts):
+            calls.append(list(texts))
+            return super().embed(texts)
+
+    reader = make_engine(cfg, recover=False, embedder=Counting())  # counts from the start, where the catalog is built
+    catalog = reader.committed().catalog
     assert isinstance(catalog, LiteralCatalog) and catalog.texts == built.texts and calls == []  # loaded, not re-embedded
-    assert np.allclose(catalog.vectors, built.vectors) and reader.prepared().catalog is catalog  # cached until the next commit
+    assert np.allclose(catalog.vectors, built.vectors)
     assert "margin" in catalog.texts and "phones" in catalog.texts and not (cfg.workspace_dir / "graph" / "literals.npz.tmp").exists()
 
 
 @pytest.mark.model
 def test_b3_translated_question_parses_like_english(model_engine):
-    catalog = model_engine.prepared().catalog
+    catalog = model_engine.committed().catalog
     en = parse_query("Why is margin lower for phones in the US?", model_engine.graph(), model_engine.settings.query, catalog)
     uk = parse_query("Чому маржа нижча для телефонів у США?", model_engine.graph(), model_engine.settings.query, catalog)
     assert set(uk.conditions) == set(en.conditions) == {("category", "phones"), ("region", "US")} and uk.direction == en.direction == -1
@@ -204,34 +223,32 @@ def test_b3_translated_question_parses_like_english(model_engine):
 
 
 @pytest.mark.model
-def test_b4_inflected_ukrainian_value(tmp_path):
+def test_b4_inflected_ukrainian_value(cfg, tmp_path):
     df = generate_retail_dataset(5000, 7)
     df["region"] = df["region"].map({"EU": "Львів", "US": "Харків", "APAC": "Київ", "LATAM": "Одеса"})
     df["category"] = df["category"].map({"laptops": "ноутбуки", "phones": "телефони", "tablets": "планшети", "accessories": "аксесуари"})
     path = tmp_path / "uk.csv"
     df.rename(columns={"region": "city"}).to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"), embedder=None)
+    engine = make_engine(cfg, embedder=None)
     assert engine.ingest_file(path)["status"] == "READY"
-    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.prepared().catalog)
+    p = parse_query("Чому margin нижчий для телефонів у Харкові?", engine.graph(), engine.settings.query, engine.committed().catalog)
     assert ("city", "Харків") in p.conditions and ("category", "телефони") in p.conditions
     assert seeds(engine, "Чому margin нижчий для телефонів у Харкові?") == seeds(engine, "Why is margin lower for телефони in Харків?")
 
 
-def test_neo4j_mirror_does_not_change_retrieval(tmp_path, demo_csv, monkeypatch):
+def test_neo4j_mirror_does_not_change_retrieval(cfg, demo_csv, monkeypatch):
     """The document's falsification step 6: identical seed scores with the mirror on (fake driver) and off."""
     from dataclasses import replace
 
-    from test_persistence import _Driver
+    from test_neo4j_mirror import _Driver
 
     from insight_graph_service.core import neo4j_mirror
 
-    cfg = make_config(tmp_path / "ws")
     engine = make_engine(cfg)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     question = "Чому margin нижчий для phones у US?"
     off = engine.evidence(question).view["traversal"]["seeds"]
-    real = neo4j_mirror.publish_snapshot
-    monkeypatch.setattr(neo4j_mirror, "publish_snapshot", lambda snapshot, config, driver=None: real(snapshot, config, driver=_Driver()))
+    monkeypatch.setattr(engine._mirror, "publish", lambda s, c: neo4j_mirror.Mirror.publish(engine._mirror, s, c, driver=_Driver()))
     engine.settings = replace(cfg, neo4j_enabled=True)
     assert engine.sync_neo4j(engine.committed().graph.snapshot)["status"] == "ok"
     assert engine.evidence(question).view["traversal"]["seeds"] == off

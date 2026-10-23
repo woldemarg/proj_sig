@@ -1,6 +1,7 @@
 # Exact versions of the container images (pip freeze of the verified graph-service image); every Dockerfile installs
 # with -c constraints.txt. A host venv may run newer releases; refresh this file when the images are re-verified
-# (python scripts/compose_check.py --fresh --tests). torch is the CPU build from https://download.pytorch.org/whl/cpu.
+# (python scripts/compose_check.py --fresh --tests). torch is pinned without its build label: the Dockerfile adds
+# +cpu or +cu130 (build arg TORCH, from https://download.pytorch.org/whl/<TORCH>); the CUDA wheels are pinned by torch itself.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -59,7 +60,7 @@ starlette==1.7.0
 sympy==1.14.0
 threadpoolctl==3.7.0
 tokenizers==0.23.2
-torch==2.14.1+cpu
+torch==2.14.1
 tqdm==4.70.1
 transformers==5.18.0
 typer==0.27.2

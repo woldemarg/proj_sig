@@ -2,11 +2,12 @@
 #   model-init         one-shot: the pinned Qwen3 checkpoint into the sig-models volume (from ./models when it verifies)
 #   neo4j              the graph mirror                                  -> browser http://127.0.0.1:17474, bolt 127.0.0.1:17687
 #   llm-model-broker   one OpenAI-compatible endpoint for the upstream model (internal + egress, no host port)
-#   insight-graph      the graph service: analysis, graph building, search (CPU torch; no egress)
+#   insight-graph      the graph service: analysis, graph building, search (the GPU with compose.gpu.yaml, else the CPU; no egress)
 #   evidence-narrator  the chat: the graph's evidence verbalised and citation-checked (no egress)
 #   sig-web-console    nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
 #
 #   docker compose up -d --build --wait      then open http://127.0.0.1:8765
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait      the embeddings on an NVIDIA GPU
 #
 # Settings: ./.env (template: .env.sample). Only the broker receives the GEMMA_* provider settings and key. The stack's
 # own Neo4j password is SIG_NEO4J_PASSWORD (default sig-local-password, at least 8 characters; the volume keeps it).
@@ -34,8 +35,8 @@ x-hardened: &hardened
 
 services:
   model-init:
-    build: { context: ., dockerfile: insight_graph_service/Dockerfile, target: runtime }
-    image: sig/insight-graph:local
+    image: sig/insight-graph:cpu  # the graph service's image, built once by insight-graph below (compose.gpu.yaml: :gpu)
+    pull_policy: never
     command: ["python", "-m", "insight_graph_service.core.model_store", "/app/models", "--seed", "/seed"]
     volumes:
       - sig-models:/app/models
@@ -59,7 +60,7 @@ services:
       interval: 30s
       start_interval: 2s
       start_period: 60s
-      timeout: 10s
+      timeout: 30s
       retries: 5
     stop_grace_period: 30s
     restart: unless-stopped
@@ -81,8 +82,12 @@ services:
 
   insight-graph:
     <<: *hardened
-    build: { context: ., dockerfile: insight_graph_service/Dockerfile, target: runtime }
-    image: sig/insight-graph:local
+    build:
+      context: .
+      dockerfile: insight_graph_service/Dockerfile
+      target: runtime
+      args: { TORCH: cpu }  # the CPU torch build; compose.gpu.yaml builds cu130
+    image: sig/insight-graph:cpu
     env_file:  # the analysis tunables (it reads many; the narrator gets an allow-list)
       - path: .env
         required: false
@@ -97,7 +102,7 @@ services:
       WEB_PORT: "8000"
       WORKSPACE_DIR: /data/workspace
       MODEL_DIR: /app/models
-      EMBEDDING_DEVICE: cpu
+      EMBEDDING_DEVICE: auto  # the GPU when compose.gpu.yaml attaches one, else the CPU
     volumes:
       - sig-workspace:/data
       - sig-models:/app/models:ro

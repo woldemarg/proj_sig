@@ -4,12 +4,14 @@
     python scripts/compose_check.py --fresh       clean room: rebuild without the build cache and pull the base images
     python scripts/compose_check.py --tests       also run scripts/check.py inside the graph service's `test` image
     python scripts/compose_check.py --live-llm    also answer one question through the broker's real upstream (a paid call)
+    python scripts/compose_check.py --gpu         the graph service on the GPU (compose.gpu.yaml); without it, on the CPU
     python scripts/compose_check.py --keep        leave the stack running afterwards
 
 Everything is reached the way a user reaches it: through the web console's nginx on one host port. The stack runs as
 compose project ``sig-check`` on its own volumes (created for the run and removed after it), its own host ports and its
 own Neo4j password, so it runs beside the user's own stack (project ``sig``) and never touches its data.
-Needs Docker, ./models (the seed of the model volume; downloaded when it does not verify) and ./.env.
+Needs Docker, ./models (the seed of the model volume; downloaded when it does not verify) and ./.env; --gpu also needs
+an NVIDIA GPU (driver 580 or newer).
 """
 
 from __future__ import annotations
@@ -39,11 +41,12 @@ ENV = {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")} | {
     "SIG_NEO4J_HTTP_PORT": "27474",
     "SIG_NEO4J_BOLT_PORT": "27687",
 }
+FILES = ["-f", str(ROOT / "compose.yaml")]  # --gpu adds compose.gpu.yaml
 results: list[tuple[str, bool, str]] = []
 
 
 def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    cmd = ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yaml"), *args]
+    cmd = ["docker", "compose", "-p", PROJECT, *FILES, *args]
     print("$", " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, env=ENV, check=check, text=True, capture_output=capture)
 
@@ -102,10 +105,13 @@ def check_start_order(seconds: float) -> None:
     )
 
 
-def check_services() -> None:
+def check_services(gpu: bool) -> None:
     page = http("GET", "/")
     record("console serves the UI", 'id="cy"' in page and "/vendor/plotly-gl3d.min.js" in page)
-    record("graph service answers through the console", "graph" in http("GET", "/api/health"))
+    health = http("GET", "/api/health")
+    record("graph service answers through the console", "graph" in health)
+    device = str(health["embedding_device"])
+    record(f"embeddings run on the {'GPU' if gpu else 'CPU'}", device.startswith("cuda" if gpu else "cpu"), device)
     chat = http("GET", "/api/chat/health")
     llm = chat["llm"]
     record(
@@ -143,8 +149,16 @@ def wait_for_batch(batch_id: str, timeout: float = 1200) -> tuple[dict[str, Any]
     raise TimeoutError(f"batch {batch_id} not finished after {timeout:.0f} s")
 
 
+def mirror_equals_graph() -> bool:
+    graph = http("GET", "/api/graph?regions=1")
+    mirrored, relationships = mirror_counts()
+    return mirrored == dict(Counter(n["data"]["kind"] for n in graph["nodes"])) and relationships == len(graph["edges"])
+
+
 def check_workflow(live_llm: bool) -> None:
     from scratch import scratch_dir, write_demo_csv
+
+    from insight_graph_service.core.demo import generate_retail_dataset
 
     csv = write_demo_csv(scratch_dir("compose_check"))
     rec, slowest = wait_for_batch(upload(csv)["batch_id"])
@@ -153,11 +167,14 @@ def check_workflow(live_llm: bool) -> None:
     detail = f"{m.get('validated_insights')} insights, {m.get('attractors_total')} anchors in {m.get('processing_duration_s', 0):.0f} s"
     record("upload through the console committed", ok, detail if ok else str(rec.get("error") or rec["status"]))
     record("health stays responsive during the ingest", slowest < 2.0, f"slowest /api/health {slowest * 1000:.0f} ms")
-    graph = http("GET", "/api/graph")
+    graph = http("GET", "/api/graph?regions=1")  # the whole view, its regions included
     kinds = Counter(n["data"]["kind"] for n in graph["nodes"])
     mirrored, relationships = mirror_counts()
     same = mirrored == dict(kinds) and relationships == len(graph["edges"]) and rec.get("neo4j", {}).get("status") == "ok"
     record("Neo4j mirror equals the snapshot", same, f"{mirrored}, {relationships} relationships")
+    with urllib.request.urlopen(urllib.request.Request(CONSOLE + "/api/graph", headers={"Accept-Encoding": "gzip"}), timeout=60) as resp:
+        encoding, size = resp.headers.get("Content-Encoding"), len(resp.read())
+    record("the console's edge gzips JSON", encoding == "gzip", f"/api/graph {encoding or 'uncompressed'}, {size} bytes on the wire")
     qa = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": False}, timeout=300)
     items, cited = qa["view"]["evidence"].get("items", []), qa["citations"]
     ok = qa["answer_mode"] == "fallback" and items and cited["cited"] and not cited["unknown"]
@@ -168,6 +185,14 @@ def check_workflow(live_llm: bool) -> None:
         qa = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": True}, timeout=300)
         detail = f"{qa['llm'].get('model')}, {qa['llm'].get('latency_s')} s{', ' + str(qa['llm'].get('error')) if qa['llm'].get('error') else ''}"
         record("LLM answer through the broker", qa["answer_mode"] == "llm" and qa["citations"]["grounded"], detail)
+    second = scratch_dir("compose_check") / "retail_synthetic_seed8.csv"
+    generate_retail_dataset(5000, 8).to_csv(second, index=False)
+    added, _ = wait_for_batch(upload(second)["batch_id"])
+    grown = mirror_equals_graph()
+    removed = http("DELETE", f"/api/datasets/{added.get('dataset_id')}") if added["status"] == "READY" else {"neo4j": {}}
+    syncs = (added.get("neo4j", {}).get("sync"), removed["neo4j"].get("sync"))
+    ok = grown and mirror_equals_graph() and syncs == ("diff", "diff") and removed["neo4j"].get("deleted", 0) > 0
+    record("the mirror follows an upload and a deletion by diffs", ok, f"syncs {syncs}, {removed['neo4j'].get('deleted')} deleted")
     reset = http("POST", "/api/reset")
     mirrored, relationships = mirror_counts()
     after = http("POST", "/api/chat/query", {"question": QUESTION, "use_llm": False})
@@ -195,14 +220,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tests", action="store_true", help="also run the test suite inside the graph service image")
     parser.add_argument("--live-llm", action="store_true", help="also ask the real upstream model once (a paid call)")
     parser.add_argument("--keep", action="store_true", help="leave the stack running")
+    parser.add_argument("--gpu", action="store_true", help="attach the GPU (compose.gpu.yaml) and expect the embeddings on CUDA")
     args = parser.parse_args(argv)
+    if args.gpu:
+        FILES.extend(["-f", str(ROOT / "compose.gpu.yaml")])
     compose("down", "-v", "--remove-orphans")  # a run always starts from new volumes
     try:
         compose("build", *(["--no-cache", "--pull"] if args.fresh else []))
         start = time.perf_counter()
         compose("up", "-d", "--wait", "--wait-timeout", "900")
         check_start_order(time.perf_counter() - start)
-        check_services()
+        check_services(args.gpu)
         check_workflow(args.live_llm)
         if args.tests:
             run_tests(args.fresh)

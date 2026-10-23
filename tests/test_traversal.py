@@ -85,7 +85,6 @@ def toy():
         edge("P6", "A3", "ACTIVATES", 0.9),
         edge("P3", "A2", "ACTIVATES", 0.95),
         edge("P3", "P4", "SPECIALIZES"),
-        edge("P4", "P3", "GENERALIZES"),
     ]
     return DualGraph({"nodes": nodes, "edges": edges})
 
@@ -135,8 +134,8 @@ def test_co_occurrence_link_is_walked_and_named_in_evidence(toy):
     assert "P7" not in {r.node_id for r in run(graph, max_latent_hops=0)[0].patterns}
     ev = build_evidence(parse_query("Why is margin lower for phones in the EU?", graph), res, graph, cfg)
     a1 = next(a for a in ev.attractors if a["id"] == "A1")
-    assert {"id": "A4", "weight": 0.25, "type": "CO_OCCURS"} in a1["related"]
-    assert "A4 (0.25, shared members)" in ev.to_prompt()
+    assert {"id": "A4", "links": {"CO_OCCURS": 0.25}, "shared": 1} in a1["related"]
+    assert "A4 (1 shared member, 0.25)" in ev.to_prompt()
 
 
 def test_latent_hop_budget_and_depth(toy):

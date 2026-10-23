@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import replace
 
 import numpy as np
@@ -11,7 +13,7 @@ from conftest import toy_insight
 from doubles import HashingEmbedder
 
 from attractor_topology.canonical import canonicalize
-from attractor_topology.encoder import InsightEncoder, SentenceTransformerEmbedder
+from attractor_topology.encoder import InsightEncoder, SentenceTransformerEmbedder, l2_normalize
 from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION
 from insight_contracts import Condition, Shift
 from insight_contracts.text import describe_scope, format_p, format_value
@@ -87,6 +89,14 @@ def encoder(request):
     cfg = load_settings().topology
     emb = HashingEmbedder() if request.param == "hashing" else SentenceTransformerEmbedder(cfg)
     return InsightEncoder(emb, cfg)
+
+
+@pytest.mark.model
+def test_the_model_computes_in_float32_on_the_cpu():
+    """bf16 has no fast CPU kernels: the CPU runs the model in float32, and the spec records it."""
+    emb = SentenceTransformerEmbedder(replace(load_settings().topology, embedding_device="cpu"))
+    assert emb.compute_dtype == "float32"
+    assert InsightEncoder(emb, load_settings().topology).spec.compute_dtype == "float32"
 
 
 def test_embedding_contract(encoder):
@@ -170,3 +180,41 @@ def test_query_instruction_only_reaches_free_question_text():
     emb.calls.clear()
     enc.encode_query("", "", (), question)
     assert [kind for kind, _ in emb.calls] == ["query", "query", "query"] and all(texts == [question] for _, texts in emb.calls)
+
+
+class _SlowModel:
+    """A stand-in for the loaded SentenceTransformer: 0.2 s per ``encode`` call, one row of text length per text."""
+
+    device = "cpu"
+
+    def __init__(self):
+        self.calls: list[list[int]] = []  # the text lengths of each call
+
+    def parameters(self):
+        return iter([np.zeros(1, dtype=np.float32)])
+
+    def encode(self, texts, **_):
+        self.calls.append([len(t) for t in texts])
+        time.sleep(0.2)
+        return np.array([[len(t), 1.0, 0.0] for t in texts], dtype=np.float32)
+
+
+def test_a_question_waits_for_one_chunk_of_a_batch_not_all_of_it():
+    """The forward passes hold the model lock a chunk at a time: a question asked while a batch embeds 160 texts waits
+    for one chunk, the loaded model's dtype for none, and every text gets the vector it gets alone."""
+    emb = SentenceTransformerEmbedder(load_settings().topology)
+    emb._model, emb.dim = _SlowModel(), 3
+    texts = [f"insight {i:03d}" + " x" * (i % 7) for i in range(160)]
+    batch = threading.Thread(target=emb.embed, args=(texts,))
+    batch.start()
+    time.sleep(0.1)  # inside the batch's first chunk
+    start = time.perf_counter()
+    assert emb.compute_dtype == "float32" and time.perf_counter() - start < 0.05
+    query = emb.embed_queries(["Чому margin нижчий?"])
+    waited = time.perf_counter() - start
+    batch.join()
+    assert waited < 1.0, waited  # the whole batch is 10 chunks, 2 s
+    sizes, batch = [len(c) for c in emb._model.calls], [n for c in emb._model.calls if len(c) > 1 for n in c]
+    assert max(sizes) == 16 and sum(sizes) == 161 and batch == sorted(batch, reverse=True)  # chunks of similar length
+    assert np.allclose(emb.embed(texts[:3]), l2_normalize(np.array([[len(t), 1.0, 0.0] for t in texts[:3]])))
+    assert np.allclose(query, l2_normalize(np.array([[len("Чому margin нижчий?"), 1.0, 0.0]])))

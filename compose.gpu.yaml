@@ -1,0 +1,20 @@
+# The graph service on the host's NVIDIA GPU: builds the CUDA 13.0 torch image (sig/insight-graph:gpu, beside the CPU
+# one) and attaches the GPU. Needs an NVIDIA driver 580 or newer (Docker Desktop on WSL 2, or the NVIDIA Container
+# Toolkit on Linux). Without this file the stack builds the CPU image and embeds on the CPU.
+#
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait
+#
+# On a GPU host, copying this file to compose.override.yaml (git-ignored) makes a plain `docker compose up` use it.
+
+services:
+  model-init:
+    image: sig/insight-graph:gpu  # the same image as the graph service, so one build serves both
+  insight-graph:
+    build:
+      args: { TORCH: cu130 }
+    image: sig/insight-graph:gpu
+    gpus: all  # the host's NVIDIA driver; the image's torch wheels bring the CUDA runtime
+    environment:
+      # torch routes a few eager CUDA ops (Qwen3's rotary matmul) to Triton kernels, and Triton needs a C compiler the
+      # image does not have; off, those ops run on cuBLAS as before
+      TORCH_DISABLE_NATIVE_JIT: "1"

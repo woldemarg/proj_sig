@@ -108,7 +108,8 @@ class LiteralCatalog:
                 self.chars[script] = (vec, vec.fit_transform([self.texts[i] for i in idx]), idx)
 
     def symbol_key(self, j: int) -> str:
-        return f"{self.types[j]}:{json.dumps(self.symbols[j], ensure_ascii=False)}"
+        kind = "metric" if self.types[j] == "declared" else self.types[j]  # a declared name and the metric's own are one symbol
+        return f"{kind}:{json.dumps(self.symbols[j], ensure_ascii=False)}"
 
 
 def _values(graph: DualGraph) -> dict[str, list[str]]:
@@ -120,16 +121,26 @@ def _values(graph: DualGraph) -> dict[str, list[str]]:
     return {v: sorted(a) for v, a in values.items()}
 
 
+def _vocabulary(graph: DualGraph) -> tuple[list[str], dict[str, list[str]]]:
+    """The graph's metric names (sorted) and condition values (``_values``): facts of one commit, derived once per graph
+    (``DualGraph.memoised``) for the catalog and for every question's lexical match. Read only."""
+    return graph.memoised(("vocabulary", ""), lambda: (sorted({n["props"]["name"] for n in graph.of_kind("Metric")}), _values(graph)))
+
+
 def build_catalog(graph: DualGraph, embedder: Embedder, known: dict[str, np.ndarray] | None = None) -> LiteralCatalog | None:
     """The graph's literals, embedded with the document-side embedder (as component labels are); ``known`` maps a
     literal to its unit vector from an earlier build, so only new literals are embedded. ``None`` for an empty graph."""
     if not graph.insights:
         return None
     texts, types, symbols, case = [], [], [], []
-    for name in sorted({n["props"]["name"] for n in graph.of_kind("Metric")}):
+    metrics, values = _vocabulary(graph)
+    declared = [n["props"].get("user_glossary", {}) for n in graph.of_kind("Dataset")]
+    for name in metrics:
         for text in dict.fromkeys((name, humanize(name))):  # raw and humanised form (once when equal)
             texts.append(text), types.append("metric"), symbols.append(name), case.append(False)
-    for value, attrs in sorted(_values(graph).items()):
+        for text in dict.fromkeys(g[name] for g in declared if name in g and g[name] not in (name, humanize(name))):  # as declared
+            texts.append(text), types.append("declared"), symbols.append(name), case.append(False)
+    for value, attrs in sorted(values.items()):
         texts.append(value), types.append("condition"), symbols.append(attrs), case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
     vectors = dict(known or {})
     missing = [t for t in dict.fromkeys(texts) if t not in vectors]
@@ -236,8 +247,13 @@ def _ground(q: ParsedQuery, catalog: LiteralCatalog, raw_tokens: list[str], toke
             vec, matrix, idx = entry
             sims = np.where(catalog.words[idx] == len(span.split()), (matrix @ vec.transform([span]).T).toarray().ravel(), -1.0)
             best = int(np.argmax(sims))
-            if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[idx[best]])) <= CHAR_MAX_LEN_DIFF:
-                hit = (idx[best], "chars", float(sims[best]))
+            tied = {catalog.symbol_key(idx[i]) for i in np.flatnonzero(sims == sims[best])}  # one name declared for two metrics: ambiguous
+            j = idx[best]
+            # a declared name is everyday words, which share their endings with many a phrase: it grounds only when the span says
+            # it, word for word (inflected), never on n-grams alone
+            said = catalog.types[j] != "declared" or all(_stem_match(a, b) for a, b in zip(span.lower().split(), catalog.texts[j].lower().split()))
+            if sims[best] >= CHAR_MIN and abs(len(span) - len(catalog.texts[j])) <= CHAR_MAX_LEN_DIFF and len(tied) == 1 and said:
+                hit = (j, "chars", float(sims[best]))
         if hit is not None:
             _register(q, catalog, hit, span, pos, claimed, tokens)
         else:
@@ -285,7 +301,7 @@ def _bind(q: ParsedQuery, value: str, attrs: list[str], pos: set[int], tokens: l
 def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, float], span: str, pos: set[int], claimed: set[int], tokens) -> None:
     j, layer, score = hit
     text, symbol = catalog.texts[j], catalog.symbols[j]
-    if catalog.types[j] == "metric":
+    if catalog.types[j] in ("metric", "declared"):
         if symbol not in q.targets:
             q.targets.append(symbol)
     else:
@@ -302,7 +318,7 @@ def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, 
     q = ParsedQuery(text=text)
     claimed: set[int] = set()  # token positions taken by a literal, then by direction and relationship words
 
-    metrics = sorted({n["props"]["name"] for n in graph.of_kind("Metric")})
+    metrics, values = _vocabulary(graph)
     parts_of = {m: [p for p in humanize(m).lower().split() if len(p) >= 3] for m in metrics}
     head_count = Counter(parts[0] for parts in parts_of.values() if parts)
     matched: list[tuple[float, str]] = []
@@ -321,7 +337,7 @@ def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, 
         q.targets = sorted(name for score, name in matched if score == best)
         claimed |= {i for i, t in enumerate(tokens) for name in q.targets for p in parts_of[name] if _stem_match(p, t)}
 
-    for value, attrs in _values(graph).items():
+    for value, attrs in values.items():
         if len(value) <= ACRONYM_MAX_LEN and value.isupper():  # an acronym matches as typed: "us" is not "US"
             pos = {i for i, t in enumerate(raw_tokens) if t == value}
         else:  # every word of the value, inflected or not

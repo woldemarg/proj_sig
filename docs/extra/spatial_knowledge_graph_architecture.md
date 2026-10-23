@@ -41,7 +41,7 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 | зону не можна передати як запит | — | те саме | #16 |
 | на «де?» приходять розрізнені факти | evidence — до 10 інсайтів у порядку рангу | `graph_query_engine/evidence.py:193-307` | #14 |
 | новий файл тієї ж області дублює інсайти | той самий потік даних, завантажений двічі, — два незалежні датасети | `ingestion.py:56-64` | #27 |
-| кожен факт «verified» | заголовок evidence подає будь-який факт як перевірений | `graph_query_engine/evidence.py:107` | #26, далі #5–#8, #15, #34 |
+| факт без оцінки довіри | заголовок і `SYSTEM_PROMPT` більше не кажуть «verified» (#26), але окремих осей довіри в evidence немає | `graph_query_engine/evidence.py:107` | #5–#8, #15, #34 |
 
 ### 2.2 Чотири властивості продукту
 
@@ -73,13 +73,13 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 | `Dataset` | `ds-` + sha256(bytes ‖ bins ‖ categories ‖ geo)[:12] | `filename, rows, columns`, для гео — `glossary` | `ingestion.py:56-64`, `snapshot.py:68-79` |
 | `Batch` | `B<utc>-<hex>` | стадії, профіль, метрики | `engine.py:485-490` |
 | `Pattern` (інсайт) | `P-` + sha1(dataset_id, умови)[:12] | запис журналу без змін: умови, `target`, `shifts`, `support`, `effect_size`, `stability`, `p_adjusted`, `weight`, `provenance` | `insight_contracts/insight.py:112-114`, `docs/03` §3.1 |
-| гео-інсайт | той самий `Pattern` | `provenance.spatial = {resolution, cells (кількість), moran_i, n_eff, p_adjusted_iid}` плюс сьогодні `compactness`, `colocated` | `discovery.py:389-396`, `spatial.py:443-456` |
+| гео-інсайт | той самий `Pattern` | `provenance.spatial = {resolution, cells (кількість), moran_i, n_eff, p_adjusted_iid}` (`SpatialProvenance`); `compactness` на вузлі виводить коміт | `discovery.py:389-396`, `spatial.py:436` |
 | `Attractor` | `A-<k>` | одиничний центроїд 1152-d, маса; текст і члени — похідні на кожному коміті | `attractor_topology/vendor/lac/storage.py:21-35`, `snapshot.py:227-265` |
 | `Dimension`, `Metric` | `D:<ds>:<col>`, `M:<ds>:<col>` | схема датасету | `snapshot.py:89-113` |
 | комірка H3 | поза графом | `geo.npz`: `cells`, `point_cell` (рядок → комірка), `lonlat`, сусідство CSR | `workspace.py:230-252` |
 | екстент інсайту | похідне | позиції рядків у `covers.npz` → H3-id через `geo.npz["cells"]` | `workspace.py:216-221`, `engine.py:456-470` |
 
-Ребра: структурні всередині датасету (`SPECIALIZES`/`GENERALIZES` — покривальне відношення множин умов, `SIBLING`, `CONTRASTS`; `lattice.py:46-109`), `CO_LOCATED` (перекриття дилатованих екстентів ≥ 0.3, до 3 партнерів, лише всередині датасету; `spatial.py:407-426`, `lattice.py:112-123`), міст `ACTIVATES` (інсайт → атрактор, вага = вирівнювання, прапорець `weak`), латентні `RELATED_TO` (взаємні kNN центроїдів) і `CO_OCCURS` (спільні члени), схема `HAS_SCOPE`, `TARGETS`, провенанс `DISCOVERED_IN`, `OF_DATASET` (`insight_contracts/graph.py:28-59`).
+Ребра: структурні всередині датасету (`SPECIALIZES` — покривальне відношення множин умов, обхід іде ним в обидва боки, `SIBLING`, `CONTRASTS`; `lattice.py`), просторова площина з коміту (`CO_LOCATED` з `relation` `overlaps`/`adjacent`/`same_region` між інсайтами однієї роздільності будь-яких датасетів, `IN_REGION` і `PARENT_OF` до вузлів `Region`; `spatial.py:436`), міст `ACTIVATES` (інсайт → атрактор, вага = вирівнювання, прапорець `weak`), латентні `RELATED_TO` (взаємні kNN центроїдів) і `CO_OCCURS` (спільні члени), схема `HAS_SCOPE`, `TARGETS`, провенанс `DISCOVERED_IN`, `OF_DATASET` (`insight_contracts/graph.py:28-59`).
 
 ### 3.3 Атрактори: механіка, яка не змінюється
 
@@ -102,7 +102,7 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 
 ### 3.4 Гео-інгест на одному рівні
 
-Опція `geo=auto|<col>|<lat>,<lon>[@res]` (`spatial.py:75-132`): лише точки (GeoJSON `Point`, WKT `POINT`, пара lat/lon), одна комірка на точку (`h3.latlng_to_cell`, `spatial.py:239`), роздільність за замовчуванням 7, опція входить у `dataset_id` дослівно. Таблиця комірок: `points`, `<col>_active_days`, `<col>_late_share`, `<col>_median`, `<col>_mode`, `share_<col>_<level>` — ролі лише за dtype; лаги `neighbours_<counter>_band` і `lisa_points` (локальний Моран з аналітичним нулем і FDR 0.05) як звичайні категоріальні виміри; інтенсивні колонки NaN нижче `MIN_CELL_POINTS` (5) (`spatial.py:225-348`). Майнер той самий; для гео: правило тавтології (сусідська умова не пояснює метрику, з якої обчислена), `n_eff = n(1−ρ)/(1+ρ)` з ρ = Moran I підгрупи (однопараметрична апроксимація Clifford–Richardson–Hémon 1989, `spatial.py:435-440`), блоковий бутстрап по батьківських комірках `r−1` (`spatial.py:306`; не зберігаються). Після допуску `annotate_extents` пише `compactness` і `colocated` (`engine.py:317`) — саме це #32 прибирає.
+Опція `geo=auto|<col>|<lat>,<lon>[@res]` (`spatial.py:75-132`): лише точки (GeoJSON `Point`, WKT `POINT`, пара lat/lon), одна комірка на точку (`h3.latlng_to_cell`, `spatial.py:239`), роздільність за замовчуванням 7, опція входить у `dataset_id` дослівно. Таблиця комірок: `points`, `<col>_active_days`, `<col>_late_share`, `<col>_median`, `<col>_mode`, `share_<col>_<level>` — ролі лише за dtype; лаги `neighbours_<counter>_band` і `lisa_points` (локальний Моран з аналітичним нулем і FDR 0.05) як звичайні категоріальні виміри; інтенсивні колонки NaN нижче `MIN_CELL_POINTS` (5) (`spatial.py:225-348`). Майнер той самий; для гео: правило тавтології (сусідська умова не пояснює метрику, з якої обчислена), `n_eff = n(1−ρ)/(1+ρ)` з ρ = Moran I підгрупи (однопараметрична апроксимація Clifford–Richardson–Hémon 1989, `spatial.py:435-440`), блоковий бутстрап по батьківських комірках `r−1` (`spatial.py:306`; не зберігаються). Комірки й екстенти лишаються в `geo.npz` і `covers.npz`; `compactness` і просторову площину виводить `derive_spatial` при кожному коміті (`engine.py:236`), у журнал нічого не пишеться.
 
 ### 3.5 Запит
 
@@ -117,7 +117,7 @@ Epic #2 перетворює гео-режим на **Spatial Knowledge Graph** 
 | Пакет | Відповідальність сьогодні | Що додають issues |
 |---|---|---|
 | `insight_contracts` (лише stdlib) | `Insight`, словник графа, `EvidencePayload` | `SpatialProvenance` з п'яти полів (#25); `Region`, `IN_REGION`, `PARENT_OF`, площина `spatial`, без `GENERALIZES` (#32); `record_digest` (#5) |
-| `subgroup_miner` (єдиний з `h3`) | інгест, комірки, ознаки, LISA, майнінг, відбір, ґратка, `annotate_extents` | `derive_spatial` (#32), `select_levels` (#29), `geometry_to_cells` (#16), парсинг `indicators` (#34); `annotate_extents` і `colocation_edges` — видалити |
+| `subgroup_miner` (єдиний з `h3`) | інгест, комірки, ознаки, LISA, майнінг, відбір, ґратка, `derive_spatial` (#32), парсинг `indicators` (#34) | `select_levels` (#29), `geometry_to_cells` (#16) |
 | `attractor_topology` | вектори, живі атрактори | **нічого** |
 | `insight_graph_service/core` | батч, workspace, компілятор знімка, Neo4j | fan-out рівнів і `upload_id` (#28), `_derive` з `derive_spatial` (#32), `supersedes` (#27), `PATCH` метаданих (#6, #34), `integrity` (#5), `credibility` (#7, #15), `verify` (#9), прибирання (#33) |
 | `graph_query_engine` (без H3) | парсинг, seed-и, обхід, evidence | `scale_chain` + `SCALE CHAIN` + згортання (#31), `ZONES`/`picture` (#14), `place_scores` у seed-формулі (#16), `trust:` (#8), заголовок (#26) |
@@ -195,7 +195,7 @@ flowchart TB
 
 - `POST /api/upload` з `geo=<loc>@<r1>,<r2>` або `geo=<loc>@auto` і необов'язковим `table=true` створює кілька звичайних датасетів: `dataset_id` кожного — як при окремому завантаженні з тією самою опцією (хеш уже містить роздільність), усі з `upload_id = sha256(bytes)` і `level`. N батчів у черзі того самого потоку, послідовно; `process` без змін; N компіляцій знімка прийнято [вимірюється на S-size].
 - Рівень `table` — звичайний датасет без гео; просторової структури на ньому немає; з гео-рівнями його зв'язують лише атрактори. Окремого ребра `table ↔ geo` немає.
-- `select_levels` (`@auto`): кандидати 3…10 (константи); один прохід `latlng_to_cell` + `cell_to_parent` дає `cells(r)`, `dense_share(r)`, `median_points(r)`; `r_fine = max{r : cells ≥ MIN_ROWS ∧ dense_share ≥ GEO_DENSE_SHARE_MIN (0.3)}`; грубші рівні — **лише з `GEO_REGION_LEVELS`**, не дрібніші за `r_fine` щонайменше на один крок списку, доки `cells ≥ MIN_ROWS`, не більше `GEO_LEVELS_MAX` (3). Підгонки до вже наявного рівня немає: сумісність регіонів дає спільний список. `profile.geo.levels = {chosen, candidates, reasons}`.
+- `select_levels` (`@auto`): кандидати 3…10 (константи); `latlng_to_cell` на кожній роздільності, як у `build_cells` (діти H3 не покривають батька точно), дає `cells(r)`, `dense_cells(r)` (комірки з ≥ `MIN_CELL_POINTS` точок), `dense_points(r)` (частка точок у них), `median_points(r)`; `r_fine = max{r : dense_cells ≥ MIN_ROWS ∧ dense_points ≥ GEO_DENSE_POINTS_MIN (0.5) ∧ cells(cap(r)) ≤ GEO_AUTO_MAX_CELLS (5 000)}`, де `cap(r)` — найдрібніший рівень `GEO_REGION_LEVELS`, не дрібніший за `r` (стеля обмежує регіони, яких сягає один інсайт), або сам `r`, якщо він дрібніший за всі рівні списку чи грубший за них (якщо кожна така роздільність має більше комірок — найгрубша з них); грубші рівні — **лише з `GEO_REGION_LEVELS`**, не дрібніші за `r_fine` щонайменше на один крок списку, доки `cells ≥ GEO_AUTO_MIN_CELLS (500)`, не більше `GEO_LEVELS_MAX` (3). Межі відкалібровано на реальному експорті подій: дрібніші рівні великого файлу дають знахідки на пів мапи і десятки тисяч `IN_REGION`, а рівень із кількома сотнями комірок не має де вмістити найменшу підгрупу майнера. Підгонки до вже наявного рівня немає: сумісність регіонів дає спільний список. `profile.geo.levels = {chosen, candidates, reasons}`.
 - Чому грубі рівні — з того самого списку, що й регіони: екстент грубого інсайту тоді дорівнює множині регіонів його рівня (`IN_REGION` з власним рівнем, частка 1.0), і вертикальний крок стає чистою операцією над ребрами, однаковою для рівнів одного завантаження і для різних датасетів.
 - Статус рівнів — `GET /api/batches?upload_id=`; `DELETE /api/uploads/{id}` — усі рівні в одній транзакції.
 
@@ -219,10 +219,11 @@ flowchart TB
        corresponds — знак спільної цільової метрики збігається; contrasts — протилежний
        повторити від Q; коли інсайтів вище немає — самі регіони: PARENT_OF до вершини
 вниз:  симетрично
-кандидати за alignment(P)·alignment(Q)·share; бюджети — константи: 3 вгору, 3 вниз, 10 усього
+кандидати: спершу того самого upload_id, далі найближчий рівень, далі найближчий скоуп (Жаккар умов),
+       далі alignment(P)·alignment(Q)·share; бюджети — константи: 3 вгору, 3 вниз, 10 різних інсайтів усього
 ```
 
-- Мітка `scale` — результат цієї функції в рядку evidence, не поле журналу: `regional` — є `corresponds` на грубшому рівні того самого `upload_id`; `scale-dependent` — `contrasts` (розворот знаку при укрупненні, парадокс Сімпсона); `not_found_coarser` — грубший рівень є, відповідного інсайту не знайдено (нестача доказу, не доказ локальності; у простій мові «на рівні району окремо не підтверджено»); `insufficient` — грубшого рівня немає (комірок < `MIN_ROWS`).
+- Мітка `scale` — результат цієї функції в рядку evidence, не поле журналу: `regional` — перший крок угору (найближчий грубший рівень того самого `upload_id` з тим самим явищем) `corresponds`; `scale-dependent` — `contrasts` (розворот знаку при укрупненні, парадокс Сімпсона); `not_found_coarser` — грубший рівень є, відповідного інсайту не знайдено (нестача доказу, не доказ локальності; у простій мові «на рівні району окремо не підтверджено»); `insufficient` — грубшого рівня в завантаженні немає (`upload_levels` вузла `Dataset` — рівні всіх записів батчів цього `upload_id`: повторне завантаження файлу додає свої рівні, видалений рівень випадає; для `@auto` — бо на ньому менше `MIN_ROWS` комірок).
 - Згортання: група одного `upload_id` з `corresponds` дає один інсайт у evidence (рівень, найближчий до запитаного, інакше найважчий); решта — `also at res 5: +1.1 sd [P7]`; інший рівень того самого завантаження не є «іншим сегментом» для `transversal_only`.
 - Секція `SCALE CHAIN:` — рядок на рівень: `res 7: P1 +1.6 sd → res 5: P7 +1.1 sd → region R:3:… (12 patterns, 3 themes) → region R:1:…`. `picture(Region)` — члени `IN_REGION` з усіх датасетів, згруповані за атракторами, частка подій, гарячі точки, найслабша достовірність (коли є); ту саму функцію викликає `ZONES` (#14). Вертикальні інсайти входять у evidence з `role=vertical_up|vertical_down` і цитуються.
 - Між датасетами (частини області, інші джерела) — те саме правило: атрактори спільні, регіони глобальні.
@@ -372,7 +373,7 @@ flowchart LR
 |---|---|---|---|
 | походження | так: `provenance`, `Batch`/`Dataset`, сирий файл до видалення | `prov:wasDerivedFrom` в експорті | — |
 | якість джерела | ні | `source`, `reliability A–F`, редаговані `PATCH`, не в хеші | `Dataset` (#6) |
-| достовірність факту | ні (усе «verified») | фаза A через спільний якір між задекларованими джерелами (#7); фаза B через місце: той самий регіон + спільний атрактор + той самий `indicator` + знак (#15); `credibility_basis.rule ∈ {anchor, place}` | `Pattern` |
+| достовірність факту | ні (оцінки немає) | фаза A через спільний якір між задекларованими джерелами (#7); фаза B через місце: той самий регіон + спільний атрактор + той самий `indicator` + знак (#15); `credibility_basis.rule ∈ {anchor, place}` | `Pattern` |
 | впевненість в обчисленні | так: `p_adjusted`, `stability`, `n_eff`, `weight` | + мітка `scale` (#31), `integrity` (#5), `verify` з сирих даних (#9) | `Pattern`, evidence |
 | відповідність інсайту атрактору | так: `alignment`, `weak` | — | `ACTIVATES` |
 | впевненість у зв'язку | так: ваги ребер | + `relation` і вага `CO_LOCATED`, частка `IN_REGION` | ребра |
@@ -456,25 +457,31 @@ M1 — походження і чесність: `record_digest` + `integrity` (
 
 | Вимога | Issue | Статус |
 |---|---|---|
-| golden без нових опцій | #4 | план |
-| геобенчмарк із закладеною істиною | #3 | план |
-| цілісність запису | #5 | план |
-| джерело і надійність | #6 | план |
-| заголовок без «verified» | #26 | план |
-| `SpatialProvenance` з п'яти полів | #25 | план |
-| прибирання перед ядром | #33 | план |
-| регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | план |
-| `upload_id`, рівні як датасети, `table` | #28 | план |
-| вибір роздільностей з даних | #29 | план |
-| автоматичний вертикальний зум, мітка `scale`, згортання, `SCALE CHAIN`, `picture` | #31 | план |
-| зона/контур як запит, `place_scores`, `resolution` | #16 | план |
-| `ZONES` | #14 | план |
-| `supersedes` | #27 | план |
-| реєстр індикаторів | #34 | план |
-| достовірність фаза A / фаза B, рядок `trust:`, правило 9 | #7, #15, #8 | план |
-| спайк золотих патернів другого джерела | #35 | план |
-| червона команда; ADR і `docs/13_trust.md` | #22, #23 | план |
-| консоль; перерахунок із сирих; експорт GeoSPARQL | #17, #9, #20 | далі |
+| golden без нових опцій | #4 | реалізовано (`tests/test_golden.py`, `tests/golden/`) |
+| геобенчмарк із закладеною істиною | #3 | реалізовано (`scripts/geo_benchmark.py`, базові числа в `docs/10` §10.3) |
+| цілісність запису | #5 | реалізовано (`record_digest`, `integrity` на вузлі Pattern, виключення з evidence) |
+| джерело і надійність | #6 | реалізовано (опції upload, `PATCH /api/datasets/{id}`, props Dataset, рядок `DATASETS:`) |
+| заголовок без «verified» | #26 | реалізовано (`graph_query_engine/evidence.py`, `SYSTEM_PROMPT`; фраза «trust is given per item» — з рядками `trust:` у #8) |
+| `SpatialProvenance` з п'яти полів | #25 | реалізовано (`insight_contracts`; пише discovery, читає evidence, задає поля дайджесту) |
+| прибирання перед ядром | #33 | реалізовано (реєстр у пам'яті, каталог при коміті, пороги-константи, `geo.npz` з п'яти масивів) |
+| регіони, `IN_REGION`, `PARENT_OF`, `CO_LOCATED` з `relation` між датасетами, площина `spatial`, без `GENERALIZES` | #32 | реалізовано (`derive_spatial`, `SNAPSHOT_VERSION` 5) |
+| `upload_id`, рівні як датасети, `table` | #28 | реалізовано (`resolve_levels`, `Engine.delete_upload`) |
+| вибір роздільностей з даних | #29 | реалізовано (`select_levels`, `@auto`) |
+| автоматичний вертикальний зум, мітка `scale`, згортання, `SCALE CHAIN`, `picture` | #31 | реалізовано (`graph_query_engine/vertical.py`) |
+| зона/контур як запит, `place_scores`, `resolution` | #16 | реалізовано (`geometry_to_cells`, `zone_overlap`, `Engine.place_scores`, `SEED_PLACE_WEIGHT` 0.35, виділення на карті) |
+| `ZONES` | #14 | реалізовано (`vertical.rank_zones`) |
+| `supersedes` | #27 | реалізовано (опція upload і `PATCH`, видалення старої версії в коміті нової, `Engine._remove`) |
+| реєстр індикаторів | #34 | реалізовано як метадані (опція `indicators`, `PATCH`, props `Metric`, рядок `METRIC BASELINES`); правило рівня 1 — у #15 |
+| достовірність фаза A (якорі) | #7 | реалізовано (`snapshot.credibility`, `SNAPSHOT_VERSION` 7; суперечність — та сама метрика в тій самій підгрупі) |
+| достовірність фаза B (місце) | #15 | реалізовано (`snapshot.credibility`, `rule: place`; підтвердження — місце одного переважно всередині іншого, суперечність — сумірні місця; покриття — `occupied` з `derive_spatial`; комірки на найдрібнішій спільній роздільності; `SNAPSHOT_VERSION` 8) |
+| рядок `trust:`, правило 9 | #8 | план |
+| спайк золотих патернів другого джерела | #35 | зроблено (`docs/10` §10.3: метод і рішення; факти локально в `data/second_source/`) |
+| червона команда | #22 | реалізовано (`scripts/poisoning_eval.py`, `test_poisoning_eval_apparatus`; підробку метаданих ловить #71) |
+| цілісність метаданих датасету (дайджест запису батча) | #71 | реалізовано (`metadata_digest`, `integrity` на Dataset, `SNAPSHOT_VERSION` 9) |
+| ADR і `docs/13_trust.md` | #23 | реалізовано (`docs/13_trust.md`: рішення в §13.1, окремого каталогу `adr/` немає; аудит P1–P5 у §13.6; H3 проти Leiden і час — у docs/02 §2.9) |
+| перерахунок із сирих | #9 | реалізовано (`Engine.verify_pattern`, `POST /api/patterns/{id}/verify`, `recompute_statistics`, кнопка в панелі інсайту) |
+| консоль: довіра, регіони, масштаб | #17 | реалізовано (бейджі довіри на картках і в панелі, картка датасету з вузла Dataset, Region-вузли і шар регіонів на карті, `GET /api/geo/{id}/overlay`, ланцюг масштабу у відповіді й панелі) |
+| експорт GeoSPARQL | #20 | реалізовано (`GET /api/export/geosparql.ttl`, `core/geosparql.py`, docs/06 §6.9; `sig:parentRegion` замість `geo:sfWithin`, `relation` з #32 замість RCC8) |
 | токен запису; похибка положення; SUFF; профілі | #10, #18, #19, #21 | за умови |
 | семантичний вхід, багатомовне заземлення, атрактори, ґратка, `CO_LOCATED overlaps`, гео-інгест, карта, транзакції, видалення | — | реалізовано (`docs/01`–`docs/12`) |
 | табличні дані без географії працюють як раніше | DoD 1, #4 | реалізовано (гілка `if geo`, `ingestion.py:139-151`) |

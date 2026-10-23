@@ -12,19 +12,17 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script: the packages live one level up
+from experiment import phenomenon_of, planted_scopes
+from scratch import build_engine, demo_engine, scratch_dir
 
-from experiment import phenomenon_of, planted_scopes  # noqa: E402
-from scratch import build_engine, demo_engine, scratch_dir  # noqa: E402
-
-EDGE_KINDS = {"SPECIALIZES", "GENERALIZES", "SIBLING", "CONTRASTS", "CO_LOCATED", "ACTIVATES", "RELATED_TO", "CO_OCCURS"}
+EDGE_KINDS = {"SPECIALIZES", "SIBLING", "CONTRASTS", "CO_LOCATED", "ACTIVATES", "RELATED_TO", "CO_OCCURS"}
 
 
 def main() -> None:
     out = Path(sys.argv[1]).resolve()
     ws = scratch_dir("export_chain_demo") / "ws"
     engine = build_engine(ws) if (ws / "graph" / "snapshot.json").exists() else demo_engine("export_chain_demo")
-    state = engine.prepared()
+    state = engine.committed()
     g, frame = state.graph, state.frame
     truth = planted_scopes()
     patterns = [

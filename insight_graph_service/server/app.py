@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -17,21 +18,82 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 
+from attractor_topology.encoder import model_folder
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
+from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import PROJECT_ROOT, Settings
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
 log = logging.getLogger(__name__)
-STATUS = {"file_too_large": 413, "unknown_dataset": 404}  # every other refusal is 409: busy, degraded, mismatch, rollback
+STATUS = {
+    "file_too_large": 413,
+    "unknown_dataset": 404,
+    "unknown_upload": 404,
+    "unknown_pattern": 404,
+    "invalid_options": 400,
+}  # every other refusal is 409: busy, degraded, mismatch, rollback
+
+
+SLOW_REQUEST_S = 2.0  # a request slower than this is logged as a warning (docs/12_architecture.md §12.7)
+
+
+class RequestTimer:
+    """ASGI middleware: every request's method, path, status and wall time in the service log (a streamed file until its
+    last byte); a slow one as a warning."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        start, status = time.perf_counter(), [None]
+
+        async def sent(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                status[0] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, sent)
+        finally:
+            seconds = time.perf_counter() - start
+            (log.warning if seconds > SLOW_REQUEST_S else log.info)("%s %s %s %.3f s", scope["method"], scope["path"], status[0], seconds)
 
 
 class SearchIn(BaseModel):
-    question: str
+    question: str = ""  # may be empty when a zone is given
+    cells: list[str] | None = None  # a map zone as H3 cells
+    geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
+    resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
+
+
+class DatasetMetadataIn(BaseModel):
+    source: str | None = None  # None: unchanged; "": undeclared
+    reliability: str | None = None
+    indicators: str | None = None
+    glossary: str | None = None  # JSON text, {"column": "meaning", "column=value": "phrase"}
+    metadata: str | None = None  # a metadata document's text (docs/02_discovery.md §2.1)
+    supersedes: str | None = None  # a dataset or upload id this dataset replaces: deleted now
+
+
+def _text(upload: UploadFile | None) -> str | None:
+    """An uploaded metadata document as text, read up to one byte past its cap."""
+    if upload is None:
+        return None
+    raw = upload.file.read(METADATA_DOC_MAX_BYTES + 1)
+    if len(raw) > METADATA_DOC_MAX_BYTES:
+        raise PipelineError("invalid_options", f"metadata document: over {METADATA_DOC_MAX_BYTES // 1024} KB")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PipelineError("invalid_options", "metadata document: not UTF-8 text") from exc
 
 
 def _log_failure(future: Future) -> None:
@@ -49,6 +111,7 @@ def create_app(engine: Engine) -> FastAPI:
         worker.shutdown(wait=False, cancel_futures=True)  # a queued batch stays UPLOADED and fails at the next start
 
     app = FastAPI(title="SIG insight graph service", lifespan=lifespan)
+    app.add_middleware(RequestTimer)
 
     async def refused(_: Request, exc: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=STATUS.get(exc.code, 409))
@@ -64,12 +127,25 @@ def create_app(engine: Engine) -> FastAPI:
     def run(job, *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
-    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None) -> JSONResponse:
-        record = engine.upload(name, stream, bins=bins, categories=categories, geo=geo)
-        run(engine.process, record["batch_id"])
-        return JSONResponse(record, status_code=202)
+    def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
+        records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
+        for record in records:  # one worker thread: the levels run in turn
+            run(engine.process, record["batch_id"])
+        run(warm)  # after the last level
+        levels = {record["level"]: record["batch_id"] for record in records}
+        return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
+
+    def warm() -> None:  # a commit's first reads, built before a console asks: the graph view it loads at READY, then the map
+        if not (engine.problem or engine.ws.unfinished_batches()):
+            cytoscape_elements(engine.graph(), None, False)
+            engine.warm_map()
+
+    def written(result: dict[str, Any]) -> dict[str, Any]:  # a write's response, its commit's reads queued
+        run(warm)
+        return result
 
     run(engine.startup_sync)  # on the batch thread: Neo4j writes stay sequential
+    run(warm)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:  # on the event loop: answers while the batch and search threads are busy
@@ -87,23 +163,49 @@ def create_app(engine: Engine) -> FastAPI:
         }
 
     @app.get("/api/batches")
-    def batches() -> list[dict[str, Any]]:
-        return list(reversed(engine.ws.list_batches()))
+    def batches(upload_id: str | None = None) -> list[dict[str, Any]]:
+        return [engine.polled(b) for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
         record = engine.ws.load_batch(batch_id) if re.fullmatch(r"[\w-]+", batch_id) else None  # an id, never a path
         if record is None:
             raise HTTPException(404, "unknown batch")
-        return record
+        return engine.polled(record)
 
     @app.post("/api/upload")
-    def upload(request: Request, file: UploadFile = File(...), bins: str = Form(""), categories: str = Form(""), geo: str = Form("")) -> JSONResponse:
-        cap = engine.settings.max_upload_mb * 1024 * 1024
-        if (length := request.headers.get("content-length")) and int(length) > cap:  # refused before the body is read
+    def upload(
+        request: Request,
+        file: UploadFile = File(...),
+        bins: str = Form(""),
+        categories: str = Form(""),
+        geo: str = Form(""),
+        source: str = Form(""),
+        reliability: str = Form(""),
+        indicators: str = Form(""),
+        glossary: str = Form(""),
+        metadata: UploadFile | None = File(None),
+        table: bool = Form(False),
+        supersedes: str = Form(""),
+    ) -> JSONResponse:
+        if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
-        return accept(Path(file.filename or "upload.csv").name, file.file, bins.strip() or None, categories.strip() or None, geo.strip() or None)
+        name = Path(file.filename or "upload.csv").name
+        return accept(
+            name,
+            file.file,
+            bins.strip() or None,
+            categories.strip() or None,
+            geo.strip() or None,
+            source=source,
+            reliability=reliability,
+            indicators=indicators,
+            glossary=glossary,
+            metadata=_text(metadata),
+            table=table,
+            supersedes=supersedes,
+        )
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -118,38 +220,78 @@ def create_app(engine: Engine) -> FastAPI:
             return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")
-    def graph(dataset: str | None = None) -> dict[str, Any]:
-        return cytoscape_elements(engine.graph(), dataset)
+    def graph(dataset: str | None = None, regions: bool = False) -> dict[str, Any]:
+        return cytoscape_elements(engine.graph(), dataset, regions)
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
-        return node_details(engine.graph(), node_id)
+        return node_details(engine.graph(), node_id, settings.thresholds)
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
-        if not body.question.strip():
+        if body.cells is not None and body.geometry is not None:
+            raise HTTPException(400, "a zone is cells or geometry, not both")
+        if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
-        return engine.evidence(body.question).to_dict()
+        return engine.evidence(body.question, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+
+    @app.post("/api/patterns/{pattern_id}/verify")
+    def verify_pattern(pattern_id: str) -> dict[str, Any]:
+        return engine.verify_pattern(pattern_id)
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
-        return sphere_points(engine.committed(), settings.topology.random_seed, dataset or None)
+        return sphere_points(engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None)
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:
         return engine.geo_datasets()
 
     @app.get("/api/geo/{dataset_id}/cells")
-    def geo_cells(dataset_id: str) -> FileResponse:
-        return FileResponse(engine.geo_cells_file(dataset_id), media_type="application/geo+json")
+    def geo_cells(dataset_id: str) -> Response:
+        return Response(engine.geo_cells_pack(dataset_id), media_type="application/json")
+
+    @app.get("/api/export/geosparql.ttl")
+    def export_geosparql() -> Response:
+        return Response(engine.export_geosparql(), media_type="text/turtle")
+
+    @app.get("/api/geo/{dataset_id}/overlay")
+    def geo_overlay(dataset_id: str) -> dict[str, Any]:
+        return engine.geo_overlay(dataset_id)
+
+    @app.get("/api/geo/{dataset_id}/projected")
+    def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
+        return engine.geo_projected(dataset_id)
+
+    @app.get("/api/geo/{dataset_id}/window")
+    def geo_window(dataset_id: str, bbox: str) -> dict[str, Any]:
+        return engine.geo_window(dataset_id, bbox)
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id, settings.geo_max_points)
+        return engine.geo_pattern(dataset_id, pattern_id)
+
+    @app.patch("/api/datasets/{dataset_id}")
+    def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
+        return written(
+            engine.update_dataset_metadata(
+                dataset_id,
+                source=body.source,
+                reliability=body.reliability,
+                indicators=body.indicators,
+                glossary=body.glossary,
+                metadata=body.metadata,
+                supersedes=body.supersedes,
+            )
+        )
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
-        return engine.delete_dataset(dataset_id)
+        return written(engine.delete_dataset(dataset_id))
+
+    @app.delete("/api/uploads/{upload_id}")
+    def delete_upload(upload_id: str) -> dict[str, Any]:
+        return written(engine.delete_upload(upload_id))
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
@@ -173,12 +315,9 @@ def log_gpu_headroom() -> None:
 def ready_app(settings: Settings) -> FastAPI:
     """The app as a service start needs it (also used by scripts/dev.py): the model files checked before anything
     touches the workspace, then the engine opened and the model warmed up."""
-    from attractor_topology.encoder import model_folder
-    from insight_graph_service.core.model_store import problems
-
     folder = model_folder(settings.topology.model_dir)
     missing = problems(folder, hashes=False)
-    if missing:  # before torch loads anything: a clear message instead of a stack trace
+    if missing:  # before the engine opens: a clear message instead of a stack trace
         log.error("embedding model in %s is incomplete (%s): run python -m insight_graph_service.core.model_store", folder, "; ".join(missing))
         raise SystemExit(3)
     try:

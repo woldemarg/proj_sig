@@ -10,4 +10,6 @@ from insight_graph_service.server.app import ready_app
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 load_env_file()  # a host run reads the repository's .env; a container gets its environment from compose
 settings = load_settings()
-uvicorn.run(ready_app(settings), host=settings.web_host, port=settings.web_port, log_level="info")
+uvicorn.run(
+    ready_app(settings), host=settings.web_host, port=settings.web_port, log_level="info", access_log=False
+)  # RequestTimer logs each request, timed

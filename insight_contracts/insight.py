@@ -105,8 +105,43 @@ class Insight:
         data["shifts"] = tuple(Shift(**s) for s in data["shifts"])
         data["drivers"] = tuple(data.get("drivers", ()))
         data["aliases"] = tuple(data.get("aliases", ()))
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
+class SpatialProvenance:
+    """The ingest statistics of a geo insight, ``provenance["spatial"]`` (docs/03_insights.md §3.1): what discovery
+    measured on its cells. The spatial structure derived from them (compactness, partners, regions) is not part of it.
+    A field an older record lacks reads None."""
+
+    resolution: int | None = None  # H3 resolution of the cells
+    cells: int | None = None  # cells in the extent
+    moran_i: float | None = None  # the subgroup's own Moran's I of the primary metric
+    n_eff: float | None = None  # effective sample size of the median test
+    p_adjusted_iid: float | None = None  # the adjusted p-value without the n_eff correction
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> SpatialProvenance | None:
+        """The five fields of a stored ``provenance["spatial"]`` (other keys ignored); None for a non-geo insight."""
+        return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data}) if data else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
+UNDIGESTED = frozenset({"provenance", "row_id", "record_digest"})  # set after the digest (rows_ref) or rewritten by a deletion (row_id)
+
+
+def record_digest(record: dict[str, Any]) -> str:
+    """SHA-256 of a journal record's canonical JSON over every key it was written with except ``UNDIGESTED``, plus the
+    ingest fields of ``provenance.spatial``: a number changed in the journal no longer matches the digest stored beside
+    it, whatever fields ``Insight`` gains or loses later."""
+    spatial = record.get("provenance", {}).get("spatial", {})
+    covered = {k: v for k, v in record.items() if k not in UNDIGESTED}
+    covered["spatial"] = {k: spatial[k] for k in SPATIAL_DIGEST_FIELDS if k in spatial}
+    return hashlib.sha256(json.dumps(covered, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def pattern_id(dataset_id: str, conditions: tuple[Condition, ...]) -> str:

@@ -37,8 +37,8 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
                               canonical text ──► tripartite vector (scope ; target ; signed phenomenon)
                                     │                         │
    structural plane                 │                         ▼
-   SPECIALIZES / GENERALIZES /      │           latent plane: anchors (vendored lac)
-   SIBLING / CONTRASTS  ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO / CO_OCCURS (anchor ↔ anchor)
+   SPECIALIZES / SIBLING /          │           latent plane: anchors (vendored lac)
+   CONTRASTS            ◄───────────┘           ACTIVATES (insight → anchor), RELATED_TO / CO_OCCURS (anchor ↔ anchor)
                     │                                         │
                     └──────► graph snapshot + journals + state (+ Neo4j mirror) ◄┘
                                           │
@@ -52,7 +52,7 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
 | | Structural plane | Latent phenomenon plane |
 |---|---|---|
 | Nodes | `Pattern` (one validated insight); `Dimension`, `Metric` as schema anchors | `Attractor` = latent anchor = "theme" in the UI: a living unit-norm centroid |
-| Edges | SPECIALIZES, GENERALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
+| Edges | SPECIALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts; for geo patterns the spatial plane (regions, IN_REGION, PARENT_OF, CO_LOCATED), derived from the cells, and IN_REGION for a table level's patterns, derived from their events | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
 | Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight); a *weak* membership (rerouted, or now aligned below `MIN_ACTIVATION_ALIGNMENT`) counts for coverage but is not walked | |
 | Schema and provenance | `Dimension`, `Metric`, `Dataset`, `Batch` nodes; HAS_SCOPE, TARGETS (Pattern → schema), DISCOVERED_IN, OF_DATASET (provenance) — never walked by retrieval | |
 | Never | embeddings never create structural edges | scope predicates never create latent edges |
@@ -88,9 +88,10 @@ The repository is split into bounded contexts: four libraries, which import only
 
 | Package | Module | Role | Chapter |
 |---|---|---|---|
-| `insight_contracts/` (shared kernel, standard library only) | `insight.py` | `Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `PhenomenonThresholds` (what counts as part of a phenomenon) | [3](03_insights.md) |
+| `insight_contracts/` (shared kernel, standard library only) | `insight.py` | `Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `record_digest`, `SpatialProvenance`, `PhenomenonThresholds` (what counts as part of a phenomenon) | [3](03_insights.md) |
 | | `graph.py` | edge types and planes, node ids, `GraphNode` / `GraphEdge`, `SNAPSHOT_VERSION` and the snapshot schema | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `text.py` | how an insight reads: scope, shift, correlation and validation phrases, number formatting, headlines | [4.2](04_representation.md#42-the-canonical-form) |
+| | `wording.py` | what people read, in Ukrainian: the name and meaning of every term (`TERMS`), the readings of an insight, a theme, a region and a lift | [8.5](08_interface.md#85-text-shown-to-people) |
 | | `payload.py` | `EvidencePayload`, the contract between the graph service and the narrator | [12.4](12_architecture.md#124-services-and-contracts) |
 | `subgroup_miner/` | `config.py` | `MinerConfig` | [2.6](02_discovery.md#26-configuration), [3.5](03_insights.md#35-configuration) |
 | | `ingestion.py` | file validation, categories, bands, dataset id | [2.1](02_discovery.md#21-ingestion) |
@@ -106,12 +107,15 @@ The repository is split into bounded contexts: four libraries, which import only
 | `graph_query_engine/` | `graph.py` | `DualGraph` (the read model of a snapshot), `LatentFrame` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `question.py` | question parsing with multilingual literal grounding | [7.1](07_question_answering.md#71-from-question-to-query) |
 | | `seeds.py`, `traversal.py` | seed scoring; the transversal walk, structural closure | [7.2](07_question_answering.md#72-seeds), [7.3](07_question_answering.md#73-transversal-traversal) |
+| | `vertical.py` | the scale chain: a geo pattern's coarser and finer levels of the same phenomenon, the regions above, the `scale` label | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `evidence.py` | the evidence object, the LLM prompt and the evidence-only summary | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `search.py`, `ports.py`, `config.py` | one question end to end over a `CommittedState`; the embedder shape it needs; `QueryConfig` | [7](07_question_answering.md) |
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
 | | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question | [9](09_operations.md) |
+| | `uploads.py`, `verify.py` | the levels of one upload, the version it replaces and its declared language (glossary, metadata document); an insight recomputed from its stored upload | [6.8](06_graph_and_storage.md#68-deleting-a-dataset), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
+| | `geo_views.py`, `errors.py` | the map's reads over one commit's graph; the error codes as `PipelineError` | [8.7](08_interface.md#87-the-map), [9.4](09_operations.md#94-error-codes) |
 | | `snapshot.py` | the dual-graph compiler and the anchor descriptions | [6.2](06_graph_and_storage.md#62-the-graph-schema), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |
-| | `workspace.py`, `chunk_journal.py`, `fileio.py` | workspace layout, journals, transactions and recovery, the writer lock; atomic file replacement that waits out Windows sharing violations | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
+| | `workspace.py`, `chunk_journal.py`, `fileio.py` | workspace layout, journals, transactions and recovery, the writer lock; atomic file replacement | [6.3](06_graph_and_storage.md#63-the-workspace-on-disk), [6.4](06_graph_and_storage.md#64-commit-rollback-and-recovery) |
 | | `neo4j_mirror.py`, `cypher/` | the Neo4j mirror | [6.6](06_graph_and_storage.md#66-neo4j-mirror) |
 | | `demo.py`, `model_store.py` | the demo data with planted mechanisms; the embedding model provisioned and verified | [10.2](10_verification.md#102-the-demo-datasets), [4.4](04_representation.md#44-the-embedding-model) |
 | `insight_graph_service/server/` | `app.py`, `views.py` | the graph service's HTTP API; graph, node and sphere JSON for the console | [8](08_interface.md) |

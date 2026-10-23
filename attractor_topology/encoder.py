@@ -71,8 +71,9 @@ class SentenceTransformerEmbedder:
 
     ``TRUNCATE_DIM`` keeps the first Matryoshka dimensions; every output row is re-normalised to unit
     length afterwards (a truncated slice of a unit vector is shorter than 1, and the tripartite
-    composition assumes unit blocks). One re-entrant lock serialises the model load and the forward passes
-    of every thread (a batch thread and request threads alike).
+    composition assumes unit blocks). One lock serialises the model load and the forward passes of every
+    thread, a chunk of ``ENCODE_BATCH_SIZE`` texts at a time: a question asked while a batch embeds waits for
+    one chunk, not the whole batch.
     """
 
     model_id = QWEN_MODEL
@@ -84,7 +85,8 @@ class SentenceTransformerEmbedder:
         self.local = model_folder(config.model_dir)
         self.device_pref = config.embedding_device
         self._model = None
-        self._lock = threading.RLock()  # re-entrant: ``_encode`` loads the model while holding it
+        self._lock = threading.Lock()  # the load and each chunk's forward pass
+        self._memo_lock = threading.Lock()
         self._memo: dict[tuple[str, str], np.ndarray] = {}
         self.dim = 0
 
@@ -97,38 +99,40 @@ class SentenceTransformerEmbedder:
         return str(next(self._load().parameters()).dtype).removeprefix("torch.")
 
     def _load(self):
+        if self._model is not None:  # loaded: no lock, so the spec never waits for a batch's forward pass
+            return self._model
         with self._lock:  # one load, however many threads ask first
             if self._model is None:
                 if not (self.local / "modules.json").is_file():
                     raise FileNotFoundError(f"embedding model not found in {self.local}: download {QWEN_MODEL} at {QWEN_REVISION} there")
                 os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                import torch
                 from sentence_transformers import SentenceTransformer
 
                 device = None if self.device_pref == "auto" else self.device_pref
-                # the checkpoint dtype on every device (bf16), recorded as spec.compute_dtype
-                self._model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
-                if self._model.device.type == "cpu":  # leave half the cores to pandas/numpy work running beside the encoder
-                    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 2
-                    torch.set_num_threads(max(1, cores // 2))
-                self.dim = int(self._model.get_embedding_dimension())
+                # the checkpoint dtype (bf16) on a GPU, float32 on the CPU (no fast bf16 kernels); recorded as spec.compute_dtype
+                model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
+                if model.device.type == "cpu":
+                    model.float()
+                self.dim = int(model.get_embedding_dimension())
+                self._model = model  # last: the lock-free path above sees a model ready to use
             return self._model
 
     def _encode(self, texts: list[str], prompt: str) -> np.ndarray:
         """Memoised, re-normalised embeddings of ``texts`` with an optional prompt prefix."""
-        with self._lock:
-            model = self._load()
-            missing = sorted({t for t in texts if (prompt, t) not in self._memo})
-            if missing:
-                vecs = model.encode(missing, prompt=prompt or None, batch_size=ENCODE_BATCH_SIZE, convert_to_numpy=True, show_progress_bar=False)
-                for text, vec in zip(missing, l2_normalize(np.asarray(vecs, dtype=np.float32))):
-                    self._memo[(prompt, text)] = vec
-            out = np.stack([self._memo[(prompt, t)] for t in texts]).astype(np.float32) if texts else np.empty((0, self.dim), dtype=np.float32)
-            while (
-                len(self._memo) > MEMO_MAX
-            ):  # after the lookup: the oldest entries go (question text would otherwise live here for the process lifetime)
+        model = self._load()
+        with self._memo_lock:
+            got = {t: self._memo[(prompt, t)] for t in set(texts) if (prompt, t) in self._memo}
+        missing = sorted(set(texts) - got.keys(), key=lambda t: (-len(t), t))  # chunks of similar length: little padding
+        for i in range(0, len(missing), ENCODE_BATCH_SIZE):
+            chunk = missing[i : i + ENCODE_BATCH_SIZE]
+            with self._lock:  # released between chunks: another thread's texts go in between
+                vecs = model.encode(chunk, prompt=prompt or None, batch_size=ENCODE_BATCH_SIZE, convert_to_numpy=True, show_progress_bar=False)
+            got.update(zip(chunk, l2_normalize(np.asarray(vecs, dtype=np.float32))))
+        with self._memo_lock:
+            self._memo.update(((prompt, t), got[t]) for t in missing)
+            while len(self._memo) > MEMO_MAX:  # the oldest entries go (question text would otherwise live here for the process lifetime)
                 del self._memo[next(iter(self._memo))]
-            return out
+        return np.stack([got[t] for t in texts]).astype(np.float32) if texts else np.empty((0, self.dim), dtype=np.float32)
 
     def embed(self, texts: list[str]) -> np.ndarray:
         return self._encode(texts, "")

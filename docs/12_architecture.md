@@ -18,7 +18,7 @@
 >
 > Compose starts them in dependency order, and a test enforces every allowed import.
 
-**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md)
+**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md) · **Next** [13. Trust and integrity](13_trust.md)
 
 ---
 
@@ -26,14 +26,16 @@
 
 | Package | Context | Owns | Owning chapter |
 |---|---|---|---|
-| `insight_contracts/` | shared kernel (standard library only) | `insight` (`Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `PhenomenonThresholds`), `graph` (edge types and planes, node ids, `SNAPSHOT_VERSION` and the snapshot schema), `text` (how an insight reads: scope, shift, correlation and validation phrases), `payload` (`EvidencePayload`) | [3](03_insights.md), [6.2](06_graph_and_storage.md#62-the-graph-schema) |
-| `subgroup_miner/` | subgroup and phenomenon discovery | `ingestion` (read, validate, bands), `spatial` (the geo option: points → H3 cells, neighbourhood conditions, Moran's I; imports `h3`), `discovery` (profiling, closed intents, pruning, bootstrap validation, insight records), `selection` (validity rules R1–R3, evidence weight), `lattice` (SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS / CO_LOCATED), `describe` (insights as LLM context), `vendor/eda/` | [2](02_discovery.md), [3](03_insights.md) |
+| `insight_contracts/` | shared kernel (standard library only) | `insight` (`Condition`, `Shift`, `Insight`, `Rejection`, `pattern_id`, `record_digest`, `SpatialProvenance`, `PhenomenonThresholds`), `graph` (edge types and planes, node ids, `SNAPSHOT_VERSION` and the snapshot schema), `text` (how an insight reads: scope, shift, correlation and validation phrases), `wording` (the Ukrainian terms and readings people see), `payload` (`EvidencePayload`) | [3](03_insights.md), [6.2](06_graph_and_storage.md#62-the-graph-schema) |
+| `subgroup_miner/` | subgroup and phenomenon discovery | `ingestion` (read, validate, bands), `spatial` (the geo option: points → H3 cells, neighbourhood conditions, Moran's I, `derive_spatial`, the spatial plane derived at the commit, and `geometry_to_cells` / `zone_overlap`, a map zone of a question; imports `h3`), `discovery` (profiling, closed intents, pruning, bootstrap validation, insight records), `selection` (validity rules R1–R3, evidence weight), `lattice` (SPECIALIZES / SIBLING / CONTRASTS), `describe` (insights as LLM context), `vendor/eda/` | [2](02_discovery.md), [3](03_insights.md) |
 | `attractor_topology/` | representation and the living attractor space | `canonical` (the embedding inputs), `encoder` (Qwen3-Embedding-0.6B, tripartite vectors), `ontology` (OMP extraction, EMA centroids, mutual-kNN links, ACTIVATES records; its state in the folder it is given), `models` (`CanonicalInsight`, `EmbeddingSpec`, versions), `vendor/lac/` | [4](04_representation.md), [5](05_latent_anchors.md) |
-| `graph_query_engine/` | grounding, seeds, transversal search, evidence | `graph` (`DualGraph`, the read model of a snapshot; `LatentFrame`), `question` (parse, literal catalog, grounding), `seeds`, `traversal`, `evidence` (the prompt and the deterministic summary), `search` (one question over a `CommittedState`; `SearchResult.payload()`), `ports` (the embedder shape it needs) | [7](07_question_answering.md) |
-| `insight_graph_service/` | the aggregate root: graph lifecycle and persistence | `core/` has no web framework: `settings` (one environment for every package), `engine` (batches, admission, deletion, reset, the committed read state, `evidence`), `batch` (admission R4/R7, journal records, metrics), `snapshot` (the dual-graph compiler, incl. co-memberships and CO_OCCURS links), `workspace` + `chunk_journal` + `fileio` (the file workspace), `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/` holds `app` (the HTTP API) and `views` (graph, node and sphere JSON) | [6](06_graph_and_storage.md), [9](09_operations.md) |
+| `graph_query_engine/` | grounding, seeds, transversal search, evidence | `graph` (`DualGraph`, the read model of a snapshot; `LatentFrame`), `question` (parse, literal catalog, grounding), `seeds`, `traversal`, `vertical` (the scale chain of a geo pattern, the ZONES), `evidence` (the prompt and the deterministic summary), `search` (one question over a `CommittedState`; `SearchResult.payload()`), `ports` (the embedder shape it needs) | [7](07_question_answering.md) |
+| `insight_graph_service/` | the aggregate root: graph lifecycle and persistence | `core/` has no web framework: `settings` (one environment for every package), `engine` (batches, admission, deletion, reset, the committed read state, `evidence`), `geo_views` (the map's reads: cells, overlay, an insight's points, the upload's insights projected on a level's cells, the window, a zone's place scores, the GeoSPARQL export), `uploads` (the levels of one upload and the version it replaces), `verify` (an insight recomputed from its stored upload), `errors` (`PipelineError`), `batch` (admission R4/R7, journal records, metrics), `snapshot` (the dual-graph compiler, incl. co-memberships and CO_OCCURS links), `workspace` + `chunk_journal` + `fileio` (the file workspace), `neo4j_mirror` + `cypher/`, `demo`, `model_store`. `server/` holds `app` (the HTTP API) and `views` (graph, node and sphere JSON) | [6](06_graph_and_storage.md), [9](09_operations.md) |
 | `evidence_narrator_service/` | grounded verbalisation | `narration` (the system prompt, the LLM-or-summary answer, the citation check, the footer), `llm_client` (OpenAI-compatible), `settings`, `app` | [7.5](07_question_answering.md#75-the-language-model-and-citation-check) |
 | `llm_model_broker/` | the upstream model | one OpenAI-compatible endpoint; the provider, the model, its key and the provider routing | [12.4](#124-services-and-contracts) |
 | `sig_web_console/` | presentation and ingress | the static UI (graph, sphere, table, map, chat), vendored Cytoscape.js, plotly.js, MapLibre GL JS and the offline basemap (`PROVENANCE.md`), `nginx.conf` | [8](08_interface.md) |
+
+**Where new code goes.** No file outgrows 1,000 lines (`tests/test_architecture.py` checks every Python and JavaScript file outside the vendored copies), and a new concern joins the module that owns it rather than `engine.py`, which orchestrates the batch lifecycle, deletion, reset and the committed state. The map's reads are `core/geo_views.py`; the derived spatial structure and its placement rules `subgroup_miner/spatial.py`; the snapshot and anything memoised per dataset `core/snapshot.py`; the Neo4j mirror and its diff `core/neo4j_mirror.py`; locks and the file layout `core/workspace.py`; how the embedder batches and releases the model `attractor_topology/encoder.py`; a parsed table shared by the levels of one upload `subgroup_miner/ingestion.py`. A fact readers derive from one commit is kept with `DualGraph.memoised`, which builds it once however many requests ask at the same time.
 
 **Thresholds shared by three packages.** The miner, the topology and the query engine must agree on what makes a measurement part of a phenomenon. `PhenomenonThresholds` (`MIN_EMM_SCORE`, `WEIGHT_EMM_REF`, `MIN_COMPONENT_Z`) carries those values, together with the predicates that use them. The service's `load_settings` builds one instance and hands it to every package config. `Settings` refuses three that differ.
 
@@ -64,8 +66,8 @@ The libraries are folders, not pip packages. Another project copies a folder, or
 
 | Service | Routes |
 |---|---|
-| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `POST /api/demo/geo`, `GET /api/graph`, `GET /api/nodes/{id}`, `GET /api/sphere` (projected points and edges, JSON), `DELETE /api/datasets/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question) |
-| narrator (`python -m evidence_narrator_service`) | `POST /api/chat/query` (`{question, use_llm}` → the answer), `GET /api/chat/health` (always 200: the LLM and the graph service) |
+| graph service (`python -m insight_graph_service.server`; port 8000 in the stack) | `GET /api/health`, `GET /api/batches[/{id}]`, `POST /api/upload`, `POST /api/demo`, `POST /api/demo/geo`, `GET /api/graph`, `GET /api/nodes/{id}`, `POST /api/patterns/{id}/verify` (an insight recomputed from its stored upload), `GET /api/sphere` (projected points and edges, JSON), `GET /api/geo`, `GET /api/geo/{dataset}/cells|overlay|patterns/{pattern}|projected|window` (the map's cells, the graph's regions, trust and scale over them, an insight's points, the upload's other levels on the map, the insights of a view), `PATCH /api/datasets/{id}` (source, reliability, indicators, supersedes), `DELETE /api/datasets/{id}`, `DELETE /api/uploads/{id}`, `POST /api/reset`, `POST /api/search` (the evidence for one question, optionally a map zone), `GET /api/export/geosparql.ttl` (the graph as GeoSPARQL Turtle) |
+| narrator (`python -m evidence_narrator_service`) | `POST /api/chat/query` (`{question, use_llm}` and an optional map zone → the answer), `GET /api/chat/health` (always 200: the LLM and the graph service) |
 | broker (`python -m llm_model_broker`) | `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` |
 
 **`EvidencePayload`** (`insight_contracts/payload.py`) is the whole contract between the graph service and the narrator:
@@ -91,7 +93,9 @@ A missing field fails `EvidencePayload.from_dict`, and the narrator answers 502:
 **Status semantics:**
 - **An empty graph is an ordinary state.** `/api/search` answers 200 with `graph_empty: true`, and the narrator answers 200 with `answer_mode: "empty"`.
 - **A workspace that cannot answer** gets 409 with `{detail, code}`; `code` is `representation_mismatch` or `workspace_degraded`. The narrator passes it through as sent.
-- **Every refusal of the graph service** ([9.4](09_operations.md#94-error-codes)) has the body `{detail, code}`: 413 for `file_too_large`, 404 for `unknown_dataset`, 409 for every other code (`busy`, `workspace_degraded`, `representation_mismatch`, `rollback_pending`, …). An unexpected error answers 500 with `code: internal_error`.
+- **Every refusal of the graph service** ([9.4](09_operations.md#94-error-codes)) has the body `{detail, code}`: 413 for `file_too_large`, 404 for `unknown_dataset` and `unknown_upload`, 400 for `invalid_options`, 409 for every other code (`busy`, `workspace_degraded`, `representation_mismatch`, `rollback_pending`, …). An unexpected error answers 500 with `code: internal_error`.
+- **A graph service that does not answer** within `INSIGHT_GRAPH_TIMEOUT_S` gives a 504 from the narrator.
+- **A client gone** before the evidence arrives (the console cancelled the question) gets an empty 499 from the narrator: no LLM call, no query log line.
 - **An unreachable graph service**, any other status from it, or a payload that breaks the contract gives a 502 from the narrator.
 
 **The broker** replaces the request's `model` with the configured one. Every other field (`temperature`, `max_tokens`, `top_p`, `stop`, `response_format`, …) is forwarded as sent. `stream: true` and a malformed body are refused with a 400, not FastAPI's 422. The broker adds the bearer key and, for OpenRouter, the pinned provider order without fallbacks. Error statuses:
@@ -124,12 +128,13 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 | 1 | `model-init` | the graph service image | — | runs once, exits 0 | edge | volume `sig-models` (read-write); `./models` read-only as a seed |
 | 1 | `neo4j` | `neo4j:5.26.31-community` | — | `cypher-shell RETURN 1` | internal, edge (ports 17474 / 17687) | volume `neo4j-data` |
 | 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
-| 2 | `insight-graph` | `insight_graph_service/Dockerfile` (CPU torch) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
+| 2 | `insight-graph` | `insight_graph_service/Dockerfile` (build arg `TORCH`: `cpu`, or `cu130` and the GPU with `compose.gpu.yaml`) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
 | 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
-| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`) | both services healthy | `GET /` | internal, edge (port 8765) | none |
+| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`; gzip for responses over 1 KB) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
 python scripts/compose_check.py                   # verification: its own project, ports and volumes, beside your stack
 python scripts/compose_check.py --fresh --tests   # clean room: no build cache, pulled base images, the test suite inside the image
 ```
@@ -138,7 +143,7 @@ python scripts/compose_check.py --fresh --tests   # clean room: no build cache, 
 
 **Hardening.** Every image except Neo4j runs as an unprivileged user with a read-only root filesystem, a tmpfs at `/tmp`, `no-new-privileges` and no capabilities.
 
-**Settings.** The graph service reads `.env` (`env_file`). Its container values are overridden in `environment`: the workspace and model paths, `EMBEDDING_DEVICE=cpu`, the Neo4j address and password (`SIG_NEO4J_PASSWORD`), and blanks for the broker's `GEMMA_*` values and for `LLM_API_KEY`: the graph service reads no LLM key, so a key an `.env` file may still hold never reaches it. The narrator gets no `env_file`, only an allow-list (`INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S`, `LLM_BASE_URL`, `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`), so no key from `.env` reaches it either.
+**Settings.** The graph service reads `.env` (`env_file`). Its container values are overridden in `environment`: the workspace and model paths, `EMBEDDING_DEVICE=auto` (the GPU when `compose.gpu.yaml` attaches one, else the CPU; that file also sets `TORCH_DISABLE_NATIVE_JIT=1`, because torch would route a few eager CUDA ops to Triton, which needs a C compiler the image does not have), the Neo4j address and password (`SIG_NEO4J_PASSWORD`), and blanks for the broker's `GEMMA_*` values and for `LLM_API_KEY`: the graph service reads no LLM key, so a key an `.env` file may still hold never reaches it. The narrator gets no `env_file`, only an allow-list (`INSIGHT_GRAPH_URL`, `INSIGHT_GRAPH_TIMEOUT_S`, `LLM_BASE_URL`, `LLM_TIMEOUT_S`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`), so no key from `.env` reaches it either.
 
 **The model.** `model-init` checks the pinned Qwen3 checkpoint file by file against `core/model_store.py`'s manifest (sizes and SHA-256 values, checked against the Hugging Face Hub):
 - A copy in the volume that verifies is kept.
@@ -187,6 +192,8 @@ Neo4j mirrors the graph for people and other applications. The narrator is state
 - **The ontology's metrics CSV** ([5](05_latent_anchors.md)).
 - **The narrator's query log:** logger `evidence_narrator_service.queries`, one JSON line with the time, the question, the mode, the metrics, the cited evidence (the manifest's pattern ids) and the citation check.
 - **Per-answer metrics:** the `metrics` of every answer.
+
+**The graph service** logs one line per HTTP request (`server/app.py::RequestTimer`): method, path, status and wall time, a streamed file until its last byte; a request slower than `SLOW_REQUEST_S` (2 s) is a warning. It replaces uvicorn's access log in `python -m insight_graph_service.server`. The batch record's `timings` carry each stage and the Neo4j sync (`neo4j_s`).
 
 **The broker** logs one line per completion: model, messages, prompt and completion tokens, and latency. It never logs the prompt itself.
 

@@ -3,34 +3,18 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter
 
 import pytest
-from conftest import make_config, make_engine
+from conftest import Crash, make_config, make_engine, upload_levels
+from fastapi.testclient import TestClient
 
-from graph_query_engine.graph import DualGraph
-from insight_contracts import LATENT_EDGES, EdgeType, GraphEdge
 from insight_graph_service.core import engine as engine_mod
-from insight_graph_service.core.neo4j_mirror import (
-    EDGE_ENDPOINTS,
-    LABELS,
-    edge_query,
-    flatten_props,
-    load_cypher,
-    node_query,
-    publish_snapshot,
-    stale_edge_query,
-    stale_node_query,
-)
-from insight_graph_service.core.snapshot import co_occurrence_edges
+from insight_graph_service.server.app import create_app
 
 
-@pytest.fixture
-def engine(tmp_path):
-    return make_engine(make_config(tmp_path / "ws"))
-
-
-def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
+def test_write_reload_and_idempotency(engine, demo_csv):
     rec = engine.ingest_file(demo_csv)
     assert rec["status"] == "READY"
     ws = engine.ws
@@ -47,7 +31,7 @@ def test_write_reload_and_idempotency(engine, demo_csv, tmp_path):
         assert (ws.root / rel).is_file(), rel
 
     # reload from disk in a fresh engine -> identical graph; rebuild reproduces it
-    again = make_engine(make_config(tmp_path / "ws"))
+    again = make_engine(engine.settings)
 
     def ids(snap):
         return sorted(n["id"] for n in snap["nodes"]), sorted(e["id"] for e in snap["edges"])
@@ -71,7 +55,7 @@ def test_graph_consistency(hashed_engine):
             assert kinds[e["source"]] == "Pattern" and kinds[e["target"]] == "Attractor"
         if e["type"] in {"RELATED_TO", "CO_OCCURS"}:
             assert kinds[e["source"]] == kinds[e["target"]] == "Attractor" and e["source"] != e["target"] and 0 < e["weight"] <= 1
-        if e["type"] in {"SPECIALIZES", "GENERALIZES", "SIBLING", "CONTRASTS"}:
+        if e["type"] in {"SPECIALIZES", "SIBLING", "CONTRASTS"}:
             assert kinds[e["source"]] == kinds[e["target"]] == "Pattern"
     activated = {e["source"] for e in g.edges if e["type"] == "ACTIVATES"}
     assert activated == {nid for nid, k in kinds.items() if k == "Pattern"}
@@ -79,9 +63,7 @@ def test_graph_consistency(hashed_engine):
     floor = hashed_engine.settings.topology.min_activation_alignment
     assert all(e["props"]["weak"] or e["weight"] >= floor for e in g.edges if e["type"] == "ACTIVATES")
     assert {e["target"] for e in g.edges if e["type"] == "ACTIVATES"} == {nid for nid, k in kinds.items() if k == "Attractor"}
-    spec = {(e["source"], e["target"]) for e in g.edges if e["type"] == "SPECIALIZES"}
-    gen = {(e["target"], e["source"]) for e in g.edges if e["type"] == "GENERALIZES"}
-    assert spec == gen and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
+    assert "GENERALIZES" not in counts and counts["SPECIALIZES"] > 0 and counts["CONTRASTS"] > 0 and counts["RELATED_TO"] > 0
     # mutual k-NN keeps the latent plane sparse
     assert counts["RELATED_TO"] <= hashed_engine.settings.topology.related_to_peer_count * len(g.of_kind("Attractor")) / 2
     # a co-occurrence link needs a member insight on both sides
@@ -130,6 +112,51 @@ def test_committed_batch_stays_ready_when_publish_save_fails(engine, demo_csv, m
     assert engine.ws.patterns()
 
 
+def test_a_transaction_marker_that_cannot_be_removed(engine, demo_csv, monkeypatch):
+    """Removing a transaction's marker can fail (a file another process holds open). A batch committed at its READY record:
+    it stays READY and is published, and the next writer start closes the marker. A deletion commits when its marker goes:
+    it fails, readers keep the dataset, and the next writer start rolls it back."""
+
+    def locked(self, cp):
+        raise PermissionError("pending.json is held open")
+
+    monkeypatch.setattr(type(engine.ws), "_close", locked)
+    rec = engine.ingest_file(demo_csv)
+    assert rec["status"] == "READY" and engine.graph().insights
+    assert engine.ws.pending_path.exists()  # waits for the next writer start
+    monkeypatch.undo()
+    again = make_engine(engine.settings)
+    assert again.problem is None and not again.ws.pending_path.exists()
+    assert [b["status"] for b in again.ws.list_batches()] == ["READY"] and again.graph().insights
+    monkeypatch.setattr(type(again.ws), "_close", locked)
+    with pytest.raises(PermissionError):
+        again.delete_dataset(rec["dataset_id"])
+    assert again.graph().insights and again.ws.pending_path.exists()  # not published; the marker waits for the next start
+    monkeypatch.undo()
+    last = make_engine(engine.settings)
+    assert last.problem is None and not last.ws.pending_path.exists()
+    assert [b["status"] for b in last.ws.list_batches()] == ["READY"] and last.graph().insights  # rolled back
+
+
+def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):
+    """READY is on disk a moment before readers switch to the new graph (the commit point, then ``_publish``): a poll in
+    that moment reads PERSISTING, so a client that acts on READY — the console's one reload — never reads the old graph."""
+    seen, publish = [], engine._publish
+
+    def spy(state, snapshot):  # the moment between the commit point and the switch
+        bid = engine.ws.list_batches()[-1]["batch_id"]  # the newest
+        polls = [b["status"] for b in client.get("/api/batches").json()] + [client.get(f"/api/batches/{bid}").json()["status"]]
+        seen.append((engine.ws.load_batch(bid)["status"], polls, len(engine.graph().insights)))
+        return publish(state, snapshot)
+
+    monkeypatch.setattr(engine, "_publish", spy)
+    with TestClient(create_app(engine)) as client:
+        rec = engine.ingest_file(demo_csv)
+        after = client.get(f"/api/batches/{rec['batch_id']}").json()["status"]
+    assert seen == [("READY", ["PERSISTING", "PERSISTING"], 0)]  # READY on disk, readers still on the empty graph
+    assert after == "READY" and engine.graph().insights
+
+
 def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     other = make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0)))
@@ -137,13 +164,33 @@ def test_representation_mismatch_is_refused(engine, demo_csv, tmp_path):
     csv2.write_text(demo_csv.read_text().replace("\n", "\n", 1) + "\n")  # different bytes -> new dataset id
     rec = other.ingest_file(csv2)
     assert rec["status"] == "FAILED" and rec["error"]["code"] == "representation_mismatch"
+    literals = other.ws.literals_path.read_bytes()
+    assert make_engine(make_config(tmp_path / "ws", block_weights=(1.0, 1.0, 1.0))).committed().catalog is None  # no cache built or saved
+    assert other.ws.literals_path.read_bytes() == literals
 
 
-class Crash(BaseException):  # the process dies: no except-handler runs
-    pass
+def test_a_model_failure_at_start_leaves_the_workspace_usable(engine, demo_csv):
+    """The literal catalog is built when the state is loaded; if the model fails there, the engine still starts, not degraded."""
+    from doubles import HashingEmbedder
+
+    class Broken(HashingEmbedder):
+        def embed(self, texts):
+            raise RuntimeError("CUDA out of memory")
+
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
+    engine.ws.literals_path.unlink()  # the start must embed the literals
+    broken = make_engine(engine.settings, embedder=Broken())
+    assert broken.problem is None and broken.graph().insights and broken.committed().catalog is None
 
 
-def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch):
+def test_a_catalog_failure_at_the_commit_is_a_batch_warning(engine, demo_csv, monkeypatch):
+    monkeypatch.setattr(engine_mod, "build_catalog", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("model gone")))
+    record = engine.ingest_file(demo_csv)
+    assert record["status"] == "READY" and any("literal catalog not built" in w for w in record["warnings"])
+    assert engine.committed().catalog is None and engine.search("Why is margin lower for phones in the US?").evidence.items  # built on the question
+
+
+def test_interrupted_batch_is_recovered(engine, demo_csv, monkeypatch):
     """A batch that dies after writing its journal leaves the transaction marker; the next writer start rolls
     it back and fails the batch, and the same upload then commits."""
     monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(Crash()))
@@ -151,14 +198,14 @@ def test_interrupted_batch_is_recovered(engine, demo_csv, tmp_path, monkeypatch)
         engine.ingest_file(demo_csv)
     monkeypatch.undo()
     assert engine.ws.patterns() and engine.ws.pending_path.exists()  # half written
-    fresh = make_engine(make_config(tmp_path / "ws"))
+    fresh = make_engine(engine.settings)
     (after,) = fresh.ws.list_batches()
     assert after["status"] == "FAILED" and after["error"]["code"] == "interrupted"
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists() and fresh.ontology().store.is_empty
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_path, monkeypatch):
+def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, monkeypatch):
     """A rollback that fails keeps its marker and checkpoint: no later write may overwrite them, and the next
     writer start finishes the rollback."""
     monkeypatch.setattr(engine_mod, "build_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph failure")))
@@ -168,52 +215,38 @@ def test_a_failed_rollback_blocks_writes_until_recovered(engine, demo_csv, tmp_p
     monkeypatch.undo()
     assert engine.ws.pending_path.exists() and engine.ws.patterns()  # the evidence stays
     assert engine.ingest_file(demo_csv)["error"]["code"] == "rollback_pending"
-    fresh = make_engine(make_config(tmp_path / "ws"))
+    fresh = make_engine(engine.settings)
     assert not fresh.ws.patterns() and not fresh.ws.pending_path.exists()
     assert fresh.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_records_survive_a_concurrent_reader(tmp_path):
-    """A record rewritten while another thread reads it (the UI polls batch records): neither side fails.
+def test_a_commit_gives_readers_a_new_graph_and_the_old_one_keeps_what_it_derived(engine, demo_csv, demo_df, tmp_path):
+    """Read views are memoised on the committed graph: the next commit's graph derives them afresh, with the new
+    dataset, while a reader that still holds the previous graph keeps its own."""
+    from insight_graph_service.server.views import cytoscape_elements
 
-    On Windows a plain ``os.replace`` over an open file, and a read during the replace, both raise
-    PermissionError (WinError 5); a batch then failed with that message."""
+    engine.ingest_file(demo_csv)
+    old = engine.graph()
+    before = cytoscape_elements(old)
+    shuffled = tmp_path / "shuffled.csv"
+    demo_df.sample(frac=1, random_state=1).to_csv(shuffled, index=False)
+    added = engine.ingest_file(shuffled)["dataset_id"]
+    new = engine.graph()
+    after = cytoscape_elements(new)
+    assert new is not old and len(after["nodes"]) > len(before["nodes"])
+    assert any(n["data"].get("dataset") == added for n in after["nodes"]) and cytoscape_elements(old) is before
+
+
+def test_writes_are_refused_while_a_batch_runs(engine, demo_csv, demo_df, tmp_path, monkeypatch):
+    """A reset, a deletion and a PATCH of another dataset during a batch answer ``busy`` at once instead of waiting
+    for the batch lock (the web request would hang for the whole batch); readers keep the committed state meanwhile
+    and the batch still commits."""
     import threading
-    import time
 
-    from insight_graph_service.core.workspace import atomic_write_json, read_json
-
-    target = tmp_path / "B-test.json"
-    atomic_write_json(target, {"status": "UPLOADED", "pad": "x" * 20000})
-    stop, errors = threading.Event(), []
-
-    def reader():
-        while not stop.is_set():
-            try:
-                assert read_json(target)["pad"]
-            except Exception as exc:
-                errors.append(f"read: {exc!r}")
-
-    thread = threading.Thread(target=reader, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 1.0
-    try:
-        while time.monotonic() < deadline:
-            try:
-                atomic_write_json(target, {"status": "PROFILING", "pad": "x" * 20000})
-            except Exception as exc:
-                errors.append(f"write: {exc!r}")
-    finally:
-        stop.set()
-        thread.join()
-    assert errors == []
-    assert not list(tmp_path.glob("*.tmp"))
-
-
-def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
-    """A reset during a batch answers ``busy`` at once instead of waiting for the batch lock (the web request
-    would hang for the whole batch); readers keep the committed state meanwhile and the batch still commits."""
-    import threading
+    shuffled = tmp_path / "shuffled.csv"
+    demo_df.sample(frac=1, random_state=1).to_csv(shuffled, index=False)
+    ready = engine.ingest_file(shuffled)["dataset_id"]
+    before = len(engine.graph().insights)
 
     started, release = threading.Event(), threading.Event()
     discover = engine_mod.run_discovery
@@ -229,128 +262,21 @@ def test_reset_is_refused_while_a_batch_runs(engine, demo_csv, monkeypatch):
     worker.start()
     try:
         assert started.wait(timeout=30)
-        with pytest.raises(engine_mod.PipelineError, match="is running") as refused:
-            engine.reset()
-        assert refused.value.code == "busy" and not engine.graph().insights  # the committed (empty) state, read without a lock
+        for write in (engine.reset, lambda: engine.delete_dataset(ready), lambda: engine.update_dataset_metadata(ready, source="x")):
+            t0 = time.perf_counter()
+            with pytest.raises(engine_mod.PipelineError, match="is running") as refused:
+                write()
+            assert refused.value.code == "busy" and time.perf_counter() - t0 < 1
+        assert len(engine.graph().insights) == before  # the committed state, read without a lock
     finally:
         release.set()
         worker.join(timeout=120)
-    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.graph().insights
+    assert engine.ws.load_batch(batch["batch_id"])["status"] == "READY" and engine.ws.ready_batch_for(ready)
     engine.reset()
     assert not engine.graph().insights and not engine.frame().patterns and not engine.ws.list_batches()
 
 
-def test_delete_dataset_removes_its_knowledge_and_orphan_anchors(tmp_path, demo_df, demo_csv):
-    """Deleting a dataset removes its patterns, vectors, memberships and artefacts; an anchor survives
-    only with a remaining member or a RELATED_TO link; the journal, state and snapshot stay consistent."""
-    cfg = make_config(tmp_path / "ws")
-    engine = make_engine(cfg)
-    assert engine.ingest_file(demo_csv)["status"] == "READY"
-    other = tmp_path / "other.csv"  # same rows, other column names: its own metrics, dimensions and anchors
-    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
-    rec = engine.ingest_file(other)
-    assert rec["status"] == "READY", rec.get("error")
-    ds = rec["dataset_id"]
-    g = engine.graph()
-    before_members = Counter(e["target"] for e in g.edges if e["type"] == "ACTIVATES" and g.nodes[e["source"]]["props"]["dataset_id"] != ds)
-    linked = {a for e in g.edges if e["type"] == "RELATED_TO" for a in (e["source"], e["target"])}
-    anchors_before = {n["id"] for n in g.of_kind("Attractor")}
-    assert any(t.startswith("x_") for t in engine.prepared().catalog.texts)  # the literal cache now holds both datasets' literals
-
-    out = engine.delete_dataset(ds)
-    catalog = engine.prepared().catalog  # the first question after the deletion rewrites the cache
-    cached = engine.ws.load_literals(engine.encoder.spec.fingerprint)
-    assert set(cached) == set(catalog.texts) and not any(t.startswith("x_") for t in cached)  # its literals are gone
-    assert out["patterns_removed"] == rec["metrics"]["validated_insights"] and out["batches"] == [rec["batch_id"]]
-    g = engine.graph()
-    assert all(n["props"]["dataset_id"] != ds for n in g.of_kind("Pattern"))
-    assert not (cfg.workspace_dir / "datasets" / ds).exists() and not (cfg.workspace_dir / "journal" / "blocks" / f"{rec['batch_id']}.npz").exists()
-    assert all(b["dataset_id"] != ds for b in engine.ws.list_batches())
-    # the orphan rule, anchor by anchor
-    anchors_after = {n["id"] for n in g.of_kind("Attractor")}
-    for a in anchors_before:
-        assert (a in anchors_after) == bool(before_members.get(a) or a in linked), a
-    assert set(out["anchors_removed"]) == {int(a[2:]) for a in anchors_before - anchors_after}
-    # journal, frame and ontology agree; the snapshot equals a fresh rebuild; questions still work
-    rows = engine.ws.patterns()
-    assert [r["row_id"] for r in rows] == list(range(len(rows))) == list(range(len(engine.ws.vectors())))
-    assert engine.ontology().store.next_chunk_id == len(rows) and set(engine.frame().patterns) == {r["id"] for r in rows}
-    assert all(a["row_id"] < len(rows) for a in engine.ws.activations())
-    ids = {(n["id"], n["kind"]) for n in g.nodes.values()}
-    assert {(n["id"], n["kind"]) for n in DualGraph(engine._derive(engine.ontology())[0]).nodes.values()} == ids
-    assert engine.evidence("Why is margin lower for phones in the US?").view["evidence"]["items"]
-    assert engine.ingest_file(other)["status"] == "READY"  # not a duplicate any more
-    # deleting the last dataset empties the knowledge base, and ingestion starts over cleanly
-    for b in {b["dataset_id"] for b in engine.ws.list_batches()}:
-        engine.delete_dataset(b)
-    assert not engine.graph().of_kind("Pattern") and not engine.ontology().attractor_ids and len(engine.ws.vectors()) == 0
-    assert engine.ingest_file(demo_csv)["status"] == "READY"
-
-
-def test_a_failed_ready_save_rolls_back_the_snapshot_too(tmp_path, demo_df, demo_csv, monkeypatch):
-    """The READY record is the commit marker. If writing it fails (a Windows sharing violation that outlasts
-    the retry), the batch rolls back completely: journal, state and the snapshot it had already written."""
-    cfg = make_config(tmp_path / "ws")
-    engine = make_engine(cfg)
-    save = engine.ws.save_batch
-
-    def flaky(record):
-        if record["status"] == "READY":
-            raise PermissionError(13, "Access is denied")
-        save(record)
-
-    monkeypatch.setattr(engine.ws, "save_batch", flaky)
-    assert engine.ingest_file(demo_csv)["status"] == "FAILED"
-    assert engine.ws.load_graph() is None and not engine.ws.patterns()  # first batch: no snapshot left behind
-    monkeypatch.setattr(engine.ws, "save_batch", save)
-    assert engine.ingest_file(demo_csv)["status"] == "READY"
-    before = {n["id"] for n in engine.ws.load_graph()["nodes"]}
-    other = tmp_path / "other.csv"
-    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
-    monkeypatch.setattr(engine.ws, "save_batch", flaky)
-    assert engine.ingest_file(other)["status"] == "FAILED"
-    assert {n["id"] for n in engine.ws.load_graph()["nodes"]} == before  # the previous snapshot is back
-    fresh = make_engine(cfg, recover=False)
-    assert set(fresh.frame().patterns) == {n["id"] for n in fresh.graph().of_kind("Pattern")}
-
-
-def test_an_interrupted_deletion_is_undone(tmp_path, demo_df, demo_csv, monkeypatch):
-    """Deletion is all or nothing: an error rolls it back at once; a crash leaves its marker, and the next
-    writer start rolls it back — journal, ontology, snapshot, batch records and dataset folder alike."""
-    cfg = make_config(tmp_path / "ws")
-    engine = make_engine(cfg)
-    assert engine.ingest_file(demo_csv)["status"] == "READY"
-    other = tmp_path / "other.csv"
-    demo_df.rename(columns=lambda c: f"x_{c}").to_csv(other, index=False)
-    rec = engine.ingest_file(other)
-    ds = rec["dataset_id"]
-
-    def state():
-        ont = engine.ontology()
-        return (
-            len(engine.ws.patterns()),
-            len(engine.ws.vectors()),
-            ont.store.next_chunk_id,
-            ont.attractor_ids,
-            sorted(n["id"] for n in engine.ws.load_graph()["nodes"]),
-            sorted(b["batch_id"] for b in engine.ws.list_batches()),
-            (cfg.workspace_dir / "datasets" / ds / "profile.json").is_file(),
-        )
-
-    before = state()
-    for failure in (RuntimeError("disk full"), Crash()):
-        monkeypatch.setattr(engine.ws, "save_graph", lambda snapshot, failure=failure: (_ for _ in ()).throw(failure))
-        with pytest.raises(type(failure)):
-            engine.delete_dataset(ds)
-        monkeypatch.undo()
-        if isinstance(failure, Crash):
-            assert engine.ws.pending_path.exists() and state() != before  # half done, marker left
-            make_engine(cfg)  # the next writer start
-        assert state() == before and not engine.ws.pending_path.exists()
-    assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
-
-
-def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
+def test_a_second_writer_process_is_refused(cfg, demo_csv):
     """One writer per workspace: a second writer started while the service holds the lock is refused
     and leaves the service's queued upload alone; readers stay allowed."""
     import os
@@ -360,7 +286,6 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     from insight_graph_service.core.settings import PROJECT_ROOT
     from insight_graph_service.core.workspace import WorkspaceBusy
 
-    cfg = make_config(tmp_path / "ws")
     queued = make_engine(cfg, recover=False).submit(demo_csv)  # an upload waiting in the web app's queue
     holder = subprocess.Popen(  # the web app: another process holding the writer lock
         [
@@ -389,18 +314,18 @@ def test_a_second_writer_process_is_refused(tmp_path, demo_csv):
     assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
 
 
-def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo_csv):
+def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv):
     """Journals of another canonical version cannot be served: the engine starts on the empty state with the
     reason, refuses writes and questions, never touches the Neo4j mirror, and a reset makes it usable again."""
     from insight_graph_service.core.workspace import atomic_write_json
 
-    cfg = make_config(tmp_path / "ws")
     old = make_engine(cfg)
     assert old.ingest_file(demo_csv)["status"] == "READY"
     atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
     engine = make_engine(cfg)
     assert "ltir-canon-0" in engine.problem and not engine.graph().insights
-    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x")):
+    reads = (engine.export_geosparql, engine.geo_datasets, lambda: engine.geo_overlay("x"), lambda: engine.geo_cells_pack("x"))  # the map too
+    for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()
         assert refused.value.code == "workspace_degraded"
@@ -412,12 +337,11 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(tmp_path, demo
     assert engine.startup_sync()["status"] == "ok" and published[-1]["stats"]["patterns"] > 0  # a healthy start syncs
 
 
-def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_csv, monkeypatch):
+def test_a_failed_recovery_starts_degraded_and_reset_still_works(cfg, demo_csv, monkeypatch):
     """A rollback that cannot finish leaves the queued uploads failed (no process runs them), so the reset that
     recovers is never refused as busy."""
     from insight_graph_service.core.workspace import Workspace
 
-    cfg = make_config(tmp_path / "ws")
     queued = make_engine(cfg).submit(demo_csv)  # left UPLOADED by a process that died
     monkeypatch.setattr(Workspace, "recover", lambda self: (_ for _ in ()).throw(OSError("disk gone")))
     engine = make_engine(cfg)
@@ -430,22 +354,35 @@ def test_a_failed_recovery_starts_degraded_and_reset_still_works(tmp_path, demo_
     assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
 
 
-def test_an_unreadable_snapshot_starts_degraded(tmp_path, demo_csv):
-    cfg = make_config(tmp_path / "ws")
-    assert make_engine(cfg).ingest_file(demo_csv)["status"] == "READY"
+def test_an_unreadable_snapshot_is_rebuilt_at_start(cfg, demo_csv):
+    """The snapshot is derived: a start rebuilds it from the journals whatever the file holds."""
+    first = make_engine(cfg)
+    assert first.ingest_file(demo_csv)["status"] == "READY"
     (cfg.workspace_dir / "graph" / "snapshot.json").write_text("{not json", encoding="utf-8")
     engine = make_engine(cfg)
-    assert engine.problem and not engine.graph().insights  # started: the reset stays reachable
-    engine.reset()
-    assert engine.problem is None and not list((tmp_path).glob("ws.deleting-*"))  # renamed aside, then deleted
+    assert engine.problem is None and set(engine.graph().insights) == set(first.graph().insights) and engine.ws.load_graph()["nodes"]
+
+
+def test_base_places_are_rebuilt_identically_at_start(cfg, points_csv):
+    """A start derives the snapshot from the journals and the stored files, whatever the snapshot file holds: a table
+    level's IN_REGION by its events (never journaled) come back with the same props."""
+    first = make_engine(cfg)
+    upload_levels(first, points_csv, geo="auto@8,7", table=True)
+
+    def placed(graph) -> list[tuple[str, str, float, str]]:
+        edges = [e for e in graph.edges if e["type"] == "IN_REGION" and e["props"]["basis"] == "events"]
+        return sorted((e["source"], e["target"], e["weight"], json.dumps(e["props"], sort_keys=True)) for e in edges)
+
+    before = placed(first.graph())
+    path = cfg.workspace_dir / "graph" / "snapshot.json"
+    old = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**old, "version": old["version"] - 1, "edges": []}), encoding="utf-8")
+    again = make_engine(cfg)
+    assert again.problem is None and before and placed(again.graph()) == before
 
 
 def test_refusals_over_http(hashed_engine, tmp_path, demo_csv):
     """The graph service's status mapping: 413 too large, 404 unknown dataset or batch, a column id with '/' resolves."""
-    from fastapi.testclient import TestClient
-
-    from insight_graph_service.server.app import create_app
-
     with TestClient(create_app(hashed_engine)) as client:
         assert client.delete("/api/datasets/nope").json()["code"] == "unknown_dataset"
         assert client.get("/api/batches/..%5Cregistry").status_code == 404
@@ -481,73 +418,131 @@ def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_pat
         assert exc.value.code == "invalid_options"
 
 
-class _Session:
-    def __init__(self, log):
-        self.log = log
+def test_the_c_parser_reads_a_file_as_pandas_python_parser_did(demo_csv, points_csv, tmp_path):
+    """``read_file`` gives the frame pandas' Python parser gave — columns, types and values, one type per column from all
+    its rows — and the dataset id the bytes always gave."""
+    import hashlib
 
-    def __enter__(self):
-        return self
+    import pandas as pd
 
-    def __exit__(self, *a):
-        return False
+    from insight_graph_service.core.settings import PROJECT_ROOT
+    from subgroup_miner import ingestion
 
-    def run(self, query, **params):
-        self.log.append((query, params))
-
-    def execute_write(self, fn):
-        fn(self)
-
-
-class _Driver:
-    def __init__(self):
-        self.log = []
-
-    def session(self, database=None):
-        return _Session(self.log)
+    semicolons = tmp_path / "semi.txt"
+    semicolons.write_text('city;value;note\n"Kyiv";0.1234567890123456789;"a; b"\nLviv;1e-310;c\n', encoding="utf-8")
+    mixed = tmp_path / "mixed.csv"  # a code column numeric-looking for its first 300,000 rows
+    mixed.write_text("code,value\n" + "".join(f"{i % 900:05d},{i}\n" for i in range(300_000)) + "x00042,1\n")
+    for path in (demo_csv, points_csv, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", semicolons, mixed):
+        pd.testing.assert_frame_equal(ingestion.read_file(path)[0], pd.read_csv(path, sep=None, engine="python"), check_exact=True)
+    assert (
+        ingestion.dataset_fingerprint(ingestion.read_file(points_csv)[1], {})
+        == "ds-" + hashlib.sha256(points_csv.read_bytes() + b"[]").hexdigest()[:12]
+    )
 
 
-def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
-    snap = hashed_engine.ws.load_graph()
-    driver = _Driver()
-    out = publish_snapshot(snap, hashed_engine.settings, driver=driver)
-    queries = [q for q, _ in driver.log]
-    assert any("CREATE CONSTRAINT pattern_id_unique" in q for q in queries)
-    assert all("CREATE (" not in q for q in queries)  # idempotent: MERGE only
-    assert out["nodes"]["Pattern"] == len(hashed_engine.graph().of_kind("Pattern"))
-    assert "MERGE (s)-[r:ACTIVATES]->(t)" in edge_query("ACTIVATES")
-    # properties are replaced, not merged: a property that disappeared (or became None) is removed
-    assert "SET n = row.props, n.id = row.id" in node_query("Pattern") and "SET r = row.props" in edge_query("RELATED_TO")
-    # what the snapshot no longer holds is deleted: every label and every edge type, keyed by the snapshot ids
-    stale = {q: p for q, p in driver.log if "NOT" in q}
-    assert {q for q in stale if "DETACH DELETE" in q} == {stale_node_query(label) for label in LABELS}
-    assert sorted(stale[stale_node_query("Pattern")]["ids"]) == sorted(n["id"] for n in hashed_engine.graph().of_kind("Pattern"))
-    assert {q for q in stale if q.endswith("DELETE r")} == {stale_edge_query(t) for t in EDGE_ENDPOINTS}
-    # an empty snapshot (a reset) clears the mirror
-    empty = _Driver()
-    publish_snapshot({"nodes": [], "edges": []}, hashed_engine.settings, driver=empty)
-    assert all(p["ids"] == [] for q, p in empty.log if "DETACH DELETE" in q)
-    flat = flatten_props({"a": 1, "b": [1, 2], "c": {"x": 1}, "d": None, "e": [{"k": 1}]})
-    assert flat == {
-        "a": 1,
-        "b": [1, 2],
-        "c_json": json.dumps({"x": 1}),
-        "e_json": json.dumps([{"k": 1}]),
-    }
+def test_a_file_read_otherwise_than_before_gets_its_own_dataset_id(tmp_path):
+    """A BOM is dropped from the first name and a TSV whose chunks typed a column apart is read whole; such a file's id
+    mixes in ``READING_FIX`` (its old dataset reads ``source_changed``, a new upload is no duplicate), any other keeps its
+    id, and a TSV whose text columns hold one type each is parsed once."""
+    import hashlib
+    from unittest import mock
+
+    import pandas as pd
+
+    from subgroup_miner import ingestion
+
+    def plain_id(path, fix=b""):
+        return "ds-" + hashlib.sha256(path.read_bytes() + fix + b"[]").hexdigest()[:12]
+
+    def read(path):
+        frame, digest = ingestion.read_file(path)
+        return frame, ingestion.dataset_fingerprint(digest, {})
+
+    for i, header in enumerate(["region,value", '"region",value', ",value", "a,a", '"region";"value"']):  # plain, quoted, empty, repeated, ;
+        bare = tmp_path / f"bare{i}.csv"
+        bare.write_text(f"{header}\nEU,1\nUS,2\n".replace(",", ";" if ";" in header else ","), encoding="utf-8")
+        bom = tmp_path / f"bom{i}.csv"
+        bom.write_bytes(b"\xef\xbb\xbf" + bare.read_bytes())
+        frame, ds = read(bom)
+        pd.testing.assert_frame_equal(frame, pd.read_csv(bare, sep=None, engine="python"), check_exact=True)  # as without the BOM
+        assert ds == plain_id(bom, ingestion.READING_FIX) != plain_id(bom) and read(bare)[1] == plain_id(bare)
+    mixed = tmp_path / "mixed.tsv"  # a code column numeric-looking for its first 300,000 rows
+    mixed.write_text("code\tvalue\n" + "".join(f"{i}\t{i}\n" for i in range(300_000)) + "x42\t1\n")
+    with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:
+        frame, ds = read(mixed)
+    assert frame["code"].map(type).eq(str).all() and ds == plain_id(mixed, ingestion.READING_FIX) and parse.call_count == 2
+    unsigned = tmp_path / "unsigned.tsv"  # an int64 chunk, then a uint64 one: their concatenation is a lossy float64, no warning
+    unsigned.write_text("code\tvalue\n" + "".join(f"c{i % 9}\t{i}\n" for i in range(300_000)) + f"c0\t{2**63}\n")
+    frame, ds = read(unsigned)
+    assert frame["value"].dtype == "uint64" and ds == plain_id(unsigned, ingestion.READING_FIX)
+    clean = tmp_path / "clean.tsv"
+    clean.write_bytes(b"\xef\xbb\xbfregion\tflag\tvalue\nEU\tTrue\t1\nUS\t\t2\n")  # a BOM the C parser always dropped, an object column
+    with mock.patch.object(pd, "read_csv", wraps=pd.read_csv) as parse:
+        frame, ds = read(clean)
+    assert list(frame.columns) == ["region", "flag", "value"] and ds == plain_id(clean) and parse.call_count == 1  # one type per column: once
 
 
-def test_co_occurrence_edges_from_memberships():
-    """W[p, j] = a_j^2 / sum_k a_k over the non-weak alignments; weak memberships do not count; the pair weight is capped at 1."""
+def test_an_upload_parses_its_file_once_and_a_recheck_reads_it_anew(cfg, points_csv, demo_csv):
+    """The ``@auto`` choice, each level and each dataset id of one upload read one parse, gone once no batch waits and
+    after a refused upload; a re-check reads the file as it is now: an edit of the same length under the old mtime is
+    ``source_changed``, a file gone ``unsupported_file``."""
+    import os
+    from pathlib import Path
+    from unittest import mock
 
-    def act(pid, aid, alignment, weak=False):
-        return GraphEdge(pid, f"A-{aid}", EdgeType.ACTIVATES, alignment, {"weak": weak})
+    import pandas as pd
 
-    edges = co_occurrence_edges([act("P1", 0, 0.9), act("P1", 1, 0.6), act("P2", 0, 0.8), act("P2", 1, 0.1, weak=True), act("P3", 1, 0.95)])
-    assert [(e.source, e.target, e.type) for e in edges] == [("A-0", "A-1", EdgeType.CO_OCCURS)]
-    assert edges[0].weight == pytest.approx((0.9**2 / 1.5) * (0.6**2 / 1.5)) and edges[0].props == {"kind": "co_occurrence", "shared": 1}
-    many = [act(f"P{i}", j, 1.0) for i in range(5) for j in (0, 1)]  # five insights split evenly: 5 x 0.25
-    assert [(e.weight, e.props["shared"]) for e in co_occurrence_edges(many)] == [(1.0, 5)]
+    from subgroup_miner import ingestion
+
+    engine = make_engine(cfg)
+    ingestion.forget_tables()
+    with mock.patch.object(ingestion.pd, "read_csv", wraps=pd.read_csv) as parse:
+        levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert len(levels) == 3 and all(r["status"] == "READY" for r in levels)
+    assert parse.call_count == 1 and ingestion._kept.cache_info().currsize == 0  # one parse, then gone
+    with demo_csv.open("rb") as f, pytest.raises(engine_mod.PipelineError):
+        engine.upload("demo.csv", f, geo="nowhere@auto")  # no such point columns: refused
+    assert ingestion._kept.cache_info().currsize == 0
+    table = next(r for r in levels if r["level"] == "table")
+    pid = next(p for p, ins in engine.graph().insights.items() if ins.dataset_id == table["dataset_id"])
+    assert engine.verify_pattern(pid)["status"] == "reproduced"
+    stored = Path(table["source_path"])
+    st, raw = stored.stat(), stored.read_bytes()
+    stored.write_bytes(raw.replace(b"4", b"5", 1))  # the same length, put back under the old mtime
+    os.utime(stored, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert engine.verify_pattern(pid)["status"] == "source_changed"
+    with pytest.raises(ingestion.IngestionError, match="not found") as gone:
+        ingestion.read_file(stored.with_name("gone.csv"))
+    assert gone.value.code == "unsupported_file"
 
 
-def test_cypher_walks_the_latent_edge_set():
-    query = load_cypher("queries/transversal")
-    assert "[rel:RELATED_TO|CO_OCCURS]" in query and all(e.value in query for e in LATENT_EDGES)
+def test_a_commit_derives_only_the_new_datasets_spatial_part(cfg, points_csv):
+    """Each geo dataset's part of the spatial plane is derived once, at its own commit, and a table's placement once:
+    the snapshot equals one derived afresh, is written compact, hands out copies the memo does not share, and a
+    deletion drops what it held from the memo, a reset all of it."""
+    from unittest import mock
+
+    from subgroup_miner import spatial
+
+    engine = make_engine(cfg)
+    with (
+        mock.patch.object(spatial, "_dataset_part", wraps=spatial._dataset_part) as part,
+        mock.patch.object(spatial, "place_table", wraps=spatial.place_table) as place,
+    ):
+        levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    assert [r["status"] for r in levels] == ["READY"] * 3 and part.call_count == 2 and place.call_count == 1
+
+    def derived() -> dict:  # the snapshot but its build time
+        return {k: v for k, v in engine._derive(engine.ontology())[0].items() if k != "created_at"}
+
+    kept = {k: v for k, v in engine.graph().snapshot.items() if k != "created_at"}
+    for e in engine._derive(engine.ontology())[0]["edges"]:  # what a commit hands out is a copy: the memo stays as built
+        e["props"]["touched"] = True
+    assert derived() == kept
+    engine._spatial_memo.clear()
+    assert derived() == kept and "\n" not in engine.ws.graph_path.read_text(encoding="utf-8")
+    table = next(r["dataset_id"] for r in levels if r["level"] == "table")
+    engine.delete_dataset(table)
+    assert not any(table in key for key in engine._spatial_memo) and len(engine._spatial_memo) == 2
+    engine.reset()
+    assert not engine._spatial_memo

@@ -92,3 +92,19 @@ def test_every_import_is_in_the_table():
 def test_the_neo4j_driver_stays_in_the_mirror():
     users = {_module(p) for top in REPO for p in (ROOT / top).rglob("*.py") if any(m.split(".")[0] == "neo4j" for m in _imports(p))}
     assert users <= {"insight_graph_service.core.neo4j_mirror"}
+
+
+LINE_BUDGET = 1_000  # lines per source file: one past it is split by responsibility first (AGENTS.md, docs/12 §12.1)
+
+
+def test_no_source_file_outgrows_the_line_budget():
+    """Every Python and JavaScript file of the repository's own code, scripts and tests stays within ``LINE_BUDGET`` lines;
+    vendored copies are upstream's."""
+    roots = [ROOT / p for p in (*REPO, "tests", "scripts", "sig_web_console")]
+    over = {
+        str(path.relative_to(ROOT)): n
+        for root in roots
+        for path in (*root.rglob("*.py"), *root.rglob("*.js"))
+        if "vendor" not in path.parts and (n := len(path.read_text(encoding="utf-8").splitlines())) > LINE_BUDGET
+    }
+    assert over == {}

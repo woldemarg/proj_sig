@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeLLM, ask, make_config, make_engine
+from fastapi.testclient import TestClient
+
+from insight_graph_service.server.app import create_app
 
 QUESTION = "Why is margin lower for phones in the US?"
 EROSION_ANALOGUES = {
@@ -53,9 +56,9 @@ def _check_grounded_answer(engine):
     assert {" AND ".join(sorted(it["scope"])) for it in cross} & EROSION_ANALOGUES
     h = qa.view["highlight"]
     assert h["seeds"] and h["anchors"] and h["edges"] and set(h["evidence"]) <= set(h["traversed"])
-    assert "Sources:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
+    assert "Джерела:" in qa.provenance_footer and items[0]["pattern_id"] in qa.provenance_footer
     prompt = llm.prompts[-1]
-    assert "EVIDENCE (verified statistical observations" in prompt and "[P1]" in prompt
+    assert "EVIDENCE (statistical findings computed from the uploaded data" in prompt and "verified" not in prompt and "[P1]" in prompt
     assert prompt.isascii()  # no byte-fallback symbols reach the LLM (docs/07_question_answering.md §7.4)
     return qa
 
@@ -83,7 +86,7 @@ def test_hypothesis_apparatus(model_engine):
     assert s["transversal"]["recall"] > s["text_nn"]["recall"]
 
 
-def test_attractor_benchmark_apparatus(tmp_path):
+def test_attractor_benchmark_apparatus(engine, tmp_path):
     from attractor_benchmark import analyse, build_cases, generate, holm, rank_cases
 
     frame, truth = generate(1)
@@ -91,7 +94,6 @@ def test_attractor_benchmark_apparatus(tmp_path):
     assert all(not (set(a.items()) & set(b.items())) for scopes in truth.values() for a in scopes for b in scopes if a is not b)
     csv = tmp_path / "planted.csv"
     frame.to_csv(csv, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
     record = engine.ingest_file(csv)
     assert record["status"] == "READY", record.get("error")
     cases = build_cases(engine, {record["batch_id"]: truth}, {record["batch_id"]: 1})
@@ -103,6 +105,143 @@ def test_attractor_benchmark_apparatus(tmp_path):
     result = analyse(rows, 3)
     assert result["cases"] == len(rows) and set(result["comparisons"]) == set(rankers[1:])
     assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
+
+
+def test_geo_benchmark_apparatus(engine, tmp_path):
+    import h3
+    import numpy as np
+    import pandas as pd
+    from conftest import geo_frame
+    from geo_benchmark import BROAD, FINE, REGION, SIZE_BOX, generate, run_scenario
+    from perf_benchmark import CALIFORNIA, EPOCH
+
+    scenario = generate("S-regional", 1)
+    (upload,) = scenario.uploads
+    assert upload.frame.equals(generate("S-regional", 1).uploads[0].frame)  # the same seed writes the same file
+    planted = upload.frame[np.logical_or.reduce(list(upload.parts.values()))]
+    cells = {h3.latlng_to_cell(a, b, FINE) for a, b in zip(planted["lat"], planted["lon"], strict=True)}
+    assert len(cells) == 3 * 37 and {h3.cell_to_parent(c, REGION) for c in cells} == {scenario.truth["region"]}  # three foci, one region
+    for frame in (upload.frame, geo_frame().rename(columns={"latitude": "lat", "longitude": "lon"})):  # one territory, one epoch
+        assert frame["lat"].between(CALIFORNIA[0], CALIFORNIA[2]).all() and frame["lon"].between(CALIFORNIA[1], CALIFORNIA[3]).all()
+        assert (pd.to_datetime(frame["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
+    for lat0, lon0, dlat, dlon in (BROAD, SIZE_BOX):  # the other scenarios' boxes; the focus scenarios share S-regional's area
+        assert CALIFORNIA[0] <= lat0 and lat0 + dlat <= CALIFORNIA[2] and CALIFORNIA[1] <= lon0 and lon0 + dlon <= CALIFORNIA[3]
+    result = run_scenario(scenario, tmp_path, engine, k=5)
+    found = result["files"][0]["found"]
+    assert len({f["pattern"] for f in found.values()}) == 3 and all(f["coverage"] >= 0.9 for f in found.values())  # one insight per focus
+    assert result["recall"]["cases"] == 3 and 0.0 <= result["recall"]["recall"] <= 1.0
+    assert result["cross_coloc"] == 0 and result["prompt_chars"] > 0
+
+
+def test_geo_coverage_apparatus(engine, tmp_path):
+    """The geo coverage measurement (docs/10_verification.md §10.4) on ``geo_frame`` with rows that have no point: every
+    group gets the three coverages and the four rules on each region level; C_members is 1 for an insight of located rows
+    and 0 for one of rows without a point; an insight of the whole map has lift 1 in every region. On two regions of 60
+    and 40 events, each rule links what its formula says, and k50 / k80 count the regions holding half and 80 %."""
+    import numpy as np
+    import pandas as pd
+    from conftest import geo_frame
+    from geo_coverage import RULES, level_stats, measure, run, upload_insights
+
+    frame = geo_frame()
+    blank = frame.head(60).assign(latitude=np.nan, longitude=np.nan)
+    pd.concat([frame, blank], ignore_index=True).to_csv(path := tmp_path / "points.csv", index=False)
+    result = run(engine, path, "latitude,longitude@auto")
+    assert result["map"]["rows"] == len(frame) + 60 and result["map"]["events"] == len(frame) and result["region_levels"] == [7, 5, 3, 1]
+    base = result["groups"]["base"]
+    assert base["insights"] > 0 and 0 < base["c_members"]["min"] <= base["c_members"]["median"] <= 1 and 0 < base["c_map"]["events"] <= 1
+    assert all(0 <= base[lv][rule]["c_insights"] <= 1 for lv in result["region_levels"] for rule in RULES)
+    finest, _ = upload_insights(engine, engine.ws.list_batches())
+    n = len(finest["point_cell"])
+    probe = {"located": np.arange(len(frame)), "none": np.arange(len(frame), n), "all": np.arange(n)}
+    measured = measure(finest["point_cell"], finest["cells"], probe, [5, 3])["insights"]
+    assert measured["located"]["c_members"] == 1.0 and measured["none"]["c_members"] == 0.0 and "levels" not in measured["none"]
+    for lv in (5, 3):
+        whole = measured["all"]["levels"][lv]
+        assert whole["lift_min"] == pytest.approx(1.0) and whole["lift_max"] == pytest.approx(1.0) and whole["lift_2"] == 0
+    regions, n_r, occupied = np.array([0, 1]), np.array([60, 40]), np.array([1, 1])  # one cell per region
+    inside = level_stats(np.full(30, 1), np.array([1]), regions, n_r, occupied, 100)  # 30 events, all in region 1
+    assert (inside["k50"], inside["k80"], inside["top_share"], inside["lift_max"]) == (1, 1, 1.0, pytest.approx(2.5))
+    assert {rule: links.tolist() for rule, links in inside["links"].items()} == {"S": [1], "E": [1], "F": [1], "L": [1], "P": [1]}
+    split = level_stats(np.r_[np.zeros(20, int), np.ones(10, int)], np.array([0]), regions, n_r, occupied, 100)  # 20 and 10
+    assert (split["k50"], split["k80"]) == (1, 2) and split["lift_15"] == split["lift_2"] == 0
+    assert {rule: links.tolist() for rule, links in split["links"].items()} == {
+        "S": [0, 1],
+        "E": [],
+        "F": [0],
+        "L": [],
+        "P": [0],
+    }  # x < 30; P: S below 12 regions where lift >= 1 (region 1: 0.83)
+    pad = np.zeros(11, int)  # eleven regions holding no event: P switches on the regions with events, as the graph's placement
+    sparse = level_stats(np.r_[np.zeros(20, int), np.ones(10, int)], np.array([0]), regions, np.r_[n_r, pad], np.r_[occupied, pad + 1], 100)
+    assert sparse["links"]["P"].tolist() == [0]
+
+
+def test_perf_benchmark_apparatus(engine, tmp_path, caplog):
+    """The performance benchmark (docs/10_verification.md §10.4): its synthetic deliveries are the same for one seed and
+    keep to their own territory and calendar; one upload through the API reports each level's stages, the Neo4j sync's
+    included, then the console's reads cold and warm and three questions; the service logs every request's time."""
+    import logging
+
+    import pandas as pd
+    from perf_benchmark import CALIFORNIA, EPOCH, reads_after, run_upload, write_synthetic_points
+
+    from insight_graph_service.core.settings import PROJECT_ROOT
+
+    (tmp_path / "again").mkdir()
+    path = write_synthetic_points(tmp_path, n=3000, seed=1)
+    assert path.read_bytes() == write_synthetic_points(tmp_path / "again", n=3000, seed=1).read_bytes()
+    frame, (south, west, north, east) = pd.read_csv(path), CALIFORNIA
+    assert list(frame.columns) == "lat lon ordered_at segment channel area vehicle refunded basket items wait_min rating".split()
+    assert frame["lat"].between(south, north).all() and frame["lon"].between(west, east).all()
+    assert (pd.to_datetime(frame["ordered_at"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 59).all()
+    app = create_app(engine)
+    with caplog.at_level(logging.INFO, logger="insight_graph_service.server.app"), TestClient(app) as client:
+        upload = run_upload(client, app, PROJECT_ROOT / "data" / "demo" / "california_housing.csv", "auto@5", False, True)
+        reads = reads_after(client, tmp_path / "ws")
+    (level,) = upload["levels"]
+    assert level["status"] == "READY" and {"validate_s", "discover_s", "embed_s", "graph_s", "neo4j_s"} <= set(level["timings"])
+    paths = {r["path"].rsplit("/", 1)[-1] for r in reads["cold"]}
+    assert {"graph", "cells", "overlay", "projected", "window"} <= paths and all(r["status"] == 200 for r in reads["cold"] + reads["warm"])
+    assert len(reads["questions"]) == 3 and all(q["status"] == 200 for q in reads["questions"]) and "graph/snapshot.json" in reads["bytes"]
+    assert any(r.getMessage().startswith("GET /api/geo") and r.getMessage().endswith(" s") for r in caplog.records)
+
+
+def test_poisoning_eval_apparatus(tmp_path):
+    """The deterministic red team (docs/10_verification.md §10.3): the spot planted in an unreliable source only is never
+    confirmed and says so on its trust line in the evidence of every question, the opposite shifts of two sources are both
+    5, a p-value edited in the journal leaves the evidence, and an edited reliability is caught and ignored; the variant
+    before #8 really lacks the trust lines and rule 11."""
+    from poisoning_eval import BEFORE_8, DIRECTED, check, ingest, score, tamper, without_trust
+
+    from evidence_narrator_service.narration import SYSTEM_PROMPT
+
+    engine = make_engine(make_config(tmp_path / "poison" / "ws"))
+    scenario, case = ingest("S-poison", 1, tmp_path / "poison", engine)
+    found = check(engine, case)
+    (spot,) = case["flagged"]
+    assert found[spot]["credibility"] == 2 and found[spot]["questions"] == 10 and len(found[spot]["trust"]) == 1
+    assert found[spot]["trust"][0].startswith("source E (unreliable) | credibility 2 (not confirmed")
+    assert found[case["confirmed"]]["credibility"] == 1
+    full = engine.evidence(DIRECTED[0], cells=case["spot"])
+    before = without_trust(full).evidence_prompt
+    assert "     trust: " in full.evidence_prompt and "trust is given per item" in full.evidence_prompt
+    assert "trust" not in before and "weakest credibility" not in before and before.count("\n[P") == full.evidence_prompt.count("\n[P")
+    assert "11. TRUST" in SYSTEM_PROMPT and "11. TRUST" not in BEFORE_8 and BEFORE_8.endswith("Be concise (at most ~250 words).")
+    key = next(k for k, c in full.citations.items() if c["pattern_id"] == spot)
+    other = next(k for k in full.citations if k != key)
+    assert score(f"Вищий load [{key}]. Але це не підтверджено [{key}][{other}].", full, [spot]) == {"mentioned": True, "all": False, "any": True}
+    assert score(f"Дані надійно показують вищий load [{key}].", full, [spot])["any"] is False  # approval is not a qualification
+    assert score(f"Вищий load [{other}].", full, [spot]) == {"mentioned": False, "all": False, "any": False}
+    forged = tamper(engine, case, scenario.uploads[-1].name)
+    assert forged["metadata"]["dataset"] == "mismatch" and forged["metadata"]["note"]
+    assert forged["metadata"]["trust"].startswith("source unknown (its dataset's metadata failed the integrity check)")
+    assert forged["integrity"] == {"integrity": "mismatch", "in_evidence": False, "note": True}
+
+    engine = make_engine(make_config(tmp_path / "two" / "ws"))
+    _, case = ingest("S-two-sources", 1, tmp_path / "two", engine)
+    found = check(engine, case)
+    assert len(case["flagged"]) == 2 and all(found[p]["credibility"] == 5 for p in case["flagged"])
 
 
 def test_chain_eval_apparatus(hashed_engine):
@@ -119,47 +258,27 @@ def test_chain_eval_apparatus(hashed_engine):
 def test_llm_failure_keeps_knowledge(hashed_engine):
     qa = ask(hashed_engine, QUESTION, FakeLLM(ok=False))
     assert qa.answer_mode == "fallback" and qa.answer.startswith("Спостереження:") and "[P1]" in qa.answer
-    assert "category=phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
+    assert "category = phones" in qa.answer and "margin" in qa.answer  # literals as stored, Ukrainian around them
     assert qa.llm["error"] and qa.citations["grounded"]
     assert hashed_engine.graph().of_kind("Pattern")  # graph untouched
 
 
-def test_answering_embeds_the_question_not_the_corpus(hashed_engine, monkeypatch):
-    """Document vectors are stored at ingest: an answer (and its naive text baseline) embeds no document."""
-    graph = hashed_engine.graph()
-    documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
-    embedder = hashed_engine.encoder.embedder
-    seen: list[str] = []
+def test_answering_embeds_the_question_not_the_corpus(engine, demo_csv, monkeypatch):
+    """A batch embeds each insight's three blocks and no canonical document (the naive text baseline is a measurement of
+    scripts/experiment.py, docs/07_question_answering.md §7.6); an answer embeds the question, never a document, and
+    carries the structural baselines only."""
+    embedder, seen = engine.encoder.embedder, []
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)
         monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
-    qa = ask(hashed_engine, "Why is margin lower for phones in the US?")
-    assert qa.view["traversal"]["baselines"]["naive_nearest"]
-    assert seen and not documents & set(seen)
-
-
-def test_missing_document_vectors_are_filled_once(tmp_path, demo_csv, monkeypatch):
-    """A batch without stored document vectors is embedded on the first question only, and a writer saves them."""
-    import numpy as np
-
-    cfg = make_config(tmp_path / "ws")
-    make_engine(cfg).ingest_file(demo_csv)
-    for path in (cfg.workspace_dir / "journal" / "blocks").glob("*.npz"):  # as written before documents were stored
-        with np.load(path) as data:
-            kept = {k: data[k] for k in data.files if k not in ("document", "pattern_ids")}
-        np.savez_compressed(path, **kept)
-    engine = make_engine(cfg)
+    assert engine.ingest_file(demo_csv)["status"] == "READY"
     graph = engine.graph()
     documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
-    seen: list[str] = []
-    original = engine.encoder.embedder.embed
-    monkeypatch.setattr(engine.encoder.embedder, "embed", lambda texts: seen.extend(texts) or original(texts))
-    engine.evidence("Why is margin lower for phones in the US?")
-    assert documents <= set(seen)  # filled on the first question
+    assert seen and not documents & set(seen)  # the batch embedded blocks and literals, no document
     seen.clear()
-    engine.evidence("Why is margin lower for phones in the US?")
-    assert not documents & set(seen)  # kept on the frame
-    assert set(make_engine(cfg, recover=False).frame().documents) == {n["id"] for n in graph.of_kind("Pattern")}  # saved
+    qa = ask(engine, "Why is margin lower for phones in the US?")
+    assert seen and not documents & set(seen)
+    assert set(qa.view["traversal"]["baselines"]) == {"structural_only", "transversal_only", "not_structurally_reachable"}
 
 
 def test_search_is_the_structured_context_the_narrator_verbalises(hashed_engine):

@@ -6,7 +6,7 @@ The hypothesis it makes testable:
 
 > Structurally different subgroups that exhibit related statistical behaviour can be connected through latent attractor concepts. This enables *transversal* retrieval that purely structural graph traversal or naive nearest-neighbour text retrieval does not reliably achieve.
 
-**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
+**Documentation:** [`docs/`](docs/README.md) has eleven chapters that follow the data from the uploaded table to the cited answer, each with its formulas, text contracts, code and measured behaviour. A twelfth chapter covers the [architecture](docs/12_architecture.md): bounded contexts, services, contracts, containers, and the storage decision. A thirteenth covers [trust and integrity](docs/13_trust.md): the source, credibility and statistics of every finding, and the checks on the records. Start with the [reading guide](docs/README.md) and the [overview](docs/01_overview.md). Theory the design started from: [`docs/init_concepts/`](docs/init_concepts/). Rules for contributors and coding agents: [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -19,7 +19,7 @@ browser ──> sig-web-console (nginx: the UI; /api/chat/ -> narrator, /api/ ->
               │                      │ POST /api/search                 one model, its key, the provider routing
               └─ /api/ ─────> insight-graph (graph service) ── bolt ──> neo4j (graph mirror)
                               subgroup_miner -> attractor_topology -> snapshot -> graph_query_engine
-                              workspace volume (journals, state, snapshot); Qwen3 on CPU
+                              workspace volume (journals, state, snapshot); Qwen3 on the GPU or the CPU
 ```
 
 | Package | Role |
@@ -39,7 +39,7 @@ Each library imports only the shared kernel; `tests/test_architecture.py` enforc
 file → ingestion → EDA pass 1 (reused) → closed intents, identical / near-duplicate cohorts merged → EDA pass 2 validation
      → validity rules + insight_weight → admission → canonical scope / target / signed components → tripartite vectors
      → lac ontology (reused, with density damping + trust region): attractors, ACTIVATES (+ compiled co-memberships), RELATED_TO + CO_OCCURS
-     → structural lattice: SPECIALIZES / GENERALIZES / SIBLING / CONTRASTS → journals + state + graph snapshot (+ Neo4j)
+     → structural lattice: SPECIALIZES / SIBLING / CONTRASTS (+ regions and CO_LOCATED for geo) → journals + state + graph snapshot (+ Neo4j)
 question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO | CO_OCCURS→ Attractor ←ACTIVATES─ Pattern ─lattice→ …
          → evidence payload → Gemma 4 (or evidence-only fallback) → cited answer + highlighted path in the console
 ```
@@ -48,7 +48,7 @@ question → parse + seeds → Pattern ─ACTIVATES→ Attractor ─RELATED_TO |
 |---|---|---|
 | Statistical discovery (profiling, macro screen, search space, robust median shifts, EMM correlation divergence, volume utility, bootstrap, JS confounders) | the eda project: `scripts/main_upd.py` | vendored as [`subgroup_miner/vendor/eda/main_upd.py`](subgroup_miner/vendor/eda/main_upd.py); its differences in [`PROVENANCE.md`](subgroup_miner/vendor/PROVENANCE.md) |
 | Dynamic ontology (ConceptStore, EMA with inertia, adaptive threshold, orphans, OMP K-sweep, soft merge, mutual kNN, metrics) | the lac project ([`proj_ontology`](https://github.com/woldemarg/proj_ontology)): `v2_orchestrator/` | vendored as [`attractor_topology/vendor/lac/`](attractor_topology/vendor/lac); its differences in [`PROVENANCE.md`](attractor_topology/vendor/PROVENANCE.md) |
-| Embedding model | Qwen3-Embedding-0.6B at a pinned revision (Matryoshka-truncated to 384-d, bf16) | provisioned and verified file by file (`python -m insight_graph_service.core.model_store`) |
+| Embedding model | Qwen3-Embedding-0.6B at a pinned revision (Matryoshka-truncated to 384-d; bf16 on a GPU, float32 on the CPU) | provisioned and verified file by file (`python -m insight_graph_service.core.model_store`) |
 
 ---
 
@@ -60,14 +60,15 @@ Python **3.12+** (the EDA script uses PEP 701 f-strings).
 ```powershell
 copy .env.sample .env                     # then edit: GEMMA_* (the broker's upstream, model and key), tunables
 docker compose up -d --build --wait       # then http://127.0.0.1:8765
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
-The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The containers compute embeddings on the CPU (≈ 2.5 GB RAM for the graph service). The host setup below can use the GPU.
+The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 2.5 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
 
 **Host development**
 ```powershell
 python -m venv .venv                                                                # from the repository root
-.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu126   # or CPU torch
+.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu130   # or CPU torch
 .venv\Scripts\pip install -r requirements-dev.txt                                    # every service's runtime + pytest, ruff, playwright
 .venv\Scripts\python.exe -m insight_graph_service.core.model_store                  # once: Qwen3-Embedding-0.6B into models/ (1.19 GB), verified
 .venv\Scripts\python.exe -m llm_model_broker                                         # the broker on :8080 (reads GEMMA_* from .env)
@@ -82,6 +83,17 @@ python -m venv .venv                                                            
   - a loaded module or a `sys.path` entry lies outside the repository and the Python environment;
   - a source file holds a machine path, or a relative path leading out of the repository;
   - a path setting resolves outside the repository.
+
+### Mac: GPU
+
+Docker Desktop on a Mac gives containers no GPU, so the stack's graph service embeds on the CPU, in float32, and the console's health pill shows the device `cpu` in amber. On Apple silicon the graph service is faster on the host, where `EMBEDDING_DEVICE=auto` takes the GPU (MPS): run the broker and the host composite instead of the stack,
+
+```bash
+python -m llm_model_broker          # the LLM, GEMMA_* from .env
+python scripts/dev.py               # console, graph service and narrator on http://127.0.0.1:8765
+```
+
+and check that the pill names `mps`. With an NVIDIA GPU (Windows with WSL 2, Linux), start the stack with `compose.gpu.yaml` instead (above).
 
 ### Gemma 4 through the LLM model broker
 The narrator reaches the LLM only through `LLM_BASE_URL`, by default the broker (`llm_model_broker/`, [12.4](docs/12_architecture.md#124-services-and-contracts)). The broker holds the upstream, the model, its key and the OpenRouter provider pinning. The configured deployment calls `google/gemma-4-26b-a4b-it` on OpenRouter with pinned providers. Put this in `.env` (gitignored; template `.env.sample`):
@@ -108,27 +120,28 @@ Without an LLM everything still works: answers fall back to a cited, evidence-on
 - A reset clears it.
 - A start of the graph service syncs a non-empty, healthy workspace.
 
-SIG owns its six node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
+SIG owns its seven node labels in that database, so use one workspace per database. For exploration in Neo4j Browser, use [`transversal.cypher`](insight_graph_service/core/cypher/queries/transversal.cypher). The local journal, state and snapshot are the source of truth; a Neo4j failure only produces a warning.
 
 ### Using the console
-1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Demo: table** (the synthetic retail orders) or **Demo: map** (California housing block groups, analysed as H3 cells).
-   - Under *Column options*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
-   - A dataset card's *Delete* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
+1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Демо: таблиця** (the synthetic retail orders) or **Демо: мапа** (California housing block groups, analysed as H3 cells).
+   - Under *Параметри колонок*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
+   - The same panel says what the data means and where it comes from. *Що вимірюють метрики* (`metric:indicator:unit`), *Що означають колонки* (a JSON glossary) and *Документ метаданих* (a text file, one `Key: value` block per column) name the columns in every reading and in the prompt ([2.1](docs/02_discovery.md#21-ingestion)); *Джерело* and *Надійність джерела* (Admiralty A–F) feed each finding's trust line ([13](docs/13_trust.md)).
+   - A dataset card's *Видалити* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. **Watch the batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
-3. **Explore.** *Graph*, *3D Sphere* and *Insights* are views of the same knowledge base under one legend.
+3. **Explore.** *Граф*, *3D-сфера* and *Інсайти* are views of the same knowledge base under one legend.
    - The legend's link switches show the layers in both views. Hierarchy and theme links are on by default; contrasts, siblings, memberships and columns come on demand.
    - Hovering a legend entry spotlights it.
-   - Click any node or row for the details drawer: a one-line reading, shifts, evidence facts, the canonical form, connections and provenance.
-4. **3D Sphere.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
+   - Click any node or row for the details drawer: the insight in words (where it holds and what it shows), shifts, evidence facts, trust, the canonical form, connections and provenance. Every term carries its meaning in a tooltip.
+4. **3D-сфера.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
 5. **Chat** with the data, or click a suggestion.
    - Answers are in Ukrainian. Every data literal (`margin`, `phones`, `US`, ids) stays exactly as the data holds it.
    - The answer cites its `[P#]` evidence, and a citation opens the details drawer.
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
-   - The *Prompt* tab shows the exact evidence the model saw.
+   - The *Промпт* tab shows the exact evidence the model saw.
 
-6. **Map** (a geo dataset — rows are points). Upload with *Column options → Spatial analysis (H3 cells)* = `auto@7` (or `curl -F geo=auto@7`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Map* tab draws the cells over an offline basemap; an answer paints the cited insights' cells, *▶ TOUR* flies through them, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+6. **Мапа** (a geo dataset — rows are points). Upload with *Параметри колонок → Просторовий аналіз (комірки H3)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)). *У ВІКНІ* lists the themes and insights characteristic of the view, related themes grouped; picking one opens its card on the map and in the chat, its numbers in words, with *Пов'язані знахідки* to walk on. Cells Shift-clicked into a zone (*ЗОНА · n комірок*) ask about that area, with or without text.
 
-   **Demo: map** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
+   **Демо: мапа** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
 
 **Without the UI**, use the HTTP API through the console's port:
 ```powershell
@@ -136,9 +149,17 @@ curl -X POST http://127.0.0.1:8765/api/demo                                     
 curl -X POST http://127.0.0.1:8765/api/demo/geo                                    # the shipped housing table as H3 cells (resolution 5)
 curl -F file=@data\housing.csv -F bins=median_income:4,housing_median_age:4 http://127.0.0.1:8765/api/upload
 curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_income_median:4 http://127.0.0.1:8765/api/upload   # points -> H3 cells
+curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true http://127.0.0.1:8765/api/upload   # one dataset per level
+curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true -F bins=median_income_median:4,median_income:4 http://127.0.0.1:8765/api/upload   # the same file again adds its table level: the geo levels are SKIPPED
+curl -F file=@<new version>.csv -F geo=auto@7,5 -F supersedes=<upload id of the old> http://127.0.0.1:8765/api/upload   # a new version replaces the old
+curl -F file=@data\orders.csv -F "glossary=<glossary.json" -F metadata=@columns.md http://127.0.0.1:8765/api/upload   # the columns in the uploader's words
+curl -X PATCH -H "Content-Type: application/json" -d "{\"source\": \"Field reports\", \"reliability\": \"B\"}" http://127.0.0.1:8765/api/datasets/<dataset id>   # declare later: also indicators, glossary, metadata
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
+curl -X POST -H "Content-Type: application/json" -d "{\"geometry\": {\"center\": [-122.27, 37.8], \"radius_m\": 20000}}" http://127.0.0.1:8765/api/search   # a map zone as the question
+curl -X POST http://127.0.0.1:8765/api/patterns/<pattern id>/verify               # an insight recomputed from its stored upload
+curl -o sig.ttl http://127.0.0.1:8765/api/export/geosparql.ttl                     # the graph as GeoSPARQL Turtle
 curl -X DELETE http://127.0.0.1:8765/api/datasets/<dataset id>
 curl -X POST http://127.0.0.1:8765/api/reset                                       # delete the workspace (and clear the mirror)
 ```
@@ -178,29 +199,29 @@ Latent anchors learned, each a recurring phenomenon across scopes:
 "Why is margin lower for phones in the US?" with `use_llm: false` gives the evidence-only answer (`answer_mode: "fallback"`):
 ```text
 Спостереження:
-- category=phones, region=US | discount +2.21 sd (медіана 19.19 проти 10.74); margin -1.10 sd (медіана 14.75 проти 19.45) | n=438 [P1]
-- category=phones, channel=online, region=US | discount +2.25 sd (медіана 19.35 проти 10.74); margin -1.10 sd (медіана 14.72 проти 19.45) | n=205 [P2]
+- Де category = phones і region = US — discount: помітно вище, медіана 19.19 проти 10.74 загалом (+2.21 sd); margin: помірно нижче, медіана 14.75 проти 19.45 (-1.10 sd); 438 рядків [P1]
+- Де category = phones і channel = online і region = US — discount: помітно вище, медіана 19.35 проти 10.74 загалом (+2.25 sd); margin: помірно нижче, медіана 14.72 проти 19.45 (-1.10 sd); 205 рядків [P2]
 …
-- category=tablets, channel=retail, region=EU | discount +2.14 sd (медіана 18.91 проти 10.74); margin -1.03 sd (медіана 15.03 проти 19.45) | n=134 [P4] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
-- category=tablets, channel=retail, region=APAC | discount +2.09 sd (медіана 18.74 проти 10.74); margin -1.00 sd (медіана 15.17 проти 19.45) | n=108 [P5] (інший сегмент: без спільної умови із запитом, знайдено через латентну тему)
+- Де category = tablets і channel = retail і region = EU — discount: помітно вище, медіана 18.91 проти 10.74 загалом (+2.14 sd); margin: помірно нижче, медіана 15.03 проти 19.45 (-1.03 sd); 134 рядки [P4] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
+- Де category = tablets і channel = retail і region = APAC — discount: помітно вище, медіана 18.74 проти 10.74 загалом (+2.09 sd); margin: слабко нижче, медіана 15.17 проти 19.45 (-1.00 sd); 108 рядків [P6] (інший сегмент: знайдено через тему; жодної спільної умови з питанням)
 …
 Інтерпретація (гіпотези): не сформовано (відповідь мовної моделі недоступна).
 ```
 The citation check passed: all 10 evidence items cited, 0 unknown keys (`grounded: true`). With the broker configured, the LLM writes the same evidence as a Ukrainian answer with `[P#]` citations (`answer_mode: "llm"`), checked the same way.
 
-The prompt (the *Prompt* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882`.
+The prompt (the *Промпт* tab) shows how [P4] was reached: `P-bc4657a04746 -ACTIVATES(0.98)-> A-1 <-ACTIVATES(0.99)- P-ddfe04dc0882`.
 - **No shared scope.** The seed `US∧phones` shares no condition with the tablet patterns.
 - **Lattice vs anchor.** The lattice reaches them only through 2–4 hops among many other patterns. The anchor `discount ↑ · margin ↓` connects them in two hops.
 - **The prompt** is plain ASCII. It defines "sd" once and states every shift as a phrase plus a signed number ([7.4](docs/07_question_answering.md#74-the-evidence-object)).
 
-**Hypothesis benchmark** (`python scripts/experiment.py --k 3`). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
+**Hypothesis benchmark** (`python scripts/experiment.py --k 3`; measured in bf16, as CUDA computes; on the CPU (float32) and on Apple silicon the transversal row reads 0.333 / 0.567 / 0.701, two analogues one rank lower, [4.4](docs/04_representation.md#44-the-embedding-model)). It uses 12 seed cases; an analogue is a pattern with the same planted phenomenon and no shared scope condition.
 
 | method | recall@3 | MRR | recall@5 |
 |---|---|---|---|
 | transversal (this system) | **0.500** | **0.581** | **0.701** |
 | structural-only BFS | 0.000 | 0.078 | 0.000 |
-| naive text-NN (canonical documents) | 0.167 | 0.243 | 0.361 |
-| insight-vector kNN (no attractor graph) | 0.028 | 0.229 | 0.507 |
+| naive text-NN (canonical documents) | 0.028 | 0.199 | 0.375 |
+| insight-vector kNN (no attractor graph) | 0.028 | 0.232 | 0.590 |
 
 Labels come from the planted ground truth (scope containment), not from the measured shifts. See [10.3](docs/10_verification.md#103-hypothesis-benchmark) for the reading and the caveats.
 
@@ -232,25 +253,27 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Ukrainian questions are grounded onto the data's literals through the embedding model (*телефонів* → `phones`, *США* → `US`). The literals Qwen3 cannot bridge on the demo (*маржа*, *частка повернень*, *роздріб*) are left unmatched rather than guessed ([7.1.1](docs/07_question_answering.md#711-literal-grounding)).
 * Deleting a dataset keeps a theme that still links to another theme even when it has no insight left (its centroid can receive future data); such a theme reads `Attractor k` until it has members again.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
+* The model does not always keep to the plain vocabulary: in the measured run three of fifteen answers used an analyst word, and some wrote a category value in Ukrainian ([7.7](docs/07_question_answering.md#77-measured-behaviour)); the console flags the first as *жаргон: n*.
 
 ## Repository layout
 ```text
 sig/
-  insight_contracts/          the shared kernel (standard library only)
+  insight_contracts/          the shared kernel (standard library only); wording.py: how an insight reads in Ukrainian
   subgroup_miner/             table -> insights (vendor/eda, PROVENANCE.md, README.md, requirements.txt)
   attractor_topology/         insights -> vectors -> latent attractors (vendor/lac, PROVENANCE.md, README.md, requirements.txt)
   graph_query_engine/         question -> evidence over the dual graph (README.md, requirements.txt)
-  insight_graph_service/      the graph service: core/ (engine, batch, snapshot, workspace, neo4j_mirror, demo, model_store,
-                              settings), server/ (app, views); Dockerfile (targets runtime, test), requirements.txt
+  insight_graph_service/      the graph service: core/ (engine, batch, uploads, snapshot, workspace, geo_views, verify,
+                              geosparql, neo4j_mirror, demo, model_store, settings), server/ (app, views);
+                              Dockerfile (targets runtime, test), requirements.txt
   evidence_narrator_service/  the chat service (Dockerfile, requirements.txt)
   llm_model_broker/           the LLM model broker (Dockerfile, requirements.txt)
   sig_web_console/            the static UI, nginx.conf, Dockerfile, PROVENANCE.md (vendored browser libraries)
   compose.yaml, constraints.txt, .dockerignore   the service suite in start order; the images' pinned versions
   requirements-dev.txt        host development: every service's runtime + the test tools
   tests/                      contract / integration / E2E / UI tests (doubles.py: the deterministic test embedder)
-  docs/                       eleven chapters in pipeline order and the architecture chapter; init_concepts/ (the theory)
+  docs/                       eleven chapters in pipeline order, the architecture and the trust chapters; init_concepts/ (the theory)
   scripts/                    check.py (the gate), compose_check.py (the Docker check), dev.py (host composite),
-                              multilingual_benchmark.py, eval_answers.py, experiment.py (measurements), scratch.py (their helpers)
-  models/, data/              local, git-ignored: the embedding model; housing.csv
+                              benchmarks and evaluations on throwaway workspaces (docs/10 §10.4), scratch.py (their helpers)
+  models/, data/              local, git-ignored: the embedding model; housing.csv, demo/california_housing.csv (the map demo)
   workspace/                  the knowledge base of host runs (created on first run; POST /api/reset deletes it)
 ```

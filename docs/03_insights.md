@@ -23,14 +23,15 @@
 | `sd_score`, `sd_raw_score` | EDA bootstrap-penalised `final_sd_score`, pass-1 `sd_aggregate_score` |
 | `emm_score`, `volume_utility` | per-pair RMS correlation change, EDA volume utility |
 | `stability` | `sd_score / sd_raw_score` ∈ `[0.1, 1]` (0 when `sd_raw_score` is 0); `None` for a covariance insight |
-| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted; `None` for a covariance insight |
+| `p_value`, `p_adjusted` | adapter median test on the EDA's primary metric, Bonferroni-adjusted; `None` for a covariance insight; recomputable from the stored upload with the shifts and support (`recompute_statistics`, [6.7](06_graph_and_storage.md#67-configuration-and-guarantees)) |
 | `drivers` | EDA confounder strings |
 | `row_hash` | 16 hex of `sha1` over the sorted covered row positions — the identity of the row set |
 | `phenomenon_type` | `"shift"` or `"covariance"` |
 | `covariance` | `{"pair": [a, b], "local_corr", "global_corr", "delta"}` or `{}` |
 | `aliases` | selectors merged into this cohort before validation |
 | `weight`, `weight_factors` | `insight_weight`, and the four factors with `null` for unmeasured ones |
-| `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, multiple_testing_family}` from the miner, plus `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), which the graph service sets on the journal record |
+| `provenance` | `{dataset_id, filename, batch_id, engine, steps, expression, multiple_testing_family}` from the miner, for a geo insight `spatial` — the five ingest fields of `SpatialProvenance` (`resolution`, `cells`, `moran_i`, `n_eff`, `p_adjusted_iid`; `from_dict` ignores other keys and reads a missing field as None) ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option); `compactness` and the spatial plane are derived at the commit, [6.1](06_graph_and_storage.md#61-the-structural-plane)), plus `rows_ref` (`datasets/<ds>/covers.npz#<pattern id>`), which the graph service sets on the journal record |
+| `record_digest` (journal record only) | `record_digest(record)`: SHA-256 of the canonical JSON of every key the journal record was written with except `provenance` (its `rows_ref` is set after the digest), `row_id` (a deletion renumbers it) and the digest itself — so `canonical` and `embedding`, written once, are covered, and the digest does not depend on which fields `Insight` has later — plus the ingest fields of `provenance.spatial` (`resolution`, `cells`, `moran_i`, `n_eff`, `p_adjusted_iid`). The graph service sets it on the journal record (`batch.pattern_records`); the snapshot checks it ([6.2](06_graph_and_storage.md#62-the-graph-schema)) |
 
 The journal adds `row_id` (the vector's row), `canonical` (the canonical form of [4.2](04_representation.md#42-the-canonical-form), including its document) and `embedding` (`{fingerprint, model_id, dim, representation_version}`) (`batch.pattern_records`). What the record does **not** hold: the covered rows themselves (only their positions, in `covers.npz`), the profiled DataFrame, any raw cell value other than condition values and medians — the rows stay in the uploaded file (`uploads/`; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). The vectors are stored beside it: the insight vector in `embeddings.mmap`, its three blocks and the document embedding in `journal/blocks/<batch>.npz`.
 

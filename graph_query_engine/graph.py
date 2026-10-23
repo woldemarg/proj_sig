@@ -3,28 +3,46 @@
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from insight_contracts import SNAPSHOT_VERSION, Insight
+from insight_contracts import (
+    SNAPSHOT_VERSION,
+    Insight,
+    PhenomenonThresholds,
+    SpatialProvenance,
+    dataset_node_id,
+    dimension_node_id,
+    region_node_id,
+    wording,
+)
 from insight_contracts.text import describe_component
 
 
 @dataclass(frozen=True)
 class LatentFrame:
-    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid,
-    plus the canonical-document embeddings the naive text baseline compares questions with.
-
-    Frozen fields, but ``documents`` is a cache: a document vector the commit lacks is added in place, once, on the
-    first question (by the caller); no entry is replaced."""
+    """Committed vectors of the single insight frame: pattern id -> unit vector, attractor id -> centroid."""
 
     patterns: dict[str, np.ndarray]
     attractors: dict[int, np.ndarray]
-    documents: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
+class PatternFacts:
+    """What the vertical zoom and the walk read of one pattern. A broad pattern at resolution 8 lies in thousands of regions, and
+    a step meets every pattern of each of them: re-deriving these per meeting made one step take a minute."""
+
+    resolution: int | None
+    upload: str | None
+    regions: dict[str, float]  # IN_REGION target -> share (read only)
+    placed: frozenset[str]  # its IN_REGION targets at the finest level they reach
+    finest: frozenset[str]  # its own cells' region ids at a region level (a cell no other pattern lies in has no node), else ``placed``
+    anchors: dict[str, float]  # non-weak ACTIVATES target -> alignment (read only)
 
 
 def describe_components(signature: list[dict[str, Any]]) -> str:
@@ -51,9 +69,63 @@ class DualGraph:
         for e in self.edges:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
+        self.own_cells: dict[str, list[str]] = snapshot.get("own_cells", {})  # a geo pattern at a region level -> its cells
+        self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
+        self._memo_lock = threading.RLock()
+
+    def memoised(self, key: tuple[str, str], build: Callable[[], Any]) -> Any:
+        """``build()`` kept under ``key``: computed once per graph even when readers on several threads ask at once (a
+        projection takes seconds on a large upload). Reentrant, since one build may read another's facts."""
+        # ponytail: one lock per graph serialises the first builds of different keys; per-key locks if readers ever queue
+        if key in self.memo:
+            return self.memo[key]
+        with self._memo_lock:
+            if key not in self.memo:
+                self.memo[key] = build()
+            return self.memo[key]
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]
+
+    def tampered(self, pattern_id: str) -> bool:
+        """Whether the pattern's journal record fails its digest (docs/13_trust.md §13.4): never a seed, a walk slot or evidence."""
+        return self.nodes[pattern_id]["props"].get("integrity") == "mismatch"
+
+    def holders(self, region: str) -> list[str]:
+        """The patterns a region holds: its IN_REGION sources, and the geo patterns whose own cell it is (``own_cells``)."""
+
+        def build() -> dict[str, list[str]]:
+            held: defaultdict[str, list[str]] = defaultdict(list)
+            for pid, cells in self.own_cells.items():
+                res = self.facts(pid).resolution
+                for c in cells:
+                    held[region_node_id(res, c)].append(pid)
+            return dict(held)
+
+        own = self.memoised(("own_holders", ""), build)
+        return [e["source"] for e in self.inc.get(region, []) if e["type"] == "IN_REGION"] + own.get(region, [])
+
+    def facts(self, pattern_id: str) -> PatternFacts:
+        """``pattern_id``'s facts, derived once per graph (``memoised``)."""
+
+        def build() -> PatternFacts:
+            out, ins = self.out.get(pattern_id, []), self.insight(pattern_id)
+            spatial = SpatialProvenance.from_dict(ins.provenance.get("spatial"))
+            regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
+            levels = {r: self.nodes[r]["props"]["resolution"] for r in regions}
+            top = max(levels.values(), default=None)
+            own = self.own_cells.get(pattern_id)
+            placed = frozenset(r for r, lv in levels.items() if lv == top)
+            return PatternFacts(
+                resolution=spatial.resolution if spatial else None,
+                upload=self.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
+                regions=regions,
+                placed=placed,
+                finest=frozenset(region_node_id(spatial.resolution, c) for c in own) if own else placed,
+                anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
+            )
+
+        return self.memoised(("facts", pattern_id), build)
 
     def canonical_document(self, node_id: str) -> str:
         return self.nodes[node_id]["props"]["canonical"]["document"]
@@ -75,3 +147,47 @@ class DualGraph:
         found = [(e, e["target"]) for e in self.out.get(node_id, []) if e["type"] in wanted]
         found += [(e, e["source"]) for e in self.inc.get(node_id, []) if e["type"] in wanted]
         return found
+
+
+def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
+    """The pattern's strongest non-weak ACTIVATES edge: the theme it is shown and walked under (a weak membership counts
+    for coverage only, docs/06_graph_and_storage.md §6.2); None when it has none."""
+    acts = (e for e in graph.out.get(pattern_id, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak"))
+    return max(acts, key=lambda e: e["weight"], default=None)
+
+
+def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThresholds) -> dict[str, str]:
+    """The insight in words, ``{"where", "what", "headline"}`` (``wording.reading``), with its dataset's declared glossary
+    (``user_glossary`` of its Dataset node) and the band count of each quantile-band condition from its Dimension node:
+    every surface that describes an insight reads it here."""
+    return wording.reading(graph.insight(pattern_id), thresholds, *declared_words(graph, pattern_id))
+
+
+def declared_words(graph: DualGraph, pattern_id: str) -> tuple[dict[str, str], dict[str, int]]:
+    """What an insight's words are read with: its dataset's declared glossary and the band count of each quantile-band
+    condition (``band_counts``)."""
+    ins = graph.insight(pattern_id)
+    declared = graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("user_glossary", {})
+    return declared, band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions))
+
+
+def theme_glossary(graph: DualGraph, attractor_id: str) -> dict[str, str]:
+    """The declared glossaries of the datasets of a theme's insights, merged (the first insight's dataset wins a name
+    both declare), for its reading; derived once per graph."""
+
+    def build() -> dict[str, str]:
+        out: dict[str, str] = {}
+        for e in graph.inc.get(attractor_id, []):
+            if e["type"] == "ACTIVATES" and e["source"] in graph.insights:
+                node = graph.nodes.get(dataset_node_id(graph.insights[e["source"]].dataset_id), {"props": {}})
+                out = node["props"].get("user_glossary", {}) | out
+        return out
+
+    return graph.memoised(("theme_glossary", attractor_id), build)
+
+
+def band_counts(graph: DualGraph, dataset_id: str, attributes: Iterable[str]) -> dict[str, int]:
+    """The band count of each quantile-band column among ``attributes``, from its Dimension node."""
+    # ponytail: a band column with missing values counts "missing" as a band; the band count is one too high then
+    dims = (graph.nodes.get(dimension_node_id(dataset_id, a)) for a in attributes if a.endswith("_band"))
+    return {d["props"]["name"]: d["props"]["cardinality"] for d in dims if d and d["props"].get("cardinality")}

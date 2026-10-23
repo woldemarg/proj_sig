@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from conftest import free_port
+from scratch import free_port
 
 from evidence_narrator_service.llm_client import OpenAICompatibleLLM
 from evidence_narrator_service.narration import SYSTEM_PROMPT, check_citations
@@ -20,6 +20,7 @@ def test_openai_compatible_roundtrip(llm_stub):
     llm = OpenAICompatibleLLM(NarratorSettings(llm_base_url=base))
     health = llm.health()
     assert health["reachable"] and health["model_available"] and health["model"] == "gemma4:latest"
+    assert "verified" not in SYSTEM_PROMPT  # the evidence is computed, not verified
     resp = llm.generate(SYSTEM_PROMPT, "EVIDENCE ... [P1] ...")
     assert resp.ok and resp.text.endswith("[P1].") and resp.model == "gemma4:latest" and resp.usage["completion_tokens"] == 5
     body = seen[-1]["body"]

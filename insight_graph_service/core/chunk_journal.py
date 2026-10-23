@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from insight_graph_service.core.fileio import replace_file, retry_sharing
+from insight_graph_service.core.fileio import replace_file
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -90,9 +90,9 @@ class ChunkJournal:
     def load_embeddings(self) -> np.ndarray:
         if not (self.embeddings_path.exists() and self.meta_path.exists()):
             return np.empty((0, 0), dtype=np.float32)
-        meta = json.loads(retry_sharing(lambda: self.meta_path.read_text(encoding="utf-8")))
+        meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
         shape = (int(meta["rows"]), int(meta["dim"]))
-        return retry_sharing(lambda: np.array(np.memmap(self.embeddings_path, dtype=np.float32, mode="r", shape=shape)))
+        return np.array(np.memmap(self.embeddings_path, dtype=np.float32, mode="r", shape=shape))
 
     def row_count(self) -> int:
         if not self.chunks_path.exists():

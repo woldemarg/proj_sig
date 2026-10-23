@@ -10,7 +10,7 @@ from typing import Any
 @dataclass(frozen=True)
 class NarratorSettings:
     insight_graph_url: str = "http://127.0.0.1:8765"  # the graph service: its POST /api/search gives the evidence
-    insight_graph_timeout_s: float = 300.0  # the first question after a commit builds the literal catalog (CPU: tens of seconds)
+    insight_graph_timeout_s: float = 600.0  # a question over a large geo upload; the console's nginx waits for it and the LLM
     llm_base_url: str = "http://127.0.0.1:8080/v1"  # the LLM model broker: it holds the upstream, the model and the key
     llm_timeout_s: float = 120.0
     llm_temperature: float = 0.1

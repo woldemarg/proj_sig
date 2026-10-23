@@ -17,7 +17,7 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import LiteralCatalog, ParsedQuery, build_catalog, parse_query
 from graph_query_engine.seeds import SeedMatch, resolve_seeds
-from graph_query_engine.traversal import TraversalResult, naive_nearest, structural_closure, traverse
+from graph_query_engine.traversal import LATTICE_EDGES, TraversalResult, structural_closure, traverse
 from insight_contracts.payload import CITATION_FIELDS, EvidencePayload
 
 _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transversal_only")
@@ -25,9 +25,9 @@ _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transv
 
 @dataclass
 class CommittedState:
-    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. ``catalog`` and the
-    document vectors ``frame`` lacks are caches: filled once, on the first question (by the caller; the catalog by
-    ``search`` if the caller did not), and never replaced. A commit replaces the whole object, never a part of it."""
+    """What retrieval reads, all from one commit: the graph, its vectors and its literal catalog. The graph service
+    builds it complete at the commit; a library caller may leave ``catalog`` None and ``search`` builds it on first
+    use. A commit replaces the whole object, never a part of it."""
 
     graph: DualGraph
     frame: LatentFrame
@@ -39,7 +39,7 @@ class SearchResult:
     question: str
     parsed: ParsedQuery
     seeds: list[SeedMatch]
-    traversal: TraversalResult  # ``baselines``: what structural-only and naive text retrieval return (§7.6)
+    traversal: TraversalResult  # ``baselines``: what the structural lattice alone reaches (§7.6)
     evidence: Evidence
     seconds: float  # the search, evidence included (a caller may add its own preparation)
 
@@ -86,33 +86,30 @@ def empty_payload(question: str) -> EvidencePayload:
     return EvidencePayload(question, graph_empty=True, view={"evidence": {}, "traversal": {}, "highlight": {k: [] for k in _HIGHLIGHT_KEYS}})
 
 
-def compute_baselines(
-    graph: DualGraph, question: str, seeds: list[SeedMatch], result: TraversalResult, frame: LatentFrame, encoder: QueryEncoder, config: QueryConfig
-) -> dict[str, Any]:
-    """What structural-only and naive text retrieval would have returned (§7.6). The documents were embedded at
-    ingest, so the question is the only text embedded here; a pattern without a document vector is left out."""
-    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, config.lattice_edges)
-    doc_vecs = {pid: frame.documents[pid] for pid in graph.insights if pid in frame.documents}
-    naive = naive_nearest(encoder.embedder.embed_queries([question])[0], doc_vecs, config.max_retrieved)
+def compute_baselines(graph: DualGraph, seeds: list[SeedMatch], result: TraversalResult, config: QueryConfig) -> dict[str, Any]:
+    """What the structural lattice alone would have reached from the seeds, and what the walk found beyond it (§7.6). The
+    naive text baseline is a measurement, not part of an answer: ``scripts/experiment.py`` embeds the documents itself."""
+    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES)
     retrieved = {r.node_id for r in result.patterns}
     return {
         "structural_only": sorted(closure),
-        "naive_nearest": [{"pattern_id": p, "cosine": round(c, 3)} for p, c in naive],
         "transversal_only": [r.node_id for r in result.patterns if r.transversal_only],
-        "not_in_naive_topk": sorted(retrieved - {p for p, _ in naive}),
         "not_structurally_reachable": sorted(retrieved - set(closure)),
     }
 
 
-def search(question: str, state: CommittedState, encoder: QueryEncoder, config: QueryConfig) -> SearchResult:
-    """The evidence for ``question`` over one committed state."""
+def search(
+    question: str, state: CommittedState, encoder: QueryEncoder, config: QueryConfig, place_scores: dict[str, float] | None = None
+) -> SearchResult:
+    """The evidence for ``question`` over one committed state; ``place_scores`` (pattern id -> its overlap with an asked
+    map zone) weigh the seeds, and the question may then be empty."""
     start = time.perf_counter()
     graph = state.graph
     if state.catalog is None and graph.insights:  # a caller that did not prepare one: build it now, kept on the state
         state.catalog = build_catalog(graph, encoder.embedder)
     parsed = parse_query(question, graph, config, state.catalog)
-    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config)
+    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores)
     result = traverse(graph, seeds, config)
-    result.baselines = compute_baselines(graph, question, seeds, result, state.frame, encoder, config)
-    evidence = build_evidence(parsed, result, graph, config)
+    result.baselines = compute_baselines(graph, seeds, result, config)
+    evidence = build_evidence(parsed, result, graph, config, place_scores)
     return SearchResult(question, parsed, seeds, result, evidence, time.perf_counter() - start)
