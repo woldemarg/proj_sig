@@ -149,6 +149,14 @@ def test_a_theme_and_a_region_read_in_plain_words():
     )
     corr = {"signature": [{"component": "correlation between delivery days and margin", "value": 0.4}], "n_patterns": 1, "distinct_scopes": 1}
     assert w.theme_reading(corr, declared).startswith("Повторювана картина: зв'язок метрик днів доставки і маржа сильнішає")
+    geo = {
+        "signature": [{"component": "share fuel type Дизель", "value": 0.8}, {"component": "points", "value": -0.2}],
+        "n_patterns": 2,
+        "distinct_scopes": 2,
+    }
+    assert w.theme_reading(geo, {"fuel_type": "Тип пального"}).startswith(  # a cell's derived columns read as in its insights
+        "Повторювана картина: частка подій комірки, де Тип пального — Дизель вище, кількість подій у комірці нижче"
+    )
     picture = {"patterns": 3, "datasets": 1, "themes": 2}
     assert w.region_reading(picture) == "3 інсайти з 1 датасету, 2 теми."
 

@@ -318,11 +318,13 @@ def sentence(words: Mapping[str, str]) -> str:
 def theme_reading(props: Mapping[str, Any], glossary: Mapping[str, str] | None = None) -> str:
     """A theme in one sentence from its Attractor props: its two strongest signature entries, its insights and scopes
     (docs/05_latent_anchors.md §5.8); ``glossary`` the declared one of its insights' datasets (``graph.theme_glossary``),
-    so its metrics read in the uploader's words (a signature label is a humanised column name)."""
+    so its metrics read in the uploader's words (a signature label is a humanised column name) and a cell's derived
+    columns as in its insights."""
     n_patterns, distinct_scopes, parts = props["n_patterns"], props["distinct_scopes"], []
 
     def words(label: str) -> str:
-        return column_words(label.replace(" ", "_"), glossary or {}, False)
+        # ponytail: the humanised label is the column with "_" read as " "; a share level holding a space reads it back as "_"
+        return column_words(label.replace(" ", "_"), glossary or {}, True)
 
     for entry in props["signature"][:2]:
         label, up = entry["component"], entry["value"] > 0
