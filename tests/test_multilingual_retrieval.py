@@ -106,6 +106,9 @@ def test_a_declared_name_grounds_the_metric():
     twice = {**dataset, "props": {"dataset_id": "ds1", "user_glossary": {"margin": "маржинальність", "return_rate": "маржинальність"}}}
     p = grounded(toy_graph([twice]))("Де маржинальність нижча?")
     assert p.targets == [] and p.grounding == []  # one name declared for two metrics says neither
+    ask = grounded(toy_graph([{**dataset, "props": {"dataset_id": "ds1", "user_glossary": {"margin": "Кількість замовлень"}}}]))
+    assert ask("Де кількості замовлень більше?").targets == ["margin"]  # said, inflected
+    assert ask("Чому кількох підприємств більше?").targets == [] and ask("Де більшість замовлень?").targets == []  # n-grams alike, not said
 
 
 def test_hub_and_ambiguity_are_rejected():
