@@ -5,7 +5,7 @@
 2. picks seed patterns;
 3. walks the structural lattice and the latent attractor bridges;
 4. follows each geo pattern up and down the levels of the same phenomenon (`vertical.scale_chain`);
-5. packs what it found into evidence with its paths and statistics ([docs/07_question_answering.md](../docs/07_question_answering.md)).
+5. packs what it found into evidence with its paths, statistics and each insight's reading in words (`insight_contracts.wording`, with the dataset's declared glossary), and the prompt sections that explain the columns: PLAIN LANGUAGE and DATASET CONTEXT ([docs/07_question_answering.md](../docs/07_question_answering.md)).
 
 The result can be the `EvidencePayload` from `insight_contracts`: an LLM-ready evidence prompt, the deterministic cited observation lines (an answer without an LLM, once framed), a citation manifest (`P#` → pattern and provenance) and the data a UI draws.
 

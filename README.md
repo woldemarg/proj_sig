@@ -125,12 +125,13 @@ SIG owns its seven node labels in that database, so use one workspace per databa
 ### Using the console
 1. **Add data.** Drop a CSV, TSV or Parquet file on the left rail, or click a demo: **Демо: таблиця** (the synthetic retail orders) or **Демо: мапа** (California housing block groups, analysed as H3 cells).
    - Under *Параметри колонок*, number-coded columns can be declared categories (`Store, Holiday_Flag`), and numeric columns split into band dimensions (`median_income:4`).
+   - The same panel says what the data means and where it comes from. *Що вимірюють метрики* (`metric:indicator:unit`), *Що означають колонки* (a JSON glossary) and *Документ метаданих* (a text file, one `Key: value` block per column) name the columns in every reading and in the prompt ([2.1](docs/02_discovery.md#21-ingestion)); *Джерело* and *Надійність джерела* (Admiralty A–F) feed each finding's trust line ([13](docs/13_trust.md)).
    - A dataset card's *Видалити* button removes that dataset again: its insights, vectors and memberships, and the themes left with no insight and no theme link ([6.8](docs/06_graph_and_storage.md#68-deleting-a-dataset)).
 2. **Watch the batch card** move through the lifecycle stages. When READY it shows the insights, the new themes and the rows, the subgroups tested, how many were filtered out, the duration and the dimension tags.
 3. **Explore.** *Граф*, *3D-сфера* and *Інсайти* are views of the same knowledge base under one legend.
    - The legend's link switches show the layers in both views. Hierarchy and theme links are on by default; contrasts, siblings, memberships and columns come on demand.
    - Hovering a legend entry spotlights it.
-   - Click any node or row for the details drawer: a one-line reading, shifts, evidence facts, the canonical form, connections and provenance.
+   - Click any node or row for the details drawer: the insight in words (where it holds and what it shows), shifts, evidence facts, trust, the canonical form, connections and provenance. Every term carries its meaning in a tooltip.
 4. **3D-сфера.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
 5. **Chat** with the data, or click a suggestion.
    - Answers are in Ukrainian. Every data literal (`margin`, `phones`, `US`, ids) stays exactly as the data holds it.
@@ -138,7 +139,7 @@ SIG owns its seven node labels in that database, so use one workspace per databa
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
    - The *Промпт* tab shows the exact evidence the model saw.
 
-6. **Мапа** (a geo dataset — rows are points). Upload with *Параметри колонок → Просторовий аналіз (комірки H3)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)).
+6. **Мапа** (a geo dataset — rows are points). Upload with *Параметри колонок → Просторовий аналіз (комірки H3)* = `auto@auto` (levels read from the points; `auto@7` names one), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)). *У ВІКНІ* lists the themes and insights characteristic of the view, related themes grouped; picking one opens its card on the map and in the chat, its numbers in words, with *Пов'язані знахідки* to walk on. Cells Shift-clicked into a zone (*ЗОНА · n комірок*) ask about that area, with or without text.
 
    **Демо: мапа** ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` with `bins=median_income_median:4`: 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
 
@@ -151,6 +152,8 @@ curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_inco
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true http://127.0.0.1:8765/api/upload   # one dataset per level
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true -F bins=median_income_median:4,median_income:4 http://127.0.0.1:8765/api/upload   # the same file again adds its table level: the geo levels are SKIPPED
 curl -F file=@<new version>.csv -F geo=auto@7,5 -F supersedes=<upload id of the old> http://127.0.0.1:8765/api/upload   # a new version replaces the old
+curl -F file=@data\orders.csv -F "glossary=<glossary.json" -F metadata=@columns.md http://127.0.0.1:8765/api/upload   # the columns in the uploader's words
+curl -X PATCH -H "Content-Type: application/json" -d "{\"source\": \"Field reports\", \"reliability\": \"B\"}" http://127.0.0.1:8765/api/datasets/<dataset id>   # declare later: also indicators, glossary, metadata
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\", \"use_llm\": false}" http://127.0.0.1:8765/api/chat/query
 curl -X POST -H "Content-Type: application/json" -d "{\"question\": \"Why is margin lower for phones in the US?\"}" http://127.0.0.1:8765/api/search   # the evidence only
@@ -250,16 +253,18 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Ukrainian questions are grounded onto the data's literals through the embedding model (*телефонів* → `phones`, *США* → `US`). The literals Qwen3 cannot bridge on the demo (*маржа*, *частка повернень*, *роздріб*) are left unmatched rather than guessed ([7.1.1](docs/07_question_answering.md#711-literal-grounding)).
 * Deleting a dataset keeps a theme that still links to another theme even when it has no insight left (its centroid can receive future data); such a theme reads `Attractor k` until it has members again.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
+* The model does not always keep to the plain vocabulary: in the measured run three of fifteen answers used an analyst word, and some wrote a category value in Ukrainian ([7.7](docs/07_question_answering.md#77-measured-behaviour)); the console flags the first as *жаргон: n*.
 
 ## Repository layout
 ```text
 sig/
-  insight_contracts/          the shared kernel (standard library only)
+  insight_contracts/          the shared kernel (standard library only); wording.py: how an insight reads in Ukrainian
   subgroup_miner/             table -> insights (vendor/eda, PROVENANCE.md, README.md, requirements.txt)
   attractor_topology/         insights -> vectors -> latent attractors (vendor/lac, PROVENANCE.md, README.md, requirements.txt)
   graph_query_engine/         question -> evidence over the dual graph (README.md, requirements.txt)
-  insight_graph_service/      the graph service: core/ (engine, batch, snapshot, workspace, neo4j_mirror, demo, model_store,
-                              settings), server/ (app, views); Dockerfile (targets runtime, test), requirements.txt
+  insight_graph_service/      the graph service: core/ (engine, batch, uploads, snapshot, workspace, geo_views, verify,
+                              geosparql, neo4j_mirror, demo, model_store, settings), server/ (app, views);
+                              Dockerfile (targets runtime, test), requirements.txt
   evidence_narrator_service/  the chat service (Dockerfile, requirements.txt)
   llm_model_broker/           the LLM model broker (Dockerfile, requirements.txt)
   sig_web_console/            the static UI, nginx.conf, Dockerfile, PROVENANCE.md (vendored browser libraries)
@@ -268,7 +273,7 @@ sig/
   tests/                      contract / integration / E2E / UI tests (doubles.py: the deterministic test embedder)
   docs/                       eleven chapters in pipeline order, the architecture and the trust chapters; init_concepts/ (the theory)
   scripts/                    check.py (the gate), compose_check.py (the Docker check), dev.py (host composite),
-                              multilingual_benchmark.py, eval_answers.py, experiment.py (measurements), scratch.py (their helpers)
-  models/, data/              local, git-ignored: the embedding model; housing.csv
+                              benchmarks and evaluations on throwaway workspaces (docs/10 §10.4), scratch.py (their helpers)
+  models/, data/              local, git-ignored: the embedding model; housing.csv, demo/california_housing.csv (the map demo)
   workspace/                  the knowledge base of host runs (created on first run; POST /api/reset deletes it)
 ```
