@@ -35,6 +35,15 @@ def settings(**overrides: Any) -> Settings:
     return load_settings(**{"neo4j_enabled": False, **overrides})
 
 
+def parse_overrides(items: list[str]) -> dict[str, Any]:
+    """``--override NAME=VALUE`` arguments as settings fields: lower-case names, numbers as int or float."""
+    overrides = {}
+    for item in items:
+        name, value = item.split("=", 1)
+        overrides[name.lower()] = float(value) if "." in value else int(value)
+    return overrides
+
+
 def scratch_dir(name: str, *, fresh: bool = False) -> Path:
     """``.scratch/<name>/``, emptied first when ``fresh``."""
     path = SCRATCH / name
