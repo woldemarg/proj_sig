@@ -85,8 +85,8 @@ def places(graph: DualGraph, pid: str, level: int | None = None) -> list[tuple[s
 
 
 def drawn_regions(graph: DualGraph, pid: str) -> frozenset[str]:
-    """The regions drawn for one intact pattern: its places at each level it lies at, so the map holds each region the
-    ZONES name, and the regions its scale chain names; none for a tampered one. Derived once per graph."""
+    """The regions drawn for one intact pattern in the graph: its places at each level it lies at, so the graph holds
+    each region the ZONES name, and the regions its scale chain names; none for a tampered one. Derived once per graph."""
 
     def build() -> frozenset[str]:
         if graph.tampered(pid):
@@ -104,8 +104,8 @@ def _own_chain(graph: DualGraph, pid: str) -> ScaleChain | None:
 
 
 def shown_regions(graph: DualGraph, pattern_ids: list[str]) -> set[str]:
-    """The regions the console draws for ``pattern_ids`` (the map's overlay, the graph's regions; docs/08_interface.md
-    §8.7): their ``drawn_regions``, each holding an intact pattern."""
+    """The Region nodes the graph view draws for ``pattern_ids`` (docs/08_interface.md §8.2): their ``drawn_regions``,
+    each holding an intact pattern."""
     return _held(graph, set().union(*(drawn_regions(graph, pid) for pid in pattern_ids)))
 
 

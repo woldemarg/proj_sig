@@ -86,7 +86,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
-        held = "G.overlay.features.reduce((a, f) => a + f.properties.patterns, 0)"
+        held = "G.overlay.features.reduce((a, f) => a + f.properties.n, 0)"
         before = page.evaluate(held)
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
@@ -99,15 +99,17 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
         assert page.evaluate(held) > before and page.evaluate("window.__samePage")
-        # zoomed onto the busiest cell, the list reads the view anew and leads with the map's own level
-        listing = "[W.data.first, W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()]"
+        # zoomed onto the busiest cell, the list reads its region alone: as many rows as the region's count says
+        listing = "W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()"
         wide = page.evaluate(listing)
-        assert wide[0] == "coarse" and wide[1]
-        page.evaluate(
-            "G.map.jumpTo({ center: centre(G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))), zoom: 13 })"
-        )
-        page.wait_for_function("W.data && W.data.first === 'map'", timeout=10000)
-        assert page.evaluate(listing)[1] != wide[1]
+        assert wide and page.evaluate("W.data.regions") > 1
+        labels = "G.map.getSource('region-labels').serialize().data.features.length"
+        assert page.evaluate(labels) == page.evaluate("G.overlay.features.filter((f) => f.properties.n > 0).length")  # a 0 is not written
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
+        page.evaluate(f"G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
+        page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)
+        region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
+        assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
         assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · готово рівнів: 2 з 2"
@@ -192,11 +194,14 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
             for p, q in zip(f["geometry"]["coordinates"][0], g["geometry"]["coordinates"][0])
             for a, b in zip(p, q)
         )
-        busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         popup = f"cellPopup({busiest}, centre({busiest}))"
-        pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")
         page.evaluate(f"{popup}; {popup}")
         assert page.locator(".sig-pop").count() == 1  # one popup at a time
+        page.wait_for_selector(".sig-pop .pp-ins")  # its region's rows with an event in it, as many as the line says
+        here = page.evaluate("document.querySelector('.sig-pop .pp-here').textContent")
+        assert here.endswith(f"з них у цій комірці: {page.locator('.sig-pop .pp-ins').count()}")
+        pid = page.get_attribute(".sig-pop .pp-ins >> nth=0", "data-pid")
         page.click(".sig-pop .pp-ins >> nth=0")  # a focus from the popup closes it: the card shows
         assert page.locator(".sig-pop").count() == 0 and page.is_visible("#map-card")
         page.evaluate(f"inspect('{pid}')")
@@ -255,6 +260,11 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
         page.evaluate("if (W.folded) $('mw-fold').click()")
+        listed = "[...document.querySelectorAll('#map-window .mw-th b')].reduce((a, b) => a + Number(b.textContent), 0)"  # folded themes too
+        assert page.evaluate(listed) == 8 < page.evaluate("W.data.insights")  # the most widespread first
+        assert "наблизьтесь" in page.inner_text("#map-window .mw-more")
+        page.click("#map-window .mw-all")
+        assert page.evaluate(listed) == page.evaluate("W.data.insights")  # every row on request
         # a geo insight with a coarser step: its card names its theme and walks its scale chain
         chained = next(
             i["id"]
@@ -283,12 +293,10 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)
         assert page.inner_text("#inspector .lead") == words["what"]
-        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list, or the group it is in
-        group = page.evaluate(f"W.data.themes.find((t) => t.id === {theme!r} || t.members.includes({theme!r})).id")
-        assert group != theme and len(page.evaluate("W.data.themes")) > 8  # the whole map's themes are grouped: the folded path runs
-        page.evaluate(f"W.fold[{group!r}] = false; renderWindow()")
+        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
+        page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()
-        assert page.evaluate(f"W.fold[{group!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{group}']").count() == 1
+        assert page.evaluate(f"W.fold[{theme!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{theme}']").count() == 1
         # a neighbour of another upload, which this map does not draw: walked on, the focus goes and its drawer says so
         offmap = "[...document.querySelectorAll('.msg-bot:last-child .insight-card .nb')].map((e) => e.dataset.id).filter((id) => !GeoMap.has(id))"
         for row in [i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if graph.facts(i["id"]).resolution == 6]:
