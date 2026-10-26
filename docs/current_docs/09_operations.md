@@ -122,7 +122,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `unsupported_file`, `unreadable_file`, `invalid_options` | missing file or unsupported type, parse error, malformed or unknown column options (a bad `source`, `reliability`, `indicators`, `glossary` or metadata document is refused before the file is stored or a batch exists: HTTP 400); `invalid_options` also refuses a question's map zone that cannot be read (`cells`, `geometry`; HTTP 400, no batch) and a `supersedes` that names nothing, the same file, or (by `PATCH`) the dataset itself or its own upload ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) | VALIDATING |
 | `invalid_schema` | too few rows or columns; no categorical dimension after profiling | VALIDATING / PROFILING |
 | `no_numeric_targets` | no numeric column | VALIDATING / PROFILING |
-| `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING) | PROFILING / DISCOVERING |
+| `no_candidates` | empty search space (PROFILING) or nothing passed the pass-1 size screen (DISCOVERING), and no known rule to report (a time window's known rules are reported instead, [2.10](02_discovery.md#210-time-windows-and-trajectories)) | PROFILING / DISCOVERING |
 | `no_viable_insights` | selection and admission kept nothing; a time window ends so with its observations recorded, and its series' trajectories read it as evaluated ([2.10](02_discovery.md#210-time-windows-and-trajectories)) | VALIDATING_INSIGHTS |
 | `embedding_failure`, `representation_mismatch` | encoder error; fingerprint differs from the workspace's | EMBEDDING |
 | `ontology_failure` | an ontology invariant was violated | UPDATING_ONTOLOGY |
