@@ -199,6 +199,19 @@ class Trajectory:
     unobserved_streak: int = 0
     last: tuple[int, Insight] | None = None  # the last admitted (window, node)
 
+    def record(self) -> dict[str, Any]:
+        """What a snapshot serves of it: its rule, metrics, state (``closed_reason`` once closed), episode, first window
+        and one entry per window it was observed in."""
+        return {
+            "predicate": [asdict(c) for c in self.predicate],
+            "metrics": list(self.metrics),
+            "state": self.state,
+            "closed_reason": self.closed_reason,
+            "episode": self.episode,
+            "first_window": self.first_window,
+            "windows": self.windows,
+        }
+
 
 def transition(
     a: Insight,

@@ -1,23 +1,44 @@
-"""The time windows of a workspace's uploads as the miner's trajectory fold reads them (docs/02_discovery.md §2.10,
-docs/06_graph_and_storage.md §6.2): which batch records are the windows of which series, what each window observed,
-and the trajectories and EVOLVES_TO edges they make. A function of the batch records and the journal records it is
-given — the engine asks it for a window's known rules, and for the temporal plane it hands the snapshot compiler.
+"""The time windows of a workspace's uploads (docs/02_discovery.md §2.10, docs/06_graph_and_storage.md §6.2): the
+lifecycle of a window batch the engine runs — its cut at upload, its known rules before discovery, what it observed
+after admission, whether its failure moves its series — and the temporal plane derived from the batch records and the
+journal, which ``snapshot`` turns into EVOLVES_TO edges and the ``trajectories`` section, as the spatial plane.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
-from insight_contracts import EdgeType, GraphEdge, Insight
+from insight_contracts import Insight, Rejection
 from insight_graph_service.core.snapshot import compute_metadata_integrity
 from insight_graph_service.core.uploads import EMPTY_LEVEL
 from insight_graph_service.core.workspace import TERMINAL
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.discovery import KnownRule
-from subgroup_miner.temporal import NOT_EVALUATED, WINDOW_UNAVAILABLE, Observation, Trajectory, WindowFacts, fold_trajectories, open_rules, series_id
+from subgroup_miner.discovery import DiscoveryResult, KnownRule
+from subgroup_miner.temporal import (
+    NOT_EVALUATED,
+    WINDOW_UNAVAILABLE,
+    Observation,
+    Trajectory,
+    WindowFacts,
+    fold_trajectories,
+    observations,
+    open_rules,
+    series_id,
+    stamp_insights,
+    upload_windows,
+)
+
+
+@dataclass
+class TemporalStructure:
+    """The derived temporal plane: every window series' trajectories, folded from its windows' records and the journal
+    (``snapshot._temporal_plane`` makes them EVOLVES_TO edges and the ``trajectories`` section)."""
+
+    series: dict[str, dict[str, Trajectory]] = field(default_factory=dict)  # series -> trajectory key -> trajectory
 
 
 def series_of(record: Mapping[str, Any]) -> str | None:
@@ -84,30 +105,42 @@ def known_rules(
     return open_rules(_fold(windows, nodes, config, before=record["window"]["index"]))
 
 
-def temporal_plane(
-    batches: Iterable[Mapping[str, Any]], journal: Iterable[Mapping[str, Any]], config: MinerConfig
-) -> tuple[list[GraphEdge], dict[str, Any]]:
-    """Every series' EVOLVES_TO edges and trajectories: the snapshot's ``trajectories``, key -> its series, rule, metrics,
-    state (``closed_reason`` when closed), episode, first window and one entry per window it was observed in."""
+def derive_temporal(batches: Iterable[Mapping[str, Any]], journal: Iterable[Mapping[str, Any]], config: MinerConfig) -> TemporalStructure:
+    """Every window series' trajectories, from its windows' batch records and the journal's nodes."""
     series: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for b in batches:
         if (s := series_of(b)) is not None:
             series[s].append(b)
     if not series:
-        return [], {}
+        return TemporalStructure()
     nodes = _nodes(journal, {b["dataset_id"] for windows in series.values() for b in windows if b.get("dataset_id")})
-    edges, trajectories = [], {}
-    for name, windows in sorted(series.items()):
-        for key, t in _fold(windows, nodes, config).items():
-            edges += [GraphEdge(a, b, EdgeType.EVOLVES_TO, 1.0, props) for a, b, props in t.edges]
-            trajectories[key] = {
-                "series": name,
-                "predicate": [asdict(c) for c in t.predicate],
-                "metrics": list(t.metrics),
-                "state": t.state,
-                "closed_reason": t.closed_reason,
-                "episode": t.episode,
-                "first_window": t.first_window,
-                "windows": t.windows,
-            }
-    return edges, trajectories
+    return TemporalStructure({name: _fold(windows, nodes, config) for name, windows in series.items()})
+
+
+def window_cuts(
+    path: Path, config: MinerConfig, *, time: str | None, window: str | None, max_windows: int, bins: str | None, categories: str | None
+) -> list[dict[str, Any]]:
+    """What each batch of an upload adds to its record: one ``{window, temporal}`` per time window of the file
+    (``upload_windows``, its reference scale on each, no observation yet), or one empty cut for an upload without time."""
+    if not time:
+        return [{}]
+    cuts, scale = upload_windows(path, config, time=time, window=window, max_windows=max_windows, bins=bins, categories=categories)
+    return [{"window": w, "temporal": {"reference_scale": scale, "observations": None}} for w in cuts]
+
+
+def record_window(
+    record: dict[str, Any], result: DiscoveryResult, insights: list[Insight], admitted: list[Insight], rejections: list[Rejection]
+) -> None:
+    """After admission, on a time window's batch: each insight's ``provenance.temporal`` (``stamp_insights``) and, on the
+    record, what the window observed of each known rule — written before a window that admits nothing fails."""
+    if (series := series_of(record)) is None:
+        return
+    stamp_insights(insights, result, series=series, window=record["window"]["index"])
+    record["temporal"]["observations"] = {k: asdict(o) for k, o in observations(result, insights, admitted, rejections).items()}
+
+
+def moves_series(record: Mapping[str, Any], code: str, batches: Iterable[Mapping[str, Any]]) -> bool:
+    """Whether a failed batch changes the temporal plane though it commits nothing: a time window with nothing to mine
+    whose series has a READY window (a node, so maybe a trajectory its refusal or its missing data moves)."""
+    series = series_of(record)
+    return series is not None and code in EMPTY_LEVEL and any(b["status"] == "READY" and series_of(b) == series for b in batches)
