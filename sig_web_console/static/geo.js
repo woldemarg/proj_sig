@@ -484,15 +484,14 @@ function cellPopup(f, lngLat) {
 // re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
 const W = { seq: 0, timer: null, data: null, fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
 const ROWS_SHOWN = 8;  // the rows listed before «показати всі»: those characteristic of the most regions in focus
-const FOCUS_INSET = 0.1;  // the share of the free view left out at each edge, where the eye rarely rests (docs/08 §8.7)
+const FOCUS_INSET = 0.15;  // the share of the map left out at each edge, where the eye rarely rests (docs/08 §8.7)
 
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
 function focusBox() {
-  /* what the list reads, as [west, south, east, north]: the map less the open list over it, where viewPadding keeps the
-     cells clear of it (the HUD covers a corner alone), and FOCUS_INSET of the rest at each edge */
-  const w = $("map").clientWidth, h = $("map").clientHeight, x1 = w - (!(W.folded ?? w < 800) && w > 2 * MW_WIDTH ? MW_WIDTH : 0);
-  const dx = x1 * FOCUS_INSET, dy = h * FOCUS_INSET, nw = G.map.unproject([dx, dy]), se = G.map.unproject([x1 - dx, h - dy]);
+  /* what the list reads, as [west, south, east, north]: the map less FOCUS_INSET at each edge, the panels over it not apart */
+  const w = $("map").clientWidth, h = $("map").clientHeight, dx = w * FOCUS_INSET, dy = h * FOCUS_INSET;
+  const nw = G.map.unproject([dx, dy]), se = G.map.unproject([w - dx, h - dy]);
   return [nw.lng, se.lat, se.lng, nw.lat];
 }
 
@@ -520,7 +519,7 @@ function renderWindow() {
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}">` +
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(((G.patterns[i.id] || {}).reading || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;

@@ -334,21 +334,24 @@ def map_set(ws: Workspace, dataset_id: str, datasets: tuple[str, ...]) -> tuple[
 
 
 class RegionSets(NamedTuple):
-    """One region level over a geo dataset's cells: the regions holding a cell (``ids``, H3), each cell's region (``idx``)
-    and, per region, the insights characteristic of its cells with their lift there (``listed``)."""
+    """One region level over a geo dataset's cells: the regions holding a cell (``ids``, H3), each cell's region
+    (``idx``), and per region the insights it lists with their lift (``listed``) and those characteristic of its own
+    cells (``own``); the others it takes from the coarser region it lies in."""
 
     ids: np.ndarray
     idx: np.ndarray
     listed: list[dict[str, float]]
+    own: list[set[str]]
 
 
 def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, RegionSets]:
     """``RegionSets`` at every region level of the graph coarser than the dataset's cells (its own cells without one)
-    where a region has a characteristic insight — a level of none gives the map no hint, so it is left out unless every
-    level is —, derived once per commit. An insight of the projection is characteristic of a region by the rule of
+    where a region lists an insight — a level of none gives the map no hint, so it is left out unless every level is —,
+    derived once per commit. An insight of the projection is characteristic of a region by the rule of
     docs/08_interface.md §8.7: with ``x`` of its ``|P_loc|`` located events in the region's cells and ``E`` the number
     its map-wide share puts there, ``x ≥ link_min_events(|P_loc|)`` and ``(x + a) / (E + a) ≥ 1``; a base insight the
-    graph leaves unplaced (``geo: partial``) is never one."""
+    graph leaves unplaced (``geo: partial``) is never one. A region also lists, at their lift there, the insights of the
+    coarser regions holding its cells that have an event in it: a zoom never loses what the coarser region listed."""
 
     def build() -> dict[int, RegionSets]:
         proj = _projection(ws, graph, dataset_id)
@@ -356,21 +359,31 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, 
         per_cell, res = proj["per_cell"], proj["resolution"]
         total = int(per_cell.sum())
         levels = tuple(sorted({n["props"]["resolution"] for n in graph.of_kind("Region")} & set(range(res)))) or (res,)
-        out = {}
-        for lv, names in event_regions(cells, levels).items():
-            ids, idx = np.unique(names, return_inverse=True)
+        regions = event_regions(cells, levels)
+        out: dict[int, RegionSets] = {}
+        coarser: RegionSets | None = None
+        for lv in sorted(regions):  # coarsest first: a region takes what the region above it lists
+            ids, idx = np.unique(regions[lv], return_inverse=True)
             here = np.bincount(idx, weights=per_cell, minlength=len(ids))
             listed: list[dict[str, float]] = [{} for _ in ids]
+            own: list[set[str]] = [set() for _ in ids]
+            events: dict[str, np.ndarray] = {}
             patterns = proj["patterns"].items() if total else ()  # no located point: the expected count would divide by it
             for pid, p in patterns:
                 mine = int(p.counts.sum())
                 if graph.nodes[pid]["props"].get("geo") == "partial" or not mine:
                     continue
-                x = np.bincount(idx[p.events], weights=p.counts, minlength=len(ids))
+                x = events[pid] = np.bincount(idx[p.events], weights=p.counts, minlength=len(ids))
                 lift = (x + WINDOW_LIFT_PRIOR) / (mine * here / total + WINDOW_LIFT_PRIOR)
                 for r in np.flatnonzero((x >= link_min_events(mine)) & (lift >= 1)):
                     listed[r][pid] = float(lift[r])
-            out[lv] = RegionSets(ids, idx, listed)
+                    own[r].add(pid)
+            if coarser is not None:
+                for r, up in set(zip(idx.tolist(), coarser.idx.tolist(), strict=True)):  # a region and each coarser one its cells lie in
+                    for pid, lift in coarser.listed[up].items():
+                        if pid not in own[r] and events[pid][r] > 0:
+                            listed[r][pid] = max(listed[r].get(pid, 0.0), lift)
+            out[lv] = coarser = RegionSets(ids, idx, listed, own)
         return {lv: s for lv, s in out.items() if any(s.listed)} or {min(out): out[min(out)]}
 
     return graph.memoised(("region_sets", dataset_id), build)
@@ -535,8 +548,10 @@ def geo_window(
         view, at = window_view(proj["centres"], bbox), sets[lv]
         cells, points = cells + int(view.sum()), points + int(proj["per_cell"][view].sum())
         lifts: defaultdict[str, list[float]] = defaultdict(list)
+        owned: set[str] = set()
         for r in np.unique(at.idx[view]):
             regions.add(region_node_id(lv, str(at.ids[r])))
+            owned |= at.own[r]
             for pid, lift in at.listed[r].items():
                 lifts[pid].append(lift)
         for pid, folded in _rows(graph, ds, lifts).items():
@@ -561,6 +576,7 @@ def geo_window(
                         "regions": len(lifts[pid]),
                         "lift": round(lift, 1),  # to one decimal, as lift_words reads it: the badge and its words agree
                         "lift_words": wording.lift_words("window", lift),
+                        "wider": pid not in owned,  # listed only as a coarser region's, at its lift there
                         "also": [{"id": q, "level": proj["patterns"][q].level} for q in folded],
                     },
                 )

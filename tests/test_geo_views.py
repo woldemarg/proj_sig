@@ -14,7 +14,9 @@ from insight_graph_service.core.engine import PipelineError
 def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp_path):
     """docs/08_interface.md §8.7: an insight is characteristic of a region when its located events in the region's cells
     reach ``link_min_events`` and ``(x + a) / (E + a) ≥ 1``, ``E`` the number its map-wide share puts there (a base insight
-    with unlocated events counts its located ones); a base insight the graph leaves unplaced never is. A view lists the
+    with unlocated events counts its located ones); a base insight the graph leaves unplaced never is. A finer region
+    also lists what the coarser one holding its cells lists, when it holds one of its events, so its children together
+    list everything a region does. A view lists the
     rows of the regions holding its cells, each result once: one region alone its overlay ``n``, a wider view the rows of
     their union, ranked by how many of them an insight is characteristic of, then by lift. A level that is not a region
     level of the map is refused; without one the finest is read."""
@@ -35,11 +37,19 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
     at = sets[5]
     partial = {pid for pid in covers if graph.nodes[pid]["props"].get("geo") == "partial"}
     assert partial and not partial & {pid for region in at.listed for pid in region}
-    pid, r = next((p, r) for r, region in enumerate(at.listed) for p in region if p in covers and (point_cell[covers[p]] < 0).any())
+    pid, r = next((p, r) for r, region in enumerate(at.own) for p in region if p in covers and (point_cell[covers[p]] < 0).any())
     located, mine = point_cell[point_cell >= 0], point_cell[covers[pid]]
     mine, inside = mine[mine >= 0], np.flatnonzero(at.idx == r)
     x, here = int(np.isin(mine, inside).sum()), int(np.isin(located, inside).sum())
     assert x >= link_min_events(len(mine)) and at.listed[r][pid] == pytest.approx((x + 30) / (len(mine) * here / len(located) + 30))  # a = 30
+    levels = sorted(sets)
+    for up, down in zip(levels, levels[1:], strict=False):  # a zoom never loses what the coarser region lists
+        above, below = sets[up], sets[down]
+        for r, region in enumerate(above.listed):
+            kids = np.unique(below.idx[above.idx == r])
+            assert set(region) <= set().union(*(below.listed[k] for k in kids))
+    finest = sets[levels[-1]]
+    assert any(set(listed) - own for listed, own in zip(finest.listed, finest.own, strict=True))  # some only from above
     overlay = {f["properties"]["id"]: f["properties"] for f in engine.geo_overlay(ds)["features"]}
     for props in [p for p in overlay.values() if p["resolution"] == 5][:12]:  # a view of one region lists its n
         lon, lat = centres[props["rows"][0]]
