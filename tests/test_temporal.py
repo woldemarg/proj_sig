@@ -520,15 +520,17 @@ QUESTION = "Why is margin lower for phones in the US?"
 def test_a_trajectory_is_one_seed_and_one_card_its_latest_window_unless_it_scores_far_below_its_best(windowed):
     """A trajectory's representative: its latest admitted window when that one scores at least the seed floor of the
     trajectory's best (max(SEED_MIN_SCORE, 75 %)), else its best; a question seeds it once and shows it once."""
-    from graph_query_engine.seeds import SEED_MIN_SCORE, SEED_RELATIVE_MIN, representatives, trajectory
+    from graph_query_engine.seeds import SEED_MIN_SCORE, SEED_RELATIVE_MIN
+    from graph_query_engine.temporal import representatives, trajectory
 
     engine, _, _ = windowed
     graph = engine.graph()
     key, t = phones_us(engine.ws.load_graph())
     w0, w1, w4 = (w["pattern_id"] for w in t["windows"] if w["active"])
-    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN)]) == {key: w4}  # the latest, at the floor
-    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN - 0.01)]) == {key: w0}  # under it: the best
-    assert representatives(graph, [(w1, 0.3), (w4, SEED_MIN_SCORE - 0.01)]) == {key: w1}  # under the absolute floor too
+    floors = (SEED_MIN_SCORE, SEED_RELATIVE_MIN)
+    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN)], *floors) == {key: w4}  # the latest, at the floor
+    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN - 0.01)], *floors) == {key: w0}  # under it: the best
+    assert representatives(graph, [(w1, 0.3), (w4, SEED_MIN_SCORE - 0.01)], *floors) == {key: w1}  # under the absolute floor too
     found = engine.search(QUESTION)
     seeded = [trajectory(graph, s.pattern_id) for s in found.seeds]
     shown = [trajectory(graph, r.node_id) for r in found.traversal.patterns]
@@ -559,9 +561,12 @@ def test_a_window_card_names_its_window_and_trajectory_and_the_prompt_says_so(wi
     assert sum("come from time windows" in n for n in payload.view["evidence"]["notes"]) == 1
     tag = f"({wording.name('time_window')} W4 [2031-03-31, 2031-04-07); {wording.name('trajectory')}: {wording.name('trajectory_ACTIVE')})"
     assert tag in payload.evidence_summary
-    graph, (_, w1, w4) = engine.graph(), (w["pattern_id"] for w in t["windows"] if w["active"])
+    graph, (w0, w1, w4) = engine.graph(), (w["pattern_id"] for w in t["windows"] if w["active"])
     monkeypatch.setitem(graph.nodes[w4]["props"], "integrity", "mismatch")  # a window no answer shows is no admitted one
     assert {k: time_facts(graph, w1)[k] for k in ("active", "latest", "transition")} == {"active": 2, "latest": 1, "transition": "CONTINUATION"}
+    for pid in (w0, w1):
+        monkeypatch.setitem(graph.nodes[pid]["props"], "integrity", "mismatch")
+    assert time_facts(graph, w1) == {}  # every admitted window tampered: no time line, no crash
 
 
 def test_the_narrator_reads_the_windows_of_an_ended_and_a_living_trajectory(windowed, monkeypatch):

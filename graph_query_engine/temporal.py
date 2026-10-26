@@ -1,15 +1,37 @@
 """Time windows in the evidence (docs/07_question_answering.md §7.4): a window's insight carries its time line — its
 window, its trajectory's state, episode and windows, the last transition, the latest admitted window and the peak — and a
 window's dataset names its window (``evidence`` adds them, and the NOTE). The seeds and the walk keep one card per
-trajectory (``seeds.representatives``)."""
+trajectory, its ``representatives`` (docs/07_question_answering.md §7.2–7.3)."""
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from typing import Any
 
 from graph_query_engine.graph import DualGraph
-from graph_query_engine.seeds import trajectory
 from insight_contracts import dataset_node_id
+
+
+def trajectory(graph: DualGraph, pid: str) -> str | None:
+    """The trajectory a time window's pattern is a node of (docs/02_discovery.md §2.10); None for any other pattern."""
+    return (graph.insight(pid).provenance.get("temporal") or {}).get("trajectory")
+
+
+def representatives(graph: DualGraph, scored: Iterable[tuple[str, float]], floor: float, relative: float) -> dict[str, str]:
+    """Trajectory key -> the pattern that stands for it among ``scored`` (id, score): its latest window when that one
+    scores at least ``max(floor, relative · the trajectory's best)`` — the seeds' floor, ``SEED_MIN_SCORE`` and
+    ``SEED_RELATIVE_MIN`` — else its best."""
+    windows: defaultdict[str, list[tuple[str, float]]] = defaultdict(list)
+    for pid, score in scored:
+        if key := trajectory(graph, pid):
+            windows[key].append((pid, score))
+    out = {}
+    for key, found in windows.items():
+        best = max(found, key=lambda f: f[1])
+        latest = max(found, key=lambda f: graph.insight(f[0]).provenance["temporal"]["window"])
+        out[key] = latest[0] if latest[1] >= max(floor, relative * best[1]) else best[0]
+    return out
 
 
 def when(iso: str) -> str:
@@ -33,6 +55,8 @@ def time_facts(graph: DualGraph, pid: str) -> dict[str, Any]:
     if not (window and t):
         return {}
     active = [w for w in t["windows"] if w["active"] and not graph.tampered(w["pattern_id"])]
+    if not active:  # every admitted window fails its digest: nothing to say of time
+        return {}
     latest, peak = active[-1], max(active, key=lambda w: abs(w["effect_size"] or 0.0))
     into = [
         e["props"]["transition"] for e in graph.inc.get(latest["pattern_id"], []) if e["type"] == "EVOLVES_TO" and e["props"]["trajectory"] == key
