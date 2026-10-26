@@ -38,6 +38,11 @@ class MinerConfig:
     weight_exponents: tuple[float, ...] = (0.35, 0.25, 0.10, 0.10)  # one per WEIGHT_FACTORS entry
     weight_floor: float = 0.05
 
+    # trajectories through the time windows of one upload (docs/02_discovery.md §2.10)
+    temporal_dormant_windows: int = 3  # evaluated-but-refused windows since the last admission before a trajectory ends
+    temporal_unobserved_windows: int = 4  # windows in a row without an evaluation before tracking stops (not a finding)
+    temporal_drift_excess: float = 0.5  # |excess shift| (reference-scale units) from which a transition is a drift
+
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5
     contrast_min_shift: float = 0.5

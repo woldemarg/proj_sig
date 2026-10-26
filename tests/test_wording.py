@@ -191,7 +191,7 @@ def test_the_console_copy_is_the_table():
 
 @pytest.mark.skipif(not (ROOT / "docs").is_dir(), reason="the graph service image holds no docs (.dockerignore)")
 def test_the_glossary_names_every_term():
-    doc = (ROOT / "docs" / "11_reference.md").read_text(encoding="utf-8")
+    doc = (ROOT / "docs" / "current_docs" / "11_reference.md").read_text(encoding="utf-8")
     glossary = doc[doc.index("## 11.1") : doc.index("## 11.2")]
     assert not [name for name, _ in w.TERMS.values() if name not in glossary]
 
@@ -247,5 +247,5 @@ def test_the_console_speaks_ukrainian_and_explains_every_error_code():
 
 @pytest.mark.skipif(not (ROOT / "docs").is_dir(), reason="the graph service image holds no docs (.dockerignore)")
 def test_the_interface_chapter_quotes_the_ukrainian_chrome():
-    doc = (ROOT / "docs" / "08_interface.md").read_text(encoding="utf-8")
+    doc = (ROOT / "docs" / "current_docs" / "08_interface.md").read_text(encoding="utf-8")
     assert not [s for s in ENGLISH_CHROME if f"*{s}" in doc or f"«{s}" in doc]
