@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import make_engine, weekly_events
+from conftest import make_config, make_engine, weekly_events
 from test_discovery_contract import implied_warehouse_frame
 
 import subgroup_miner.ingestion as ingestion
