@@ -153,6 +153,7 @@ details.adv > summary::before { content: "▸ "; color: var(--muted); } details.
 .sw.region { background: var(--region); border-radius: 1px; transform: rotate(45deg); width: 9px; height: 9px; }
 .ln { width: 18px; height: 0; border-top: 2px solid var(--muted); display: inline-block; flex: none; }
 .ln.lattice { border-top: 2px solid var(--muted); } .ln.sibling { border-top: 2px dotted var(--muted); }
+.ln.temporal { border-top: 2px dashed var(--graph-ink); }
 .ln.contrast { border-top: 2px dashed var(--bad); } .ln.colocated { border-top: 2px dashed var(--path); } .ln.rel { border-top: 3px solid var(--anchor); } .ln.path { border-top: 4px solid var(--path); }
 .ln.act { border-top: 2px solid var(--anchor); }
 .ring { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: none; background: var(--surface-2); }
@@ -191,8 +192,8 @@ table.ins tbody tr { cursor: pointer; } table.ins tbody tr:hover td { background
 .drawer h4 { margin: 18px 0 8px; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
 pre.canon { margin: 0; padding: 10px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); font: 12px/1.55 var(--mono); white-space: pre-wrap; }
 .nb-group { margin-bottom: 4px; } .nb-group > summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 4px 0; }
-.nb { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 4px 6px; border-radius: var(--r-xs); cursor: pointer; }
-.nb:hover { background: var(--surface-2); } .nb span:first-child { flex: 1; min-width: 0; } .nb .muted { font-variant-numeric: tabular-nums; }
+.nb, .tl { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 4px 6px; border-radius: var(--r-xs); } .nb { cursor: pointer; }
+.nb:hover { background: var(--surface-2); } .nb span:first-child, .tl span:first-child { flex: 1; min-width: 0; } .nb .muted { font-variant-numeric: tabular-nums; }
 .shift-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 13px; margin-bottom: 8px; }
 .meter { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: var(--sunken); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: inherit; } .meter i.up { background: var(--up); } .meter i.down { background: var(--down); }
