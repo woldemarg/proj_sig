@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, others: [], data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], away: null, cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -88,7 +88,7 @@ const GeoMap = {
 
   focused: () => Boolean(G.focusId),
 
-  placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : []),  // its cells' H3 ids: a zone a question can carry
+  placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : G.away && G.away.pid === pid ? G.away.cells : []),  // its cells' H3 ids: a zone a question can carry
 
   openTheme(aid) { W.fold[aid ?? ""] = true; renderWindow(); },  // the IN VIEW list opens the theme a card names
 
@@ -114,10 +114,11 @@ const GeoMap = {
     }
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
-      const pts = await api(`/api/geo/${encodeURIComponent(away || G.ds)}/patterns/${encodeURIComponent(pid)}`);
+      const pts = await api(`/api/geo/${encodeURIComponent(away || G.ds)}/patterns/${encodeURIComponent(pid)}${away ? "?rings=1" : ""}`);
       if (G.focusId !== pid) return;  // another insight was focused meanwhile
       const p = own || { ...pts, reading: G.overlay.patterns[pid].reading, numbers: G.overlay.patterns[pid].numbers, spatial: {} };
-      if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of
+      if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of; its cells its place
+        G.away = { pid, cells: pts.cells };
         const rings = { type: "FeatureCollection", features: pts.rings.map((r) => ({ type: "Feature", geometry: { type: "Polygon", coordinates: [r] }, properties: {} })) };
         paintFocus(p, item, rings, pts.rows);
         if (fit && rings.features.length) G.map.fitBounds(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
@@ -133,11 +134,14 @@ const elsewhere = (pid) => {  // the dataset of «Усі датасети» whos
   return t && t.map_dataset && t.integrity !== "mismatch" ? t.map_dataset : null;
 };
 
+const uploadOf = (d) => d.upload_id || d.dataset_id;  // as the server's map_set: a record without one is its own upload
+
 function spread(filter) {
-  /* «Усі датасети» on the map: no dataset chosen and geo datasets of two uploads or more; the finest anchors it (its
-     levels are the regions'), the others go along and the server keeps one per upload */
-  if (filter || new Set(G.datasets.map((d) => d.upload_id)).size < 2) return null;
-  const anchor = [...G.datasets].sort((a, b) => b.resolution - a.resolution || b.cells - a.cells)[0];
+  /* «Усі датасети» on the map: no dataset chosen and geo datasets of two uploads or more; the coarsest anchors it — its
+     region levels are the map's, and every finer dataset has them too, so no file drops out of a finer one — the
+     others go along and the server keeps one per upload */
+  if (filter || new Set(G.datasets.map(uploadOf)).size < 2) return null;
+  const anchor = [...G.datasets].sort((a, b) => a.resolution - b.resolution || b.cells - a.cells)[0];
   return { anchor, others: G.datasets.filter((d) => d !== anchor).map((d) => d.dataset_id) };
 }
 
@@ -145,13 +149,17 @@ async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
   if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
-  const filter = $("dataset-filter").value, all = spread(filter);
+  const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
   const want = all ? all.anchor : G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
   else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
-  else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode(); scheduleWindow(); }  // a commit changes the graph over the same cells, a filter the mode
+  else {  // a commit changes the graph over the same cells, a filter the mode: a new mode is fitted as a load is
+    await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode();
+    if (G.others.join() !== was) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
+    scheduleWindow();
+  }
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
 }
 
@@ -194,8 +202,12 @@ function paintMode() {
   vis(["regions-hit"], all);
   for (const id of ["lyr-cells", "lyr-lisa"]) $(id).disabled = all;
   for (const el of [$("map-metric"), $("map-ramp"), document.querySelector("label[for='map-metric']")]) el.hidden = all;
+  const finest = all && G.overlay ? G.overlay.features.filter((f) => f.properties.resolution === G.levels[0]) : [];
+  G.box = finest.length ? ringsBox(finest) : G.cellBox;  // «Усі датасети» opens on every dataset's regions, not the anchor's cells
+  paintZone();  // cells or hexes, as the mode draws them
   if (all) {
-    const files = [...new Set([G.ds, ...G.others].map(fileOf))];
+    const files = [...new Map([G.ds, ...G.others].map((ds) => G.datasets.find((d) => d.dataset_id === ds) || { dataset_id: ds })
+      .map((d) => [uploadOf(d), d.filename || d.dataset_id])).values()];  // one per upload: two files of one name are two
     $("map-title").textContent = "Усі датасети";
     $("map-meta").textContent = `${plural(files.length, "файл", "файли", "файлів")}: ${files.join(", ")}`;
     return;
@@ -353,7 +365,7 @@ async function loadDataset(ds) {
     for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
-    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on: its cells, as they are drawn
+    G.cellBox = boundsOf(data.features.map((_, i) => i));  // what the map opens on: its cells, as they are drawn (paintMode)
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
@@ -362,11 +374,8 @@ async function loadDataset(ds) {
     if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
     $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
     colorBy(G.metric);
-    const finest = G.others.length && G.overlay ? G.overlay.features.filter((f) => f.properties.resolution === G.levels[0]) : [];
-    if (finest.length) G.box = ringsBox(finest);  // «Усі датасети» opens on every dataset's regions, not the anchor's cells
     paintMode();
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
-    paintZone();
     return true;
   } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
 }
@@ -531,8 +540,7 @@ function cellPopup(f, lngLat) {
 function regionPopup(id, lngLat) {
   /* «Усі датасети»: a hex's count and what each dataset brings to it; the zone and the question take its H3 */
   const f = ((G.overlay || empty()).features).find((r) => r.properties.id === id); if (!f) return;
-  const name = (ds) => (G.datasets.find((d) => d.dataset_id === ds) || {}).filename || ds;
-  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(name(ds))}</th><td>${num(n, 0)}</td></tr>`).join("");
+  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(fileOf(ds))}</th><td>${num(n, 0)}</td></tr>`).join("");
   openPopup(`<div class="pp-head"><span>${esc(id)}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat, id.split(":")[2]);
 }

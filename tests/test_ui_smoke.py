@@ -409,7 +409,8 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               return [G.ds, G.loading]; } finally { api = orig; $("dataset-filter").value = ""; } }"""
         assert page.evaluate(pick, [real, "ds-stub"]) == [real, False]  # the filter's choice wins over the load in flight
         listed = page.evaluate("G.datasets")  # the stub listed as a geo dataset, as an answer's other dataset is
-        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, {**listed[0], "dataset_id": "ds-stub", "filename": "stub"}]))
+        stub_entry = {**listed[0], "dataset_id": "ds-stub", "filename": "stub", "upload_id": listed[0].get("upload_id") or listed[0]["dataset_id"]}
+        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, stub_entry]))  # one upload with the real one: the one-dataset map
         keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
             api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
             try { const a = loadDataset(stub); await wait(50);  // an answer's load in flight

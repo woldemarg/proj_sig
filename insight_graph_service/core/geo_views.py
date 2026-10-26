@@ -257,12 +257,12 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
-def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int) -> dict[str, Any]:
+def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int, rings: bool = False) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
     another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
     whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it.
-    With its cells' ``rings``, the ``level`` it was found at and its numbers, so a map that holds no cell of this dataset
-    draws and describes it."""
+    With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
+    of this dataset draws and describes it."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
     if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
@@ -284,7 +284,6 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
     return {
         "pattern_id": pattern_id,
         "cells": [str(c) for c in geo["cells"][rows]],
-        "rings": [cell_boundary(str(c)) for c in geo["cells"][rows]],  # a map that holds no cell of this dataset draws them
         "rows": rows.tolist(),
         "n_points": int(len(inside)),
         "points": np.round(points.astype(float), 5).tolist(),
@@ -293,7 +292,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
         "phenomenon_type": ins.phenomenon_type,
         "support": ins.support,
         "weight": ins.weight,
-    }
+    } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
