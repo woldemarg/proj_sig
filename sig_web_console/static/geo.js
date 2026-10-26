@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
@@ -323,14 +323,12 @@ async function loadProjected(ds, seq = G.loadSeq) {
 }
 
 function mergePatterns() {
-  /* what the map draws, each row's insights for the popup: its own level's insights that the commit's overlay holds intact
+  /* what the map draws: its own level's insights that the commit's overlay holds intact
      (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
      (/projected, intact only) */
   const trust = (G.overlay && G.overlay.patterns) || {};
   const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch").map((p) => ({ ...p, reading: trust[p.id].reading, numbers: trust[p.id].numbers }));
   G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
-  G.byRow = G.data.features.map(() => []);
-  Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
   if (G.focusId && !G.patterns[G.focusId]) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
 }
 
@@ -440,7 +438,7 @@ function renderCard(p, item, pts) {
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["де знайдено", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      ? [["де знайдено", esc(levelName(p.level))], [term("cells_footprint"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
       : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
@@ -457,27 +455,39 @@ function trustTags(pid) {
 }
 
 function cellPopup(f, lngLat) {
-  const p = f.properties, row = p.row;
+  const p = f.properties, row = p.row, level = G.level ?? regionLevel();
   const skip = new Set(["row", "h3"]);
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
-  const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
-  const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</span></div>` : "";
+  const region = level != null && G.overlay ? G.overlay.features.find((r) => r.properties.resolution === level && r.properties.rows.includes(row)) : null;
+  const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div><div class="pp-list"></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
+    `<div class="pp-scroll">${reg}<div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div>` +
     `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button>` +
     `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
   GeoMap.closePopup();
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });
   const el = popup.getElement();
-  el.querySelectorAll(".pp-ins").forEach((x) => x.addEventListener("click", () => GeoMap.focusPattern(x.dataset.pid)));
   el.querySelector(".pp-zone").addEventListener("click", () => { GeoMap.closePopup(); GeoMap.toggleZone(p.h3); });
   el.querySelector(".pp-ask").addEventListener("click", () => {  // the selected zone if it holds this cell, else the cell; the typed text, if any
     GeoMap.closePopup(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
   });
+  if (region && region.properties.n) cellInsights(popup, row, level);
+}
+
+async function cellInsights(popup, row, level) {
+  /* the region's IN VIEW rows that have an event in this cell: a window on the cell's centre lists its region alone,
+     each row's cells there telling whether this cell holds one of its events */
+  const b = G.bounds[row], cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, dx = (b[2] - b[0]) / 10, dy = (b[3] - b[1]) / 10;
+  const bbox = [unwrap(cx - dx, 0), cy - dy, unwrap(cx + dx, 0), cy + dy].map((v) => v.toFixed(6)).join(",");
+  const d = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}&level=${level}`).catch(() => null);
+  if (G.popup !== popup || !d || d.error) return;  // closed or replaced meanwhile
+  const here = d.themes.flatMap((t) => t.insights).filter((i) => i.cells > 0 && G.patterns[i.id]).sort((x, y) => x.rank - y.rank);
+  const el = popup.getElement();
+  el.querySelector(".pp-here").textContent += ` · з них у цій комірці: ${here.length}`;
+  el.querySelector(".pp-list").innerHTML = here.map(({ id }) => { const q = G.patterns[id]; return `<div class="pp-ins" data-pid="${esc(id)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(id)}</div>`; }).join("");
+  el.querySelectorAll(".pp-ins").forEach((x) => x.addEventListener("click", () => GeoMap.focusPattern(x.dataset.pid)));
 }
 
 // ponytail: PoC — the map as a window on the hidden graph (GET /api/geo/{ds}/window): the themes and insights of the view,

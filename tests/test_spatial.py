@@ -27,7 +27,6 @@ from subgroup_miner.ingestion import IngestionError, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
-    cells_inside,
     centre_region,
     effective_n_factor,
     footprint,
@@ -416,15 +415,18 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
     assert {e["props"]["basis"] for e in members} >= {"events"}
-    # the map as a window on the graph: every other level's insights on the finest level's cells, a coarser geo one by
-    # every cell inside its own, a base one by the footprint of its events
+    # the map as a window on the graph: every other level's insights on the finest level's cells, each by every cell
+    # holding its events
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
-    assert all(projected[pid]["rows"] and projected[pid]["spatial"]["footprint_share"] >= 0.8 for pid in table_ids)
-    fine_cells, coarse_cells = (engine.ws.load_geo(r["dataset_id"], ("cells",))["cells"] for r in done[:2])
+    assert all(p["rows"] and p["spatial"]["footprint_share"] == 1 for p in projected.values())  # every cell of its events
+    point_cell, coarse = (
+        engine.ws.load_geo(fine, ("point_cell",))["point_cell"],
+        engine.ws.load_geo(done[1]["dataset_id"], ("point_cell",))["point_cell"],
+    )
     for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
-        assert projected[pid]["rows"] == np.flatnonzero(cells_inside(fine_cells, coarse_cells[rows].astype(str))).tolist()
+        assert sorted(projected[pid]["rows"]) == np.unique(point_cell[np.isin(coarse, rows) & (point_cell >= 0)]).tolist()
     everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every region's rows
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
     assert table_ids & set(listed) and all(i["lift"] >= 1 for i in listed.values())
@@ -433,8 +435,8 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
         assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
-    drawn = engine.geo_pattern(fine, pid)  # drawn by its footprint, counted by all its events
-    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] < listed[pid]["points"] and set(drawn["rows"]) == set(
+    drawn = engine.geo_pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
+    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(
         projected[pid]["rows"]
     )
     with pytest.raises(PipelineError, match="west,south"):

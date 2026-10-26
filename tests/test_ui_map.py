@@ -192,11 +192,14 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
             for p, q in zip(f["geometry"]["coordinates"][0], g["geometry"]["coordinates"][0])
             for a, b in zip(p, q)
         )
-        busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         popup = f"cellPopup({busiest}, centre({busiest}))"
-        pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")
         page.evaluate(f"{popup}; {popup}")
         assert page.locator(".sig-pop").count() == 1  # one popup at a time
+        page.wait_for_selector(".sig-pop .pp-ins")  # its region's rows with an event in it, as many as the line says
+        here = page.evaluate("document.querySelector('.sig-pop .pp-here').textContent")
+        assert here.endswith(f"з них у цій комірці: {page.locator('.sig-pop .pp-ins').count()}")
+        pid = page.get_attribute(".sig-pop .pp-ins >> nth=0", "data-pid")
         page.click(".sig-pop .pp-ins >> nth=0")  # a focus from the popup closes it: the card shows
         assert page.locator(".sig-pop").count() == 0 and page.is_visible("#map-card")
         page.evaluate(f"inspect('{pid}')")

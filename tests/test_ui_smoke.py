@@ -351,10 +351,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
         forged = """(pid) => { const was = G.focusId, ev = G.evidence; GeoMap.focusPattern(pid, false);  // focused when a commit marks it
             const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" }; mergePatterns();
-            const drawn = [GeoMap.has(pid), G.byRow.some((r) => r.includes(pid)), G.focusId];
+            const drawn = [GeoMap.has(pid), G.focusId];
             G.overlay.patterns[pid] = t; mergePatterns(); G.evidence = ev; GeoMap.focusPattern(was); return [...drawn, GeoMap.has(pid)]; }"""
         own = page.evaluate("G.data.patterns.find((p) => GeoMap.has(p.id)).id")  # a record that fails its digest is never drawn
-        assert page.evaluate(forged, own) == [False, False, None, True]  # and its focus goes
+        assert page.evaluate(forged, own) == [False, None, True]  # and its focus goes
         opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
         page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
         first = page.evaluate(opacity)

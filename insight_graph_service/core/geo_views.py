@@ -27,7 +27,6 @@ from insight_graph_service.core.uploads import same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.spatial import (
     SpatialError,
-    build_projection,
     cell_boundary,
     cell_centres,
     compactness,
@@ -94,7 +93,7 @@ def place_scores(
     ws: Workspace, graph: DualGraph, cells: list[str] | None, geometry: dict[str, Any] | None, resolution: int | None
 ) -> dict[str, float] | None:
     """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
-    datasets of at most ``resolution`` (None: all), and every placed base pattern's by its footprint on the geo level
+    datasets of at most ``resolution`` (None: all), and every placed base pattern's by the cells holding its events on the geo level
     that places it, of at most ``resolution`` too; ``geometry`` becomes the cells of the finest of them. None: no zone."""
     if cells is None and geometry is None:
         return None
@@ -136,7 +135,7 @@ def _zone_scores(
     ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...], tables: tuple[tuple[str, str], ...], strict: bool = True
 ) -> dict[str, float]:
     """``zone_overlap`` over the stored cells and extents of each geo dataset in ``levels``, and over each (table level,
-    geo level placing it) of ``tables`` by the footprints of the table's patterns on that level's cells; ``strict``: a
+    geo level placing it) of ``tables`` by the cells holding the table's patterns' events on that level; ``strict``: a
     missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
     out: dict[str, float] = {}
     for dataset_id, _ in levels:
@@ -152,7 +151,7 @@ def _zone_scores(
             if strict:
                 raise FileNotFoundError(table)
             continue
-        prints = {pid: footprint(geo["point_cell"], rows)[0] for pid, rows in covers.items()}  # a table's rows are the points
+        prints = {pid: footprint(geo["point_cell"], rows, 1.0)[0] for pid, rows in covers.items()}  # a table's rows are the points
         out.update(zone_overlap(geo["cells"], prints, zone))
     return out
 
@@ -423,8 +422,8 @@ class Projected(NamedTuple):
 
 def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, Any]:
     """Every intact insight of the dataset's upload on the dataset's cells (``Projected``), derived once per commit: an
-    insight of the dataset is drawn by its cells, one of another geo level by the cells inside its own (``cells_inside``),
-    a base one by the ``footprint`` of its events; each counts all its located events. ``per_cell``: points;
+    insight of the dataset is drawn by its cells, one of another level by every cell holding its located events, so it
+    is drawn where it is counted and a region listing it shows it. ``per_cell``: points;
     ``centres``; ``resolution``: the dataset's."""
 
     def build() -> dict[str, Any]:
@@ -442,8 +441,6 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
                 continue
             res = ((b.get("profile") or {}).get("geo") or {}).get("resolution", b.get("level"))  # also without upload levels
             level = "table" if b.get("level") == "table" else f"res {res}"
-            other = None if own or b.get("level") == "table" else ws.load_geo(b["dataset_id"], ("cells",))
-            inside = build_projection(cells, other["cells"]) if other else None
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
                 if pid not in graph.nodes or graph.tampered(pid):
                     continue
@@ -451,8 +448,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
                     patterns[pid] = Projected(rows, level, rows, per_cell[rows])
                     continue
                 events, counts = footprint(point_cell, members(rows), 1.0)  # every cell holding its located events
-                drawn = inside(rows) if inside else footprint(point_cell, members(rows))[0]
-                patterns[pid] = Projected(drawn, level, events, counts)
+                patterns[pid] = Projected(events, level, events, counts)
         return {
             "patterns": patterns,
             "per_cell": per_cell,

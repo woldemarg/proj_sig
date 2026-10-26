@@ -20,7 +20,7 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
     rows of the regions holding its cells, each result once: one region alone its overlay ``n``, a wider view the rows of
     their union, ranked by how many of them an insight is characteristic of, then by lift. A level that is not a region
     level of the map is refused; without one the finest is read."""
-    from insight_graph_service.core.geo_views import _region_sets, _rows, window_view
+    from insight_graph_service.core.geo_views import _projection, _region_sets, _rows, window_view
     from subgroup_miner.spatial import cell_centres, link_min_events
 
     frame = geo_frame()
@@ -48,6 +48,10 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
         for r, region in enumerate(above.listed):
             kids = np.unique(below.idx[above.idx == r])
             assert set(region) <= set().union(*(below.listed[k] for k in kids))
+    drawn = {pid: set(p.rows.tolist()) for pid, p in _projection(engine.ws, graph, ds)["patterns"].items()}
+    for s in sets.values():  # a region shows every insight it lists: each is drawn by a cell of it
+        for r, region in enumerate(s.listed):
+            assert all(drawn[pid] & set(np.flatnonzero(s.idx == r).tolist()) for pid in region)
     finest = sets[levels[-1]]
     assert any(set(listed) - own for listed, own in zip(finest.listed, finest.own, strict=True))  # some only from above
     overlay = {f["properties"]["id"]: f["properties"] for f in engine.geo_overlay(ds)["features"]}
