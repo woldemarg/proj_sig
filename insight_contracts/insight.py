@@ -42,7 +42,7 @@ class Shift:
     local_median: float
     global_median: float
     global_mad: float
-    source: str = "eda"  # eda (step4 top shift) | covariance_pair (adapter, docs/02_discovery.md §2.4)
+    source: str = "eda"  # eda (step4 top shift) | covariance_pair (adapter, docs/02_discovery.md §2.4) | tracked (§2.10)
 
     @property
     def direction(self) -> int:
