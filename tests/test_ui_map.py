@@ -74,6 +74,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
         page.click(".adv summary")
+        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in the rail, not the page
         assert page.is_disabled("#table")
         page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
