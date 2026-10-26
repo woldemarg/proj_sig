@@ -304,12 +304,13 @@ def load_dataset(
         if geo or locator:
             raise IngestionError("invalid_options", "a time window is a table's: no geo option, no point columns left out")
         table = upload_table(path, config, time=window["column"], bins=bins, categories=categories)
-        inside = ((table.time >= pd.Timestamp(window["t_start"])) & (table.time < pd.Timestamp(window["t_end"]))).to_numpy()
-        frame = table.frame[inside].reset_index(drop=True)
+        start, end = (pd.to_datetime(window[k], utc=True) for k in ("t_start", "t_end"))  # one instant, however it is spelled
+        inside = ((table.time >= start) & (table.time < end)).to_numpy()
+        frame = table.frame[inside].reset_index(drop=True)  # its rows renumbered: a window's covers are rows of the window
         if len(frame) < config.min_rows:
             raise IngestionError("invalid_schema", f"Only {len(frame)} rows in window {window['index']} (MIN_ROWS={config.min_rows})")
         unread = int(table.time.isna().sum())
-        bounds = f"{window['column']}:{window['t_start']}/{window['t_end']}"
+        bounds = f"{window['column']}:{start.isoformat()}/{end.isoformat()}"
         return LoadedDataset(
             frame=frame,
             dataset_id=dataset_fingerprint(table.digest, table.bins, table.categories, window=bounds),

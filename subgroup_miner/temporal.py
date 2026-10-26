@@ -236,6 +236,7 @@ def fold_trajectories(windows: Mapping[int, WindowFacts], upto: int, scale: Mapp
     data, not a finding that the phenomenon ended. A node whose trajectory is unknown opens it; one whose trajectory is
     closed opens its next episode (REAPPEARANCE)."""
     trajectories: dict[str, Trajectory] = {}
+    windows = {int(k): v for k, v in windows.items()}  # a map read back from JSON keys its windows by strings
     for index in range(upto):
         seen = _seen(windows.get(index))
         for t in sorted((t for t in trajectories.values() if t.state != CLOSED), key=lambda t: t.key):

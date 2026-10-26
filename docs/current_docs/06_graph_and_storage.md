@@ -83,6 +83,7 @@ So two undeclared datasets, or two without a registry, never give 1 or 5, and a 
 | TARGETS | Pattern → Metric | schema | `min(1, |z| / 3)` for the target and every shift with `|z| ≥ MIN_COMPONENT_Z` (`PhenomenonThresholds.material`); `role` primary / secondary, `z`, medians |
 | DISCOVERED_IN | Pattern → Batch | provenance | 1.0 |
 | OF_DATASET | Batch → Dataset | provenance | 1.0 |
+| EVOLVES_TO | Pattern → Pattern (an earlier time window → a later one) | temporal | 1.0; `trajectory`, `episode`, `from_window`, `to_window`, `gap`, `transition`, `shifts {metric: {subgroup, baseline, excess}}`, `drift_metric` ([2.10](02_discovery.md#210-time-windows-and-trajectories)); never walked by a question |
 
 Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datasets reuse column names with different meanings. Activations that point to an unjournaled pattern or a dead anchor are skipped when the snapshot is built.
 
@@ -98,7 +99,7 @@ Edge ids are `<TYPE>:<source>-><target>`. Ids are dataset-scoped, because datase
 | `registry/batches/<batch_id>.json` | JSON | the batch record ([9.1](09_operations.md#91-the-batch-lifecycle)) | `save_batch`, atomically at every stage |
 | `uploads/<id>_<name>` | the received bytes | files received over HTTP (`POST /api/upload`, `POST /api/demo`); the batch record's `source_path` points at its upload (provenance); kept after processing until the dataset's deletion or a reset | `Workspace.save_upload` |
 | `datasets/<ds>/profile.json` | JSON | the batch `profile` (columns, selected dimensions, global medians and MADs, cardinality, entropy, bands, overrides); the snapshot reads the same profile from the batch record | `Workspace.save_profile` |
-| `datasets/<ds>/covers.npz` | npz: pattern id → int64 row positions | the `rows_ref` target (`Workspace.covers_ref`) | `Workspace.save_covers` |
+| `datasets/<ds>/covers.npz` | npz: pattern id → int64 row positions (a time window's: rows of the window, [2.10](02_discovery.md#210-time-windows-and-trajectories)) | the `rows_ref` target (`Workspace.covers_ref`) | `Workspace.save_covers` |
 | `datasets/<ds>/geo.npz` | npz: `cells` (H3 ids), `point_cell` (source row → cell row, −1 without a point), `lonlat` float32, `nbr_ptr` / `nbr_idx` (ring-1 neighbours, CSR) | a geo dataset's spatial context — the cell → points provenance the map draws ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)); the covers of such a dataset are cell rows | `Workspace.save_geo`, read by `Workspace.load_geo` |
 | `datasets/<ds>/cells.geojson` | GeoJSON `FeatureCollection`, compact | the map's file: the cells with their properties (the cell table's columns but the `*_band` texts), `bbox`, `meta` and the patterns' extents (`geo_views.geo_cells`), built from the journaled patterns and written with the batch; `GET /api/geo/{dataset}/cells` serves it as its compact cell package ([8.1](08_interface.md#81-http-api)) | `Workspace.save_geo_cells`, with the batch |
 | `datasets/<ds>/rejections.json` | JSON list `{expression, reason, detail}` | discovery merges, then validity rejections, then admission refusals (`detail` e.g. `same rows as …`, `|z|=0.17 p_adj=1 emm=0.07`) | `Workspace.save_rejections` |

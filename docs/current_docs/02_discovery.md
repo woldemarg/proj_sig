@@ -40,10 +40,10 @@ The dataset id is a pure function of the bytes and the applied options:
 ```text
 dataset_id = "ds-" + sha256( file bytes ‖ repr(sorted(bins.items())) [‖ repr(sorted(categories)) when any apply]
                              [‖ "geo=<locator>@<res>" with the geo option] [‖ "left_out=[…]" for a table level's point columns]
-                             [‖ "window=<column>:<t_start>/<t_end>" for a time window, §2.10] )[:12]
+                             [‖ "window=<column>:<t_start>/<t_end>" for a time window, its bounds as UTC instants, §2.10] )[:12]
 ```
 
-Identical content with identical options always gets the same id; a second upload of it is `SKIPPED` ([9.1](09_operations.md#91-the-batch-lifecycle)). The frame keeps the file's row order, so EDA row positions are file rows. The file itself is not copied: an upload stays under `uploads/`, and the batch record's `source_path` names it (provenance; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). Semantic typing (identifiers, categoricals, redundant columns) is not done here: it is EDA step 1.
+Identical content with identical options always gets the same id; a second upload of it is `SKIPPED` ([9.1](09_operations.md#91-the-batch-lifecycle)). The frame keeps the file's row order, so EDA row positions are file rows — a time window's are rows of the window, renumbered from 0, which reading the same window again gives back (§2.10). The file itself is not copied: an upload stays under `uploads/`, and the batch record's `source_path` names it (provenance; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). Semantic typing (identifiers, categoricals, redundant columns) is not done here: it is EDA step 1.
 
 > **Running example.** `retail_synthetic.csv`: 5,000 rows × 11 columns, no bands, no overrides → `ds-6e53eb7fb0f9`. On real data the options matter: `housing.csv` needs `bins=median_income:4,housing_median_age:4` (only one native categorical).
 
@@ -185,7 +185,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 |---|---|---|
 | `file_too_large` | `PipelineError` (`Engine.upload`) | an upload above `MAX_UPLOAD_MB`; refused with HTTP 413 before a batch is registered |
 | `unsupported_file`, `unreadable_file`, `invalid_options`, `invalid_schema`, `no_numeric_targets` | `IngestionError` | missing file or unsupported type, parse error, bad options, too few rows or columns, no numeric column |
-| `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); neither the search space nor a known rule has a cohort that passed pass 1 |
+| `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); no cohort of the search passed pass 1 and no known rule was given (a window with known rules reports them in `tracked_absent` instead, §2.10) |
 | `internal_error` | `DiscoveryError` | a closed intent that does not contain its own selector (an invariant check that should never fire) |
 
 Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame is named):
@@ -270,12 +270,12 @@ Each window is `{index, of, column, size, t_start, t_end, rows}` (`size` in ISO 
 **Known rules in discovery.** `run_discovery(…, known=[KnownRule(key, predicate, metrics)])` evaluates the rules of the trajectories still open:
 
 1. A rule on an attribute that is no dimension of the window (absent, constant or nested in another, step 1) is not evaluated: `EVALUATION_ERROR`.
-2. Its selector goes through pass 1, where the size floor holds (below it, or the whole window: `INSUFFICIENT_SAMPLE`, with the rows it selects), and through the closure: two rules with one extent are one cohort, whose `Candidate.known` names both.
+2. Its selector goes through pass 1, where the size floor holds (below it, or the whole window: `INSUFFICIENT_SAMPLE`, with the rows it selects), and through the closure: two rules with one extent are one cohort, whose `Candidate.known` names both; its insight's `provenance.temporal` names the first rule's trajectory, and the window's observations give both the same `pattern_id`, which is what the fold links.
 3. The search's own pass-1 cohorts with a known extent leave its pool before the closure: that cohort is the rule's trajectory's observation. The ranking and `VALIDATION_BUDGET` go to new cohorts only, and `n_tests` counts the search's cohorts only.
 4. A known cohort with neither a shift nor a covariance pair is evaluated with nothing moved (`no_shift`). The others go to step 4b one at a time, the global RNG seeded from `EDA_RANDOM_SEED` and the rule's conditions, so a rule's stability depends on the window's rows and the rule alone — not on how many cohorts the search brought into the window, nor on the name of its upload.
-5. `build_insights` treats a known rule as one hypothesis named before its window was seen: `p_adjusted = min(1, p · m)` over the window's m metrics (`multiple_testing_family = m`). Its shifts add every metric the trajectory reports that the window's top three leave out (`Shift.source = "tracked"`), so a change is measured on the same metrics in every window; the primary target stays the largest shift.
+5. `build_insights` treats a known rule as one hypothesis named before its window was seen: `p_adjusted = min(1, p · m)` over the window's m metrics (`multiple_testing_family = m`). Its shifts add every metric the trajectory reports that the window's top three leave out (`Shift.source = "tracked"`), so a change is measured on the same metrics in every window — a metric the window's profile left out (constant there, or a near duplicate, step 1) is still a column of it and reads against the window's own median and MAD; the primary target stays the largest shift.
 
-A window without a search space but with known rules is still mined; `no_candidates` only when neither has a cohort. `DiscoveryResult.tracked` holds the validated known cohorts (outside `candidates`), `tracked_absent` the rules without one (`key → (reason, rows)`), and `covers_of` covers both. With `known=()` nothing of this runs, and discovery is unchanged.
+A window given known rules is mined to the end: without a search space, with nothing past pass 1, or with no rule it can evaluate, it still returns each rule's outcome in `tracked_absent`; `no_candidates` is for a window given none. `DiscoveryResult.tracked` holds the validated known cohorts (outside `candidates`), `tracked_absent` the rules without one (`key → (reason, rows)`), and `covers_of` covers both. With `known=()` nothing of this runs, and discovery is unchanged.
 
 **What a window observed.** `temporal.observations(known, result, insights, admitted, rejections)` gives each known rule an `Observation`: `EVALUATED` and admitted (`active`, with its `pattern_id`); evaluated and refused, with the rule that refused it (`weak_effect`, `not_significant`, `unstable`, `min_support`, `low_weight`, `budget`, or `no_shift`); or `NOT_EVALUATED` with its reason (`INSUFFICIENT_SAMPLE`, `EVALUATION_ERROR`, and `WINDOW_UNAVAILABLE` for a window that observed nothing). `p_adjusted` and `stability` are None for a covariance insight, as on the insight.
 
