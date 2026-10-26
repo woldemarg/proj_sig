@@ -103,6 +103,8 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         listing = "W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()"
         wide = page.evaluate(listing)
         assert wide and page.evaluate("W.data.regions") > 1
+        labels = "G.map.getSource('region-labels').serialize().data.features.length"
+        assert page.evaluate(labels) == page.evaluate("G.overlay.features.filter((f) => f.properties.n > 0).length")  # a 0 is not written
         busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         page.evaluate(f"G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
         page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)
