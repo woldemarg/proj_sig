@@ -82,6 +82,19 @@ def test_neo4j_mirror_equals_the_snapshot(hashed_engine):
     }
 
 
+def test_the_mirror_links_the_windows_of_a_trajectory(windowed):
+    """EVOLVES_TO reaches Neo4j as a Pattern → Pattern relationship with its props (``shifts`` as JSON), one per edge."""
+    engine = windowed[0]
+    snap = engine.ws.load_graph()
+    driver = _Driver()
+    out = Mirror().publish(snap, engine.settings, driver=driver)
+    rows = [row for q, p in driver.log if q == edge_query("EVOLVES_TO") for row in p["rows"]]
+    evolves = [e for e in snap["edges"] if e["type"] == "EVOLVES_TO"]
+    assert EDGE_ENDPOINTS["EVOLVES_TO"] == ("Pattern", "Pattern") and out["edges"]["EVOLVES_TO"] == len(rows) == len(evolves) > 0
+    assert {(r["source"], r["target"]) for r in rows} == {(e["source"], e["target"]) for e in evolves}
+    assert all({"trajectory", "transition", "from_window", "to_window", "shifts_json"} <= r["props"].keys() for r in rows)
+
+
 def test_a_publish_after_the_first_sends_only_what_changed(hashed_engine, tmp_path, monkeypatch):
     """The diff with the last publish written: changed rows rewritten, gone ones deleted by id, no stale sweep; a
     failed publish and a reset are followed by a full sync."""

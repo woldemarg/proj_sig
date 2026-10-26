@@ -472,16 +472,22 @@ def test_the_same_file_uploaded_again_and_still_queued_hides_no_window(windowed)
     assert beside == alone and alone[records[0]["upload_id"] + ":when:P7DT0H0M0S"]
 
 
-def test_a_thin_window_records_why_its_known_rules_were_not_evaluated(tmp_path):
-    """A window too thin for the search and for its known rules alike fails with nothing to mine, its observations on
-    its record (``INSUFFICIENT_SAMPLE`` with the rows, not an unavailable window), and readers see them at once."""
+def weeks_csv(folder: Path, *sizes: int) -> Path:
+    """The demo's orders over weeks of the given sizes: 1,500 rows find its effects, 60 leave every cohort under pass 1,
+    10 are under ``MIN_ROWS``."""
     from insight_graph_service.core.demo import generate_retail_dataset
 
     frame = generate_retail_dataset(5000, seed=7)
-    thin = frame.sample(60, random_state=3).assign(when="2031-03-12 12:00:00")  # W1: sixty rows, every cohort under pass 1
-    frame = frame.sample(1500, random_state=1).assign(when="2031-03-05 12:00:00")
-    path = tmp_path / "events.csv"
-    pd.concat([frame, thin]).to_csv(path, index=False, lineterminator="\n")
+    weeks = [frame.sample(n, random_state=w + 1).assign(when=f"2031-03-{5 + 7 * w:02d} 12:00:00") for w, n in enumerate(sizes)]
+    path = folder / "weeks.csv"
+    pd.concat(weeks).to_csv(path, index=False, lineterminator="\n")
+    return path
+
+
+def test_a_thin_window_records_why_its_known_rules_were_not_evaluated(tmp_path):
+    """A window too thin for the search and for its known rules alike fails with nothing to mine, its observations on
+    its record (``INSUFFICIENT_SAMPLE`` with the rows, not an unavailable window), and readers see them at once."""
+    path = weeks_csv(tmp_path, 1500, 60)
     engine = make_engine(make_config(tmp_path / "ws"))
     first, second = upload_windows_of(engine, path)
     assert first["status"] == "READY" and (second["status"], second["error"]["code"]) == ("FAILED", "no_viable_insights")
@@ -489,6 +495,39 @@ def test_a_thin_window_records_why_its_known_rules_were_not_evaluated(tmp_path):
     seen = second["temporal"]["observations"][key]
     assert (seen["status"], seen["reason"]) == ("NOT_EVALUATED", "INSUFFICIENT_SAMPLE") and seen["support"] > 0
     assert [(w["index"], w["reason"]) for w in engine.graph().trajectories[key]["windows"]] == [(0, None), (1, "INSUFFICIENT_SAMPLE")]
+
+
+def test_a_new_version_of_windows_replaces_the_old_and_one_deletion_removes_every_window(tmp_path, demo_csv):
+    """An upload of windows that names the dataset it replaces applies it with its last window, though the last two
+    found nothing to mine; deleting the upload removes every window — the one without a dataset id too — and the
+    trajectories with them."""
+    engine = make_engine(make_config(tmp_path / "ws"))
+    old = engine.ingest_file(demo_csv)
+    with weeks_csv(tmp_path, 1500, 60, 10).open("rb") as f:
+        uploaded = engine.upload("weeks.csv", f, time="when", window="7D", supersedes=old["dataset_id"])
+    records = [engine.process(r["batch_id"]) for r in uploaded]
+    assert [(r["status"], (r.get("error") or {}).get("code")) for r in records] == [
+        ("READY", None),
+        ("FAILED", "no_viable_insights"),
+        ("FAILED", "invalid_schema"),
+    ]
+    assert records[2]["dataset_id"] is None and records[2]["superseded"]["datasets"] == [old["dataset_id"]]
+    assert engine.ws.ready_batch_for(old["dataset_id"]) is None and engine.graph().trajectories  # the old version is gone
+    removed = engine.delete_upload(records[0]["upload_id"])
+    assert len(removed["batches"]) == 3 and not engine.ws.list_batches() and not engine.ws.patterns()
+    snapshot = engine.ws.load_graph()
+    assert snapshot["trajectories"] == {} and not any(e["type"] == "EVOLVES_TO" for e in snapshot["edges"])
+
+
+def test_a_windows_digest_leaves_its_temporal_provenance_out(windowed):
+    """``provenance.temporal`` is written after the digest, like ``rows_ref``: the integrity of a window's insight is its
+    numbers', and a window whose trajectory is rewritten in its record reads intact (the record's observations are signed)."""
+    from insight_contracts.insight import record_digest
+
+    engine, _, _ = windowed
+    record = next(r for r in engine.ws.patterns() if r["provenance"]["temporal"]["origin"] == "tracked")
+    moved = {**record, "provenance": {**record["provenance"], "temporal": {**record["provenance"]["temporal"], "trajectory": "T-other"}}}
+    assert record_digest(moved) == record_digest(record) == record["record_digest"]
 
 
 def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
