@@ -48,7 +48,15 @@ def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
     for b in ws.list_batches():
         geo = (b.get("profile") or {}).get("geo")
         if b.get("status") == "READY" and geo:
-            out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
+            out.append(
+                {
+                    "dataset_id": b["dataset_id"],
+                    "upload_id": b.get("upload_id"),
+                    "filename": b["filename"],
+                    **geo,
+                    "metrics": b["profile"].get("numerics", []),
+                }
+            )
     return out
 
 
@@ -252,39 +260,49 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
 def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
     another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
-    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it."""
+    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it.
+    With its cells' ``rings``, the ``level`` it was found at and its numbers, so a map that holds no cell of this dataset
+    draws and describes it."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
     if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
         raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
     if rows is not None:
-        inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
+        inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
         members = member_rows(ws, batch, ws.ready_batch_for(dataset_id), len(geo["point_cell"])) if batch else None
         if members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-        rows = found.events
+        rows, level = found.events, found.level
         src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
         inside = src[np.isin(geo["point_cell"][src], rows)]
     step = max(1, int(np.ceil(len(inside) / max_points)))
     points = geo["lonlat"][inside[::step]]
+    ins = graph.insight(pattern_id)
     return {
         "pattern_id": pattern_id,
         "cells": [str(c) for c in geo["cells"][rows]],
+        "rings": [cell_boundary(str(c)) for c in geo["cells"][rows]],  # a map that holds no cell of this dataset draws them
         "rows": rows.tolist(),
         "n_points": int(len(inside)),
         "points": np.round(points.astype(float), 5).tolist(),
+        "level": level,
+        "effect_size": ins.effect_size,
+        "phenomenon_type": ins.phenomenon_type,
+        "support": ins.support,
+        "weight": ins.weight,
     }
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
     """What the map draws over a geo dataset: every region holding a cell of the datasets ``map_set`` keeps, at each
     level of ``_region_sets``, as GeoJSON with the rows of ``dataset_id``'s cells inside it and ``n``, the IN VIEW rows a
-    view of that region alone lists (``_rows``; the datasets' insights are of different uploads, so their counts add); and
-    each pattern of the dataset and of the table levels of its upload with its credibility, integrity, scale and reading.
-    Derived once per commit."""
+    view of that region alone lists (``_rows``; the datasets' insights are of different uploads, so their counts add), and
+    ``by``, that count per dataset; and each pattern of the dataset and of the table levels of its upload, and each one
+    another dataset of the set lists, with its credibility, integrity, scale and reading — the latter with ``map_dataset``,
+    the dataset whose ``/patterns`` draws it. Derived once per commit."""
     kept = map_set(ws, dataset_id, datasets)
 
     def build() -> dict[str, Any]:
@@ -292,15 +310,17 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
         owner = _owner(ws, dataset_id)
         tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
-        held: defaultdict[str, int] = defaultdict(int)
+        held: defaultdict[str, dict[str, int]] = defaultdict(dict)
         levels = _region_sets(ws, graph, dataset_id).keys()  # the map's: another dataset's finer ones would lie inside its cells
         for ds in kept:
             for lv, sets in _region_sets(ws, graph, ds).items():
                 for cell, listed in zip(sets.ids, sets.listed, strict=True) if lv in levels else ():
-                    held[region_node_id(lv, str(cell))] += len(_rows(graph, ds, listed))
+                    held[region_node_id(lv, str(cell))][ds] = len(_rows(graph, ds, listed))
         features = region_features(geo["cells"], sorted(held))
         for f in features:
-            f["properties"]["n"] = held[f["properties"]["id"]]
+            by = held[f["properties"]["id"]]
+            f["properties"].update(n=sum(by.values()), by=by)
+        elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds)["patterns"]}
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
             | {
@@ -308,7 +328,8 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
                 "reading": insight_reading(graph, pid, thresholds),
                 "numbers": wording.value_words(graph.insight(pid)),
             }
-            for pid in pids
+            | ({"map_dataset": elsewhere[pid]} if pid in elsewhere else {})
+            for pid in [*pids, *elsewhere]
         }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
@@ -556,6 +577,7 @@ def geo_window(
                         "effect": round(ins.effect_size, 3),
                         "ptype": ins.phenomenon_type,
                         "weight": round(ins.weight, 3),
+                        "support": ins.support,
                         "points": x,
                         "share": round(x / mine, 3),
                         "cells": int(view[p.events].sum()),

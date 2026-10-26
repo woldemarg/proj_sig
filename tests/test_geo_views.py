@@ -82,8 +82,10 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
 def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     """Over several geo datasets (``map_set``) a region's ``n`` is the sum of each dataset's rows there, their insights
     being of different uploads, and a view of it lists their rows, each with its dataset; a level of the map's own upload
-    adds nothing, since the map counts it already, and a dataset that is not a geo dataset is refused."""
-    from insight_graph_service.core.geo_views import _region_sets, map_set
+    adds nothing, since the map counts it already, and a dataset that is not a geo dataset is refused. The overlay splits
+    each count by dataset and carries the trust of every insight another dataset lists, with the dataset that draws it,
+    whose ``/patterns`` gives its cells' rings."""
+    from insight_graph_service.core.geo_views import _projection, _region_sets, map_set
     from subgroup_miner.spatial import cell_centres
 
     fine, coarse = upload_levels(engine, points_csv, geo="auto@8,7")
@@ -107,6 +109,13 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     levels = set(_region_sets(engine.ws, engine.graph(), c))
     assert {f["properties"]["resolution"] for f in engine.geo_overlay(c, (b,))["features"]} <= levels
     assert engine.geo_window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
+    overlay = engine.geo_overlay(a, (b,))  # what «Усі датасети» reads: each region's count per dataset, every listed insight's trust
+    assert all(sum(f["properties"]["by"].values()) == f["properties"]["n"] for f in overlay["features"])
+    away = {pid: t["map_dataset"] for pid, t in overlay["patterns"].items() if "map_dataset" in t}
+    assert set(away) == set(_projection(engine.ws, engine.graph(), b)["patterns"]) and set(away.values()) == {b}
+    drawn = engine.geo_pattern(b, next(iter(away)))  # a map holding none of its cells draws it by their rings
+    assert len(drawn["rings"]) == len(drawn["cells"]) > 0 and drawn["level"] == "res 8" and {"effect_size", "support", "weight"} <= set(drawn)
+    assert {d["upload_id"] for d in engine.geo_datasets()} == {fine["upload_id"], other["upload_id"]}
 
 
 def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_csv):
