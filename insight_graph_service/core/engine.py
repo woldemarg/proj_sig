@@ -600,8 +600,8 @@ class Engine:
         )
 
     @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points)
+    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
+        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings)
 
     @_healthy
     def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:

@@ -1,5 +1,5 @@
 """The console's map in a browser (docs/08_interface.md §8.7): the base level's places, the form's geo levels, popups and Esc,
-an insight from the map to the chat and back."""
+an insight from the map to the chat and back, «Усі датасети»."""
 
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
         page.click(".adv summary")
+        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in the rail, not the page
         assert page.is_disabled("#table")
         page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
@@ -347,5 +348,75 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.locator(".msg-bot").last.locator(".ic-graph").click()
         page.wait_for_function(f"$('dataset-filter').value === '' && S.cy.getElementById('{base}').nonempty()", timeout=20000)
         assert table["dataset_id"] == graph.insight(base).dataset_id
+        browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
+    """«Усі датасети» over two uploads of one territory at two resolutions (docs/08_interface.md §8.7): the coarser
+    anchors it, so both files are on every level; no cells, the HUD naming the files, the list's rows from both, a hex
+    zoomed onto listing its count, an insight of the other dataset drawn by its own cells and asked with them, a hex's
+    popup splitting its count by dataset; a dataset chosen, the map is its own again, and back."""
+    import pandas as pd
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, housing = make_engine(cfg), PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
+    (full,) = upload_levels(engine, housing, geo="auto@6", bins="median_income_median:4")
+    pd.read_csv(housing).iloc[::2].to_csv(half := tmp_path / "half.csv", index=False)
+    (other,) = upload_levels(engine, half, geo="auto@5", bins="median_income_median:4")
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.ds && G.map.loaded() && G.overlay && W.data && !W.data.error", timeout=60000)
+        page.evaluate("if (W.folded) $('mw-fold').click()")
+        assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]  # the coarser anchors it
+        two = [dict(dataset_id=f"{u}{r}", upload_id=u, resolution=r, cells=c) for u, r, c in (("a", 8, 9), ("a", 7, 5), ("b", 8, 4), ("b", 7, 3))]
+        assert (
+            page.evaluate(
+                f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ return spread('').anchor.dataset_id; }} finally {{ G.datasets = keep; }} }})()"
+            )
+            == "a8"
+        )  # each upload's finest, not its coarser level
+        finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
+        assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
+        assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")
+        assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
+        rows = "W.data.themes.flatMap((t) => t.insights)"
+        assert {i["dataset_id"] for i in page.evaluate(rows)} == {full["dataset_id"], other["dataset_id"]}
+        theirs = page.evaluate(f"{rows}.find((i) => i.dataset_id === {full['dataset_id']!r}).id")
+        page.evaluate(f"GeoMap.pick({theirs!r})")  # drawn by its own cells, which the map does not hold
+        page.wait_for_function("G.focus.length > 0 && !$('map-card').hidden", timeout=20000)
+        assert page.evaluate("G.map.getSource('focus').serialize().data.features.length") == page.evaluate("G.focus.length")
+        assert page.evaluate(f"GeoMap.placeOf({theirs!r}).length") == page.evaluate("G.focus.length")  # its question carries its cells
+        both = page.evaluate(
+            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.by).filter(Boolean).length === 2)"
+        )
+        page.evaluate(
+            f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
+        )
+        assert all(name in page.inner_text(".sig-pop") for name in ("california_housing.csv", "half.csv"))
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
+        page.evaluate(f"GeoMap.closePopup(); G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
+        page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)  # a hex alone lists its count, over both uploads
+        region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
+        assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights")
+        page.select_option("#dataset-filter", full["dataset_id"])
+        page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
+        assert page.inner_text("#map-title") == "california_housing.csv"
+        page.select_option("#dataset-filter", other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
+        page.wait_for_function(f"G.ds === {other['dataset_id']!r} && G.others.length === 0 && !G.loading", timeout=20000)
+        page.select_option("#dataset-filter", "")
+        page.wait_for_function("G.others.length === 1 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'none'", timeout=20000)
+        assert page.inner_text("#map-title") == "Усі датасети"
         browser.close()
         assert not errors, errors

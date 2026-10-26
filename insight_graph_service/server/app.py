@@ -268,8 +268,8 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, datasets.split(","))))
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
-    def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id)
+    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, rings)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
