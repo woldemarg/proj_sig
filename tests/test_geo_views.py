@@ -48,7 +48,7 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
         for r, region in enumerate(above.listed):
             kids = np.unique(below.idx[above.idx == r])
             assert set(region) <= set().union(*(below.listed[k] for k in kids))
-    drawn = {pid: set(p.rows.tolist()) for pid, p in _projection(engine.ws, graph, ds)["patterns"].items()}
+    drawn = {pid: set(p.events.tolist()) for pid, p in _projection(engine.ws, graph, ds)["patterns"].items()}
     for s in sets.values():  # a region shows every insight it lists: each is drawn by a cell of it
         for r, region in enumerate(s.listed):
             assert all(drawn[pid] & set(np.flatnonzero(s.idx == r).tolist()) for pid in region)
@@ -70,6 +70,10 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
         assert not {i["id"] for i in rows} & {a["id"] for i in rows for a in i["also"]}
         keys = [(-i["regions"], -i["lift"]) for i in rows]
         assert keys == sorted(keys) and all(i["lift"] >= 1 and i["dataset_id"] == ds for i in rows)
+        own = [i["rank"] for i in rows if not i["wider"]]  # a row listed only as a coarser region's after the place's own
+        assert all(i["regions"] == 0 for i in rows if i["wider"]) and (
+            not own or max(own) < min([i["rank"] for i in rows if i["wider"]], default=len(rows))
+        )
     assert engine.geo_window(ds, "-180,-90,180,90")["level"] == 7
     with pytest.raises(PipelineError, match="region level"):
         engine.geo_window(ds, "-180,-90,180,90", 8)
@@ -79,7 +83,7 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     """Over several geo datasets (``map_set``) a region's ``n`` is the sum of each dataset's rows there, their insights
     being of different uploads, and a view of it lists their rows, each with its dataset; a level of the map's own upload
     adds nothing, since the map counts it already, and a dataset that is not a geo dataset is refused."""
-    from insight_graph_service.core.geo_views import map_set
+    from insight_graph_service.core.geo_views import _region_sets, map_set
     from subgroup_miner.spatial import cell_centres
 
     fine, coarse = upload_levels(engine, points_csv, geo="auto@8,7")
@@ -99,6 +103,10 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     window = engine.geo_window(a, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", shared["resolution"], (b,))
     rows = [i for t in window["themes"] for i in t["insights"]]
     assert window["insights"] == len(rows) == shared["n"] and {i["dataset_id"] for i in rows} == {a, b}
+    c = coarse["dataset_id"]  # a coarser map with a finer upload: the map's own levels read both
+    levels = set(_region_sets(engine.ws, engine.graph(), c))
+    assert {f["properties"]["resolution"] for f in engine.geo_overlay(c, (b,))["features"]} <= levels
+    assert engine.geo_window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
 
 
 def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_csv):

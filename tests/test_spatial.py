@@ -420,7 +420,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
-    assert all(p["rows"] and p["spatial"]["footprint_share"] == 1 for p in projected.values())  # every cell of its events
+    assert all(p["rows"] for p in projected.values())
     point_cell, coarse = (
         engine.ws.load_geo(fine, ("point_cell",))["point_cell"],
         engine.ws.load_geo(done[1]["dataset_id"], ("point_cell",))["point_cell"],
@@ -436,9 +436,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
         assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
     drawn = engine.geo_pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
-    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(
-        projected[pid]["rows"]
-    )
+    assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
