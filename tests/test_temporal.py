@@ -13,6 +13,7 @@ from test_discovery_contract import implied_warehouse_frame
 import subgroup_miner.ingestion as ingestion
 from insight_contracts import UNDIRECTED_EDGES, Condition, EdgeType, GraphEdge, Insight, Shift
 from insight_contracts.graph import LATENT_EDGES, STRUCTURAL_EDGES
+from subgroup_miner import discovery as discovery_module
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import DiscoveryError, KnownRule, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
@@ -33,6 +34,7 @@ from subgroup_miner.temporal import (
     WindowFacts,
     fold_trajectories,
     observations,
+    observed,
     open_rules,
     reference_scale,
     series_id,
@@ -42,6 +44,8 @@ from subgroup_miner.temporal import (
     upload_windows,
 )
 from subgroup_miner.vendor.eda.main_upd import calculate_mad
+
+discovery_eda = discovery_module.eda
 
 CFG = MinerConfig()
 SCOPE = (Condition("region", "x"), Condition("segment", "B"))
@@ -108,6 +112,50 @@ def test_a_window_whose_cohorts_are_all_known_is_still_mined():
     assert res.candidates == [] and [c.known for c in res.tracked] == [(RULE,)]
 
 
+def test_a_window_reports_its_known_rules_when_nothing_passes_pass_one():
+    """``no_candidates`` is for a window asked to follow nothing: one with known rules records why each was not evaluated
+    — no search space and a rule on a missing column, or a window too thin for the search and the rule alike."""
+    missing = KnownRule("T-a", (Condition("missing", "v"), Condition("segment", "B")), ("value",))
+    res = run_discovery(planted_frame(), replace(CFG, compute_budget=0), known=[missing])
+    assert (res.candidates, res.tracked, res.tracked_absent) == ([], [], {"T-a": ("EVALUATION_ERROR", None)})
+    thin = planted_frame(1, n=80)  # every cohort under the pass-1 floor, the rule's six rows too
+    with pytest.raises(DiscoveryError, match="pass-1"):
+        run_discovery(thin, CFG)
+    res = run_discovery(thin, CFG, known=[RULE])
+    assert res.tracked_absent == {RULE.key: ("INSUFFICIENT_SAMPLE", int(((thin.segment == "B") & (thin.region == "x")).sum()))}
+    seen = observations([RULE], res, [], [], [])
+    assert seen[RULE.key] == Observation(NOT_EVALUATED, reason="INSUFFICIENT_SAMPLE", support=6)
+
+
+def test_known_rules_cost_no_second_pass_one_without_a_rule(monkeypatch):
+    calls = []
+    real = discovery_eda.step4_evaluate_micro_slices
+    monkeypatch.setattr(discovery_eda, "step4_evaluate_micro_slices", lambda *a: calls.append(len(a[1])) or real(*a))
+    run_discovery(planted_frame(), CFG)
+    assert len(calls) == 1  # the search's alone
+    run_discovery(planted_frame(), CFG, known=[RULE])
+    assert calls[1:] == [calls[0], 1]  # then the known rule's
+
+
+def test_a_trajectory_metric_the_window_profile_drops_is_still_reported():
+    """A metric constant in a window leaves its profile's metrics but stays a column: the rule reports it from the window's
+    own median and MAD, and its move reads as a drift."""
+    before = planted_frame(1)
+    before.loc[(before.segment == "B") & (before.region == "x"), "noise"] += 2.0
+    flat = planted_frame(2).assign(noise=1.0)
+
+    def tracked(frame):
+        res = run_discovery(frame, CFG, known=[RULE])
+        return res, next(i for i in build_insights(res, CFG, dataset_id="d", batch_id="b", filename="f") if i.expression == res.tracked[0].expression)
+
+    res, after = tracked(flat)
+    assert "noise" not in res.profile.numerics
+    noise = after.shift_for("noise")
+    assert noise.source == "tracked" and noise.local_median == noise.global_median == 1.0
+    kind, shifts, metric = transition(tracked(before)[1], after, {"value": 1.0, "noise": 1.0}, ["value", "noise"], CFG)
+    assert (kind, metric) == (DRIFT, "noise") and shifts["noise"]["excess"] < -1.5
+
+
 def test_the_shortest_selector_of_an_extent_opens_its_trajectory():
     frame = implied_warehouse_frame()
     res = run_discovery(frame, CFG)
@@ -115,8 +163,23 @@ def test_the_shortest_selector_of_an_extent_opens_its_trajectory():
     cohort = next(c for c in res.candidates if set(eu_laptops) < set(c.conditions))
     assert Condition("warehouse", "RTM") in cohort.conditions and cohort.generator == eu_laptops
     rules = [KnownRule("T-1", eu_laptops, ("margin",)), KnownRule("T-2", (*eu_laptops, Condition("warehouse", "RTM")), ("margin",))]
-    (both,) = run_discovery(frame, CFG, known=rules).tracked  # two rules, one extent: one cohort
+    res = run_discovery(frame, CFG, known=rules)
+    (both,) = res.tracked  # two rules, one extent: one cohort
     assert both.known == tuple(rules)
+    insights = build_insights(res, CFG, dataset_id="d", batch_id="b", filename="f")
+    stamp_insights(insights, res, series="up-1", window=1)
+    ins = next(i for i in insights if i.expression == both.expression)
+    seen = observations(rules, res, insights, [ins], [])
+    assert ins.provenance["temporal"]["trajectory"] == "T-1" and seen["T-1"] == seen["T-2"] and seen["T-2"].pattern_id == ins.id
+
+
+def test_one_node_observed_by_two_trajectories_links_both():
+    """Two rules whose extents meet in a window: one node, named in its provenance by the first, linked to both by the
+    window's observations — the fold's record of which trajectories it serves."""
+    later = node("P1", "T-1")
+    seen = WindowFacts({"T-1": observed(later, True), "T-2": observed(later, True)}, [later])
+    t = fold({0: facts(node("P0", "T-1"), node("Q0", "T-2")), 1: seen}, 2)
+    assert [(a, b) for k in ("T-1", "T-2") for a, b, _ in t[k].edges] == [("P0", "P1"), ("Q0", "P1")]
 
 
 def test_insights_carry_their_trajectory_and_windows_record_what_they_saw():
@@ -177,6 +240,10 @@ def test_an_upload_is_cut_into_half_open_windows(tmp_path):
     other = upload_windows(path, CFG, time="when", window="14D", max_windows=52)[0]
     assert series_id("up-1", other[0]) != series_id("up-1", windows[0])  # another cut of the file: other trajectories
     assert load_dataset(path, CFG, window=other[0]).dataset_id != loads[0].dataset_id  # a window is its bounds, not its index
+    assert loads[0].frame.index.equals(pd.RangeIndex(len(loads[0].frame)))  # its covers are rows of the window, not of the file
+    respelled = {**windows[0], "t_start": "2031-03-03 00:00:00", "t_end": "2031-03-10T02:00:00+02:00"}  # the same instants
+    again = load_dataset(path, CFG, window=respelled)
+    assert again.dataset_id == loads[0].dataset_id and again.frame.equals(loads[0].frame)
 
 
 def test_window_options_are_refused(tmp_path):
@@ -260,6 +327,11 @@ def test_three_refusals_terminate_a_trajectory_and_unobserved_windows_do_not_res
     assert (t.state, t.closed_reason) == (CLOSED, TERMINATED)
     assert [(w["index"], w["status"], w["reason"]) for w in t.windows][1:3] == [(1, EVALUATED, None), (2, NOT_EVALUATED, WINDOW_UNAVAILABLE)]
     assert open_rules({"T-1": t}) == []
+
+
+def test_a_window_map_keyed_by_strings_folds_as_by_integers():
+    windows = {0: facts(node("P0")), 1: facts(refused="T-1"), 2: facts(node("P2"))}
+    assert fold({str(k): v for k, v in windows.items()}, 3)["T-1"] == fold(windows, 3)["T-1"]  # as JSON keys them
 
 
 def test_four_unobserved_windows_close_a_trajectory_for_want_of_data():

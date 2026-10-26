@@ -276,6 +276,30 @@ def _known_selectors(
     return selectors, absent
 
 
+def _track_known(
+    profile: dict[str, Any], rules: dict[str, tuple[Any, KnownRule]], absent: dict[str, tuple[str, int | None]], forbidden: Any
+) -> tuple[list[Candidate], dict[str, tuple[str, int | None]], set[bytes]]:
+    """The known rules through pass 1 and the closure, as any cohort (§2.10): the cohorts that can become insights, every
+    rule without one added to ``absent`` (under the size floor or the whole window: ``INSUFFICIENT_SAMPLE`` with its rows;
+    nothing moved: ``no_shift``), and the extents pass 1 found, which the EDA's pool leaves to them."""
+    if not rules:
+        return [], absent, set()
+    data, numerics, absent = profile["data_safe"], list(profile["numerics"]), dict(absent)
+    found = _pass1(eda.step4_evaluate_micro_slices(profile, [s for s, _ in rules.values()], forbidden), {e: s for e, (s, _) in rules.items()})
+    for cand in found:
+        cand.known = (rules[cand.expression][1],)
+    for expr in sorted(rules.keys() - {c.expression for c in found}):
+        selector, rule = rules[expr]
+        absent[rule.key] = ("INSUFFICIENT_SAMPLE", int(selector.covers(data).sum()))
+    tracked = []
+    for cand in merge_identical_extents(found, profile, forbidden)[0]:
+        if _measurable(cand, profile, numerics):
+            tracked.append(cand)
+        else:  # evaluated, and nothing in it moved
+            absent |= {rule.key: ("no_shift", cand.row_count) for rule in cand.known}
+    return tracked, absent, {np.sort(c.row_indices).tobytes() for c in found}
+
+
 def _measurable(cand: Candidate, profile: dict[str, Any], numerics: list[str]) -> bool:
     """A cohort can become an insight: it has a shift, or a covariance pair to stand on."""
     return bool(cand.top_shifts) or bool(_covariance_pair(cand.row_indices, profile["ranks"], profile["global_corr"], numerics, cand.restated))
@@ -325,32 +349,20 @@ def run_discovery(
         dimension_entropy={c: _entropy(data[c]) for c in categoricals},
     )
     rules, tracked_absent = _known_selectors(known, categoricals)
-    if not space and not rules:
+    if not space and not known:  # a window's known rules are reported (``tracked_absent``) even when none can be evaluated
         raise DiscoveryError("no_candidates", f"Search space is empty (dimensions selected: {dims}).")
 
     if on_stage:
         on_stage("DISCOVERING")
     forbidden = spatial.derived_from if spatial else None
     raw = eda.step4_evaluate_micro_slices(profile, space, forbidden)
-    known_raw = eda.step4_evaluate_micro_slices(profile, [selector for selector, _ in rules.values()], forbidden)
-    if raw.empty and known_raw.empty:
+    tracked, tracked_absent, taken = _track_known(profile, rules, tracked_absent, forbidden)
+    if raw.empty and not known:
         raise DiscoveryError("no_candidates", "No subgroup passed the pass-1 size screen.")
 
     pass1 = _pass1(raw, {str(sel): sel for sel in space})
-    known_pass1 = _pass1(known_raw, {expr: selector for expr, (selector, _) in rules.items()})
-    for cand in known_pass1:
-        cand.known = (rules[cand.expression][1],)
-    for expr in sorted(rules.keys() - {c.expression for c in known_pass1}):  # under the size floor, or the whole window
-        selector, rule = rules[expr]
-        tracked_absent[rule.key] = ("INSUFFICIENT_SAMPLE", int(selector.covers(data).sum()))
-    taken = {np.sort(c.row_indices).tobytes() for c in known_pass1}  # a known rule's extent is its trajectory's, not the EDA's
+    # a known rule's extent is its trajectory's, not the EDA's
     merged, rejections = merge_identical_extents([c for c in pass1 if np.sort(c.row_indices).tobytes() not in taken], profile, forbidden)
-    tracked = []
-    for cand in merge_identical_extents(known_pass1, profile, forbidden)[0]:
-        if _measurable(cand, profile, numerics):
-            tracked.append(cand)
-        else:  # evaluated, and nothing in it moved
-            tracked_absent |= {rule.key: ("no_shift", cand.row_count) for rule in cand.known}
     candidates = []
     for c in merged:  # a cohort without a shift stands on its covariance pair alone; without one it can become no insight
         if _measurable(c, profile, numerics):
@@ -446,11 +458,13 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         shifts: list[Shift] = []  # never empty: a cohort without a shift entered the rank on its covariance pair
         for metric, magnitude in cand.top_shifts:
             shifts.append(_shift(metric, float(np.median(rows[metric].dropna())), prof.global_medians[metric], prof.global_mads[metric], magnitude))
-        reported = [m for rule in cand.known for m in rule.metrics if m in prof.numerics and rows[m].notna().any()]
+        # a trajectory's metric the window's profile left out (constant here, or a near duplicate) is still a column
+        reported = [m for rule in cand.known for m in rule.metrics if _numeric(result.data, m) and rows[m].notna().any()]
         for metric, source in [*((m, "covariance_pair") for m in covariance.get("pair", [])), *((m, "tracked") for m in reported)]:
             if all(s.metric != metric for s in shifts):
                 local_median = float(np.median(rows[metric].dropna()))
-                shifts.append(_shift(metric, local_median, prof.global_medians[metric], prof.global_mads[metric], source=source))
+                scale = (prof.global_medians[metric], prof.global_mads[metric]) if metric in prof.numerics else _global_stats(result.data[metric])
+                shifts.append(_shift(metric, local_median, *scale, source=source))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
         primary = shifts[0]
         values = rows[primary.metric].to_numpy(dtype=float)
@@ -533,6 +547,10 @@ def selector_conditions(expression: str) -> list[tuple[str, str]] | None:
     conditions found do not make up the whole expression."""
     found = list(re.finditer(r"(.+?)=='(.*?)'(?: AND |$)", expression))
     return [m.groups() for m in found] if found and "".join(m.group(0) for m in found) == expression else None
+
+
+def _numeric(data: pd.DataFrame, column: str) -> bool:
+    return column in data.columns and pd.api.types.is_numeric_dtype(data[column])
 
 
 def _global_stats(column: pd.Series) -> tuple[float, float]:
