@@ -250,7 +250,7 @@ After admission the graph service stores the cells, the point → cell map, the 
 
 ## 2.10 Time windows and trajectories
 
-A table with a time column can be cut into fixed windows and mined window by window. A cohort that one window admits is then followed into the later windows by its rule, not found again by the search: the search ranks and budgets what it finds anew, so a known cohort that slips out of a window's best fifty would otherwise read as gone. `subgroup_miner/temporal.py` holds the pieces; `scripts/temporal_benchmark.py` runs them over the windows of one upload ([10.4](10_verification.md#104-measurement-scripts)).
+A table with a time column can be cut into fixed windows and mined window by window. A cohort that one window admits is then followed into the later windows by its rule, not found again by the search: the search ranks and budgets what it finds anew, so a known cohort that slips out of a window's best fifty would otherwise read as gone. `subgroup_miner/temporal.py` holds the pieces. The graph service runs them over the windows of an upload — `POST /api/upload` with `time` and `window`, one batch per window in order ([9.1](09_operations.md#91-the-batch-lifecycle)), the trajectories and their `EVOLVES_TO` edges compiled into the snapshot ([6.2](06_graph_and_storage.md#62-the-graph-schema)) — and `scripts/temporal_benchmark.py` runs them in memory ([10.4](10_verification.md#104-measurement-scripts)).
 
 **Windows.** `temporal.upload_windows(path, config, time=, window=, max_windows=, bins=, categories=)` cuts a stored upload into non-overlapping windows of one fixed size (`pd.Timedelta`: `7D`, `24h`, `90min`; months and years have no fixed length and are refused, as is a size without a unit or under a second):
 

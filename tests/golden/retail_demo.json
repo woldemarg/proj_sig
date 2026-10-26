@@ -1,5 +1,5 @@
 {
- "version": 11,
+ "version": 12,
  "nodes": {
   "Attractor": 8,
   "Batch": 1,
@@ -109,6 +109,7 @@
   "SPECIALIZES": 24,
   "TARGETS": 49
  },
+ "trajectories": {},
  "patterns": [
   "P-0259a44956b2 category=laptops & channel=retail & region=EU | target margin | support 225 | p_value 4.86717e-43 | p_adjusted 1.63537e-40 | stability 0.949844 | weight 0.609469 | margin -0.858879 @15.77; delivery_days -0.252937 @3.1; discount -0.177775 @10.06; return_rate -0.126874 @0.0536",
   "P-0f4bf4089b23 category=accessories & region=APAC | target delivery_days | support 227 | p_value 3.64638e-28 | p_adjusted 1.22518e-25 | stability 0.940314 | weight 0.712853 | delivery_days +1.60194 @5.3; return_rate +1.11515 @0.0722; margin +0.158706 @20.13",

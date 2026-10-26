@@ -22,7 +22,7 @@ def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarra
     """What of the journal record the recomputation (``recompute_statistics``) does not reproduce, each as ``{field,
     journal, recomputed}``: its id and selector against its conditions, the rows against ``covers.npz`` and the record's
     row hash, its target as its first shift (on a covariance insight, the stronger of its pair), a missing p only on a
-    covariance insight, its test family against its dataset's, then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
+    covariance insight, its test family against its dataset's (a known rule's: the window's metrics), then every number; floats agree within a relative 1e-9 (the same code over the same bytes)."""
     rows = fresh["rows"]
     out = []
 
@@ -92,7 +92,11 @@ def verify_pattern(ws: Workspace, pattern_id: str, load: Callable[[dict[str, Any
         return out | {"status": "source_missing"}
     if loaded.dataset_id != ds:
         return out | {"status": "source_changed", "detail": f"the file read with its options now gives {loaded.dataset_id}"}
-    family = Counter(r["provenance"].get("multiple_testing_family") for r in records if r["dataset_id"] == ds).most_common(1)[0][0]
+    if (record["provenance"].get("temporal") or {}).get("origin") == "tracked":  # a known rule's family: the window's metrics (§2.10)
+        family = len(batch["profile"]["numerics"])
+    else:  # the search's, shared by its dataset's other cohorts
+        searched = (r["provenance"] for r in records if r["dataset_id"] == ds and (r["provenance"].get("temporal") or {}).get("origin") != "tracked")
+        family = Counter(p.get("multiple_testing_family") for p in searched).most_common(1)[0][0]
     fresh = recompute_statistics(
         loaded.frame,
         [(c["attribute"], c["value"]) for c in record["conditions"]],

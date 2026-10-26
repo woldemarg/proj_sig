@@ -1,18 +1,23 @@
 """Time windows and trajectories (docs/02_discovery.md §2.10): the windows of an upload, known rules in
-discovery, the fold of the observations and the transitions between windows."""
+discovery, the fold of the observations and the transitions between windows; an upload's windows as batches of the
+graph service, their records and the temporal plane of the snapshot (docs/06_graph_and_storage.md §6.2)."""
 
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_config, make_engine
 from test_discovery_contract import implied_warehouse_frame
 
 import subgroup_miner.ingestion as ingestion
 from insight_contracts import UNDIRECTED_EDGES, Condition, EdgeType, GraphEdge, Insight, Shift
 from insight_contracts.graph import LATENT_EDGES, STRUCTURAL_EDGES
+from insight_graph_service.core.errors import PipelineError
+from insight_graph_service.core.snapshot import compute_metadata_integrity
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import DiscoveryError, KnownRule, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
@@ -135,10 +140,10 @@ def test_insights_carry_their_trajectory_and_windows_record_what_they_saw():
     tracked = next(i for i in later if i.expression == "region=='x' AND segment=='B'")
     assert tracked.provenance["temporal"] | {"window": 0, "origin": "eda"} == temporal  # the same trajectory, rule and metrics
     selection = select_insights(later, CFG)
-    seen = observations([rule, gone], second, later, selection.kept, selection.rejections)
+    seen = observations(second, later, selection.kept, selection.rejections)
     assert seen[rule.key].active and seen[rule.key].pattern_id == tracked.id
     assert seen["T-gone"] == Observation(NOT_EVALUATED, reason="INSUFFICIENT_SAMPLE", support=0)
-    refused = observations([rule], second, later, [], [])  # admitted nowhere: evaluated, inactive
+    refused = observations(second, later, [], [])  # admitted nowhere: evaluated, inactive
     assert refused[rule.key].status == EVALUATED and not refused[rule.key].active and refused[rule.key].pattern_id is None
 
 
@@ -303,3 +308,167 @@ def test_evolves_to_is_a_temporal_edge_no_walk_follows():
 def test_reference_scale_reads_the_whole_upload():
     frame = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0, 5.0], "flat": 3.0, "text": list("vwxyz")})
     assert reference_scale(frame) == {"a": pytest.approx(1.0 / 0.6745), "flat": None}
+
+
+PHONES_US = [{"attribute": "category", "value": "phones"}, {"attribute": "region", "value": "US"}]
+
+
+def weekly_events(folder: Path) -> Path:
+    """The demo's orders over five weeks (``when``): W0, W1 and W4 hold its planted effects, W2 the same rows with every
+    metric shuffled (nothing to find), W3 ten rows (under ``MIN_ROWS``)."""
+    from insight_graph_service.core.demo import generate_retail_dataset
+
+    frame = generate_retail_dataset(5000, seed=7)
+    rng = np.random.default_rng(1)
+    week = rng.choice([0, 1, 2, 4], len(frame), p=[0.3, 0.3, 0.1, 0.3])
+    when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
+    frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
+    for metric in ("discount", "margin", "delivery_days", "return_rate"):
+        frame.loc[week == 2, metric] = rng.permutation(frame.loc[week == 2, metric].to_numpy())
+    frame = pd.concat([frame, frame.sample(10, random_state=1).assign(when="2031-03-24 12:00:00")], ignore_index=True)
+    path = folder / "events.csv"
+    frame.to_csv(path, index=False, lineterminator="\n")
+    return path
+
+
+def upload_windows_of(engine, csv: Path) -> list[dict]:
+    """``csv`` uploaded with ``time=when``, ``window=7D``, each window processed in order."""
+    with csv.open("rb") as f:
+        return [engine.process(r["batch_id"]) for r in engine.upload(csv.name, f, time="when", window="7D")]
+
+
+@pytest.fixture(scope="module")
+def windowed(tmp_path_factory):
+    """The weekly upload through the graph service, with the graph its readers saw after each window."""
+    folder = tmp_path_factory.mktemp("windowed")
+    engine = make_engine(make_config(folder / "ws"))
+    with weekly_events(folder).open("rb") as f:
+        uploaded = engine.upload("events.csv", f, time="when", window="7D")
+    records, served = [], []
+    for r in uploaded:
+        records.append(engine.process(r["batch_id"]))
+        served.append(engine.graph())
+    return engine, records, served
+
+
+def phones_us(snapshot: dict) -> tuple[str, dict]:
+    return next((k, t) for k, t in snapshot["trajectories"].items() if t["predicate"] == PHONES_US)
+
+
+def evolves(snapshot: dict, key: str) -> list[tuple]:
+    return [
+        (e["props"]["from_window"], e["props"]["to_window"], e["props"]["transition"])
+        for e in snapshot["edges"]
+        if e["type"] == "EVOLVES_TO" and e["props"]["trajectory"] == key
+    ]
+
+
+def test_an_upload_with_a_time_column_is_a_batch_per_window_and_a_trajectory_through_them(windowed):
+    engine, records, served = windowed
+    outcome = [(r["window"]["index"], r["status"], (r.get("error") or {}).get("code")) for r in records]
+    assert outcome == [
+        (0, "READY", None),
+        (1, "READY", None),
+        (2, "FAILED", "no_viable_insights"),
+        (3, "FAILED", "invalid_schema"),
+        (4, "READY", None),
+    ]
+    assert len({r["upload_id"] for r in records}) == 1 and len({r["dataset_id"] for r in records if r["dataset_id"]}) == 4
+    assert records[2]["temporal"]["observations"] and records[3]["temporal"]["observations"] is None  # mined and refused; never mined
+    assert {compute_metadata_integrity(r) for r in records} == {"ok"}  # a failed window is signed as a READY one
+    snapshot = engine.ws.load_graph()
+    key, t = phones_us(snapshot)
+    seen = [(w["index"], w["status"], w["active"], w["reason"] or w["rejection"]) for w in t["windows"]]
+    assert seen == [
+        (0, "EVALUATED", True, None),
+        (1, "EVALUATED", True, None),
+        (2, "EVALUATED", False, "weak_effect"),  # the shuffled week: dormant
+        (3, "NOT_EVALUATED", False, "WINDOW_UNAVAILABLE"),  # ten rows: nothing observed
+        (4, "EVALUATED", True, None),
+    ]
+    assert t["state"] == "ACTIVE" and t["series"] == records[0]["upload_id"] + ":when:P7DT0H0M0S"
+    assert evolves(snapshot, key) == [(0, 1, "CONTINUATION"), (1, 4, "RECOVERY")]
+    after_refusal = served[2].trajectories[key]  # W2 committed nothing, yet readers saw its refusal before W3 ran
+    assert after_refusal["state"] == "DORMANT" and [w["index"] for w in after_refusal["windows"]] == [0, 1, 2]
+    graph = engine.graph()
+    nodes = [graph.nodes[w["pattern_id"]]["props"] for w in t["windows"] if w["active"]]
+    assert [n["provenance"]["temporal"]["origin"] for n in nodes] == ["eda", "tracked", "tracked"]  # found once, then followed by its rule
+    assert all(n["credibility"] != 1 for n in nodes)  # the windows of one upload are one source: they confirm nothing
+    assert {graph.nodes[f"DS:{r['dataset_id']}"]["props"]["window"]["index"] for r in records if r["status"] == "READY"} == {0, 1, 4}
+
+
+def test_a_windows_node_reads_its_trajectory_reproduces_and_no_walk_follows_it(windowed, monkeypatch):
+    from graph_query_engine.seeds import SeedMatch
+    from graph_query_engine.traversal import traverse
+    from insight_graph_service.server.views import node_details
+
+    engine, records, _ = windowed
+    key, t = phones_us(engine.ws.load_graph())
+    tracked = t["windows"][1]["pattern_id"]
+    details = node_details(engine.graph(), tracked, engine.settings.thresholds)
+    assert details["trajectory"]["key"] == key and [w["index"] for w in details["trajectory"]["windows"]] == [0, 1, 2, 3, 4]
+    assert details["neighbor_counts"]["EVOLVES_TO"] == 1 and details["neighbor_counts"]["EVOLVES_TO (in)"] == 1
+    checked = engine.verify_pattern(tracked)  # a known rule's family is the window's metrics; its tracked shifts recomputed too
+    assert checked["status"] == "reproduced", checked["diff"]
+    eda = next(
+        r["id"] for r in engine.ws.patterns() if r["dataset_id"] == records[1]["dataset_id"] and r["provenance"]["temporal"]["origin"] == "eda"
+    )
+    assert engine.verify_pattern(eda)["status"] == "reproduced"  # the window's other family
+    walked = traverse(engine.graph(), [SeedMatch(tracked, 1.0, {})], engine.settings.query)
+    assert walked.patterns and walked.used_edges and not any(e.startswith("EVOLVES_TO:") for e in walked.used_edges)
+    journal = engine.ws.patterns()
+    record = next(r for r in journal if r["id"] == tracked)
+    forged = {**record, "p_adjusted": record["p_value"], "provenance": {**record["provenance"], "multiple_testing_family": 1}}
+    monkeypatch.setattr(engine.ws, "patterns", lambda: [forged if r["id"] == tracked else r for r in journal])
+    assert "multiple_testing_family" in {d["field"] for d in engine.verify_pattern(tracked)["diff"]}  # forged with its p: not the window's
+
+
+def test_the_same_file_uploaded_again_and_still_queued_hides_no_window(windowed):
+    from insight_graph_service.core.temporal import temporal_plane
+
+    engine, records, _ = windowed
+    twin = [{**r, "batch_id": f"twin-{i}", "status": "UPLOADED", "dataset_id": None} for i, r in enumerate(records)]
+    edges, trajectories = temporal_plane([*records, *twin], engine.ws.patterns(), engine.settings.miner)
+    assert trajectories == engine.graph().trajectories and len(edges) == sum(e["type"] == "EVOLVES_TO" for e in engine.ws.load_graph()["edges"])
+
+
+def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
+    engine = make_engine(replace(cfg, max_windows=3))
+    csv = weekly_events(tmp_path)
+    for options, said in [
+        ({"time": "when"}, "go together"),
+        ({"window": "7D"}, "go together"),
+        ({"time": "when", "window": "7D", "geo": "auto"}, "go together"),
+        ({"time": "when", "window": "7D"}, "MAX_WINDOWS=3"),
+        ({"time": "nope", "window": "7D"}, "not in dataset"),
+    ]:
+        with csv.open("rb") as f, pytest.raises(PipelineError, match=said) as refused:
+            engine.upload(csv.name, f, **options)
+        assert refused.value.code == "invalid_options"
+    assert not engine.ws.list_batches() and not (engine.ws.uploads_dir.exists() and any(engine.ws.uploads_dir.iterdir()))
+
+
+def test_a_window_whose_record_fails_its_digest_is_read_as_unavailable(cfg, tmp_path):
+    engine = make_engine(cfg)
+    records = upload_windows_of(engine, weekly_events(tmp_path))
+    forged = engine.ws.load_batch(records[1]["batch_id"])
+    forged["temporal"]["observations"] = {}  # by hand, past the API: the window seems to have seen none of its rules
+    engine.ws.save_batch(forged)
+    engine = make_engine(cfg)  # a restart rebuilds the snapshot
+    snapshot = engine.ws.load_graph()
+    key, t = phones_us(snapshot)
+    assert [w["reason"] for w in t["windows"]][:2] == [None, "WINDOW_UNAVAILABLE"]
+    assert evolves(snapshot, key) == [(0, 4, "RECOVERY")]  # the forged window links nothing; W2 refused the rule, W4 recovers it
+
+
+def test_the_upload_form_takes_a_time_column_and_names_each_window(engine, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from insight_graph_service.server.app import create_app
+
+    csv = weekly_events(tmp_path)
+    with TestClient(create_app(engine)) as client, csv.open("rb") as f:
+        accepted = client.post("/api/upload", files={"file": ("events.csv", f, "text/csv")}, data={"time": "when", "window": "7D"})
+        assert accepted.status_code == 202 and list(accepted.json()["levels"]) == ["W0", "W1", "W2", "W3", "W4"]
+        refused = client.post("/api/upload", files={"file": ("events.csv", b"a,b\n1,2\n", "text/csv")}, data={"time": "when"})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"

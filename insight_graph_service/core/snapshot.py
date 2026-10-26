@@ -91,7 +91,7 @@ def _schema_plane(
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
                 "integrity": integrity[bid],
-                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
+                **{k: b[k] for k in ("upload_id", "level", "supersedes", "window") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
@@ -443,6 +443,8 @@ BATCH_DIGEST_FIELDS = (
     "metadata_doc",
     "supersedes",
     "profile",
+    "window",  # a time window's bounds and what it observed of its series' trajectories (docs/02_discovery.md §2.10)
+    "temporal",
 )
 
 
@@ -478,11 +480,13 @@ def build_snapshot(
     ontology: LatentOntology,
     settings: Settings,
     spatial: SpatialStructure | None = None,
+    temporal: tuple[list[GraphEdge], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
     ``profile``); ``representation``: the recorded vector contract; ``spatial``: the derived spatial plane of the geo
-    patterns (``subgroup_miner.spatial.derive_spatial``)."""
+    patterns (``subgroup_miner.spatial.derive_spatial``); ``temporal``: the EVOLVES_TO edges and trajectories of the time
+    windows (``core.temporal.temporal_plane``)."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
@@ -512,6 +516,8 @@ def build_snapshot(
             )
         )
 
+    evolves, trajectories = temporal or ([], {})
+    edges += evolves
     counts = Counter(e.type.value for e in edges)
     n_attr = len(ontology.attractor_ids)
     return {
@@ -521,6 +527,7 @@ def build_snapshot(
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
         "own_cells": {pid: sorted(cells) for pid, cells in spatial.own_cells.items() if pid in nodes},
+        "trajectories": trajectories,
         "stats": {
             "patterns": len(insights),
             "attractors": n_attr,

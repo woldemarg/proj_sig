@@ -163,6 +163,8 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         linked = [*basis.get("patterns", []), *basis.get("confirmed_by", [])]
         linked += [s.pattern_id for s in steps]
         out["labels"] = {pid: graph.nodes[pid]["label"] for pid in linked if pid in graph.nodes}  # of other datasets too
+        if key := (node["props"].get("provenance", {}).get("temporal") or {}).get("trajectory"):  # its windows (§2.10)
+            out["trajectory"] = {"key": key, **graph.trajectories.get(key, {})}
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)
         out["reading"] = {"what": wording.region_reading(out["picture"])}
