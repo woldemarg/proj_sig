@@ -49,7 +49,6 @@ from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of,
 from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, forget_tables, load_dataset, parse_indicators
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
-from subgroup_miner.temporal import observations, stamp_insights, upload_windows
 
 log = logging.getLogger(__name__)
 
@@ -278,7 +277,7 @@ class Engine:
             ontology=ontology,
             settings=self.settings,
             spatial=derive_spatial(geo, self.settings.region_levels, tables, self._spatial_memo),
-            temporal=temporal.temporal_plane(batches.values(), records, self.settings.miner),
+            temporal=temporal.derive_temporal(batches.values(), records, self.settings.miner),
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
@@ -329,7 +328,7 @@ class Engine:
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
         levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
         READY (``uploads.replaced_by``). ``time`` and ``window`` cut a table into time windows, one batch each, in order
-        (``temporal.upload_windows``, docs/02_discovery.md §2.10). Processing is a separate call."""
+        (``temporal.window_cuts``, docs/02_discovery.md §2.10). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if bool(time) != bool(window) or (time and (geo or table)):
@@ -345,11 +344,9 @@ class Engine:
         try:
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
-            if time:
-                cuts, scale = upload_windows(
-                    path, self.settings.miner, time=time, window=window, max_windows=self.settings.max_windows, bins=bins, categories=categories
-                )
-                windows = [{"window": w, "temporal": {"reference_scale": scale, "observations": None}} for w in cuts]
+            windows = temporal.window_cuts(
+                path, self.settings.miner, time=time, window=window, max_windows=self.settings.max_windows, bins=bins, categories=categories
+            )
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
@@ -531,16 +528,13 @@ class Engine:
         a time window's record keeps what it observed of each known rule; ``no_viable_insights`` when none is admitted."""
         ds, covers = record["dataset_id"], covers_of(result)
         insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=record["batch_id"], filename=record["filename"])
-        if series := temporal.series_of(record):
-            stamp_insights(insights, result, series=series, window=record["window"]["index"])
         selection = select_insights(insights, self.settings.miner)
         kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
         if loaded.spatial:
             record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
             self.ws.save_profile(ds, record["profile"])
         rejections = [*result.rejections, *selection.rejections, *refused]
-        if series:
-            record["temporal"]["observations"] = {k: asdict(o) for k, o in observations(result, insights, kept, rejections).items()}
+        temporal.record_window(record, result, insights, kept, rejections)
         self.ws.save_rejections(ds, [asdict(r) for r in rejections])
         if not kept:
             raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
@@ -711,7 +705,7 @@ class Engine:
         if not self.ws.pending_path.exists():  # a coarser level with nothing to mine still completes a new version
             self._supersede_alone(record, ("FAILED", code))
         self.ws.save_batch(record)
-        if code in uploads.EMPTY_LEVEL and any(t["series"] == temporal.series_of(record) for t in self.graph().trajectories.values()):
+        if temporal.moves_series(record, code, self.ws.list_batches()):
             self._rederive(record)
         log.warning("[%s] FAILED %s: %s", record["batch_id"], code, exc)
         return record

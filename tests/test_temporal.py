@@ -496,12 +496,31 @@ def test_a_windows_node_reads_its_trajectory_reproduces_and_no_walk_follows_it(w
 
 
 def test_the_same_file_uploaded_again_and_still_queued_hides_no_window(windowed):
-    from insight_graph_service.core.temporal import temporal_plane
+    from insight_graph_service.core.temporal import derive_temporal
 
     engine, records, _ = windowed
     twin = [{**r, "batch_id": f"twin-{i}", "status": "UPLOADED", "dataset_id": None} for i, r in enumerate(records)]
-    edges, trajectories = temporal_plane([*records, *twin], engine.ws.patterns(), engine.settings.miner)
-    assert trajectories == engine.graph().trajectories and len(edges) == sum(e["type"] == "EVOLVES_TO" for e in engine.ws.load_graph()["edges"])
+    alone, beside = (derive_temporal(rs, engine.ws.patterns(), engine.settings.miner).series for rs in (records, [*records, *twin]))
+    assert beside == alone and alone[records[0]["upload_id"] + ":when:P7DT0H0M0S"]
+
+
+def test_a_thin_window_records_why_its_known_rules_were_not_evaluated(tmp_path):
+    """A window too thin for the search and for its known rules alike fails with nothing to mine, its observations on
+    its record (``INSUFFICIENT_SAMPLE`` with the rows, not an unavailable window), and readers see them at once."""
+    from insight_graph_service.core.demo import generate_retail_dataset
+
+    frame = generate_retail_dataset(5000, seed=7)
+    thin = frame.sample(60, random_state=3).assign(when="2031-03-12 12:00:00")  # W1: sixty rows, every cohort under pass 1
+    frame = frame.sample(1500, random_state=1).assign(when="2031-03-05 12:00:00")
+    path = tmp_path / "events.csv"
+    pd.concat([frame, thin]).to_csv(path, index=False, lineterminator="\n")
+    engine = make_engine(make_config(tmp_path / "ws"))
+    first, second = upload_windows_of(engine, path)
+    assert first["status"] == "READY" and (second["status"], second["error"]["code"]) == ("FAILED", "no_viable_insights")
+    key, _ = phones_us(engine.ws.load_graph())
+    seen = second["temporal"]["observations"][key]
+    assert (seen["status"], seen["reason"]) == ("NOT_EVALUATED", "INSUFFICIENT_SAMPLE") and seen["support"] > 0
+    assert [(w["index"], w["reason"]) for w in engine.graph().trajectories[key]["windows"]] == [(0, None), (1, "INSUFFICIENT_SAMPLE")]
 
 
 def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
