@@ -494,7 +494,7 @@ async function cellInsights(popup, row, level) {
 // re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
 const W = { seq: 0, timer: null, data: null, fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
 const ROWS_SHOWN = 8;  // the rows listed before «показати всі»: those characteristic of the most regions in focus
-const FOCUS_INSET = 0.15;  // the share of the map left out at each edge, where the eye rarely rests (docs/08 §8.7)
+const FOCUS_INSET = 0.2;  // the share of the map left out at each edge, where the eye rarely rests (docs/08 §8.7)
 
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
