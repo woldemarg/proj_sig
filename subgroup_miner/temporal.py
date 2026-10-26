@@ -150,26 +150,28 @@ def observed(ins: Insight, active: bool, rejection: str | None = None) -> Observ
 
 
 def observations(
-    known: Iterable[KnownRule], result: DiscoveryResult, insights: Iterable[Insight], admitted: Iterable[Insight], rejections: Iterable[Rejection]
+    result: DiscoveryResult, insights: Iterable[Insight], admitted: Iterable[Insight], rejections: Iterable[Rejection]
 ) -> dict[str, Observation]:
-    """Each known rule's outcome in a window: not evaluated (and why), or evaluated and admitted or refused (and by which
-    rule). ``insights``: what ``build_insights`` made of the window; ``admitted``: the ones the graph took."""
+    """Each known rule's outcome in a window (every rule ``run_discovery`` was given ends in ``tracked`` or in
+    ``tracked_absent``): not evaluated (and why), or evaluated and admitted or refused (and by which rule). ``insights``:
+    what ``build_insights`` made of the window; ``admitted``: the ones the graph took."""
     built = {i.expression: i for i in insights}
     kept = {i.expression: i for i in admitted}
     why = {r.expression: r.reason for r in rejections}
-    cohort = {rule.key: c.expression for c in result.tracked for rule in c.known}
     out = {}
-    for rule in known:
-        if rule.key in result.tracked_absent:
-            reason, support = result.tracked_absent[rule.key]
-            out[rule.key] = (
-                Observation(EVALUATED, rejection=reason, support=support)
-                if reason == "no_shift"
-                else Observation(NOT_EVALUATED, reason=reason, support=support)
-            )
-        else:
-            expression = cohort[rule.key]
-            out[rule.key] = observed(kept[expression], True) if expression in kept else observed(built[expression], False, why.get(expression))
+    for key, (reason, support) in result.tracked_absent.items():
+        out[key] = (
+            Observation(EVALUATED, rejection=reason, support=support)
+            if reason == "no_shift"
+            else Observation(NOT_EVALUATED, reason=reason, support=support)
+        )
+    for cohort in result.tracked:
+        seen = (
+            observed(kept[cohort.expression], True)
+            if cohort.expression in kept
+            else observed(built[cohort.expression], False, why.get(cohort.expression))
+        )
+        out |= {rule.key: seen for rule in cohort.known}
     return out
 
 
@@ -196,6 +198,19 @@ class Trajectory:
     inactive_streak: int = 0
     unobserved_streak: int = 0
     last: tuple[int, Insight] | None = None  # the last admitted (window, node)
+
+    def record(self) -> dict[str, Any]:
+        """What a snapshot serves of it: its rule, metrics, state (``closed_reason`` once closed), episode, first window
+        and one entry per window it was observed in."""
+        return {
+            "predicate": [asdict(c) for c in self.predicate],
+            "metrics": list(self.metrics),
+            "state": self.state,
+            "closed_reason": self.closed_reason,
+            "episode": self.episode,
+            "first_window": self.first_window,
+            "windows": self.windows,
+        }
 
 
 def transition(

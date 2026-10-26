@@ -27,6 +27,7 @@ class Settings:
     workspace_dir: Path = Path("workspace")
     max_upload_mb: int = 200
     geo_max_points: int = 5000  # points per pattern sent to the map (GET /api/geo/{dataset}/patterns/{pattern})
+    max_windows: int = 52  # time windows one upload may make (docs/02_discovery.md §2.10)
 
     @property
     def max_upload_bytes(self) -> int:
