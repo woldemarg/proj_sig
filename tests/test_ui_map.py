@@ -380,6 +380,13 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.wait_for_function("G.ds && G.map.loaded() && G.overlay && W.data && !W.data.error", timeout=60000)
         page.evaluate("if (W.folded) $('mw-fold').click()")
         assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]  # the coarser anchors it
+        two = [dict(dataset_id=f"{u}{r}", upload_id=u, resolution=r, cells=c) for u, r, c in (("a", 8, 9), ("a", 7, 5), ("b", 8, 4), ("b", 7, 3))]
+        assert (
+            page.evaluate(
+                f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ return spread('').anchor.dataset_id; }} finally {{ G.datasets = keep; }} }})()"
+            )
+            == "a8"
+        )  # each upload's finest, not its coarser level
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
         assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
         assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")

@@ -137,11 +137,13 @@ const elsewhere = (pid) => {  // the dataset of «Усі датасети» whos
 const uploadOf = (d) => d.upload_id || d.dataset_id;  // as the server's map_set: a record without one is its own upload
 
 function spread(filter) {
-  /* «Усі датасети» on the map: no dataset chosen and geo datasets of two uploads or more; the coarsest anchors it — its
-     region levels are the map's, and every finer dataset has them too, so no file drops out of a finer one — the
-     others go along and the server keeps one per upload */
+  /* «Усі датасети» on the map: no dataset chosen and geo datasets of two uploads or more; of each upload's finest
+     dataset (as map_set keeps), the coarsest anchors it — its region levels are the map's, and every other upload has
+     them too, so no file drops out of a finer one — the others go along */
   if (filter || new Set(G.datasets.map(uploadOf)).size < 2) return null;
-  const anchor = [...G.datasets].sort((a, b) => a.resolution - b.resolution || b.cells - a.cells)[0];
+  const finest = new Map();
+  for (const d of [...G.datasets].sort((a, b) => b.resolution - a.resolution || b.cells - a.cells)) if (!finest.has(uploadOf(d))) finest.set(uploadOf(d), d);
+  const anchor = [...finest.values()].sort((a, b) => a.resolution - b.resolution || b.cells - a.cells)[0];
   return { anchor, others: G.datasets.filter((d) => d !== anchor).map((d) => d.dataset_id) };
 }
 
@@ -365,7 +367,7 @@ async function loadDataset(ds) {
     for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
-    G.cellBox = boundsOf(data.features.map((_, i) => i));  // what the map opens on: its cells, as they are drawn (paintMode)
+    G.box = G.cellBox = boundsOf(data.features.map((_, i) => i));  // what the map opens on (paintMode), a tab switch before it too
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
