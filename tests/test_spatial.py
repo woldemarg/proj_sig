@@ -425,9 +425,9 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     fine_cells, coarse_cells = (engine.ws.load_geo(r["dataset_id"], ("cells",))["cells"] for r in done[:2])
     for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
         assert projected[pid]["rows"] == np.flatnonzero(cells_inside(fine_cells, coarse_cells[rows].astype(str))).tolist()
-    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every insight at its own share, lift 1
+    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every region's rows
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
-    assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
+    assert table_ids & set(listed) and all(i["lift"] >= 1 for i in listed.values())
     assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
     overlay = engine.geo_overlay(fine)
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
@@ -519,9 +519,8 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     every = {n["id"] for n in finer.graph().of_kind("Region")}
     assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7 (where the level of 9 lies)
     assert all(n["props"]["patterns"] == len(finer.graph().holders(n["id"])) for n in finer.graph().of_kind("Region"))  # the r7 cells too
-    with mock.patch("insight_graph_service.core.geo_views.shown_regions", return_value=every):  # were they shown
-        drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
-    assert drawn and all(f["properties"]["resolution"] <= 7 for f in drawn)  # none inside one of its cells
+    drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
+    assert drawn and all(f["properties"]["resolution"] < 7 for f in drawn)  # none inside one of its cells, nor its cells
 
 
 def test_a_table_level_is_placed_by_its_events(engine, points_csv):

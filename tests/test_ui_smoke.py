@@ -11,7 +11,6 @@ import pytest
 from conftest import make_engine, serve, stack
 from dev import chromium
 
-from graph_query_engine.vertical import ZONES_MAX
 from insight_contracts.wording import TERMS, name
 from insight_graph_service.core.settings import PROJECT_ROOT
 
@@ -79,11 +78,11 @@ def test_upload_process_render_query(client, demo_csv):
     cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
     assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["rings"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
-    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # its insights' places and the regions above, their trust and scale
-    assert overlay["features"] and all(f["properties"]["resolution"] <= 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
-    own = [f for f in overlay["features"] if f["properties"]["resolution"] == 5]
-    assert len(own) <= ZONES_MAX * len(overlay["patterns"]) < 884  # at most five places each, not every cell of every insight
-    assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
+    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # every region holding a cell, its count of rows, the trust and scale
+    assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["n"] >= 0 for f in overlay["features"])
+    for level in {f["properties"]["resolution"] for f in overlay["features"]}:  # each level's regions hold every cell once
+        rows = [r for f in overlay["features"] if f["properties"]["resolution"] == level for r in f["properties"]["rows"]]
+        assert sorted(rows) == list(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
     plain, view = (client.get(f"/api/graph?dataset={geo_ds}{q}").json() for q in ("", "&regions=1"))  # the regions with their switch alone
@@ -381,7 +380,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             "cells": pack(0),
             "projected": [],
             "overlay": {"type": "FeatureCollection", "features": [], "patterns": {}},
-            "window": {"cells": 1, "points": 3, "first": "map", "insights": 0, "themes": []},
+            "window": {"cells": 1, "points": 3, "level": None, "regions": 1, "insights": 0, "themes": []},
         }
         page.route("**/api/geo/ds-stub/**", lambda r: r.fulfill(json=stub[r.request.url.split("/")[6].split("?")[0]]))
         race = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms)), slow = {

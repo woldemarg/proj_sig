@@ -90,10 +90,7 @@ const GeoMap = {
 
   placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : []),  // its cells' H3 ids: a zone a question can carry
 
-  openTheme(aid) {  // the IN VIEW list opens the theme a card names, or the group it is folded into
-    const group = ((W.data && W.data.themes) || []).find((t) => t.id === aid || t.members.includes(aid));
-    W.fold[(group ? group.id : aid) ?? ""] = true; renderWindow();
-  },
+  openTheme(aid) { W.fold[aid ?? ""] = true; renderWindow(); },  // the IN VIEW list opens the theme a card names
 
   unfocus() {
     GeoMap.closePopup();
@@ -349,13 +346,13 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   const regions = (G.overlay || empty()).features;
   G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
   G.map.getSource("regions").setData(G.overlay || empty());
-  G.map.getSource("region-labels").setData({ type: "FeatureCollection", features: regions.map((f) => ({
-    type: "Feature", geometry: { type: "Point", coordinates: centre(f) }, properties: { resolution: f.properties.resolution, icon: countIcon(f.properties.patterns) } })) });
+  G.map.getSource("region-labels").setData({ type: "FeatureCollection", features: regions.filter((f) => f.properties.n > 0).map((f) => ({  // a 0 is not written
+    type: "Feature", geometry: { type: "Point", coordinates: centre(f) }, properties: { resolution: f.properties.resolution, icon: countIcon(f.properties.n) } })) });
   G.level = undefined;
   paintRegions();
 }
 
-const centre = (f) => {  // the region's H3 centre, the one its window membership uses; a ring's mean for a feature without one
+const centre = (f) => {  // the region's H3 centre, where its count is drawn; a ring's mean for a feature without one
   if ((f.properties || {}).centre) return f.properties.centre;
   const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = r.reduce((a, c) => a + unwrap(c[0], x0), 0) / r.length;
   return [unwrap(lon, 0), r.reduce((a, c) => a + c[1], 0) / r.length];
@@ -394,7 +391,8 @@ function paintRegions() {
   G.level = level;
   const coarser = G.levels.find((lv) => level !== null && lv < level);
   G.map.setFilter("regions-line", ["in", ["get", "resolution"], ["literal", level === null ? [] : [level, coarser ?? level]]]);
-  G.map.setPaintProperty("regions-line", "line-opacity", ["case", ["==", ["get", "resolution"], level ?? -1], 0.75, 0.22]);
+  G.map.setPaintProperty("regions-line", "line-opacity", ["*", ["case", ["==", ["get", "resolution"], level ?? -1], 0.75, 0.22],
+    ["case", [">", ["get", "n"], 0], 1, 0.3]]);  // a region without a characteristic insight stays pale
   G.map.setFilter("regions-n", ["==", ["get", "resolution"], level ?? -1]);  // -1: no region
 }
 
@@ -466,7 +464,7 @@ function cellPopup(f, lngLat) {
   const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
   const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
   const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
+  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</span></div>` : "";
   const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
     `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
     `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button>` +
@@ -484,16 +482,27 @@ function cellPopup(f, lngLat) {
 
 // ponytail: PoC — the map as a window on the hidden graph (GET /api/geo/{ds}/window): the themes and insights of the view,
 // re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
-const W = { seq: 0, timer: null, data: null, fold: {}, folded: null };  // folded: decided by the map's width at the first render
+const W = { seq: 0, timer: null, data: null, fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
+const ROWS_SHOWN = 8;  // the rows listed before «показати всі»: those characteristic of the most regions in focus
+const FOCUS_INSET = 0.1;  // the share of the free view left out at each edge, where the eye rarely rests (docs/08 §8.7)
 
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
+function focusBox() {
+  /* what the list reads, as [west, south, east, north]: the map less the open list over it, where viewPadding keeps the
+     cells clear of it (the HUD covers a corner alone), and FOCUS_INSET of the rest at each edge */
+  const w = $("map").clientWidth, h = $("map").clientHeight, x1 = w - (!(W.folded ?? w < 800) && w > 2 * MW_WIDTH ? MW_WIDTH : 0);
+  const dx = x1 * FOCUS_INSET, dy = h * FOCUS_INSET, nw = G.map.unproject([dx, dy]), se = G.map.unproject([x1 - dx, h - dy]);
+  return [nw.lng, se.lat, se.lng, nw.lat];
+}
+
 async function loadWindow() {
   if (!G.map || !G.ds || G.loading || S.view !== "map") return;
-  const b = G.map.getBounds(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
-  const [w, e] = b.getEast() - b.getWest() >= 360 ? ["-180", "180"] : [lon(b.getWest()), lon(b.getEast())];  // west > east: across ±180°
-  const bbox = [w, lat(b.getSouth()), e, lat(b.getNorth())].join(",");
-  const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}`).catch((e) => ({ error: e.message }));
+  const [x0, s, x1, n] = focusBox(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
+  const [w, e] = x1 - x0 >= 360 ? ["-180", "180"] : [lon(x0), lon(x1)];  // west > east: across ±180°
+  const level = G.level ?? regionLevel();  // the drawn level, or the one the zoom would draw with the regions switched off
+  const query = `bbox=${[w, lat(s), e, lat(n)].join(",")}${level == null ? "" : `&level=${level}`}`;
+  const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?${query}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
   W.data = data; renderWindow();
 }
@@ -510,19 +519,17 @@ function renderWindow() {
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
-  const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
-  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
+  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}">` +
     `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(((G.patterns[i.id] || {}).reading || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
-  const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного: жоден інсайт не має досить подій у вікні понад свою частку на мапі.</div>` : shown.map((t, k) => {
+  const more = d.insights <= ROWS_SHOWN ? "" : `<div class="mw-more">${W.all ? `Показано всі ${d.insights}` : `Показано ${ROWS_SHOWN} з ${d.insights} · наблизьтесь, щоб побачити особливості ділянок`}` +
+    `<button type="button" class="mw-all">${W.all ? `лише перші ${ROWS_SHOWN}` : "показати всі"}</button></div>`;
+  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN) })).filter((t) => t.rows.length);
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного — віддаліться, щоб побачити ширшу ділянку.</div>` : more + themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
-    const members = t.members.map((id) => byId[id]), m = members.length;  // a group: the related themes folded into it
-    const n = t.insights.length + members.reduce((a, x) => a + x.insights.length, 0);
-    const tip = m ? `${t.reading}\n+${m} — ${TERMS.RELATED_TO[0]}: ${TERMS.RELATED_TO[1]}` : t.reading || t.label;
-    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(tip)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}${m ? ` +${m}` : ""}</span><b>${n}</b></button>` +
-      (open ? t.insights.map(row).join("") + members.map((x) => `<div class="mw-sub" title="${esc(x.reading)}">${esc(x.label)}</div>` + x.insights.map(row).join("")).join("") : "") + `</div>`;
+    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.reading || t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.rows.length}</b></button>` +
+      (open ? t.rows.map(row).join("") : "") + `</div>`;
   }).join("");
 }
