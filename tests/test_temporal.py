@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import make_config, make_engine
+from conftest import make_engine, weekly_events
 from test_discovery_contract import implied_warehouse_frame
 
 import subgroup_miner.ingestion as ingestion
@@ -313,42 +313,10 @@ def test_reference_scale_reads_the_whole_upload():
 PHONES_US = [{"attribute": "category", "value": "phones"}, {"attribute": "region", "value": "US"}]
 
 
-def weekly_events(folder: Path) -> Path:
-    """The demo's orders over five weeks (``when``): W0, W1 and W4 hold its planted effects, W2 the same rows with every
-    metric shuffled (nothing to find), W3 ten rows (under ``MIN_ROWS``)."""
-    from insight_graph_service.core.demo import generate_retail_dataset
-
-    frame = generate_retail_dataset(5000, seed=7)
-    rng = np.random.default_rng(1)
-    week = rng.choice([0, 1, 2, 4], len(frame), p=[0.3, 0.3, 0.1, 0.3])
-    when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
-    frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
-    for metric in ("discount", "margin", "delivery_days", "return_rate"):
-        frame.loc[week == 2, metric] = rng.permutation(frame.loc[week == 2, metric].to_numpy())
-    frame = pd.concat([frame, frame.sample(10, random_state=1).assign(when="2031-03-24 12:00:00")], ignore_index=True)
-    path = folder / "events.csv"
-    frame.to_csv(path, index=False, lineterminator="\n")
-    return path
-
-
 def upload_windows_of(engine, csv: Path) -> list[dict]:
     """``csv`` uploaded with ``time=when``, ``window=7D``, each window processed in order."""
     with csv.open("rb") as f:
         return [engine.process(r["batch_id"]) for r in engine.upload(csv.name, f, time="when", window="7D")]
-
-
-@pytest.fixture(scope="module")
-def windowed(tmp_path_factory):
-    """The weekly upload through the graph service, with the graph its readers saw after each window."""
-    folder = tmp_path_factory.mktemp("windowed")
-    engine = make_engine(make_config(folder / "ws"))
-    with weekly_events(folder).open("rb") as f:
-        uploaded = engine.upload("events.csv", f, time="when", window="7D")
-    records, served = [], []
-    for r in uploaded:
-        records.append(engine.process(r["batch_id"]))
-        served.append(engine.graph())
-    return engine, records, served
 
 
 def phones_us(snapshot: dict) -> tuple[str, dict]:
@@ -472,3 +440,72 @@ def test_the_upload_form_takes_a_time_column_and_names_each_window(engine, tmp_p
         assert accepted.status_code == 202 and list(accepted.json()["levels"]) == ["W0", "W1", "W2", "W3", "W4"]
         refused = client.post("/api/upload", files={"file": ("events.csv", b"a,b\n1,2\n", "text/csv")}, data={"time": "when"})
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+
+
+QUESTION = "Why is margin lower for phones in the US?"
+
+
+def test_a_trajectory_is_one_seed_and_one_card_its_latest_window_unless_it_scores_far_below_its_best(windowed):
+    """A trajectory's representative: its latest admitted window when that one scores at least the seed floor of the
+    trajectory's best (max(SEED_MIN_SCORE, 75 %)), else its best; a question seeds it once and shows it once."""
+    from graph_query_engine.seeds import SEED_MIN_SCORE, SEED_RELATIVE_MIN, representatives, trajectory
+
+    engine, _, _ = windowed
+    graph = engine.graph()
+    key, t = phones_us(engine.ws.load_graph())
+    w0, w1, w4 = (w["pattern_id"] for w in t["windows"] if w["active"])
+    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN)]) == {key: w4}  # the latest, at the floor
+    assert representatives(graph, [(w0, 1.0), (w1, 0.9), (w4, SEED_RELATIVE_MIN - 0.01)]) == {key: w0}  # under it: the best
+    assert representatives(graph, [(w1, 0.3), (w4, SEED_MIN_SCORE - 0.01)]) == {key: w1}  # under the absolute floor too
+    found = engine.search(QUESTION)
+    seeded = [trajectory(graph, s.pattern_id) for s in found.seeds]
+    shown = [trajectory(graph, r.node_id) for r in found.traversal.patterns]
+    assert key in seeded and len(seeded) == len(set(seeded))  # phones in the US seeds the walk, once
+    assert len(shown) == len(set(shown)) and None not in shown  # every trajectory is one card
+
+
+def test_a_window_card_names_its_window_and_trajectory_and_the_prompt_says_so(windowed, monkeypatch):
+    """The evidence of a time window's insight: its time line (window, state, episode, active windows, last transition,
+    latest and peak — a tampered window none of them), its dataset's window in DATASETS and in METRIC BASELINES, one
+    NOTE, and the evidence-only answer's window and state in the console's words."""
+    from graph_query_engine.temporal import time_facts
+    from insight_contracts import wording
+
+    engine, _, _ = windowed
+    key, t = phones_us(engine.ws.load_graph())
+    payload = engine.evidence(QUESTION)
+    items = payload.view["evidence"]["items"]
+    phones = next(it for it in items if it["time"]["trajectory"] == key)
+    assert all(it["time"] for it in items)  # every insight here is a window's
+    peak = max((w for w in t["windows"] if w["active"]), key=lambda w: abs(w["effect_size"]))
+    line = f"     time: window W4 [2031-03-31, 2031-04-07) | trajectory ACTIVE (episode 1, active in 3/5 windows; last transition: RECOVERY; latest: W4, peak: W{peak['index']} {peak['effect_size']:+.2f} sd)"
+    assert phones["time"]["window"]["index"] == 4 and line in payload.evidence_prompt.splitlines()
+    datasets = payload.evidence_prompt.split("DATASETS:")[1].split("\n\n")[0]
+    assert all(" window=W" in row for row in datasets.strip().splitlines())
+    baselines = payload.evidence_prompt.split("METRIC BASELINES (whole dataset):")[1].split("\n\n")[0]
+    assert all(" in window W" in row for row in baselines.strip().splitlines())
+    assert sum("come from time windows" in n for n in payload.view["evidence"]["notes"]) == 1
+    tag = f"({wording.name('time_window')} W4 [2031-03-31, 2031-04-07); {wording.name('trajectory')}: {wording.name('trajectory_ACTIVE')})"
+    assert tag in payload.evidence_summary
+    graph, (_, w1, w4) = engine.graph(), (w["pattern_id"] for w in t["windows"] if w["active"])
+    monkeypatch.setitem(graph.nodes[w4]["props"], "integrity", "mismatch")  # a window no answer shows is no admitted one
+    assert {k: time_facts(graph, w1)[k] for k in ("active", "latest", "transition")} == {"active": 2, "latest": 1, "transition": "CONTINUATION"}
+
+
+def test_the_narrator_reads_the_windows_of_an_ended_and_a_living_trajectory(windowed, monkeypatch):
+    """Rule 13 is in the system prompt with the console's words for states and transitions; an answer over an ended and
+    a living trajectory's cards is grounded, its prompt holds both states and the NOTE, and those words are no jargon."""
+    from conftest import FakeLLM
+
+    from evidence_narrator_service.narration import SYSTEM_PROMPT, answer, jargon
+
+    engine, _, _ = windowed
+    graph = engine.graph()
+    keys = list(dict.fromkeys(it["time"]["trajectory"] for it in engine.evidence(QUESTION).view["evidence"]["items"]))
+    ended = keys[1]
+    monkeypatch.setitem(graph.trajectories, ended, {**graph.trajectories[ended], "state": "CLOSED", "closed_reason": "TERMINATED"})
+    payload = engine.evidence(QUESTION)
+    qa = answer(payload, FakeLLM())
+    assert "13. TIME:" in SYSTEM_PROMPT and qa.answer_mode == "llm" and qa.citations["grounded"]
+    assert "trajectory TERMINATED" in qa.prompt and "trajectory ACTIVE" in qa.prompt and "NOTE: " in qa.prompt
+    assert jargon("Траєкторія активна, інша завершена; дрейф, відновлення, повторна поява, без спостереження.", qa.prompt) == {}

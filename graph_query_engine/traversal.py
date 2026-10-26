@@ -23,7 +23,7 @@ from typing import Any
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
-from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.seeds import SeedMatch, representatives, trajectory
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
@@ -192,7 +192,11 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
         if node not in best or r.score > best[node].score:
             best[node] = r
 
-    ordered = sorted(best.values(), key=lambda r: (r.route != "seed", -r.score))
+    # one card per trajectory: a seeded one keeps its seed, another its representative among the intact windows reached
+    stands = representatives(graph, ((r.node_id, r.score) for r in best.values() if not graph.tampered(r.node_id)))
+    stands |= {k: s for s in seed_ids if (k := trajectory(graph, s))}
+    shown = [r for r in best.values() if (k := trajectory(graph, r.node_id)) is None or graph.tampered(r.node_id) or stands[k] == r.node_id]
+    ordered = sorted(shown, key=lambda r: (r.route != "seed", -r.score))
     budget = len(seed_ids) + config.max_retrieved
     tampered = {r.node_id for r in ordered if graph.tampered(r.node_id)}  # seeds never are
     patterns = [r for r in ordered if r.node_id not in tampered][:budget]  # a tampered pattern takes no slot an intact one could

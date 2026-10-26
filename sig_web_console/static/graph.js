@@ -22,6 +22,7 @@ function graphStyle() {
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
     { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
+    { selector: 'edge[type="EVOLVES_TO"]', style: { "line-style": "dashed", "line-color": ink, "target-arrow-shape": "triangle", "target-arrow-color": ink, "arrow-scale": 0.8, width: 1.4, opacity: 0.7 } },
     { selector: 'edge[type="IN_REGION"]', style: { "line-style": "dashed", "line-color": region, width: "mapData(weight, 0, 1, 0.5, 2)", opacity: 0.55 } },
     { selector: 'edge[type="PARENT_OF"]', style: { "line-color": region, "target-arrow-shape": "triangle", "target-arrow-color": region, "arrow-scale": 0.6, opacity: 0.6 } },
     { selector: 'edge[type="ACTIVATES"]', style: { "line-color": anchor, width: "mapData(weight, 0, 1, 0.4, 2)", opacity: 0.22 } },
@@ -187,6 +188,7 @@ const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, d
   ["contrast", "CONTRASTS", "Contrasts", "bad", 2, "dash"],
   ["sibling", "SIBLING", "Siblings", "muted", 1.5, "dot"],
   ["colocated", "CO_LOCATED", "Same place", "path", 1.5, "dash"],
+  ["temporal", "EVOLVES_TO", "Later in time", "ink", 2, "dash"],
 ];
 const ANSWER_MARKS = [  // highlight field, legend key, name, palette colour, size, ring width
   ["evidence", "ev", "Evidence", "ink", 8, 2], ["transversal_only", "cross", "Other segment", "bad", 10, 3],
@@ -515,6 +517,22 @@ function scaleRows(c, labels) {
     c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
 }
 
+function timelineRows(t, window) {
+  /* a time window's insight: its trajectory, window by window (docs/02_discovery.md §2.10); an admitted window opens its insight */
+  const row = (w) => {
+    const head = `W${w.index}${w.index === window.index ? " · це вікно" : ""}`;
+    if (!w.active) {
+      const note = w.status === "EVALUATED" ? `${word("observation_EVALUATED")}, не прийнято` : `${word("observation_NOT_EVALUATED")}: ${word(`reason_${w.reason}`)}`;
+      return `<div class="tl"><span>${esc(head)}</span><span class="muted">${esc(note)}</span></div>`;
+    }
+    const p = w.p_adjusted, bucket = [0.001, 0.01, 0.05].find((c) => p < c);  // text.format_p
+    const test = p === null || p === undefined ? word("covariance") : `${word("p_adjusted")} ${bucket ? `< ${bucket}` : num(p, 2)}`;
+    return nbRow(w.pattern_id, head, `прийнято · ${signed(w.effect_size)} sd · ${test}`);
+  };
+  return `<h4>${cap(word("trajectory"))}</h4><p class="lead">${term(`trajectory_${t.closed_reason || t.state}`)} · ${term("episode")} ${num(t.episode, 0)} · ${term("time_window")} ${esc(windowSpan(window))}</p>` +
+    t.windows.map(row).join("");
+}
+
 function whereRows(places) {
   /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
   const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% інсайту` : "", r.lift_words ? `${word("place_lift")}: ${r.lift_words}` : "", r.n !== undefined ? plural(r.n, "подія", "події", "подій") : ""].filter(Boolean).join(" · ");
@@ -544,6 +562,7 @@ async function inspect(id, note = "") {
       [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
       [term("aliases"), esc((p.aliases || []).join("; "))],
     ]);
+    if (d.trajectory && d.trajectory.windows && (d.dataset || {}).window) html += timelineRows(d.trajectory, d.dataset.window);
     html += `<h4>Довіра</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);

@@ -3,6 +3,8 @@ and the query vector, then the diverse top seeds the transversal walk starts fro
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +21,26 @@ SEED_TOP_K = 3
 SEED_MIN_SCORE = 0.25
 SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
 SEED_PLACE_WEIGHT = 0.35  # a map zone: the weight of a pattern's overlap with it (docs/07_question_answering.md §7.2)
+
+
+def trajectory(graph: DualGraph, pid: str) -> str | None:
+    """The trajectory a time window's pattern is a node of (docs/02_discovery.md §2.10); None for any other pattern."""
+    return (graph.insight(pid).provenance.get("temporal") or {}).get("trajectory")
+
+
+def representatives(graph: DualGraph, scored: Iterable[tuple[str, float]]) -> dict[str, str]:
+    """Trajectory key -> the pattern that stands for it among ``scored`` (id, score): its latest window when that one
+    scores at least the seed floor of the trajectory's best, else its best (docs/07_question_answering.md §7.2)."""
+    windows: defaultdict[str, list[tuple[str, float]]] = defaultdict(list)
+    for pid, score in scored:
+        if key := trajectory(graph, pid):
+            windows[key].append((pid, score))
+    out = {}
+    for key, found in windows.items():
+        best = max(found, key=lambda f: f[1])
+        latest = max(found, key=lambda f: graph.insight(f[0]).provenance["temporal"]["window"])
+        out[key] = latest[0] if latest[1] >= max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * best[1]) else best[0]
+    return out
 
 
 @dataclass
@@ -105,9 +127,15 @@ def resolve_seeds(
     )
     seeds: list[SeedMatch] = []
     floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * scored[0].score) if scored else 1.0
+    stands, by_id, taken = representatives(graph, ((s.pattern_id, s.score) for s in scored)), {s.pattern_id: s for s in scored}, set()
     for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds, unless more of it lies in the zone
         if len(seeds) >= SEED_TOP_K or cand.score < floor:
             break
+        if key := trajectory(graph, cand.pattern_id):  # a trajectory ranks by its best window and seeds its representative once
+            if key in taken:
+                continue
+            taken.add(key)
+            cand = by_id[stands[key]]
         place = cand.matched.get("place", 0.0)
         near = {o for s in seeds if place <= s.matched.get("place", 0.0) for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:
