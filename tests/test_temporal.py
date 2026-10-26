@@ -96,6 +96,8 @@ def test_a_known_rules_bootstrap_does_not_depend_on_the_eda_pool():
     narrow = run_discovery(planted_frame(), replace(CFG, validation_budget=3), known=[RULE])
     assert len(narrow.validated) < len(wide.validated)
     assert narrow.tracked[0].final_sd_score == wide.tracked[0].final_sd_score
+    renamed = run_discovery(planted_frame(), CFG, known=[replace(RULE, key="T-another-upload")])  # the same rule in another series
+    assert renamed.tracked[0].final_sd_score == wide.tracked[0].final_sd_score
 
 
 def test_a_window_whose_cohorts_are_all_known_is_still_mined():

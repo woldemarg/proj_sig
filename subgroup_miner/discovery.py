@@ -372,8 +372,8 @@ def run_discovery(
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG
     validated = _validate(eligible, data, numerics, categoricals, (global_medians, global_mads), blocks)
     validated_known = []
-    for cand in sorted(tracked, key=lambda c: c.known[0].key):  # each known rule's draws are its own, whatever else the window holds
-        np.random.seed(int(stable_hash(config.eda_random_seed, cand.known[0].key, length=8), 16))
+    for cand in sorted(tracked, key=lambda c: c.known[0].key):  # a rule's draws: its rows and its conditions, nothing else in the window
+        np.random.seed(int(stable_hash(config.eda_random_seed, [c.expr for c in cand.known[0].predicate], length=8), 16))
         validated_known += _validate([cand], data, numerics, categoricals, (global_medians, global_mads), blocks)
 
     return DiscoveryResult(

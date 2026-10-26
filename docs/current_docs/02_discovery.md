@@ -174,7 +174,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `VALIDATION_BUDGET` | 50 | cohorts sent to the bootstrap (EDA default) |
 | `MIN_SEARCH_DIMENSIONS` | 3 | dimension back-fill floor in step 2 |
 | `REDUNDANCY_JACCARD` | 0.88 | near-duplicate threshold |
-| `EDA_RANDOM_SEED` | 42 | bootstrap seed (a known rule's bootstrap is seeded from it and the rule's key) |
+| `EDA_RANDOM_SEED` | 42 | bootstrap seed (a known rule's bootstrap is seeded from it and the rule's conditions) |
 | `TEMPORAL_DORMANT_WINDOWS`, `TEMPORAL_UNOBSERVED_WINDOWS`, `TEMPORAL_DRIFT_EXCESS` | 3, 4, 0.5 | a trajectory's end after refused windows, after windows without an evaluation; the excess shift of a drift ([2.10](#210-time-windows-and-trajectories)) |
 | `GEO_RESOLUTION`, `MIN_CELL_POINTS` | 7, 5 | H3 resolution when the geo option names none; points below which a cell's intensive metrics are NaN ([2.9](#29-spatial-datasets-the-geo-option)) |
 | `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_COLOCATION_MIN` | 8, 40, 0.3 | categorical roles, the `CO_LOCATED` overlap — constants of `subgroup_miner/spatial.py`, not settings |
@@ -272,7 +272,7 @@ Each window is `{index, of, column, size, t_start, t_end, rows}` (`size` in ISO 
 1. A rule on an attribute that is no dimension of the window (absent, constant or nested in another, step 1) is not evaluated: `EVALUATION_ERROR`.
 2. Its selector goes through pass 1, where the size floor holds (below it, or the whole window: `INSUFFICIENT_SAMPLE`, with the rows it selects), and through the closure: two rules with one extent are one cohort, whose `Candidate.known` names both.
 3. The search's own pass-1 cohorts with a known extent leave its pool before the closure: that cohort is the rule's trajectory's observation. The ranking and `VALIDATION_BUDGET` go to new cohorts only, and `n_tests` counts the search's cohorts only.
-4. A known cohort with neither a shift nor a covariance pair is evaluated with nothing moved (`no_shift`). The others go to step 4b one at a time, the global RNG seeded from `EDA_RANDOM_SEED` and the rule's key, so a rule's stability does not depend on how many cohorts the search brought into the window.
+4. A known cohort with neither a shift nor a covariance pair is evaluated with nothing moved (`no_shift`). The others go to step 4b one at a time, the global RNG seeded from `EDA_RANDOM_SEED` and the rule's conditions, so a rule's stability depends on the window's rows and the rule alone — not on how many cohorts the search brought into the window, nor on the name of its upload.
 5. `build_insights` treats a known rule as one hypothesis named before its window was seen: `p_adjusted = min(1, p · m)` over the window's m metrics (`multiple_testing_family = m`). Its shifts add every metric the trajectory reports that the window's top three leave out (`Shift.source = "tracked"`), so a change is measured on the same metrics in every window; the primary target stays the largest shift.
 
 A window without a search space but with known rules is still mined; `no_candidates` only when neither has a cohort. `DiscoveryResult.tracked` holds the validated known cohorts (outside `candidates`), `tracked_absent` the rules without one (`key → (reason, rows)`), and `covers_of` covers both. With `known=()` nothing of this runs, and discovery is unchanged.
