@@ -23,6 +23,11 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | component | — | — | one `(label, signed coefficient)` term of the phenomenon, e.g. `("discount", +2.21)` ([4.2](04_representation.md#42-the-canonical-form)) |
 | `insight_weight`, weight | evidence | weight (the scaled input magnitude) | statistical strength in `[WEIGHT_FLOOR, 1]` ([3.3](03_insights.md#33-insight-weight)) |
 | admission | — | — | the graph's policy over valid insights: the R4 weight floor and the R7 batch budget (`batch.admit_insights`, [3.2](03_insights.md#32-selection-rules)) |
+| time window | — | — | a fixed span `[t_start, t_end)` of an upload's time column, mined as a dataset of its own ([2.10](02_discovery.md#210-time-windows-and-trajectories)); not the map's window, the area in view ([8.7](08_interface.md#87-the-map)) |
+| trajectory, rule (known rule) | — | — | one cohort followed through the time windows of an upload: its rule — the shortest selector of the cohort's extent where it was first admitted — evaluated directly in every later window ([2.10](02_discovery.md#210-time-windows-and-trajectories)) |
+| observation | — | — | what one window found of a known rule: admitted, evaluated and refused, or not evaluated, with its reason ([2.10](02_discovery.md#210-time-windows-and-trajectories)) |
+| episode, transition (EVOLVES_TO) | — | — | the stretch of a trajectory from its opening, or reopening, to its close; the type of the edge from one admitted node of a trajectory to the next — `CONTINUATION`, `DRIFT`, `RECOVERY`, `REAPPEARANCE` ([2.10](02_discovery.md#210-time-windows-and-trajectories)) |
+| reference scale, excess shift (δ) | — | — | a metric's `MAD / 0.6745` over the whole upload; a subgroup's change between two windows beyond its window population's, in that unit ([2.10](02_discovery.md#210-time-windows-and-trajectories)) |
 | ACTIVATES | membership | activation | pattern → anchor edge; `alignment` (cosine) and `strength` (alignment × weight) |
 | RELATED_TO | theme link | RELATED_TO | mutual nearest-neighbour edge between anchors ([5.7](05_latent_anchors.md#57-links-between-anchors)) |
 | CO_OCCURS | co-occurring themes | — | link between anchors that share member insights ([5.7](05_latent_anchors.md#57-links-between-anchors)) |
@@ -104,6 +109,7 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | `MinerConfig` — validity rules | `MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_STABILITY` 0.5 | [3.2](03_insights.md#32-selection-rules) |
 | `MinerConfig` — weight | `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_EXPONENTS` (0.35, 0.25, 0.10, 0.10), `WEIGHT_FLOOR` 0.05 | [3.3](03_insights.md#33-insight-weight) |
 | `MinerConfig` — structural lattice | `CONTRAST_MIN_OVERLAP` 0.5, `CONTRAST_MIN_SHIFT` 0.5 | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
+| `MinerConfig` — trajectories | `TEMPORAL_DORMANT_WINDOWS` 3, `TEMPORAL_UNOBSERVED_WINDOWS` 4, `TEMPORAL_DRIFT_EXCESS` 0.5 | [2.10](02_discovery.md#210-time-windows-and-trajectories) |
 | `TopologyConfig` (`attractor_topology/config.py`) — representation | `MODEL_DIR` (`models`), `EMBEDDING_DEVICE` auto, `BLOCK_WEIGHTS` (0.45, 0.55, 1.0), `EMM_COMPONENT_WEIGHT` 0.5 | [4.3](04_representation.md#43-the-tripartite-vector), [4.4](04_representation.md#44-the-embedding-model) |
 | `TopologyConfig` — extraction | `CONCEPTS_PER_CHUNK` 1, `DICTIONARY_K_MIN` 4, `DICTIONARY_K_STEP` 2, `MAX_CONCEPT_COUNT` 80, `RECONSTRUCTION_ERROR_TOLERANCE` 0.015, `DEAD_CONCEPT_PENALTY` 0.05, `MAX_DEAD_CONCEPT_RATIO` 0.25, `DICTIONARY_BATCH_SIZE` 256, `DICTIONARY_INPUT_SCALE` 10, `RANDOM_SEED` 42, `SOFT_MERGE_LOW` 0.95, `MIN_ACTIVATION_ALIGNMENT` 0.20 | [5.3](05_latent_anchors.md#53-extraction-omp-k-sweep-with-signed-repair) |
 | `TopologyConfig` — assignment | `MIN_ASSIGN_THRESHOLD` 0.88, `MAX_ASSIGN_THRESHOLD` 0.92, `ADAPTIVE_PERCENTILE` 85, `TOP_K_ASSIGN` 2, `MIXTURE_RATIO` 0.80, `CENTROID_ALPHA` 0.05, `ORPHAN_BUFFER_MIN_FACTOR` 3 | [5.4](05_latent_anchors.md#54-assignment-ema-and-orphans), [5.10](05_latent_anchors.md#510-calibration-per-embedder) |
@@ -140,6 +146,8 @@ Every quantity the system computes, where it is explained and which code compute
 | bootstrap stability, confounder drivers | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) | `main_upd.py::step4b_deep_validation` |
 | closed intent, near-duplicate Jaccard, `temp_index` | [2.3](02_discovery.md#23-deduplication-before-validation) | `subgroup_miner/discovery.py`: `closed_intent`, `prune_near_duplicates`, `run_discovery` |
 | signed shift, EMM per pair, covariance pair, median test, Bonferroni | [2.4](02_discovery.md#24-what-the-adapter-adds) | `subgroup_miner/discovery.py`: `run_discovery` (EMM per pair), `_covariance_pair`, `_median_test`, `build_insights` (signed shift, Bonferroni) |
+| time windows, reference scale, trajectory key, a known rule's test family and tracked shifts | [2.10](02_discovery.md#210-time-windows-and-trajectories) | `subgroup_miner/temporal.py`: `upload_windows`, `reference_scale`, `trajectory_key`; `subgroup_miner/discovery.py`: `run_discovery` (`known`), `build_insights` |
+| trajectory fold, transitions (Δsub, Δbase, δ) | [2.10](02_discovery.md#210-time-windows-and-trajectories) | `subgroup_miner/temporal.py`: `fold_trajectories`, `transition` |
 | selection predicates | [3.2](03_insights.md#32-selection-rules) | `subgroup_miner/selection.py::select_insights` |
 | admission (R4 weight floor, R7 budget) | [3.2](03_insights.md#32-selection-rules) | `insight_graph_service/core/batch.py::admit_insights` |
 | weight factors and weighted geometric mean | [3.3](03_insights.md#33-insight-weight) | `subgroup_miner/selection.py`: `weight_factors`, `insight_weight` |

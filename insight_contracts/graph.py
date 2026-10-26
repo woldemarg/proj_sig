@@ -23,6 +23,10 @@ Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (
 from a region to its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, a base one
 ``geo: partial`` when too few of its events are located, both derived at the commit. ``own_cells`` maps a geo pattern
 whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
+``EVOLVES_TO`` (the temporal plane, never walked) runs from a trajectory's node in one time window of an upload to its
+next admitted node (docs/02_discovery.md §2.10): ``trajectory``, ``episode``, ``from_window``, ``to_window``, ``gap``
+(windows between), ``transition`` (CONTINUATION | DRIFT | RECOVERY | REAPPEARANCE), ``shifts`` ({metric: {subgroup,
+baseline, excess}} in reference-scale units) and ``drift_metric``.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ class EdgeType(str, Enum):
     PARENT_OF = "PARENT_OF"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
+    EVOLVES_TO = "EVOLVES_TO"
 
 
 STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}  # pattern <-> pattern
@@ -67,6 +72,7 @@ EDGE_PLANE = {
     EdgeType.TARGETS: "schema",
     EdgeType.DISCOVERED_IN: "provenance",
     EdgeType.OF_DATASET: "provenance",
+    EdgeType.EVOLVES_TO: "temporal",
 }
 
 

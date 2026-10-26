@@ -2,13 +2,13 @@
 
 > **In one paragraph.** Ingestion validates the uploaded file, optionally turns number-coded columns into categories and numeric columns into quantile bands, and gives the dataset a content-addressed id. The vendored automatic-EDA engine then searches conjunctions of two and three `attribute = value` selectors in two passes: a cheap screen for robust median shifts and correlation changes, and an expensive bootstrap validation of the best 50. Between the passes the adapter merges selectors that cover identical rows and prunes near-duplicate cohorts, so the bootstrap is spent only on distinct subgroups. The adapter also adds what the EDA does not produce — the direction of each shift, a significance test, provenance — and hands typed candidates to [3. Insights](03_insights.md).
 
-**Code** `subgroup_miner/ingestion.py`, `subgroup_miner/discovery.py`, `subgroup_miner/vendor/eda/main_upd.py`, `subgroup_miner/config.py` (`MinerConfig`) · **Tests** `tests/test_discovery_contract.py`, `tests/test_persistence.py` (ingestion failures, column options), `tests/test_subgroup_miner_standalone.py` · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
+**Code** `subgroup_miner/ingestion.py`, `subgroup_miner/discovery.py`, `subgroup_miner/temporal.py`, `subgroup_miner/vendor/eda/main_upd.py`, `subgroup_miner/config.py` (`MinerConfig`) · **Tests** `tests/test_discovery_contract.py`, `tests/test_temporal.py`, `tests/test_persistence.py` (ingestion failures, column options), `tests/test_subgroup_miner_standalone.py` · **Previous** [1. Overview](01_overview.md) · **Next** [3. Insights](03_insights.md)
 
 ---
 
 ## 2.1 Ingestion
 
-`load_dataset(path, config, filename=, bins=, categories=, geo=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings, geo, spatial)`.
+`load_dataset(path, config, filename=, bins=, categories=, geo=, window=)` (`config` a `MinerConfig`) turns a file into a `LoadedDataset(frame, dataset_id, filename, bins, categories, derived_columns, warnings, geo, spatial, points)`; `window` takes a time window of the upload ([2.10](#210-time-windows-and-trajectories)).
 
 | Input | Form | Source |
 |---|---|---|
@@ -39,7 +39,8 @@ The dataset id is a pure function of the bytes and the applied options:
 
 ```text
 dataset_id = "ds-" + sha256( file bytes ‖ repr(sorted(bins.items())) [‖ repr(sorted(categories)) when any apply]
-                             [‖ "geo=<locator>@<res>" with the geo option] [‖ "left_out=[…]" for a table level's point columns] )[:12]
+                             [‖ "geo=<locator>@<res>" with the geo option] [‖ "left_out=[…]" for a table level's point columns]
+                             [‖ "window=<column>:<t_start>/<t_end>" for a time window, §2.10] )[:12]
 ```
 
 Identical content with identical options always gets the same id; a second upload of it is `SKIPPED` ([9.1](09_operations.md#91-the-batch-lifecycle)). The frame keeps the file's row order, so EDA row positions are file rows. The file itself is not copied: an upload stays under `uploads/`, and the batch record's `source_path` names it (provenance; [6.3](06_graph_and_storage.md#63-the-workspace-on-disk)). Semantic typing (identifiers, categoricals, redundant columns) is not done here: it is EDA step 1.
@@ -128,7 +129,7 @@ The bootstrap of step 4b is the expensive stage and `VALIDATION_BUDGET` (50) slo
    int(ext(S)) = { (a, v) : a is a profiled categorical, every covered row has a = v, v is not null-like }
    ```
 
-   — the Galois closure of formal concept analysis: every condition that holds on all of the cohort's rows, including conditions the selector did not state (an implied column). `expression` keeps the member selector with the most conditions; the other selectors become `aliases` and `Rejection(…, "cover_equivalent")`.
+   — the Galois closure of formal concept analysis: every condition that holds on all of the cohort's rows, including conditions the selector did not state (an implied column). `expression` keeps the member selector with the most conditions; the other selectors become `aliases` and `Rejection(…, "cover_equivalent")`. The member with the fewest conditions (the first by text among them) is the cohort's `generator`: the rule a trajectory keeps ([2.10](#210-time-windows-and-trajectories)).
 2. **Ranking.** `temp_index = clip₊(zscore(SD)) + clip₊(zscore(EMM_eda)) + clip₊(zscore(vol))` over the distinct cohorts (scipy's population z-score, `NaN → 0`) — the EDA workflow's own ranking.
 3. **Near duplicates** (`prune_near_duplicates`), greedy in `temp_index` order: a cohort is absorbed as an alias of a higher-ranked kept cohort with the same primary metric (pass-1 top shift), the same sign of `med_S(y) − med(y)` and
 
@@ -150,6 +151,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | EMM per pair | `emm_score = EMM_eda`: the RMS correlation change per pair of the metrics the scope may explain (`correlation_change` in the vendored step 4; re-scored at closure when the closed intent restates more metrics), so `temp_index`, step 4b and the insight all see the per-pair value | the Frobenius norm grows with the number of off-diagonal entries; per pair it is an RMS correlation change in `[0, 2]`, so `MIN_EMM_SCORE` means the same on every dataset |
 | covariance pair | `argmax_{i<j} |C_S,ij − C_ij|` over pairs defined in `S` (needs `n ≥ 3m`; `{}` if none) → `{pair, local_corr, global_corr, delta}` | says *which* relation drives the EMM score |
 | pair shifts | `z_k(S)` for pair metrics missing from the top three (`Shift.source = "covariance_pair"`) | lets a correlation-change insight be targeted on one of its metrics |
+| tracked shifts | `z_k(S)` for the metrics a known rule's trajectory reports that the top three leave out (`Shift.source = "tracked"`) | a change between time windows is measured on the same metrics in each ([2.10](#210-time-windows-and-trajectories)) |
 | significance | two-sided asymptotic median test on the primary metric, `se = 1.2533 · 1.4826 · MAD(y_S) / √n` with the subgroup MAD computed like the EDA's (zero-MAD fallback included); if that is 0, the global MAD; if that is 0 too, `se = sd(y_S) / √n`. `z = (med_S − med) / se`, `p = 2 · Φ̄(|z|)` (`p = 1` for `n < 2` or a zero or non-finite `se`); `p_adjusted = min(1, p · n_tests)` | the EDA has no p-values; selection and weight need one. Bonferroni over overlapping cohorts is conservative, never anti-conservative |
 | stability | `final_sd / sd_raw = 1 − min(CV, 0.9)` | recovers the bootstrap factor that step 4b folds into `final_sd` |
 | determinism | `np.random.seed(EDA_RANDOM_SEED)` before step 4b | `DataFrame.sample` uses the global RNG; same data and config → identical insights |
@@ -157,10 +159,10 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 
 ## 2.5 Contracts
 
-* `run_discovery(df, config, on_stage=None, spatial=None) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections, spatial)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges (and `tautological` ones of a geo dataset, added by `build_insights`); `spatial` (a `SpatialContext`) switches on [2.9](#29-spatial-datasets-the-geo-option).
-* `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, validated, final_sd_score, drivers, aliases)`.
+* `run_discovery(df, config, on_stage=None, spatial=None, known=()) → DiscoveryResult(profile, candidates, validated, data, n_tests, pass1_subgroups, rejections, spatial, ranks, global_corr, tracked, tracked_absent)`: `candidates` are the distinct cohorts, `validated` the ones step 4b returned, `rejections` the `cover_equivalent` / `near_duplicate` merges and the `no_shift` / `tautological` cohorts (a geo dataset's); `spatial` (a `SpatialContext`) switches on [2.9](#29-spatial-datasets-the-geo-option); `known`, `tracked` and `tracked_absent` are a time window's known rules and what became of them ([2.10](#210-time-windows-and-trajectories)).
+* `Candidate(expression, conditions, row_indices, row_count, volume_utility, top_shifts[(metric, |z|)], sd_aggregate_score, emm_stabilized_score (per pair), temp_index, final_sd_score, drivers, aliases, restated, emm_reliability, generator, known)`.
 * `build_insights(result, config, dataset_id=, batch_id=, filename=) → list[Insight]` — unfiltered, weight unset ([3.1](03_insights.md#31-the-insight-record)); the primary target is the largest shift.
-* `covers_of(result) → {expression: row positions}` for every distinct cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id, and points each journal record's `provenance.rows_ref` at them (`Workspace.covers_ref`).
+* `covers_of(result) → {expression: row positions}` for every distinct cohort and every validated known cohort; `Engine.process` persists the covers of the kept insights as `covers.npz` (`Workspace.save_covers`), keyed by pattern id, and points each journal record's `provenance.rows_ref` at them (`Workspace.covers_ref`).
 
 ## 2.6 Configuration
 
@@ -172,7 +174,8 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 | `VALIDATION_BUDGET` | 50 | cohorts sent to the bootstrap (EDA default) |
 | `MIN_SEARCH_DIMENSIONS` | 3 | dimension back-fill floor in step 2 |
 | `REDUNDANCY_JACCARD` | 0.88 | near-duplicate threshold |
-| `EDA_RANDOM_SEED` | 42 | bootstrap seed |
+| `EDA_RANDOM_SEED` | 42 | bootstrap seed (a known rule's bootstrap is seeded from it and the rule's key) |
+| `TEMPORAL_DORMANT_WINDOWS`, `TEMPORAL_UNOBSERVED_WINDOWS`, `TEMPORAL_DRIFT_EXCESS` | 3, 4, 0.5 | a trajectory's end after refused windows, after windows without an evaluation; the excess shift of a drift ([2.10](#210-time-windows-and-trajectories)) |
 | `GEO_RESOLUTION`, `MIN_CELL_POINTS` | 7, 5 | H3 resolution when the geo option names none; points below which a cell's intensive metrics are NaN ([2.9](#29-spatial-datasets-the-geo-option)) |
 | `GEO_SHARE_MAX_LEVELS`, `GEO_MODE_MAX_LEVELS`, `GEO_COLOCATION_MIN` | 8, 40, 0.3 | categorical roles, the `CO_LOCATED` overlap — constants of `subgroup_miner/spatial.py`, not settings |
 
@@ -182,7 +185,7 @@ The Bonferroni family is `n_tests = distinct cohorts × m`: identical extents ar
 |---|---|---|
 | `file_too_large` | `PipelineError` (`Engine.upload`) | an upload above `MAX_UPLOAD_MB`; refused with HTTP 413 before a batch is registered |
 | `unsupported_file`, `unreadable_file`, `invalid_options`, `invalid_schema`, `no_numeric_targets` | `IngestionError` | missing file or unsupported type, parse error, bad options, too few rows or columns, no numeric column |
-| `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); empty search space or nothing passed pass 1 |
+| `no_numeric_targets`, `invalid_schema`, `no_candidates` | `DiscoveryError` | profiling left no metric; no categorical dimension (the message suggests `BIN_COLUMNS`); neither the search space nor a known rule has a cohort that passed pass 1 |
 | `internal_error` | `DiscoveryError` | a closed intent that does not contain its own selector (an invariant check that should never fire) |
 
 Guarantees (`tests/test_discovery_contract.py`; on the demo unless a toy frame is named):
@@ -243,4 +246,62 @@ After admission the graph service stores the cells, the point → cell map, the 
 
 > **Measured** on the map demo (California housing, 20,640 block groups, `geo=auto@5`, `bins=median_income_median:4`): 884 cells (540 below `MIN_CELL_POINTS`), global Moran's I of the metrics 0.33–0.72; 53 distinct cohorts, 12 of them dropped before the rank as tautological, 39 validated, 18 insights admitted (one a correlation change, three on a `hot spot` scope); of the 39 validated 26 are significant without and 17 with the subgroup-level `n_eff` correction; the subgroups' own Moran's I runs from below 0 (scattered cells: no discount) to 0.71 (a solid inland block of 616 cells, `n_eff` 33).
 
-**Why the H3 hierarchy groups places, not community detection.** The regions are H3 cells at `GEO_REGION_LEVELS`, fixed by the grid: a region has the same id (`R:<res>:<h3>`) for every dataset, batch and commit, and a new dataset adds members to it without moving its border. A cell joins the region holding its centre by one rule on every platform, a centre on a border to its H3 parent ([6.1](06_graph_and_storage.md#61-the-structural-plane)). Communities found on the graph (Leiden, as GraphRAG builds its summaries) would be recomputed with every commit. Their ids and borders would change with the data, and two sources could not be compared at one place. That comparison is what credibility by place reads ([13.3](13_trust.md#133-credibility-levels)). **Time is not an axis of the spatial plane.** Datasets carry no time slice, and a region holds the findings of every period uploaded. A time axis is the next product iteration, not this one. Nothing in `SpatialProvenance` or `derive_spatial` assumes that all datasets describe one moment.
+**Why the H3 hierarchy groups places, not community detection.** The regions are H3 cells at `GEO_REGION_LEVELS`, fixed by the grid: a region has the same id (`R:<res>:<h3>`) for every dataset, batch and commit, and a new dataset adds members to it without moving its border. A cell joins the region holding its centre by one rule on every platform, a centre on a border to its H3 parent ([6.1](06_graph_and_storage.md#61-the-structural-plane)). Communities found on the graph (Leiden, as GraphRAG builds its summaries) would be recomputed with every commit. Their ids and borders would change with the data, and two sources could not be compared at one place. That comparison is what credibility by place reads ([13.3](13_trust.md#133-credibility-levels)). **Time is not an axis of the spatial plane.** A table can be cut into time windows ([2.10](#210-time-windows-and-trajectories)), a geo dataset is not: it carries no time slice, and a region holds the findings of every period uploaded. Nothing in `SpatialProvenance` or `derive_spatial` assumes that all datasets describe one moment.
+
+## 2.10 Time windows and trajectories
+
+A table with a time column can be cut into fixed windows and mined window by window. A cohort that one window admits is then followed into the later windows by its rule, not found again by the search: the search ranks and budgets what it finds anew, so a known cohort that slips out of a window's best fifty would otherwise read as gone. `subgroup_miner/temporal.py` holds the pieces; `scripts/temporal_benchmark.py` runs them over the windows of one upload ([10.4](10_verification.md#104-measurement-scripts)).
+
+**Windows.** `temporal.upload_windows(path, config, time=, window=, max_windows=, bins=, categories=)` cuts a stored upload into non-overlapping windows of one fixed size (`pd.Timedelta`: `7D`, `24h`, `90min`; months and years have no fixed length and are refused, as is a size without a unit or under a second):
+
+```text
+t0 = the first time, floored to its day (UTC)
+T_w = [t0 + w·Δt, t0 + (w + 1)·Δt),   w = 0 … M − 1,   M = ⌊(t_max − t0) / Δt⌋ + 1
+```
+
+Each window is `{index, of, column, size, t_start, t_end, rows}` (`size` in ISO 8601: `7D` and `1W` are one size); more than `max_windows` windows is `invalid_options`. The time column is read as dates (`pd.to_datetime`, formats mixed row by row, a time without a zone as UTC). A column the file lacks, a numeric one (no unit to read it in), or one without a single readable time is `invalid_options`; a row whose time does not read belongs to no window, and every window's warnings count those rows.
+
+**One table for every window.** `ingestion.upload_table` prepares an upload's table once — categories, then bands, over the whole upload, the time column set apart and parsed — and keeps it with the shared parse until `forget_tables`. `load_dataset(…, window=)` returns that window's rows of it without the time column; fewer than `MIN_ROWS` is `invalid_schema`. Because the bands are cut over the whole upload, `x_band = q2` holds the same values in every window, and a condition means the same thing from window to window. Each window is a dataset of its own: its id hashes the window's column and bounds besides the file and the options ([2.1](#21-ingestion)), so the same file cut by another window size is other data.
+
+**Reference scale.** `temporal.reference_scale(table)`: per numeric column, `s_ref = MAD / 0.6745` over the whole upload (`calculate_mad` with its zero-MAD fallback; None for a constant column) — one unit for every change between windows, where a window's own MAD would change the unit with the data. It reads every window, which a retrospective analysis may and a prospective one may not.
+
+**Rules and trajectories.** Every cohort a window admits opens a trajectory. Its rule is the cohort's `generator`: of the selectors the closure merged into it ([2.3](#23-deduplication-before-validation)), the one with the fewest conditions (the first by text among them) — not its closed intent, since on a window's few hundred rows an attribute can be constant by chance, and an implied condition is no part of the mechanism. The key is `"T-" + sha1(json([series, the rule's condition expressions]))[:12]`, the series being the upload cut on one time column by one size (`temporal.series_id`: `<upload_id>:<column>:<size>`) — the same file cut otherwise follows its own trajectories. `temporal.stamp_insights(insights, result, series=, window=)` writes on each insight `provenance.temporal = {series, window, origin, trajectory, predicate, metrics}`: `origin` is `eda` for a cohort the search found, `tracked` for a known rule's; `metrics` are the shifts of the trajectory's first node (its top three and covariance pair), which every later node reports.
+
+**Known rules in discovery.** `run_discovery(…, known=[KnownRule(key, predicate, metrics)])` evaluates the rules of the trajectories still open:
+
+1. A rule on an attribute that is no dimension of the window (absent, constant or nested in another, step 1) is not evaluated: `EVALUATION_ERROR`.
+2. Its selector goes through pass 1, where the size floor holds (below it, or the whole window: `INSUFFICIENT_SAMPLE`, with the rows it selects), and through the closure: two rules with one extent are one cohort, whose `Candidate.known` names both.
+3. The search's own pass-1 cohorts with a known extent leave its pool before the closure: that cohort is the rule's trajectory's observation. The ranking and `VALIDATION_BUDGET` go to new cohorts only, and `n_tests` counts the search's cohorts only.
+4. A known cohort with neither a shift nor a covariance pair is evaluated with nothing moved (`no_shift`). The others go to step 4b one at a time, the global RNG seeded from `EDA_RANDOM_SEED` and the rule's key, so a rule's stability does not depend on how many cohorts the search brought into the window.
+5. `build_insights` treats a known rule as one hypothesis named before its window was seen: `p_adjusted = min(1, p · m)` over the window's m metrics (`multiple_testing_family = m`). Its shifts add every metric the trajectory reports that the window's top three leave out (`Shift.source = "tracked"`), so a change is measured on the same metrics in every window; the primary target stays the largest shift.
+
+A window without a search space but with known rules is still mined; `no_candidates` only when neither has a cohort. `DiscoveryResult.tracked` holds the validated known cohorts (outside `candidates`), `tracked_absent` the rules without one (`key → (reason, rows)`), and `covers_of` covers both. With `known=()` nothing of this runs, and discovery is unchanged.
+
+**What a window observed.** `temporal.observations(known, result, insights, admitted, rejections)` gives each known rule an `Observation`: `EVALUATED` and admitted (`active`, with its `pattern_id`); evaluated and refused, with the rule that refused it (`weak_effect`, `not_significant`, `unstable`, `min_support`, `low_weight`, `budget`, or `no_shift`); or `NOT_EVALUATED` with its reason (`INSUFFICIENT_SAMPLE`, `EVALUATION_ERROR`, and `WINDOW_UNAVAILABLE` for a window that observed nothing). `p_adjusted` and `stability` are None for a covariance insight, as on the insight.
+
+**The fold.** `temporal.fold_trajectories(windows, upto, scale, config)` replays an upload's first `upto` windows in order (`WindowFacts(observations, admitted nodes)` per window index; a window it is not given is unavailable). Per open trajectory and window:
+
+| What the window observed | The trajectory |
+|---|---|
+| admitted | `ACTIVE`, linked to its last admitted node by an `EVOLVES_TO` edge |
+| evaluated, refused | `DORMANT`; after `TEMPORAL_DORMANT_WINDOWS` (3) such windows since it was last admitted, `CLOSED` (`TERMINATED`) |
+| not evaluated | unchanged; after `TEMPORAL_UNOBSERVED_WINDOWS` (4) in a row, `CLOSED` (`TTL_EXPIRED_UNOBSERVED`) — tracking stops for want of data, which says nothing about the phenomenon |
+| a node of a closed trajectory | its next episode: `ACTIVE`, linked by a `REAPPEARANCE` edge |
+
+A window without an evaluation does not reset the refused count. A closed trajectory is not evaluated again; only the search can reopen it, as a new episode. `open_rules(trajectories)` gives the next window's known rules: those of the trajectories `ACTIVE` or `DORMANT`.
+
+**Transitions.** Between two admitted nodes a and b of one trajectory (windows w_a < w_b), per metric k the trajectory reports and that has a reference scale:
+
+```text
+Δsub_k  = (med_b(y_k | S) − med_a(y_k | S)) / s_ref,k      the subgroup's change
+Δbase_k = (med_b(y_k) − med_a(y_k)) / s_ref,k              its window population's change (each window's own baseline)
+δ_k     = Δsub_k − Δbase_k                                  the excess: the part of the change that is the subgroup's own
+type    = REAPPEARANCE  another episode
+        | RECOVERY      the trajectory was DORMANT
+        | DRIFT         both nodes are shift insights and max_k |δ_k| ≥ TEMPORAL_DRIFT_EXCESS (0.5)
+        | CONTINUATION  otherwise
+```
+
+The edge carries `from_window`, `to_window`, `gap` (the windows between), the type, `shifts {k: {subgroup, baseline, excess}}` and, for a drift, `drift_metric`. A covariance insight's medians are not its phenomenon, so no drift is read from them. A trend shared by the whole population moves Δsub and Δbase alike and leaves δ near 0; δ does not tell a change in the subgroup's make-up or a confounder from a change of the subgroup itself.
+
+> **Measured** (`scripts/temporal_benchmark.py`, 20 planted uploads of 20,000 events in ten weekly windows, 100 pure-noise uploads; [10.4](10_verification.md#104-measurement-scripts)): every expected edge of S1–S4 found and none added (recall and precision 1.000), every transition typed as planted (S1 and S4 `CONTINUATION`, S2 `DRIFT` with a positive excess on every edge, S3 `DORMANT` in its two quiet windows and then `RECOVERY`), one trajectory per planted scope; at S4's trend (W4 → W5) the median excess is −0.005 and every upload's stays under the drift threshold; 0 of the 100 noise uploads holds a trajectory admitted in three windows (Wilson 95 % interval [0, 0.037]). A planted upload carries 27.4 trajectories on average: the planted cohorts and the narrower and overlapping cohorts that carry part of their effect.
