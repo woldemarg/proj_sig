@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -46,6 +47,8 @@ from subgroup_miner.temporal import dynamics
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
+
+log = logging.getLogger(__name__)
 
 Member = tuple[dict[str, Any], float, float]  # (pattern record, alignment, strength)
 
@@ -429,21 +432,25 @@ def _temporal_plane(
 ) -> tuple[list[GraphEdge], dict[str, Any]]:
     """TemporalNode hubs (added to ``nodes``), PEAKED_AT / DROPPED_AT edges and the ``trajectories`` section from each
     READY dataset's signed time record and its series file (``temporal``: batch id → (series, the file's SHA-256)). A
-    record that fails its metadata digest, or a file other than the one it signed (one that no longer reads among them),
-    gives its dataset no temporal plane; a pattern that fails its record digest gets no trajectory. A trajectory is
+    record that fails its metadata digest, or a file other than the one it signed (a missing one or one that no longer
+    reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
+    whose metrics has a series (a geo counter or share), gets no trajectory. A trajectory is
     ``subgroup_miner.temporal.dynamics`` of the pattern's series; its short form is the pattern's ``temporal_summary``,
     the dataset's ``temporal`` its column, grid and span. A hub exists only with an event in it, and a pattern has one
     edge per hub and kind: its most prominent event there, ``metrics`` naming every metric that peaked (or dipped) then."""
     edges, trajectories = [], {}
     for bid, (series, digest) in sorted(temporal.items()):
         signed = batches[bid]["temporal"]
-        if integrity.get(bid) == "mismatch" or digest != signed["series_digest"] or series is None:
+        if integrity.get(bid) == "mismatch":
+            continue
+        if digest != signed["series_digest"] or series is None:
+            log.warning("%s: its series file is missing or not the one its record signs: no temporal plane", batches[bid]["dataset_id"])
             continue
         head = {k: signed[k] for k in ("column", "grid", "span")}
         nodes[dataset_node_id(batches[bid]["dataset_id"])].props["temporal"] = head
         for pid, entry in sorted(series.items()):
-            if pid not in nodes or nodes[pid].props["integrity"] == "mismatch":
-                continue
+            if pid not in nodes or nodes[pid].props["integrity"] == "mismatch" or not entry["series"]:
+                continue  # no metric of it has a series (a geo counter or share): it has no time line
             props = nodes[pid].props
             metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
             traj = trajectories[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)

@@ -848,3 +848,14 @@ def test_a_centre_on_a_boundary_goes_by_one_rule_on_every_platform():
             assert {c: centre_region(c, 5) for c in cells} == rule
     ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 5) != h3.latlng_to_cell(*exact(c), 5)]
     assert ties and centre_region("8829aab493fffff", 5) == "8529a86bfffffff" != h3.cell_to_parent("8829aab493fffff", 5)
+
+
+def test_a_date_column_past_2262_reads_its_own_years():
+    """The cell counters of a date column read the points' dates in their own unit: years 2250 and 2300 order as written."""
+    shares = []
+    for early, late in (("2150-06-01", "2200-06-01"), ("2250-06-01", "2300-06-01")):  # the second pair crosses 2262
+        frame = geo_frame()
+        frame["when"] = np.where(frame.index % 2 == 0, early, late)
+        table, _, _ = cells_of(frame)
+        shares.append(table["when_late_share"].to_numpy())
+    assert np.allclose(shares[0], shares[1], equal_nan=True) and np.nanmax(shares[1]) > 0

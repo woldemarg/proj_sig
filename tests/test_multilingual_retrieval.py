@@ -92,6 +92,9 @@ def test_a_calendar_period_is_no_band_value():
     assert ("price_band", "q1") in parse_query("margin for q1 phones", g).conditions
     p = parse_query("margin for phones in 2031-Q1", g)
     assert p.when is not None and ("price_band", "q1") not in p.conditions
+    season = toy_graph([pattern("P6", ["season=2019", "category=phones"])])
+    assert ("season", "2019") in parse_query("margin for phones in 2019-20", season).conditions  # shaped like a month, names none: its words stay
+    assert ("season", "2019") not in parse_query("margin for phones in 2019-12", season).conditions  # a month: no literal
 
 
 def test_dense_gate_accepts_translations_and_rejects_case():

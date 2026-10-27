@@ -303,6 +303,8 @@ def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_it
         ds: {el["data"]["id"] for el in cytoscape_elements(engine.graph(), ds, False)["nodes"]} for ds in (timed["dataset_id"], plain["dataset_id"])
     }
     assert hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
+    starts = {el["data"]["id"]: el["data"]["t_start"] for el in cytoscape_elements(engine.graph())["nodes"] if el["data"]["kind"] == "TemporalNode"}
+    assert starts.keys() == hubs and all(starts[h] == next(n["props"]["t_start"] for n in snap["nodes"] if n["id"] == h) for h in hubs)
 
 
 def restarted(engine):
@@ -310,7 +312,7 @@ def restarted(engine):
     return make_engine(engine.settings).ws.load_graph()
 
 
-def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plane(tmp_path):
+def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plane(tmp_path, caplog):
     engine = make_engine(make_config(tmp_path / "ws"))
     with weekly_retail(tmp_path).open("rb") as f:
         record = engine.process(engine.upload("weekly.csv", f, time="when")[0]["batch_id"])
@@ -323,6 +325,11 @@ def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plan
         snap = again.ws.load_graph()
         assert again.problem is None and not snap["trajectories"] and not any(n["kind"] == "TemporalNode" for n in snap["nodes"])
         assert "temporal" not in next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
+    caplog.clear()  # the damaged files above logged the same line
+    path.unlink()  # a missing file: no plane either, and the log names it
+    again = make_engine(engine.settings)
+    assert again.problem is None and not again.ws.load_graph()["trajectories"]
+    assert f"{record['dataset_id']}: its series file is missing or not the one its record signs" in caplog.text
     path.write_bytes(original)
     edited = {**record, "temporal": {**record["temporal"], "grid": "month"}}
     engine.ws.save_batch(edited)
@@ -426,15 +433,17 @@ def test_a_geo_patterns_points_are_those_of_its_cells():
 def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_their_points(tmp_path, monkeypatch):
     import h3
 
+    import insight_graph_service.core.engine as engine_module
+
     engine = make_engine(make_config(tmp_path / "ws"))
-    annotate = engine._annotate
+    annotate = engine_module.annotate_batch
 
     def without_placing(*args):  # the commit's annotation reads the stored point → cell map: it never places a point again
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(h3, "latlng_to_cell", lambda *_: pytest.fail("a point placed again at the commit"))
             return annotate(*args)
 
-    monkeypatch.setattr(engine, "_annotate", without_placing)
+    monkeypatch.setattr(engine_module, "annotate_batch", without_placing)
     path = geo_timed(tmp_path)
     cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when")
     assert (cells["level"], cells["status"], table["level"], table["status"]) == ("7", "READY", "table", "READY")
@@ -447,7 +456,6 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     stored = engine.ws.load_geo(cells["dataset_id"])
     raw = pd.read_csv(path)
     raw["t"] = pd.to_datetime(raw["when"], errors="coerce", utc=True, format="ISO8601")
-    assert stored["point_ts"].tolist() == raw["t"].dt.as_unit("us").array.asi8.tolist() and stored["point_ts"][0] == np.iinfo(np.int64).min
     snap = engine.ws.load_graph()
     props = {n["id"]: n["props"] for n in snap["nodes"] if n["kind"] == "Pattern"}
     geo = [pid for pid, p in props.items() if p["dataset_id"] == cells["dataset_id"]]
@@ -491,6 +499,7 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
         ("in 2031-W54 or 2031-13", None),
         ("2031-W54, that is 2031-W13", ("2031-03-24", "2031-03-31")),  # the first that names a period
         ("on 9999-12-31", None),  # its next day runs past the calendar
+        ("2031-W13 or 2031-W14", ("2031-03-24", "2031-03-31")),  # two periods: the first
         ("2019-2020, v2031-03, 2031-03-24-1", None),
         ("in March", None),
     ],
@@ -561,3 +570,36 @@ def test_the_drawer_gets_the_curve_of_its_findings_metric_only(timed):
     shown = node_details(graph, pid, engine.settings.thresholds)["trajectory"]
     assert set(shown["series"]) == set(shown["smoothed"]) == {shown["metric"]} and len(graph.trajectories[pid]["series"]) > 1
     assert shown["events"] == graph.trajectories[pid]["events"]
+
+
+def test_no_readable_time_is_no_bin():
+    codes, bins = calendar_bins(pd.Series([pd.NaT] * 3, dtype="datetime64[us, UTC]"), "week")
+    assert codes.tolist() == [-1, -1, -1] and bins == []
+
+
+def test_a_geo_level_checks_the_times_of_its_located_points(tmp_path):
+    frame = geo_frame()
+    frame["when"] = "2019-03-04"  # every located point in one week
+    unlocated = frame.sample(300, random_state=2).assign(latitude=np.nan, longitude=np.nan)
+    unlocated["when"] = pd.date_range("2019-03-04", periods=300, freq="D").strftime("%Y-%m-%d")  # the rows without a point: 43 weeks
+    path = tmp_path / "points.csv"
+    pd.concat([frame, unlocated], ignore_index=True).to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        (level,) = engine.upload(path.name, f, geo="latitude,longitude@7", time="when")  # the file's rows fill the weeks
+    record = engine.process(level["batch_id"])  # the series would be of the located points: one week, refused before the search
+    assert record["status"] == "FAILED" and record["error"]["code"] == "invalid_options" and record["failed_stage"] == "VALIDATING"
+    assert "over its located points: 1 week bins hold rows" in record["error"]["message"]
+
+
+def test_a_geo_pattern_without_a_series_has_no_time_line(tmp_path):
+    frame = geo_frame().drop(columns="load")  # the cells hold counters, shares and modes only: no metric has a series
+    frame["when"] = frame["when"].astype(str)
+    path = tmp_path / "points.csv"
+    frame.to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    (cells,) = upload_levels(engine, path, geo="latitude,longitude@7", time="when")
+    series = json.loads((engine.ws.datasets_dir / cells["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
+    snap = engine.ws.load_graph()
+    assert cells["status"] == "READY" and series and all(not entry["series"] for entry in series.values())
+    assert not snap["trajectories"] and not any("temporal_summary" in n["props"] for n in snap["nodes"])  # never «not measured»

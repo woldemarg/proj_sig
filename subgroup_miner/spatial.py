@@ -86,7 +86,6 @@ class SpatialContext:
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
-    point_ts: np.ndarray | None = None  # with a time column: each source row's time, int64 µs since the epoch (UTC), iinfo(int64).min without one
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -353,7 +352,7 @@ def build_cells(
         values = rows[col]
         times = _as_datetime(values)
         if times is not None:
-            t = times.to_numpy(dtype="datetime64[ns]")
+            t = times.to_numpy(dtype="datetime64[us]")  # nanoseconds end in 2262
             good = ~np.isnat(t)
             mid = t[good].min() + (t[good].max() - t[good].min()) / 2
             out[f"{col}_active_days"] = (
