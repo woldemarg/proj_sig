@@ -260,20 +260,20 @@ def create_app(engine: Engine) -> FastAPI:
         return Response(engine.export_geosparql(), media_type="text/turtle")
 
     @app.get("/api/geo/{dataset_id}/overlay")
-    def geo_overlay(dataset_id: str) -> dict[str, Any]:
-        return engine.geo_overlay(dataset_id)
+    def geo_overlay(dataset_id: str, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_overlay(dataset_id, tuple(filter(None, datasets.split(","))))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
         return engine.geo_projected(dataset_id)
 
     @app.get("/api/geo/{dataset_id}/window")
-    def geo_window(dataset_id: str, bbox: str) -> dict[str, Any]:
-        return engine.geo_window(dataset_id, bbox)
+    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, datasets.split(","))))
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
-    def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id)
+    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, rings)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:

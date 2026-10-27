@@ -1,22 +1,27 @@
-"""The map's reads over the graph (insight_graph_service/core/geo_views.py, docs/08_interface.md §8.7): the window and
-what it lists, its themes grouped, and every insight in words."""
+"""The map's reads over the graph (insight_graph_service/core/geo_views.py, docs/08_interface.md §8.7): the regions,
+the window and what it lists, and every insight in words."""
 
 from __future__ import annotations
 
 import h3
 import numpy as np
 import pytest
-from conftest import HOT, geo_frame, upload_levels
+from conftest import geo_frame, upload_levels
 
 from insight_graph_service.core.engine import PipelineError
 
 
-def test_the_window_lists_what_is_characteristic_of_the_view(engine, tmp_path):
-    """docs/08_interface.md §8.7: an insight counts all its located events, over the map's located points, so the whole
-    map gives every insight lift 1, a base one with unlocated events too; a part of the map lists only insights with
-    enough events there and lift at least 1, by ``(x + a) / (E + a)``; a view of too few events lists nothing; a base insight the graph leaves unplaced
-    is not listed."""
-    from subgroup_miner.spatial import GEO_LINK_MIN_EVENTS, cell_centres, link_min_events
+def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp_path):
+    """docs/08_interface.md §8.7: an insight is characteristic of a region when its located events in the region's cells
+    reach ``link_min_events`` and ``(x + a) / (E + a) ≥ 1``, ``E`` the number its map-wide share puts there (a base insight
+    with unlocated events counts its located ones); a base insight the graph leaves unplaced never is. A finer region
+    also lists what the coarser one holding its cells lists, when it holds one of its events, so its children together
+    list everything a region does. A view lists the
+    rows of the regions holding its cells, each result once: one region alone its overlay ``n``, a wider view the rows of
+    their union, ranked by how many of them an insight is characteristic of, then by lift. A level that is not a region
+    level of the map is refused; without one the finest is read."""
+    from insight_graph_service.core.geo_views import _projection, _region_sets, _rows, window_view
+    from subgroup_miner.spatial import cell_centres, link_min_events
 
     frame = geo_frame()
     frame.loc[frame.sample(frac=0.1, random_state=1).index, ["latitude", "longitude"]] = np.nan  # events no map locates
@@ -24,37 +29,102 @@ def test_the_window_lists_what_is_characteristic_of_the_view(engine, tmp_path):
     frame.loc[web[::2], ["latitude", "longitude"]] = np.nan  # half the web events: an insight on them is partial
     frame.to_csv(path := tmp_path / "points.csv", index=False)
     fine, _, table = upload_levels(engine, path, geo="auto@8,7", table=True)
-    geo = engine.ws.load_geo(fine["dataset_id"], ("cells", "point_cell"))
-    point_cell, covers = geo["point_cell"], engine.ws.load_covers(table["dataset_id"])
-    whole = {i["id"]: i for t in engine.geo_window(fine["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
-    unlocated = [pid for pid in covers if pid in whole and (point_cell[covers[pid]] < 0).any()]
-    assert unlocated and {i["lift"] for i in whole.values()} == {1.0}
-    partial = {pid for pid in covers if engine.graph().nodes[pid]["props"].get("geo") == "partial"}
-    assert partial and not partial & set(whole)  # the graph does not place them: the window does not list them
-    graph = engine.graph()
-    placed = {e["source"] for e in graph.snapshot["edges"] if e["type"] == "IN_REGION" and e["source"] in covers}
-    assert placed and placed <= set(whole)  # every insight the graph places lists on the whole map: one floor for both
-    lon = cell_centres(geo["cells"])[:, 0]
-    split = float(np.median(lon))
-    half = engine.geo_window(fine["dataset_id"], f"-180,-90,{split},90")
-    listed = {i["id"]: i for t in half["themes"] for i in t["insights"]}
-    shown = set(whole) | {a["id"] for i in whole.values() for a in i["also"]}  # a level folded there stands alone without its host
-    assert listed and set(listed) < shown and all(i["lift"] >= 1 for i in listed.values())
-    assert all(i["points"] >= GEO_LINK_MIN_EVENTS or i["points"] >= 5 and i["share"] >= 0.05 for i in listed.values())  # link_min_events
-    pid = next(p for p in listed if p in covers)  # a base insight's lift from its events alone
-    located = point_cell[point_cell >= 0]
-    mine = point_cell[covers[pid]]
-    mine = mine[mine >= 0]
-    x, here = int((lon[mine] <= split).sum()), int((lon[located] <= split).sum())
-    expected = len(mine) * here / len(located)
-    assert listed[pid]["points"] == x >= link_min_events(len(mine)) and listed[pid]["lift"] == round(
-        (x + 30) / (expected + 30), 1
-    )  # a = 30; one decimal, as its words read it
-    counts = np.bincount(located, minlength=len(geo["cells"]))
-    quietest = np.flatnonzero(counts == counts[counts > 0].min())[0]  # one cell's view: fewer events than any insight needs
-    w, s = cell_centres(geo["cells"][[quietest]])[0] - 1e-6
-    few = engine.geo_window(fine["dataset_id"], f"{w},{s},{w + 2e-6},{s + 2e-6}")
-    assert few["cells"] == 1 and 0 < few["points"] < 5 and few["themes"] == []
+    ds, graph = fine["dataset_id"], engine.graph()
+    geo = engine.ws.load_geo(ds, ("cells", "point_cell"))
+    point_cell, covers, centres = geo["point_cell"], engine.ws.load_covers(table["dataset_id"]), cell_centres(geo["cells"])
+    sets = _region_sets(engine.ws, graph, ds)
+    assert set(sets) <= {1, 3, 5, 7} and all(any(s.listed) for s in sets.values())  # the levels coarser than the cells with a hint
+    at = sets[5]
+    partial = {pid for pid in covers if graph.nodes[pid]["props"].get("geo") == "partial"}
+    assert partial and not partial & {pid for region in at.listed for pid in region}
+    pid, r = next((p, r) for r, region in enumerate(at.own) for p in region if p in covers and (point_cell[covers[p]] < 0).any())
+    located, mine = point_cell[point_cell >= 0], point_cell[covers[pid]]
+    mine, inside = mine[mine >= 0], np.flatnonzero(at.idx == r)
+    x, here = int(np.isin(mine, inside).sum()), int(np.isin(located, inside).sum())
+    assert x >= link_min_events(len(mine)) and at.listed[r][pid] == pytest.approx((x + 30) / (len(mine) * here / len(located) + 30))  # a = 30
+    levels = sorted(sets)
+    for up, down in zip(levels, levels[1:], strict=False):  # a zoom never loses what the coarser region lists
+        above, below = sets[up], sets[down]
+        for r, region in enumerate(above.listed):
+            kids = np.unique(below.idx[above.idx == r])
+            assert set(region) <= set().union(*(below.listed[k] for k in kids))
+    drawn = {pid: set(p.events.tolist()) for pid, p in _projection(engine.ws, graph, ds)["patterns"].items()}
+    for s in sets.values():  # a region shows every insight it lists: each is drawn by a cell of it
+        for r, region in enumerate(s.listed):
+            assert all(drawn[pid] & set(np.flatnonzero(s.idx == r).tolist()) for pid in region)
+    finest = sets[levels[-1]]
+    assert any(set(listed) - own for listed, own in zip(finest.listed, finest.own, strict=True))  # some only from above
+    overlay = {f["properties"]["id"]: f["properties"] for f in engine.geo_overlay(ds)["features"]}
+    for props in [p for p in overlay.values() if p["resolution"] == 5][:12]:  # a view of one region lists its n
+        lon, lat = centres[props["rows"][0]]
+        alone = engine.geo_window(ds, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", 5)
+        assert alone["regions"] == 1 and alone["insights"] == props["n"]
+    split = float(np.median(centres[:, 0]))
+    for bbox in (f"-180,-90,{split},90", f"{split},-90,180,90", "-180,-90,180,90"):
+        window = engine.geo_window(ds, bbox, 5)
+        rows = sorted((i for t in window["themes"] for i in t["insights"]), key=lambda i: i["rank"])
+        focus = np.unique(at.idx[window_view(centres, bbox)])
+        expected = _rows(graph, ds, {p: 0 for r in focus for p in at.listed[r]})
+        assert window["regions"] == len(focus) and [i["rank"] for i in rows] == list(range(window["insights"]))
+        assert {i["id"] for i in rows} == set(expected) and len(rows) == len(expected)  # each result once
+        assert not {i["id"] for i in rows} & {a["id"] for i in rows for a in i["also"]}
+        keys = [(-i["regions"], -i["lift"]) for i in rows]
+        assert keys == sorted(keys) and all(i["lift"] >= 1 and i["dataset_id"] == ds for i in rows)
+        own = [i["rank"] for i in rows if not i["wider"]]  # a row listed only as a coarser region's after the place's own
+        assert all(i["regions"] == 0 for i in rows if i["wider"]) and (
+            not own or max(own) < min([i["rank"] for i in rows if i["wider"]], default=len(rows))
+        )
+    assert engine.geo_window(ds, "-180,-90,180,90")["level"] == 7
+    with pytest.raises(PipelineError, match="region level"):
+        engine.geo_window(ds, "-180,-90,180,90", 8)
+
+
+def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
+    """Over several geo datasets (``map_set``) a region's ``n`` is the sum of each dataset's rows there, their insights
+    being of different uploads, and a view of it lists their rows, each with its dataset; a level of the map's own upload
+    adds nothing, since the map counts it already, and a dataset that is not a geo dataset is refused. The overlay splits
+    each count by dataset and carries the trust of every insight another dataset lists, with the dataset that draws it,
+    whose ``/patterns`` gives its cells' rings."""
+    from insight_graph_service.core.geo_views import _projection, _region_sets, map_set
+    from subgroup_miner.spatial import cell_centres
+
+    fine, coarse = upload_levels(engine, points_csv, geo="auto@8,7")
+    geo_frame(seed=4).to_csv(other_path := tmp_path / "other.csv", index=False)
+    (other,) = upload_levels(engine, other_path, geo="auto@8")
+    a, b = fine["dataset_id"], other["dataset_id"]
+    assert map_set(engine.ws, a, (coarse["dataset_id"], b)) == (a, b) and map_set(engine.ws, a, ()) == (a,)
+    with pytest.raises(PipelineError, match="not geo datasets"):
+        map_set(engine.ws, a, ("ds-nope",))
+    alone = {f["properties"]["id"]: f["properties"]["n"] for f in engine.geo_overlay(a)["features"]}
+    theirs = {f["properties"]["id"]: f["properties"]["n"] for f in engine.geo_overlay(b)["features"]}
+    both = engine.geo_overlay(a, (b,))["features"]
+    assert {f["properties"]["id"] for f in both} == set(alone) | set(theirs)
+    assert all(f["properties"]["n"] == alone.get(f["properties"]["id"], 0) + theirs.get(f["properties"]["id"], 0) for f in both)
+    shared = next(p for f in both if alone.get((p := f["properties"])["id"]) and theirs.get(p["id"]))  # a region where both list rows
+    lon, lat = cell_centres(engine.ws.load_geo(a, ("cells",))["cells"])[shared["rows"][0]]
+    window = engine.geo_window(a, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", shared["resolution"], (b,))
+    rows = [i for t in window["themes"] for i in t["insights"]]
+    assert window["insights"] == len(rows) == shared["n"] and {i["dataset_id"] for i in rows} == {a, b}
+    c = coarse["dataset_id"]  # a coarser map with a finer upload: the map's own levels read both
+    levels = set(_region_sets(engine.ws, engine.graph(), c))
+    coarser = engine.geo_overlay(c, (b,))["features"]
+    assert {f["properties"]["resolution"] for f in coarser} <= levels
+    assert all(
+        any(f["properties"]["by"].get(b) for f in coarser if f["properties"]["resolution"] == lv) for lv in levels
+    )  # the finer file at every level
+    assert engine.geo_window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
+    overlay = engine.geo_overlay(a, (b,))  # what «Усі датасети» reads: each region's count per dataset, every listed insight's trust
+    assert all(sum(f["properties"]["by"].values()) == f["properties"]["n"] for f in overlay["features"])
+    away = {pid: t["map_dataset"] for pid, t in overlay["patterns"].items() if "map_dataset" in t}
+    assert set(away) == set(_projection(engine.ws, engine.graph(), b)["patterns"]) and set(away.values()) == {b}
+    drawn = engine.geo_pattern(b, next(iter(away)), rings=True)  # a map holding none of its cells draws it by their rings
+    assert (
+        "rings" not in engine.geo_pattern(b, next(iter(away)))
+        and len(drawn["rings"]) == len(drawn["cells"]) > 0
+        and drawn["level"] == "res 8"
+        and {"effect_size", "support", "weight"} <= set(drawn)
+    )
+    assert {d["upload_id"] for d in engine.geo_datasets()} == {fine["upload_id"], other["upload_id"]}
 
 
 def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_csv):
@@ -91,30 +161,6 @@ def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_cs
     assert hosts == _fold_levels(graph, coarse["dataset_id"], {q: -v for q, v in reversed(listed.items())}) and any(hosts.values())
 
 
-def test_the_window_leads_with_the_levels_of_its_extent(engine, points_csv):
-    """Over more than ``WINDOW_DETAIL_REGIONS`` regions the table and coarser levels lead every theme, closer the map's
-    own; then by lift; themes follow their leading row, the insights without a theme last."""
-    fine, _, _ = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
-
-    def tiers(bbox: str) -> tuple[str, list[list[tuple[bool, float]]]]:
-        window = engine.geo_window(fine["dataset_id"], bbox)
-
-        def coarse(i: dict) -> bool:
-            return i["level"] in ("table", "res 7")
-
-        rows = [[(coarse(i) != (window["first"] == "coarse"), -i["lift"]) for i in t["insights"]] for t in window["themes"]]
-        assert [t["id"] is None for t in window["themes"]] == sorted(t["id"] is None for t in window["themes"])
-        named = [r for r, t in zip(rows, window["themes"]) if t["id"] is not None]
-        assert all(r == sorted(r) for r in rows) and [r[0] for r in named] == sorted(r[0] for r in named)
-        return window["first"], rows
-
-    wide, rows = tiers("-180,-90,180,90")
-    assert wide == "coarse" and {k[0] for r in rows for k in r} == {False, True}  # both kinds listed: the order is tested
-    lat, lon = HOT
-    close, rows = tiers(f"{lon - 0.04},{lat - 0.03},{lon + 0.04},{lat + 0.03}")
-    assert close == "map" and rows
-
-
 def test_a_map_without_a_located_point_lists_nothing(engine, points_csv):
     """A projection whose cells hold no event (never a READY level's, which refuses a file without a valid point) lists an
     empty window instead of dividing by its total."""
@@ -148,32 +194,6 @@ def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     from insight_graph_service.core.geo_views import lon_span  # the cells file's bbox: west > east across ±180° (M10-F05)
 
     assert lon_span(np.array([179.2, 179.6, -179.5])) == (179.2, -179.5) and lon_span(np.array([-114.3, -124.3])) == (-124.3, -114.3)
-
-
-def test_related_themes_group_by_one_hop_in_the_windows_order():
-    """Over eight themes a theme joins the earlier kept theme it has the strongest direct RELATED_TO to (the earlier on a
-    tie); one linked only to a member stays on its own, as does one sharing a place (CO_LOCATED) and none; the list keeps
-    every theme in order, and eight themes group nothing."""
-    from graph_query_engine.graph import DualGraph
-    from insight_contracts import SNAPSHOT_VERSION
-    from insight_graph_service.core.geo_views import WINDOW_THEMES_UNGROUPED, group_themes
-
-    ids = [f"A-{k}" for k in range(9)]
-    links = [("RELATED_TO", "A-1", "A-0", 0.5), ("RELATED_TO", "A-2", "A-1", 0.9), ("RELATED_TO", "A-3", "A-0", 0.4),
-             ("RELATED_TO", "A-2", "A-3", 0.6), ("RELATED_TO", "A-4", "A-0", 0.5), ("RELATED_TO", "A-2", "A-4", 0.5),
-             ("CO_LOCATED", "A-0", "A-5", 1.0)]  # fmt: skip
-    edges = [{"id": f"e{n}", "type": t, "source": a, "target": b, "weight": w, "props": {}} for n, (t, a, b, w) in enumerate(links)]
-    graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [{"id": a, "kind": "Attractor", "label": a, "props": {}} for a in ids], "edges": edges})
-
-    def window(keys):
-        return [{"id": k, "members": []} for k in keys]
-
-    grouped = group_themes(graph, window([*ids, None]))
-    assert [t["id"] for t in grouped] == [*ids, None] and {t["id"]: t["members"] for t in grouped if t["members"]} == {
-        "A-0": ["A-1", "A-4"],  # A-4 ties A-0 and A-2 at 0.5: the earlier
-        "A-2": ["A-3"],  # A-3 links A-0 at 0.4, A-2 at 0.6; A-2 links only A-1, a member: kept
-    }
-    assert not any(t["members"] for t in group_themes(graph, window(ids[:WINDOW_THEMES_UNGROUPED])))
 
 
 def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, points_csv):

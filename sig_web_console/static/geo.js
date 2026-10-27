@@ -1,13 +1,14 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, data: null, patterns: {}, projected: [], byRow: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], away: null, cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, popup: null, want: null, stale: false };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
+const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
 const GeoMap = {
-  has: (pid) => Boolean(G.patterns[pid]),
+  has: (pid) => Boolean(G.patterns[pid] || elsewhere(pid)),
   offMap: (pid) => (G.loading ? "Ще не намальовано: мапа завантажується."  // why the drawer of an insight the map does not draw opens
     : !G.overlay && G.data?.patterns.some((p) => p.id === pid) ? "Не на цій мапі: довіру до нього не вдалося прочитати."
     : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Не на цій мапі: його запис не пройшов перевірку цілісності."
@@ -69,12 +70,12 @@ const GeoMap = {
 
   onAnswer(qa) {
     const items = ((qa.view && qa.view.evidence && qa.view.evidence.items) || []);
-    const geoDs = items.some((i) => G.patterns[i.pattern_id]) ? G.ds  // the open map draws one of them (another level of its upload too): it stays
+    const geoDs = items.some((i) => GeoMap.has(i.pattern_id)) ? G.ds  // the open map draws one of them (another level of its upload too): it stays
       : items.map((i) => i.provenance.dataset_id).find((ds) => G.datasets.some((d) => d.dataset_id === ds));
     if (!geoDs) { GeoMap.clear(); return; }
     if (!G.map || S.view !== "map") { G.pending = qa; G.want = geoDs; return; }  // the map opens on the answer's dataset
     // the answer's insights wait for a click on their citation or card in the chat: nothing is painted before
-    const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => G.patterns[i.pattern_id]); };
+    const apply = () => { GeoMap.unfocus(); G.evidence = items.filter((i) => GeoMap.has(i.pattern_id)); };
     // a load in flight is superseded, the latest answer's dataset winning; a later load drops this one
     if (geoDs !== G.ds || G.loading) loadDataset(geoDs).then((done) => done && apply()); else apply();
   },
@@ -88,12 +89,9 @@ const GeoMap = {
 
   focused: () => Boolean(G.focusId),
 
-  placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : []),  // its cells' H3 ids: a zone a question can carry
+  placeOf: (pid) => (G.patterns[pid] ? G.patterns[pid].rows.map((r) => G.data.features[r].properties.h3) : G.away && G.away.pid === pid ? G.away.cells : []),  // its cells' H3 ids: a zone a question can carry
 
-  openTheme(aid) {  // the IN VIEW list opens the theme a card names, or the group it is folded into
-    const group = ((W.data && W.data.themes) || []).find((t) => t.id === aid || t.members.includes(aid));
-    W.fold[(group ? group.id : aid) ?? ""] = true; renderWindow();
-  },
+  openTheme(aid) { W.fold[aid ?? ""] = true; renderWindow(); },  // the IN VIEW list opens the theme a card names
 
   unfocus() {
     GeoMap.closePopup();
@@ -106,36 +104,65 @@ const GeoMap = {
   },
 
   async focusPattern(pid, fit = true) {
-    const p = G.patterns[pid]; if (!p || !G.map) return;
+    const own = G.patterns[pid], away = !own && elsewhere(pid); if (!(own || away) || !G.map) return;
     GeoMap.unfocus();
     G.focusId = pid;
     const item = G.evidence.find((i) => i.pattern_id === pid);
-    const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
-    for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, color);
-    G.focus = p.rows; G.map.getSource("focus").setData(cellsOf(p.rows));  // only its cells: the cost follows the insight, not the map
-    G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
-    if (fit) fitRows(p.rows, 90);
-    renderCard(p, item, null);
+    if (own) {
+      paintFocus(own, item, cellsOf(own.rows), own.rows);  // only its cells: the cost follows the insight, not the map
+      if (fit) fitRows(own.rows, 90);
+      renderCard(own, item, null);
+    }
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
-      const pts = await api(`/api/geo/${encodeURIComponent(G.ds)}/patterns/${encodeURIComponent(pid)}`);
+      const pts = await api(`/api/geo/${encodeURIComponent(away || G.ds)}/patterns/${encodeURIComponent(pid)}${away ? "?rings=1" : ""}`);
       if (G.focusId !== pid) return;  // another insight was focused meanwhile
+      const p = own || { ...pts, reading: G.overlay.patterns[pid].reading, numbers: G.overlay.patterns[pid].numbers, spatial: {} };
+      if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of; its cells its place
+        G.away = { pid, cells: pts.cells };
+        const rings = { type: "FeatureCollection", features: pts.rings.map((r) => ({ type: "Feature", geometry: { type: "Polygon", coordinates: [r] }, properties: {} })) };
+        paintFocus(p, item, rings, pts.rows);
+        if (fit && rings.features.length) G.map.fitBounds(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
+      }
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
       renderCard(p, item, pts);
     } catch (e) { /* the card stays without the point count */ }
   },
 };
 
+const elsewhere = (pid) => {  // the dataset of «Усі датасети» whose /patterns draws an insight of another one, if any
+  const t = G.others.length && G.overlay && G.overlay.patterns[pid];
+  return t && t.map_dataset && t.integrity !== "mismatch" ? t.map_dataset : null;
+};
+
+const uploadOf = (d) => d.upload_id || d.dataset_id;  // as the server's map_set: a record without one is its own upload
+
+function spread(filter) {
+  /* «Усі датасети» on the map: no dataset chosen and geo datasets of two uploads or more; of each upload's finest
+     dataset (as map_set keeps), the coarsest anchors it — its region levels are the map's, and every other upload has
+     them too, so no file drops out of a finer one — the others go along */
+  if (filter || new Set(G.datasets.map(uploadOf)).size < 2) return null;
+  const finest = new Map();
+  for (const d of [...G.datasets].sort((a, b) => b.resolution - a.resolution || b.cells - a.cells)) if (!finest.has(uploadOf(d))) finest.set(uploadOf(d), d);
+  const anchor = [...finest.values()].sort((a, b) => a.resolution - b.resolution || b.cells - a.cells)[0];
+  return { anchor, others: G.datasets.filter((d) => d !== anchor).map((d) => d.dataset_id) };
+}
+
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
-  const filter = $("dataset-filter").value;
-  const want = G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
+  if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
+  G.others = all ? all.others : [];
+  const want = all ? all.anchor : G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
   else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
-  else { await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); scheduleWindow(); }  // a commit changes the graph over the same cells
+  else {  // a commit changes the graph over the same cells, a filter the mode: a new mode is fitted as a load is
+    await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode();
+    if (G.others.join() !== was) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
+    scheduleWindow();
+  }
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
 }
 
@@ -149,6 +176,50 @@ const viewPadding = () => {  // every cell clear of the open list, where the map
   const w = $("map").clientWidth, open = !(W.folded ?? w < 800);
   return { top: 40, bottom: 40, left: 40, right: 40 + (open && w > 2 * MW_WIDTH ? MW_WIDTH : 0) };
 };
+
+const fileOf = (ds) => (G.datasets.find((d) => d.dataset_id === ds) || {}).filename || ds;
+const alongside = (sep) => (G.others.length ? `${sep}datasets=${G.others.map(encodeURIComponent).join(",")}` : "");  // «Усі датасети»: the rest of the set
+
+function ringsBox(features) {  // the box of polygons' outer rings, each longitude taken around the first: a set across ±180° stays one box
+  const x0 = features[0].geometry.coordinates[0][0][0];
+  const b = features.flatMap((f) => f.geometry.coordinates[0]).reduce((a, [x, y]) => {
+    const u = unwrap(x, x0); return [Math.min(a[0], u), Math.min(a[1], y), Math.max(a[2], u), Math.max(a[3], y)];
+  }, [Infinity, 90, -Infinity, -90]);
+  return [[b[0], b[1]], [b[2], b[3]]];
+}
+
+function paintFocus(p, item, cells, rows) {
+  /* a focused insight's cells — orange where its target is higher, cyan lower, green a correlation — and the rest dimmed */
+  const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
+  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, color);
+  G.focus = rows; G.map.getSource("focus").setData(cells);
+  G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
+}
+
+function paintMode() {
+  /* the HUD and layers of one dataset, or of «Усі датасети»: no cells, LISA or metric there (the datasets' resolutions and
+     metrics differ), the files named, and the hexes taking the clicks */
+  const all = G.others.length > 0, vis = (ids, on) => ids.forEach((id) => G.map.setLayoutProperty(id, "visibility", on ? "visible" : "none"));
+  vis(["cells-fill", "cells-line"], !all && $("lyr-cells").checked);
+  vis(["lisa-hot", "lisa-cold"], !all && $("lyr-lisa").checked);
+  vis(["regions-hit"], all);
+  for (const id of ["lyr-cells", "lyr-lisa"]) $(id).disabled = all;
+  for (const el of [$("map-metric"), $("map-ramp"), document.querySelector("label[for='map-metric']")]) el.hidden = all;
+  const finest = all && G.overlay ? G.overlay.features.filter((f) => f.properties.resolution === G.levels[0]) : [];
+  G.box = finest.length ? ringsBox(finest) : G.cellBox;  // «Усі датасети» opens on every dataset's regions, not the anchor's cells
+  paintZone();  // cells or hexes, as the mode draws them
+  if (all) {
+    const files = [...new Map([G.ds, ...G.others].map((ds) => G.datasets.find((d) => d.dataset_id === ds) || { dataset_id: ds })
+      .map((d) => [uploadOf(d), d.filename || d.dataset_id])).values()];  // one per upload: two files of one name are two
+    $("map-title").textContent = "Усі датасети";
+    $("map-meta").textContent = `${plural(files.length, "файл", "файли", "файлів")}: ${files.join(", ")}`;
+    return;
+  }
+  const info = G.datasets.find((d) => d.dataset_id === G.ds) || {}, sac = info.sac || {};
+  $("map-title").textContent = info.filename || G.ds;
+  $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
+    (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
+}
 
 function boundsOf(rows) {  // the cells' boxes, each moved next to the first one: cells across ±180° stay one box
   const x0 = G.bounds[rows[0]][0];
@@ -208,6 +279,7 @@ function ensureMap() {
     layer("hl-glow", "line", "focus", { "line-color": C.up, "line-width": 8, "line-blur": 6, "line-opacity": 0.6 });
     layer("hl-line", "line", "focus", { "line-color": C.up, "line-width": 1.6 });
     layer("focus-line", "line", "focus", { "line-color": C.amber, "line-width": 2.6, "line-opacity": 1 });
+    layer("regions-hit", "fill", "regions", { "fill-color": "#000", "fill-opacity": 0 }, ["==", ["get", "resolution"], -1], { layout: { visibility: "none" } });  // «Усі датасети»: a hex takes the click
     layer("regions-line", "line", "regions", { "line-color": C.region, "line-width": 1.4, "line-opacity": 0.75, "line-dasharray": [4, 2] }, ["==", ["get", "resolution"], -1]);
     layer("regions-n", "symbol", "region-labels", {}, ["==", ["get", "resolution"], -1], { layout: { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true } });
     layer("zone-line", "line", "zone", { "line-color": "#eef3ff", "line-width": 2, "line-dasharray": [2, 1] });
@@ -232,14 +304,16 @@ function ensureMap() {
     let pointer = null;  // the latest pointer event, read once per frame
     m.on("mousemove", (e) => {
       if (!pointer) requestAnimationFrame(() => {
-        const ev = pointer, f = m.queryRenderedFeatures(ev.point, { layers: ["cells-fill"] })[0];
+        const ev = pointer, f = m.queryRenderedFeatures(ev.point, { layers: [G.others.length ? "regions-hit" : "cells-fill"] })[0];
         pointer = null;
-        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` + (f ? ` · ${f.properties.h3} · ${plural(f.properties.points, "подія", "події", "подій")}` : "");
+        $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` +
+          (!f ? "" : f.properties.h3 ? ` · ${f.properties.h3} · ${plural(f.properties.points, "подія", "події", "подій")}` : ` · ${f.properties.id}`);
         m.getCanvas().style.cursor = f ? "pointer" : "";
       });
       pointer = e;
     });
     m.on("click", "cells-fill", (e) => (e.originalEvent.shiftKey ? GeoMap.toggleZone(e.features[0].properties.h3) : cellPopup(e.features[0], e.lngLat)));
+    m.on("click", "regions-hit", (e) => { const id = e.features[0].properties.id; return e.originalEvent.shiftKey ? GeoMap.toggleZone(id.split(":")[2]) : regionPopup(id, e.lngLat); });
     m.on("moveend", () => { placeDensity(); paintRegions(); scheduleWindow(); });  // once a move ends, not on each of its frames
     wireHud();
   });
@@ -294,22 +368,17 @@ async function loadDataset(ds) {
     for (const id of ["regions", "region-labels"]) G.map.getSource(id).setData(empty());
     G.bounds = data.features.map((f) => { const r = f.geometry.coordinates[0], x0 = r[0][0];  // a cell across ±180° stays one box
       return r.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]); });
-    G.box = boundsOf(data.features.map((_, i) => i));  // what the map opens on: its cells, as they are drawn
+    G.box = G.cellBox = boundsOf(data.features.map((_, i) => i));  // what the map opens on (paintMode), a tab switch before it too
     G.map.getSource("cells").setData(data);
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
     if (seq !== G.loadSeq) return false;
-    const info = G.datasets.find((d) => d.dataset_id === ds) || {};
     const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
     if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
     $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
     colorBy(G.metric);
-    const sac = info.sac || {};
-    $("map-title").textContent = info.filename || ds;
-    $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
-      (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
+    paintMode();
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
-    paintZone();
     return true;
   } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
 }
@@ -326,36 +395,37 @@ async function loadProjected(ds, seq = G.loadSeq) {
 }
 
 function mergePatterns() {
-  /* what the map draws, each row's insights for the popup: its own level's insights that the commit's overlay holds intact
+  /* what the map draws: its own level's insights that the commit's overlay holds intact
      (a record that fails its digest is never drawn, and without an overlay none can be trusted) and the other levels'
      (/projected, intact only) */
   const trust = (G.overlay && G.overlay.patterns) || {};
   const own = G.data.patterns.filter((p) => trust[p.id] && trust[p.id].integrity !== "mismatch").map((p) => ({ ...p, reading: trust[p.id].reading, numbers: trust[p.id].numbers }));
   G.patterns = Object.fromEntries([...own, ...G.projected].map((p) => [p.id, p]));
-  G.byRow = G.data.features.map(() => []);
-  Object.values(G.patterns).forEach((p) => p.rows.forEach((r) => G.byRow[r] && G.byRow[r].push(p.id)));
-  if (G.focusId && !G.patterns[G.focusId]) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
+  if (G.focusId && !GeoMap.has(G.focusId)) GeoMap.unfocus();  // a commit's overlay marked the focused one: it goes
 }
 
 async function loadOverlay(ds, seq = G.loadSeq) {
   /* the graph's regions, trust and scale over the map: they change with every commit, the cells never */
   let failed = "";
-  const overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay`).catch((e) => { failed = e.message; return null; });
+  const overlay = await api(`/api/geo/${encodeURIComponent(ds)}/overlay${alongside("?")}`).catch((e) => { failed = e.message; return null; });
   if (seq !== G.loadSeq) return;  // a dataset loaded since
   G.overlay = overlay;
   $("map-overlay-error").hidden = !failed;  // not an empty graph: the regions, trust and scale could not be read
   $("map-overlay-error").textContent = failed && `Регіони й довіра недоступні, тож інсайти цього рівня не намальовано: ${failed}`;
   mergePatterns();
   const regions = (G.overlay || empty()).features;
-  G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
+  const levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
+  const res = (G.datasets.find((d) => d.dataset_id === ds) || {}).resolution;
+  const apart = G.others.length ? levels : levels.filter((lv) => res - lv >= REGION_GAP);  // «Усі датасети» draws no cells
+  G.levels = apart.length ? apart : levels.slice(-1);  // none that far: the coarsest
   G.map.getSource("regions").setData(G.overlay || empty());
-  G.map.getSource("region-labels").setData({ type: "FeatureCollection", features: regions.map((f) => ({
-    type: "Feature", geometry: { type: "Point", coordinates: centre(f) }, properties: { resolution: f.properties.resolution, icon: countIcon(f.properties.patterns) } })) });
+  G.map.getSource("region-labels").setData({ type: "FeatureCollection", features: regions.filter((f) => f.properties.n > 0).map((f) => ({  // a 0 is not written
+    type: "Feature", geometry: { type: "Point", coordinates: centre(f) }, properties: { resolution: f.properties.resolution, icon: countIcon(f.properties.n) } })) });
   G.level = undefined;
   paintRegions();
 }
 
-const centre = (f) => {  // the region's H3 centre, the one its window membership uses; a ring's mean for a feature without one
+const centre = (f) => {  // the region's H3 centre, where its count is drawn; a ring's mean for a feature without one
   if ((f.properties || {}).centre) return f.properties.centre;
   const r = f.geometry.coordinates[0].slice(1), x0 = r[0][0], lon = r.reduce((a, c) => a + unwrap(c[0], x0), 0) / r.length;
   return [unwrap(lon, 0), r.reduce((a, c) => a + c[1], 0) / r.length];
@@ -394,14 +464,17 @@ function paintRegions() {
   G.level = level;
   const coarser = G.levels.find((lv) => level !== null && lv < level);
   G.map.setFilter("regions-line", ["in", ["get", "resolution"], ["literal", level === null ? [] : [level, coarser ?? level]]]);
-  G.map.setPaintProperty("regions-line", "line-opacity", ["case", ["==", ["get", "resolution"], level ?? -1], 0.75, 0.22]);
+  G.map.setPaintProperty("regions-line", "line-opacity", ["*", ["case", ["==", ["get", "resolution"], level ?? -1], 0.75, 0.22],
+    ["case", [">", ["get", "n"], 0], 1, 0.3]]);  // a region without a characteristic insight stays pale
   G.map.setFilter("regions-n", ["==", ["get", "resolution"], level ?? -1]);  // -1: no region
+  G.map.setFilter("regions-hit", ["==", ["get", "resolution"], level ?? -1]);
 }
 
 function paintZone() {
   /* the selected cells outlined (H3 ids are global: the zone survives a switch of dataset, and a map of another level,
      which does not draw them, says how many it has), and the zone bar */
-  const inZone = G.data ? G.data.features.filter((f) => G.zone.has(f.properties.h3)) : [], shown = inZone.length;
+  const inZone = G.others.length ? ((G.overlay || empty()).features.filter((f) => G.zone.has(f.properties.id.split(":")[2])))  // «Усі датасети»: hexes
+    : G.data ? G.data.features.filter((f) => G.zone.has(f.properties.h3)) : [], shown = inZone.length;
   if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: inZone });
   $("map-zone").hidden = !G.zone.size;
   $("map-zone-n").textContent = `ЗОНА · ${plural(G.zone.size, "комірка", "комірки", "комірок")}` + (G.data && shown < G.zone.size ? ` · на цій мапі: ${shown}` : "");
@@ -442,7 +515,7 @@ function renderCard(p, item, pts) {
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by the cells holding most of its points
-      ? [["де знайдено", esc(levelName(p.level))], [term(p.level === "table" ? "cells_footprint" : "cells_inside"), `${num(p.rows.length, 0)} (${num(sp.footprint_share * 100, 0)}% ${word("points")})`], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
       : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
@@ -459,41 +532,74 @@ function trustTags(pid) {
 }
 
 function cellPopup(f, lngLat) {
-  const p = f.properties, row = p.row;
+  const p = f.properties, row = p.row, level = G.level ?? regionLevel();
   const skip = new Set(["row", "h3"]);
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
-  const pids = (G.byRow[row] || []).sort((a, b) => G.patterns[b].weight - G.patterns[a].weight);
-  const ins = pids.slice(0, 6).map((pid) => { const q = G.patterns[pid]; return `<div class="pp-ins" data-pid="${esc(pid)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(pid)}</div>`; }).join("");
-  const region = G.level != null && G.overlay ? G.overlay.features.find((f) => f.properties.resolution === G.level && f.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub">${cap(word("region"))}</div><div class="pp-reg">${esc(region.properties.id)}<span>${esc(picture(region.properties))}</span></div>` : "";
-  const html = `<div class="pp"><div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${ins ? `<div class="pp-sub">Інсайти цієї комірки (${pids.length})</div>${ins}` : ""}${reg}${ins || reg ? `<div class="pp-sub">${cap(word("cell"))}</div>` : ""}<table>${rows}</table></div>` +
-    `<button type="button" class="pp-zone">${G.zone.has(p.h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button>` +
-    `<button type="button" class="pp-ask">Запитати про цю зону</button></div>`;
+  const region = level != null && G.overlay ? G.overlay.features.find((r) => r.properties.resolution === level && r.properties.rows.includes(row)) : null;
+  const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div><div class="pp-list"></div>` : "";
+  const popup = openPopup(`<div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
+    `<div class="pp-scroll">${reg}<div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div>`, lngLat, p.h3);
+  if (region && region.properties.n) cellInsights(popup, row, level);
+}
+
+function regionPopup(id, lngLat) {
+  /* «Усі датасети»: a hex's count and what each dataset brings to it; the zone and the question take its H3 */
+  const f = ((G.overlay || empty()).features).find((r) => r.properties.id === id); if (!f) return;
+  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(fileOf(ds))}</th><td>${num(n, 0)}</td></tr>`).join("");
+  openPopup(`<div class="pp-head"><span>${esc(id)}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
+    `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat, id.split(":")[2]);
+}
+
+function openPopup(html, lngLat, h3) {
+  /* one popup at a time, its zone and question buttons on h3: the selected zone if it holds h3, else h3 alone, with the
+     text typed, if any */
   GeoMap.closePopup();
-  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(html).addTo(G.map);
+  const buttons = `<button type="button" class="pp-zone">${G.zone.has(h3) ? "− Прибрати із зони" : "+ Додати до зони"}</button><button type="button" class="pp-ask">Запитати про цю зону</button>`;
+  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${buttons}</div>`).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });
   const el = popup.getElement();
+  el.querySelector(".pp-zone").addEventListener("click", () => { GeoMap.closePopup(); GeoMap.toggleZone(h3); });
+  el.querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); ask($("question").value, { cells: G.zone.has(h3) ? GeoMap.zone() : [h3] }); });
+  return popup;
+}
+
+async function cellInsights(popup, row, level) {
+  /* the region's IN VIEW rows that have an event in this cell: a window on the cell's centre lists its region alone,
+     each row's cells there telling whether this cell holds one of its events */
+  const b = G.bounds[row], cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, dx = (b[2] - b[0]) / 10, dy = (b[3] - b[1]) / 10;
+  const bbox = [unwrap(cx - dx, 0), cy - dy, unwrap(cx + dx, 0), cy + dy].map((v) => v.toFixed(6)).join(",");
+  const d = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}&level=${level}`).catch(() => null);
+  if (G.popup !== popup || !d || d.error) return;  // closed or replaced meanwhile
+  const here = d.themes.flatMap((t) => t.insights).filter((i) => i.cells > 0 && G.patterns[i.id]).sort((x, y) => x.rank - y.rank);
+  const el = popup.getElement();
+  el.querySelector(".pp-here").textContent += ` · з них у цій комірці: ${here.length}`;
+  el.querySelector(".pp-list").innerHTML = here.map(({ id }) => { const q = G.patterns[id]; return `<div class="pp-ins" data-pid="${esc(id)}" tabindex="0" role="button"><b class="${q.effect_size >= 0 ? "up" : "down"}">${esc(human(q.target))} ${signed(q.effect_size)} sd</b><span>${esc(q.scope.map(human).join(" · "))}</span>${q.level ? `<i class="pp-tag">${esc(levelName(q.level))}</i>` : ""}${trustTags(id)}</div>`; }).join("");
   el.querySelectorAll(".pp-ins").forEach((x) => x.addEventListener("click", () => GeoMap.focusPattern(x.dataset.pid)));
-  el.querySelector(".pp-zone").addEventListener("click", () => { GeoMap.closePopup(); GeoMap.toggleZone(p.h3); });
-  el.querySelector(".pp-ask").addEventListener("click", () => {  // the selected zone if it holds this cell, else the cell; the typed text, if any
-    GeoMap.closePopup(); ask($("question").value, { cells: G.zone.has(p.h3) ? GeoMap.zone() : [p.h3] });
-  });
 }
 
 // ponytail: PoC — the map as a window on the hidden graph (GET /api/geo/{ds}/window): the themes and insights of the view,
 // re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
-const W = { seq: 0, timer: null, data: null, fold: {}, folded: null };  // folded: decided by the map's width at the first render
+const W = { seq: 0, timer: null, data: null, fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
+const ROWS_SHOWN = 8;  // the rows listed before «показати всі»: those characteristic of the most regions in focus
+const FOCUS_INSET = 0.2;  // the share of the map left out at each edge, where the eye rarely rests (docs/08 §8.7)
 
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
+function focusBox() {
+  /* what the list reads, as [west, south, east, north]: the map less FOCUS_INSET at each edge, the panels over it not apart */
+  const w = $("map").clientWidth, h = $("map").clientHeight, dx = w * FOCUS_INSET, dy = h * FOCUS_INSET;
+  const nw = G.map.unproject([dx, dy]), se = G.map.unproject([w - dx, h - dy]);
+  return [nw.lng, se.lat, se.lng, nw.lat];
+}
+
 async function loadWindow() {
   if (!G.map || !G.ds || G.loading || S.view !== "map") return;
-  const b = G.map.getBounds(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
-  const [w, e] = b.getEast() - b.getWest() >= 360 ? ["-180", "180"] : [lon(b.getWest()), lon(b.getEast())];  // west > east: across ±180°
-  const bbox = [w, lat(b.getSouth()), e, lat(b.getNorth())].join(",");
-  const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}`).catch((e) => ({ error: e.message }));
+  const [x0, s, x1, n] = focusBox(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
+  const [w, e] = x1 - x0 >= 360 ? ["-180", "180"] : [lon(x0), lon(x1)];  // west > east: across ±180°
+  const level = G.level ?? regionLevel();  // the drawn level, or the one the zoom would draw with the regions switched off
+  const query = `bbox=${[w, lat(s), e, lat(n)].join(",")}${level == null ? "" : `&level=${level}`}${alongside("&")}`;
+  const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?${query}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
   W.data = data; renderWindow();
 }
@@ -510,19 +616,17 @@ function renderWindow() {
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
-  const shown = d.themes.filter((t) => !d.themes.some((x) => x.members.includes(t.id)));  // a group counts once
-  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(shown.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)}">` +
-    `<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
+  $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
+    `${G.others.length ? `<i class="mw-ds" title="${esc(fileOf(i.dataset_id))}">${esc(fileOf(i.dataset_id).replace(/\.[^.]+$/, ""))}</i>` : ""}<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc(((G.patterns[i.id] || {}).reading || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
-  const byId = Object.fromEntries(d.themes.map((t) => [t.id, t]));
-  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного: жоден інсайт не має досить подій у вікні понад свою частку на мапі.</div>` : shown.map((t, k) => {
+  const more = d.insights <= ROWS_SHOWN ? "" : `<div class="mw-more">${W.all ? `Показано всі ${d.insights}` : `Показано ${ROWS_SHOWN} з ${d.insights} · наблизьтесь, щоб побачити особливості ділянок`}` +
+    `<button type="button" class="mw-all">${W.all ? `лише перші ${ROWS_SHOWN}` : "показати всі"}</button></div>`;
+  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN) })).filter((t) => t.rows.length);
+  $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного — віддаліться, щоб побачити ширшу ділянку.</div>` : more + themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
-    const members = t.members.map((id) => byId[id]), m = members.length;  // a group: the related themes folded into it
-    const n = t.insights.length + members.reduce((a, x) => a + x.insights.length, 0);
-    const tip = m ? `${t.reading}\n+${m} — ${TERMS.RELATED_TO[0]}: ${TERMS.RELATED_TO[1]}` : t.reading || t.label;
-    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(tip)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}${m ? ` +${m}` : ""}</span><b>${n}</b></button>` +
-      (open ? t.insights.map(row).join("") + members.map((x) => `<div class="mw-sub" title="${esc(x.reading)}">${esc(x.label)}</div>` + x.insights.map(row).join("")).join("") : "") + `</div>`;
+    return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.reading || t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.rows.length}</b></button>` +
+      (open ? t.rows.map(row).join("") : "") + `</div>`;
   }).join("");
 }

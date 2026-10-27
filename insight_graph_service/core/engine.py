@@ -681,20 +681,20 @@ class Engine:
         )
 
     @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points)
+    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
+        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings)
 
     @_healthy
-    def geo_overlay(self, dataset_id: str) -> dict[str, Any]:
-        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds)
+    def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
         return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
 
     @_healthy
-    def geo_window(self, dataset_id: str, bbox: str) -> dict[str, Any]:
-        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds)
+    def geo_window(self, dataset_id: str, bbox: str, level: int | None = None, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds, level, datasets)
 
     def warm_map(self) -> None:
         """``geo_views.warm`` over the committed graph (the server queues it on the batch thread after a commit and at a

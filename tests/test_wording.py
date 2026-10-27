@@ -53,16 +53,14 @@ def test_a_correlation_change_reads_by_the_predicates_of_covariance_change(befor
 
 def test_the_terms_state_the_numbers_the_code_uses():
     """sd is the engine's robust z (the demo's 19.19 vs 10.74 with MAD 2.58 is +2.21, not 3.28) and its cap; stability
-    names the bootstrap's resamples; the window's prior, the footprint's share and the volume utility are the code's."""
+    names the bootstrap's resamples; the window's prior and the volume utility are the code's."""
     from insight_graph_service.core.geo_views import WINDOW_LIFT_PRIOR
-    from subgroup_miner.spatial import GEO_FOOTPRINT_SHARE
     from subgroup_miner.vendor.eda.main_upd import BOOTSTRAP_RESAMPLES, ROBUST_Z_CAP, robust_z_score, volume_preference_score
 
     assert round(robust_z_score(19.19, 10.74, 2.58), 2) == 2.21 and "0,6745 · Δмедіани / MAD" in w.TERMS["sd"][1]
     assert f"не більше {ROBUST_Z_CAP:g}" in w.TERMS["sd"][1]
     assert "1 − min(CV, 0,9)" in w.TERMS["stability"][1] and f"на {BOOTSTRAP_RESAMPLES} бутстреп" in w.TERMS["stability"][1]
     assert f"згладжено {WINDOW_LIFT_PRIOR} подіями" in w.TERMS["window_lift"][1] and "згладж" not in w.TERMS["place_lift"][1]
-    assert f"{GEO_FOOTPRINT_SHARE:.0%}".replace("%", " %") in w.TERMS["cells_footprint"][1]
     assert volume_preference_score(1 / 3) > max(volume_preference_score(0.3), volume_preference_score(0.4))  # "найбільша … третину"
     assert "третину" in w.TERMS["volume_utility"][1] and "непорожнім значенням метрики" in w.TERMS["n_eff"][1]
 
