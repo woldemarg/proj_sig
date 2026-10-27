@@ -20,12 +20,14 @@ from scipy.signal import find_peaks
 from scipy.stats import norm
 
 import subgroup_miner.vendor.eda.main_upd as eda
+from insight_contracts import EdgeType
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import _MEDIAN_SE_FACTOR
+from subgroup_miner.ingestion import IngestionError
 
 _FREQ = {"day": "D", "week": "W-SUN", "month": "M", "quarter": "Q"}  # a week runs Monday to Sunday, as ISO 8601's
 RISING, FALLING, FLAT, SPIKE = "rising", "falling", "flat", "spike"
-PEAKED_AT, DROPPED_AT = "PEAKED_AT", "DROPPED_AT"
+PEAKED_AT, DROPPED_AT = EdgeType.PEAKED_AT.value, EdgeType.DROPPED_AT.value
 
 
 def period_label(period: pd.Period, grid: str) -> str:
@@ -38,15 +40,18 @@ def period_label(period: pd.Period, grid: str) -> str:
     return period.strftime("%Y-%m-%d" if grid == "day" else "%Y-%m")
 
 
-def calendar_bins(times: pd.Series, grid: str) -> tuple[np.ndarray, list[dict[str, Any]]]:
+def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Each row's bin (-1 for a row without a time) and the bins from the first time's period to the last's, empty ones
     included, each ``{period, t_start, t_end, rows, partial}`` (UTC, half-open). ``partial``: the upload's times begin
-    after the bin's first day or end before its last."""
+    after the bin's first day or end before its last. More bins than ``max_bins`` is ``invalid_options``, before any is built:
+    one placeholder date (``9999-12-31``) would make hundreds of thousands."""
     known = times.notna().to_numpy()
     naive = times[known].dt.tz_convert("UTC").dt.tz_localize(None)
     periods = naive.dt.to_period(_FREQ[grid])
-    first = periods.min()
-    span = pd.period_range(first, periods.max(), freq=_FREQ[grid])
+    first, last = periods.min(), periods.max()
+    if max_bins and (count := last.ordinal - first.ordinal + 1) > max_bins:
+        raise IngestionError("invalid_options", f"the time column spans {count} {grid} bins, from {first} to {last} (TEMPORAL_MAX_BINS={max_bins})")
+    span = pd.period_range(first, last, freq=_FREQ[grid])
     codes = np.full(len(times), -1, dtype=np.int64)
     codes[known] = periods.array.asi8 - first.ordinal
     rows = np.bincount(codes[known], minlength=len(span))

@@ -246,6 +246,7 @@ x₀ = y₀, P₀ = R₀;   прямий прохід Калмана, зворо
 |---|---|---|---|
 | `grid` (опція) | форма/API | `week` | одиниця календарної сітки: `day`/`week`/`month`/`quarter`; Timedelta-рядки M13 (`7D`, `24h`) — `invalid_options` з підказкою |
 | `temporal_min_bins` (`TEMPORAL_MIN_BINS`) | `Settings` | 3 | менше непорожніх бінів — відмова `invalid_options` |
+| `temporal_max_bins` (`TEMPORAL_MAX_BINS`) | `Settings` | 1000 | більше бінів у span — відмова `invalid_options` до побудови сітки (дата-заглушка `9999-12-31` дала б сотні тисяч тижнів) |
 | `temporal_min_rows_bin` (`TEMPORAL_MIN_ROWS_BIN`) | `MinerConfig` | 30 | поріг рядків біна (серії і глобально); нижче — `missing` |
 | `temporal_process_noise` (`TEMPORAL_PROCESS_NOISE`) | `MinerConfig` | 0.1 | Q локально-рівневої моделі, z²/бін |
 | `temporal_event_p` (`TEMPORAL_EVENT_P`) | `MinerConfig` | 0.05 | рівень значущості події, Бонферроні по парах виміряних бінів |

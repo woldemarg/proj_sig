@@ -31,6 +31,7 @@ reset can delete the folder while it is held); see ``acquire_writer_lock``.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -255,6 +256,26 @@ class Workspace:
             nbr_ptr=spatial.nbr_ptr,
             nbr_idx=spatial.nbr_idx,
         )
+
+    def save_temporal(self, dataset_id: str, series: dict[str, Any]) -> str:
+        """A dataset's series over its time column's grid (``subgroup_miner.temporal.annotate``) as
+        ``datasets/<ds>/temporal.json``; returns the SHA-256 of the bytes written, which its batch record signs."""
+        path = self.dataset_dir(dataset_id) / "temporal.json"
+        atomic_write_json(path, series)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def load_temporal(self, dataset_id: str) -> tuple[dict[str, Any] | None, str] | None:
+        """The series ``save_temporal`` stored (None when the file no longer reads as JSON) and the SHA-256 of the file as it
+        is now; None for a dataset without one. A damaged file is a mismatch to its digest, never an error of the workspace."""
+        path = self.datasets_dir / dataset_id / "temporal.json"
+        if not path.is_file():
+            return None
+        data = path.read_bytes()
+        try:
+            series = json.loads(data)
+        except ValueError:
+            series = None
+        return series, hashlib.sha256(data).hexdigest()
 
     def save_geo_cells(self, dataset_id: str, payload: dict[str, Any]) -> None:
         """The map's GeoJSON of a geo dataset (``geo_views.geo_cells``), written with its batch."""

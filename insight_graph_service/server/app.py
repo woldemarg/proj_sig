@@ -187,6 +187,8 @@ def create_app(engine: Engine) -> FastAPI:
         metadata: UploadFile | None = File(None),
         table: bool = Form(False),
         supersedes: str = Form(""),
+        time: str = Form(""),
+        grid: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -205,6 +207,8 @@ def create_app(engine: Engine) -> FastAPI:
             metadata=_text(metadata),
             table=table,
             supersedes=supersedes,
+            time=time.strip() or None,
+            grid=grid.strip() or None,
         )
 
     @app.post("/api/demo")
