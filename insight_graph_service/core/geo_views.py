@@ -39,7 +39,7 @@ from subgroup_miner.spatial import (
     zone_overlap,
 )
 
-WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region and to their expected count (docs/08 §8.7)
+WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region and to their expected count: ranking, not membership (docs/08 §8.7)
 
 
 def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
@@ -356,7 +356,8 @@ def map_set(ws: Workspace, dataset_id: str, datasets: tuple[str, ...]) -> tuple[
 class RegionSets(NamedTuple):
     """One region level over a geo dataset's cells: the regions holding a cell (``ids``, H3), each cell's region
     (``idx``), and per region the insights it lists with their lift (``listed``) and those characteristic of its own
-    cells (``own``); the others it takes from the coarser region it lies in."""
+    cells (``own``); the others it takes from the coarser regions its cells lie in (two on a coarser boundary: H3 nests only
+    approximately)."""
 
     ids: np.ndarray
     idx: np.ndarray
@@ -369,7 +370,7 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, 
     where a region lists an insight — a level of none gives the map no hint, so it is left out unless every level is —,
     derived once per commit. An insight of the projection is characteristic of a region by the rule of
     docs/08_interface.md §8.7: with ``x`` of its ``|P_loc|`` located events in the region's cells and ``E`` the number
-    its map-wide share puts there, ``x ≥ link_min_events(|P_loc|)`` and ``(x + a) / (E + a) ≥ 1``; a base insight the
+    its map-wide share puts there, ``x ≥ link_min_events(|P_loc|)`` and ``(x + a) / (E + a) ≥ 1``, which is ``x ≥ E`` whatever ``a``; a base insight the
     graph leaves unplaced (``geo: partial``) is never one. A region also lists, at their lift there, the insights of the
     coarser regions holding its cells that have an event in it: a zoom never loses what the coarser region listed."""
 
@@ -540,7 +541,8 @@ def geo_window(
     of them, over the datasets ``map_set`` keeps, each result once (``_rows``); ranked (``rank``) by how many of those
     regions it is characteristic of in its own right — a row a region lists only as a coarser one's comes after —,
     then its best lift there, then weight, and listed under its theme
-    (``primary_anchor``). A view of one region lists the ``n`` the overlay draws on it."""
+    (``primary_anchor``). A view of one region lists the ``n`` the overlay draws on it; ``cells`` and ``points`` add over
+    the set's datasets, each of its own grid and file."""
     rows: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     cells = points = 0
     regions: set[str] = set()
