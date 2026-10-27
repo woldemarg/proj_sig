@@ -166,6 +166,8 @@ class PhenomenonThresholds:
     min_emm_score: float = 0.08  # RMS correlation change per metric pair (after reliability shrinkage) that counts
     weight_emm_ref: float = 0.08  # correlation change that saturates the EMM evidence (same scale as min_emm_score)
     min_component_z: float = 0.5  # |robust z| from which a secondary shift is part of the phenomenon
+    temporal_event_excess: float = 0.5  # the least prominence (in s_ref) of a peak or a dip of an insight's series
+    temporal_fade_z: float = 0.5  # |smoothed z| below which an insight's current shift reads as under the threshold
 
     def material(self, shift: Shift) -> bool:
         """A shift strong enough to be part of a phenomenon."""

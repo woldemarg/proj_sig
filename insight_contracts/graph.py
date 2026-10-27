@@ -133,3 +133,6 @@ def region_node_id(resolution: int, cell: str) -> str:
 
 def dimension_node_id(dataset_id: str, name: str) -> str:
     return f"D:{dataset_id}:{name}"
+
+
+TIME_GRIDS = ("day", "week", "month", "quarter")  # the calendar units an upload's time column is binned by

@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, locate_points, parse_geo, select_levels
 
@@ -36,6 +37,8 @@ class LoadedDataset:
     geo: str | None = None  # the applied geo option, "<locator>@<resolution>"
     spatial: SpatialContext | None = None  # rows are H3 cells when set
     points: str | None = None  # a table level's left-out point columns, as a geo level's ``location`` names them
+    time: pd.Series | None = None  # each row's time (UTC; NaT where its value reads as none), the time column left out
+    grid: str | None = None  # the calendar unit its times are binned by (``TIME_GRIDS``)
 
 
 def parse_bins(spec: str | None) -> dict[str, int]:
@@ -78,10 +81,15 @@ READING_FIX = b"reading=2"  # a file read otherwise than before: its own dataset
 
 
 def dataset_fingerprint(
-    digest: Any, bins: dict[str, int], categories: list[str] | None = None, geo: str | None = None, left_out: list[str] | None = None
+    digest: Any,
+    bins: dict[str, int],
+    categories: list[str] | None = None,
+    geo: str | None = None,
+    left_out: list[str] | None = None,
+    time: str | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
-    options -> same id."""
+    options -> same id. ``time``: ``<column>:<grid>`` — the same file with its time apart is another analysis."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -90,6 +98,8 @@ def dataset_fingerprint(
         h.update(f"geo={geo}".encode())
     if left_out:  # the table level of a geo upload: its point columns left out
         h.update(f"left_out={sorted(left_out)}".encode())
+    if time:
+        h.update(f"time={time}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -194,6 +204,29 @@ def apply_bins(df: pd.DataFrame, bins: dict[str, int]) -> tuple[pd.DataFrame, li
     return out, derived
 
 
+def parse_grid(spec: str | None) -> str:
+    """The calendar unit of a time column's grid (``TIME_GRIDS``; ``week`` by default). A duration such as ``7D`` is
+    refused: a bin is a calendar period, the same for every upload."""
+    unit = (spec or "week").strip().lower()
+    if unit not in TIME_GRIDS:
+        raise IngestionError("invalid_options", f"grid {spec!r}: one of {', '.join(TIME_GRIDS)} — a calendar unit, not a duration such as 7D")
+    return unit
+
+
+def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
+    """A time column as UTC times (a time without a zone is taken as UTC; NaT where a value reads as none). A column the
+    file lacks, a numeric one (no unit to read it in) or one with no value that reads as a time is ``invalid_options``."""
+    if column not in frame.columns:
+        raise IngestionError("invalid_options", f"time column '{column}' not in dataset")
+    values = frame[column]
+    if pd.api.types.is_numeric_dtype(values):
+        raise IngestionError("invalid_options", f"time column '{column}' holds numbers: give its times as dates")
+    times = pd.to_datetime(values, errors="coerce", utc=True, format=None if pd.api.types.is_datetime64_any_dtype(values) else "mixed")
+    if times.isna().all():
+        raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
+    return times
+
+
 def load_dataset(
     path: Path,
     config: MinerConfig,
@@ -205,6 +238,8 @@ def load_dataset(
     strict: bool = True,
     locator: str | None = None,
     shared: bool = False,
+    time: str | None = None,
+    grid: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -212,7 +247,8 @@ def load_dataset(
     neither the file nor the cells still fails the geo levels. ``locator`` (the table level of a geo upload) leaves
     the columns it locates the points in out of the table. ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
-    of an upload, reading the parse its levels share (``read_file``)."""
+    of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
+    (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; §2.10) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -230,6 +266,15 @@ def load_dataset(
     warnings = []
     spatial = None
     left_out = []
+    times = None
+    if time:
+        if geo_spec:
+            raise IngestionError("invalid_options", "a time column goes with a table: the geo levels do not read it yet")
+        grid = parse_grid(grid)
+        times = read_times(frame, time)
+        frame = frame.drop(columns=[time])
+        if unread := int(times.isna().sum()):
+            warnings.append(f"{unread} rows without a readable time: mined, outside every time bin")
     if locator and not geo_spec:
         try:
             left_out = locate_points(frame, locator)[2]
@@ -255,7 +300,9 @@ def load_dataset(
         warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
+        dataset_id=dataset_fingerprint(
+            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{grid}" if time else None
+        ),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,
@@ -264,6 +311,8 @@ def load_dataset(
         geo=_geo_text(geo_spec),
         spatial=spatial,
         points=",".join(left_out) or None,
+        time=times,
+        grid=grid if time else None,
     )
 
 
