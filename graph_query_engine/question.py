@@ -23,8 +23,7 @@ import numpy as np
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import Embedder
-from graph_query_engine.temporal import period_interval
-from insight_contracts import wording
+from graph_query_engine.temporal import period_interval, strip_periods
 from insight_contracts.text import covariance_label, humanize
 
 NEG_WORDS = frozenset(
@@ -317,7 +316,7 @@ def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, floa
 def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, catalog: LiteralCatalog | None = None) -> ParsedQuery:
     """Targets, conditions, direction and relationship intent of a question. Literals typed as the data holds
     them match lexically; with ``catalog`` (``build_catalog``) the rest of the question is grounded (§7.1.1)."""
-    raw_tokens = _TOKEN.findall(wording.PERIOD.sub(" ", text).replace("’", "'").replace("ʼ", "'"))  # a period is no literal: 2031-Q1 is no q1
+    raw_tokens = _TOKEN.findall(strip_periods(text).replace("’", "'").replace("ʼ", "'"))  # a period is no literal: 2031-Q1 is no q1
     tokens = [t.lower() for t in raw_tokens]
     q = ParsedQuery(text=text, when=period_interval(text))
     claimed: set[int] = set()  # token positions taken by a literal, then by direction and relationship words

@@ -46,6 +46,8 @@ def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None) -> t
     after the bin's first day or end before its last. More bins than ``max_bins`` is ``invalid_options``, before any is built:
     one placeholder date (``9999-12-31``) would make hundreds of thousands."""
     known = times.notna().to_numpy()
+    if not known.any():  # no time reads: no bin (the upload's check refuses it)
+        return np.full(len(times), -1, dtype=np.int64), []
     naive = times[known].dt.tz_convert("UTC").dt.tz_localize(None)
     periods = naive.dt.to_period(_FREQ[grid])
     first, last = periods.min(), periods.max()

@@ -1,5 +1,6 @@
 """Pure pieces of the batch lifecycle (docs/09_operations.md §9.1): admission into the graph, the journal records,
-the batch metrics. The engine runs the stages and owns the state."""
+the batch metrics, the time column's check and the series of the admitted insights. The engine runs the stages and owns
+the state."""
 
 from __future__ import annotations
 
@@ -9,11 +10,14 @@ from dataclasses import asdict
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from attractor_topology.models import CanonicalInsight, EmbeddingSpec
 from attractor_topology.ontology import OntologyUpdate
 from insight_contracts import Insight, Rejection, record_digest
 from subgroup_miner.discovery import DiscoveryResult
+from subgroup_miner.ingestion import IngestionError, LoadedDataset
+from subgroup_miner.temporal import annotate, calendar_bins, extent_points, reference_scale
 
 
 def pattern_records(kept: list[Insight], canon: list[CanonicalInsight], row_ids: list[int], spec: EmbeddingSpec) -> list[dict[str, Any]]:
@@ -90,3 +94,46 @@ def batch_metrics(
         "timings": timings,
         "processing_duration_s": time.perf_counter() - t0,
     }
+
+
+def series_times(loaded: LoadedDataset) -> pd.Series:
+    """The times of the rows a batch's series are of (docs/02_discovery.md §2.10): a table's every row, a geo level's
+    located points only (``point_cell >= 0``) — what VALIDATING checks and the commit bins."""
+    if loaded.spatial is None:
+        return loaded.time
+    return loaded.time[loaded.spatial.point_cell >= 0].reset_index(drop=True)
+
+
+def check_time(times: pd.Series, column: str, grid: str, min_bins: int, max_bins: int, rows: str = "") -> None:
+    """A time column spans at most ``max_bins`` bins of ``grid`` (``TEMPORAL_MAX_BINS``) and fills at least ``min_bins``
+    of them (``TEMPORAL_MIN_BINS``, never fewer than one), else ``invalid_options``: at upload over the file's rows,
+    before a batch exists, and at VALIDATING over the rows its series will be of (``series_times``; ``rows`` names them)."""
+    bins = calendar_bins(times, grid, max_bins)[1]
+    if (filled := sum(b["rows"] > 0 for b in bins)) < max(min_bins, 1):
+        raise IngestionError("invalid_options", f"time column '{column}'{rows}: {filled} {grid} bins hold rows (TEMPORAL_MIN_BINS={min_bins})")
+
+
+def annotate_batch(
+    loaded: LoadedDataset, kept: list[Insight], rows: dict[str, np.ndarray], column: str, min_rows_bin: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Every admitted insight's series over the time column's grid, and what the batch record signs of it but the series
+    file's digest — the column, the grid, the span, the bins, the rows without a time, each metric's reference scale
+    (docs/02_discovery.md §2.10). A geo level's series are of its located points: a pattern's are those of its cells, a
+    ``<c>_median`` metric's values those of point column ``c``."""
+    times, frame, covers = series_times(loaded), loaded.frame, rows
+    if loaded.spatial is not None:
+        located = loaded.spatial.point_cell >= 0
+        frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
+        covers = extent_points(loaded.spatial.point_cell[located], rows)
+    codes, bins = calendar_bins(times, loaded.grid)
+    scale = reference_scale(frame)
+    series = annotate(frame, codes, bins, covers, {i.id: [s.metric for s in i.shifts] for i in kept}, scale, min_rows_bin)
+    signed = {
+        "column": column,
+        "grid": loaded.grid,
+        "span": [bins[0]["t_start"], bins[-1]["t_end"]],
+        "bins": bins,
+        "rows_without_time": int((codes < 0).sum()),
+        "reference_scale": scale,
+    }
+    return signed, series

@@ -301,7 +301,6 @@ def load_dataset(
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
-            spatial.point_ts = times.dt.as_unit("us").array.asi8  # the unit times are read in: years 1–9999
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)

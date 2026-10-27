@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
-import pandas as pd
 
 from attractor_topology.canonical import canonicalize
 from attractor_topology.encoder import InsightEncoder, SentenceTransformerEmbedder, TextEmbedder
@@ -40,7 +39,7 @@ from graph_query_engine.search import CommittedState, SearchResult, empty_payloa
 from insight_contracts import EvidencePayload, Insight, Rejection
 from insight_contracts.text import RELIABILITY
 from insight_graph_service.core import geo_views, uploads, verify
-from insight_graph_service.core.batch import admit_insights, batch_metrics, pattern_records
+from insight_graph_service.core.batch import admit_insights, annotate_batch, batch_metrics, check_time, pattern_records, series_times
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.neo4j_mirror import Mirror
 from insight_graph_service.core.settings import Settings
@@ -60,7 +59,6 @@ from subgroup_miner.ingestion import (
 )
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
-from subgroup_miner.temporal import annotate, calendar_bins, extent_points, reference_scale
 
 log = logging.getLogger(__name__)
 
@@ -286,8 +284,8 @@ class Engine:
                 continue
             if "series_digest" not in signed:
                 log.warning("%s: its time record is of another model (no series_digest): no temporal plane", b["dataset_id"])
-            elif (stored := self.ws.load_temporal(b["dataset_id"])) is not None:
-                temporal[b["batch_id"]] = stored
+            else:  # a missing file is none it signed: the compile names it
+                temporal[b["batch_id"]] = self.ws.load_temporal(b["dataset_id"]) or (None, "")
         snapshot = build_snapshot(
             records=records,
             activations=self.ws.activations(),
@@ -368,7 +366,8 @@ class Engine:
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
             if time:
-                self._check_time(read_times(read_file(path, shared=True)[0], time), time, grid)
+                s = self.settings  # the file's rows here; a geo level's located points at VALIDATING
+                check_time(read_times(read_file(path, shared=True)[0], time), time, grid, s.temporal_min_bins, s.temporal_max_bins)
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
@@ -413,16 +412,6 @@ class Engine:
             )
             for g, level in levels
         ]
-
-    def _check_time(self, times: pd.Series, time: str, grid: str) -> None:
-        """A time column spans at most ``TEMPORAL_MAX_BINS`` bins of ``grid`` and fills at least ``TEMPORAL_MIN_BINS`` of
-        them (``invalid_options`` otherwise): at upload, before a batch exists, and at VALIDATING for a batch submitted
-        without one."""
-        bins = calendar_bins(times, grid, self.settings.temporal_max_bins)[1]
-        if (filled := sum(b["rows"] > 0 for b in bins)) < self.settings.temporal_min_bins:
-            raise IngestionError(
-                "invalid_options", f"time column '{time}': {filled} {grid} bins hold rows (TEMPORAL_MIN_BINS={self.settings.temporal_min_bins})"
-            )
 
     @_healthy
     def submit(
@@ -507,8 +496,10 @@ class Engine:
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = self._load(record, shared=True)
-                    if loaded.time is not None:
-                        self._check_time(loaded.time, record["time"], loaded.grid)
+                    if loaded.time is not None:  # over the rows the series will be of
+                        s = self.settings
+                        rows = " over its located points" if loaded.spatial is not None else ""
+                        check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, rows)
                     record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
@@ -599,7 +590,8 @@ class Engine:
                     rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
                 self.ws.save_covers(ds, mined.rows)
                 if mined.loaded.time is not None:  # each insight's series over the grid, signed with the record
-                    record["temporal"] = self._annotate(record, mined)
+                    signed, series = annotate_batch(mined.loaded, mined.kept, mined.rows, record["time"], self.settings.miner.temporal_min_rows_bin)
+                    record["temporal"] = signed | {"series_digest": self.ws.save_temporal(record["dataset_id"], series)}
 
             with self._stage(record, "PERSISTING", timings, "persist_s"):
                 self._refuse_journaled(mined.kept)
@@ -626,32 +618,6 @@ class Engine:
             self._publishing = batch_id  # set before READY is on disk: a poll reads PERSISTING until _publish
             self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
         return snapshot, state
-
-    def _annotate(self, record: dict[str, Any], mined: _Mined) -> dict[str, Any]:
-        """Inside the commit (docs/02_discovery.md §2.10): every admitted insight's series over the time column's grid in
-        ``temporal.json``, and what the batch record signs of it — the column, the grid, the span, the bins, the rows
-        without a time, each metric's reference scale and the file's SHA-256. A geo level's series are of its located
-        points: a pattern's are those of its cells, a ``<c>_median`` metric's values those of point column ``c``."""
-        loaded = mined.loaded
-        times, frame, covers = loaded.time, loaded.frame, mined.rows
-        if loaded.spatial is not None:  # a geo level: the points with a cell, each extent's, the point column a median summarises
-            located = loaded.spatial.point_cell >= 0
-            times = times[located].reset_index(drop=True)
-            frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
-            covers = extent_points(loaded.spatial.point_cell[located], mined.rows)
-        codes, bins = calendar_bins(times, loaded.grid)
-        scale = reference_scale(frame)
-        metrics = {i.id: [s.metric for s in i.shifts] for i in mined.kept}
-        series = annotate(frame, codes, bins, covers, metrics, scale, self.settings.miner.temporal_min_rows_bin)
-        return {
-            "column": record["time"],
-            "grid": loaded.grid,
-            "span": [bins[0]["t_start"], bins[-1]["t_end"]],
-            "bins": bins,
-            "rows_without_time": int((codes < 0).sum()),
-            "reference_scale": scale,
-            "series_digest": self.ws.save_temporal(record["dataset_id"], series),
-        }
 
     # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
 

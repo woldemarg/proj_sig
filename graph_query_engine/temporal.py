@@ -12,32 +12,41 @@ from typing import Any
 from insight_contracts import wording
 
 
-@functools.lru_cache(maxsize=8192)  # ponytail: a grid's labels repeat across patterns and questions
 def period_interval(text: str) -> tuple[datetime, datetime] | None:
     """The UTC interval [start, end) of the first calendar period written in ``text`` the way the grid names one —
     ``2031-W13`` (an ISO week), ``2031-Q1`` or ``Q1 2031``, ``2031-03-24`` (a time after it allowed), ``2031-03`` —
     (``wording.PERIOD``); a token that only looks like one (``2031-W54``, ``2019-20``) or whose period runs past the
     calendar (``9999-12-31``) is passed over. None when there is none."""
-    for m in wording.PERIOD.finditer(text):
-        g = m.groups()
-        try:
-            if g[0]:
-                start = date.fromisocalendar(int(g[0]), int(g[1]), 1)
-                stop = start + timedelta(days=7)
-            elif g[2] or g[4]:
-                year, quarter = (int(g[2]), int(g[3])) if g[2] else (int(g[5]), int(g[4]))
-                start = date(year, 3 * quarter - 2, 1)
-                stop = _months_on(start, 3)
-            elif g[6]:
-                start = date(int(g[6]), int(g[7]), int(g[8]))
-                stop = start + timedelta(days=1)
-            else:
-                start = date(int(g[9]), int(g[10]), 1)
-                stop = _months_on(start, 1)
-        except (ValueError, OverflowError):
-            continue
-        return tuple(datetime(d.year, d.month, d.day, tzinfo=UTC) for d in (start, stop))
-    return None
+    return next((span for m in wording.PERIOD.finditer(text) if (span := _interval(m.group(0)))), None)
+
+
+def strip_periods(text: str) -> str:
+    """``text`` without the calendar periods it names (``period_interval``'s), so that none reads as a literal of the
+    data (``2031-Q1`` is no band ``q1``); a token that only looks like one stays (``2019-20`` may be a value)."""
+    return wording.PERIOD.sub(lambda m: " " if _interval(m.group(0)) else m.group(0), text)
+
+
+@functools.lru_cache(maxsize=1024)  # ponytail: a grid's labels repeat across patterns and questions
+def _interval(token: str) -> tuple[datetime, datetime] | None:
+    """One ``wording.PERIOD`` token's interval; None for one that names no date."""
+    g = wording.PERIOD.fullmatch(token).groups()
+    try:
+        if g[0]:
+            start = date.fromisocalendar(int(g[0]), int(g[1]), 1)
+            stop = start + timedelta(days=7)
+        elif g[2] or g[4]:
+            year, quarter = (int(g[2]), int(g[3])) if g[2] else (int(g[5]), int(g[4]))
+            start = date(year, 3 * quarter - 2, 1)
+            stop = _months_on(start, 3)
+        elif g[6]:
+            start = date(int(g[6]), int(g[7]), int(g[8]))
+            stop = start + timedelta(days=1)
+        else:
+            start = date(int(g[9]), int(g[10]), 1)
+            stop = _months_on(start, 1)
+    except (ValueError, OverflowError):
+        return None
+    return tuple(datetime(d.year, d.month, d.day, tzinfo=UTC) for d in (start, stop))
 
 
 def _months_on(day: date, months: int) -> date:
