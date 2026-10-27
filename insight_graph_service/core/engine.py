@@ -56,6 +56,7 @@ from subgroup_miner.ingestion import (
     parse_indicators,
     read_file,
     read_times,
+    resolve_grid,
 )
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
@@ -345,9 +346,9 @@ class Engine:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
         levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
-        READY (``uploads.replaced_by``). ``time`` names a time column, binned by ``grid`` (``week`` by default) after
-        admission (docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
-        fills fewer than ``TEMPORAL_MIN_BINS`` refuses the upload. Processing is a separate call."""
+        READY (``uploads.replaced_by``). ``time`` names a time column, binned by ``grid`` (by default the unit the span
+        asks for, ``resolve_grid``) after admission (docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
+        gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if grid and not time:
@@ -366,8 +367,10 @@ class Engine:
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
             if time:
+                times = read_times(read_file(path, shared=True)[0], time)
+                grid = resolve_grid(times, grid)  # the batch records the unit, auto resolved
                 s = self.settings  # the file's rows here; a geo level's located points at VALIDATING
-                check_time(read_times(read_file(path, shared=True)[0], time), time, grid, s.temporal_min_bins, s.temporal_max_bins)
+                check_time(times, time, grid, s.temporal_min_bins, s.temporal_max_bins)
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
@@ -497,6 +500,7 @@ class Engine:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = self._load(record, shared=True)
                     if loaded.time is not None:  # over the rows the series will be of
+                        record["grid"] = loaded.grid  # a batch submitted without a unit: the one the span gave it
                         s = self.settings
                         rows = " over its located points" if loaded.spatial is not None else ""
                         check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, rows)
@@ -590,7 +594,7 @@ class Engine:
                     rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
                 self.ws.save_covers(ds, mined.rows)
                 if mined.loaded.time is not None:  # each insight's series over the grid, signed with the record
-                    signed, series = annotate_batch(mined.loaded, mined.kept, mined.rows, record["time"], self.settings.miner.temporal_min_rows_bin)
+                    signed, series = annotate_batch(mined.loaded, mined.kept, mined.rows, record["time"], self.settings.miner)
                     record["temporal"] = signed | {"series_digest": self.ws.save_temporal(record["dataset_id"], series)}
 
             with self._stage(record, "PERSISTING", timings, "persist_s"):

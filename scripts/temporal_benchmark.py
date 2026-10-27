@@ -16,7 +16,8 @@ benchmark, which ``temporal_ab.py`` compares against):
 
 ``spike=True`` adds the metric ``pulse`` (S6): segment=A ∧ region_type=suburban +2.5 every week and +3 more in week 6 — one
 PEAKED_AT, in that ISO week. ``stationary=True`` (S5) plants the four cohorts as a constant +2.5 with no time in
-them: every admitted insight's series is stationary, so any event is false — the share of uploads with one, with its
+them, and adds ``grade``, a tie-heavy metric (integers −2…2, 38 % of them one value) raised by 1 in S1's cohort:
+every admitted insight's series is stationary, so any event is false — the share of uploads with one, with its
 Wilson interval. ``flash=(k, m)`` adds the metric ``flash`` (S7): segment=A ∧ channel=partner +m in k consecutive weeks
 only, over a table without the cohorts. Over durations k and magnitudes m the matrix of how often the one global pass admits that cohort (or a
 specialisation of it), and how often a peak marks it, is the measured boundary of Flash Event Blindness — a research boundary, not an acceptance
@@ -100,8 +101,10 @@ def generate(
         frame[metric] = rng.normal(0.0, 1.0, rows)
     scope = {name: np.logical_and.reduce([frame[c] == v for c, v in conds.items()]) for name, (conds, _) in PLANTED.items()}
     if stationary:
+        frame["grade"] = np.clip(np.rint(rng.normal(0.0, 1.0, rows)), -2, 2)  # a tie-heavy metric: its median is a lump
         for name, (_, metric) in list(PLANTED.items())[:4]:
             frame.loc[scope[name], metric] += 2.5
+        frame.loc[scope["S1"], "grade"] += 1.0
     elif not flash:
         frame.loc[scope["S1"], "value"] += 2.5
         frame.loc[scope["S2"], "load"] += 1.0 + week[scope["S2"]]
@@ -138,6 +141,7 @@ def mine(path: Path, config: Settings) -> tuple[list[Insight], dict[str, dict[st
         {i.id: [s.metric for s in i.shifts] for i in kept},
         reference_scale(loaded.frame),
         cfg.temporal_min_rows_bin,
+        cfg.temporal_tie_share,
     )
     trajectories = {i.id: dynamics(series[i.id], bins, [i.target, *(s.metric for s in i.shifts)], cfg) for i in kept if series[i.id]["series"]}
     return kept, trajectories, bins  # as the compile: no trajectory for a pattern none of whose metrics has a series

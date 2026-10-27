@@ -207,13 +207,35 @@ def apply_bins(df: pd.DataFrame, bins: dict[str, int]) -> tuple[pd.DataFrame, li
     return out, derived
 
 
+GRID_FREQ = {"day": "D", "week": "W-SUN", "month": "M", "quarter": "Q"}  # a week runs Monday to Sunday, as ISO 8601's
+GRID_MIN_BINS, GRID_MIN_ROWS = 14, 300  # what a grid should give a span: bins enough for a series, rows enough per bin for an insight's share
+
+
 def parse_grid(spec: str | None) -> str:
-    """The calendar unit of a time column's grid (``TIME_GRIDS``; ``week`` by default). A duration such as ``7D`` is
-    refused: a bin is a calendar period, the same for every upload."""
-    unit = (spec or "week").strip().lower()
-    if unit not in TIME_GRIDS:
-        raise IngestionError("invalid_options", f"grid {spec!r}: one of {', '.join(TIME_GRIDS)} — a calendar unit, not a duration such as 7D")
+    """The calendar unit of a time column's grid (``TIME_GRIDS``), or ``auto`` (the default: ``resolve_grid`` picks it
+    from the span). A duration such as ``7D`` is refused: a bin is a calendar period, the same for every upload."""
+    unit = (spec or "auto").strip().lower()
+    if unit != "auto" and unit not in TIME_GRIDS:
+        raise IngestionError("invalid_options", f"grid {spec!r}: one of {', '.join(TIME_GRIDS)} or auto — a calendar unit, not a duration such as 7D")
     return unit
+
+
+def resolve_grid(times: pd.Series, grid: str) -> str:
+    """``auto`` resolved from ``times``: of quarter, month, week and day the unit that best balances the bins its span
+    makes against ``GRID_MIN_BINS`` and the rows a bin holds against ``GRID_MIN_ROWS`` — the smaller of the two ratios
+    the highest, a tie to the coarser: a month of dense data gets days, a year weeks, a thin year months. The span is
+    the 1st to the 99th percentile of the times, so one stray date cannot coarsen the grid (``check_time`` then refuses
+    it on the unit chosen). A named grid is itself."""
+    if grid != "auto":
+        return grid
+    naive = times.dropna().dt.tz_convert("UTC").dt.tz_localize(None)
+    first, last = naive.quantile(0.01), naive.quantile(0.99)
+
+    def balance(unit: str) -> float:
+        bins = pd.Period(last, GRID_FREQ[unit]).ordinal - pd.Period(first, GRID_FREQ[unit]).ordinal + 1
+        return min(bins / GRID_MIN_BINS, len(naive) / bins / GRID_MIN_ROWS)
+
+    return max(("quarter", "month", "week", "day"), key=balance)
 
 
 def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -262,7 +284,8 @@ def load_dataset(
     the columns it locates the points in out of the table. ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
     of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
-    (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; §2.10) — discovery never sees it."""
+    (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
+    ``resolve_grid`` of the span; §2.10) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -282,8 +305,8 @@ def load_dataset(
     left_out = []
     times = None
     if time:
-        grid = parse_grid(grid)
         times = read_times(frame, time)
+        grid = resolve_grid(times, parse_grid(grid))
         frame = frame.drop(columns=[time])
         if unread := int(times.isna().sum()):
             warnings.append(f"{unread} rows without a readable time: mined, outside every time bin")
