@@ -86,7 +86,8 @@ function botCard(turn) {
       (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="Та сама знахідка на іншому рівні цього завантаження">також ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Її комірки мапи проти зони з питання">${area[it.key] ? "у виділеній зоні" : "поза виділеною зоною"}</span>` : "") +
-      (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") + `</div>` +
+      (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") +
+      (it.time && it.time.words ? `<span class="role" title="${esc(TERMS.trend[1])}">${esc(it.time.words)}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
       `<div class="ev-stats">${term("support")}: ${num(s.support, 0)} · ${term("weight")}: ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");

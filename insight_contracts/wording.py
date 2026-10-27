@@ -9,6 +9,7 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Mapping
 from typing import Any
 
@@ -57,6 +58,23 @@ TERMS: dict[str, tuple[str, str]] = {
     "integrity_ok": ("цілісність підтверджено", "числа збігаються з відбитком, записаним разом із ними"),
     "integrity_mismatch": ("цілісність порушено", "числа змінено після запису; знахідку виключено з відповідей"),
     "integrity_unverified": ("цілісність не перевірено", "записано до появи відбитків"),
+    # time: a finding's series over the calendar periods of its dataset (docs/02_discovery.md §2.10)
+    "trend": ("динаміка", "як рівень знахідки змінювався в часі, від першого до останнього виміряного періоду її датасету"),
+    "trend_rising": ("зростає", "від першого до останнього виміряного періоду рівень знахідки помітно піднявся"),
+    "trend_falling": ("спадає", "від першого до останнього виміряного періоду рівень знахідки помітно опустився"),
+    "trend_flat": ("без змін", "за весь проміжок рівень знахідки помітно не змінився, піків і спадів у ньому немає"),
+    "trend_spike": ("сплеск", "рівень знахідки повернувся туди, де був, але між тим мав пік або спад"),
+    "time_current": ("зараз", "рівень знахідки в останньому виміряному періоді, після згладжування"),
+    "time_unmeasured": ("не виміряно", "у жодному періоді не було досить рядків знахідки, щоб виміряти її рівень"),
+    "time_faded": ("нижче порога", "в останньому виміряному періоді відхилення знахідки слабше за поріг, з якого воно вважається суттєвим"),
+    "temporal_hub": (
+        "період часу",
+        "день, тиждень, місяць чи квартал, у якому одна чи кілька знахідок мали пік або спад; той самий для всіх датасетів",
+    ),
+    "PEAKED_AT": ("пік у періоді", "у цьому періоді рівень знахідки був помітно вищим, ніж до і після"),
+    "PEAKED_AT (in)": ("пік знахідки", "знахідка, рівень якої в цьому періоді був помітно вищим, ніж до і після"),
+    "DROPPED_AT": ("спад у періоді", "у цьому періоді рівень знахідки був помітно нижчим, ніж до і після"),
+    "DROPPED_AT (in)": ("спад знахідки", "знахідка, рівень якої в цьому періоді був помітно нижчим, ніж до і після"),
     # how a finding relates to coarser levels of its map
     "scale_regional": ("тримається на ширшому рівні", "той самий зсув є і на ширшому рівні мапи цього завантаження"),
     "scale_scale-dependent": ("змінюється з масштабом", "на ширшому рівні мапи цього завантаження зсув протилежний"),
@@ -178,6 +196,12 @@ JARGON = (  # analyst words a plain-language answer leaves out (system-prompt ru
 )
 
 
+# a calendar period as the grid names one and a question may write it, in any case: 2031-W13, 2031-Q1 or Q1 2031, 2031-03-24, 2031-03
+PERIOD = re.compile(
+    r"(?<![\w-])(?:(\d{4})-W(\d{2})|(\d{4})-Q([1-4])|Q([1-4])\s+(\d{4})|(\d{4})-(\d{2})-(\d{2})|(\d{4})-(\d{2}))(?![\d-])", re.IGNORECASE
+)
+
+
 def name(key: str) -> str:
     """The Ukrainian name of a term; an unknown key reads as itself (a new edge type or label never raises)."""
     return TERMS.get(key, (key, ""))[0]
@@ -208,6 +232,23 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
         rest = column.removeprefix("share_")
         return next((c for c in sorted(declared, key=len, reverse=True) if rest.startswith(c + "_")), None)
     return None
+
+
+def time_words(facts: Mapping[str, Any]) -> str:
+    """A finding's time line in words (the evidence-only answer, the console's chip): its metric's trend (or that it was
+    never measured), its current level and an event — its metric's strongest, else another metric's, named
+    (``graph_query_engine.temporal.time_facts``)."""
+    if facts["trend"] is None:
+        return f"{name('trend')}: {name('time_unmeasured')}"
+    parts = [f"{name('trend')}: {name('trend_' + facts['trend'])}"]
+    if facts["current"] is not None:
+        level = name("time_faded") if facts["faded"] else shift_words(facts["current"])
+        parts.append(f"{name('time_current')}: {level} ({facts['current']:+.2f} sd)")
+    if facts["events"]:
+        event = next((e for e in facts["events"] if e["metric"] == facts["metric"]), facts["events"][0])
+        other = "" if event["metric"] == facts["metric"] else f" ({humanize(event['metric'])})"
+        parts.append(f"{name(event['kind'])} {event['period']}{other}")
+    return "; ".join(parts)
 
 
 def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:

@@ -148,6 +148,7 @@ async function upload() {
   const fd = new FormData();
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
+  if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
