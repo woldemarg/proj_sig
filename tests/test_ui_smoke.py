@@ -85,6 +85,7 @@ def test_upload_process_render_query(client, demo_csv):
         assert sorted(rows) == list(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
+    assert client.get(f"/api/geo/{geo_ds}/overlay", params={"datasets": f" {geo_ds} ,"}).json() == overlay  # ids as typed, spaces too
     plain, view = (client.get(f"/api/graph?dataset={geo_ds}{q}").json() for q in ("", "&regions=1"))  # the regions with their switch alone
     regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
     assert regions and all(r["resolution"] <= 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
@@ -411,17 +412,18 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         listed = page.evaluate("G.datasets")  # the stub listed as a geo dataset, as an answer's other dataset is
         stub_entry = {**listed[0], "dataset_id": "ds-stub", "filename": "stub", "upload_id": listed[0].get("upload_id") or listed[0]["dataset_id"]}
         page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, stub_entry]))  # one upload with the real one: the one-dataset map
-        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
-            try { const a = loadDataset(stub); await wait(50);  // an answer's load in flight
+        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms)), reads = [];
+            api = async (path, o) => { reads.push(path); if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
+            try { const a = G.load = loadDataset(stub); await wait(50);  // an answer's load in flight
               $("dataset-filter").value = ""; await GeoMap.refresh(); await a;  // a refresh with no filter keeps to it
-              const kept = G.ds;
+              const kept = G.ds, stale = reads.filter((p) => p.includes(`/${real}/overlay`)).length;  // nothing of the map it leaves
+              const fresh = reads.filter((p) => p.includes(`/${stub}/overlay`)).length;  // the load's read, then the pass's after it
               await loadDataset(real);
               const b = loadDataset(stub); await wait(50);  // an answer on the map still shown arrives during a load: it wins
               GeoMap.onAnswer({ view: { evidence: { items: [{ pattern_id: own, provenance: { dataset_id: real }, statistics: {} }] } } });
               await b; await wait(800);
-              return [kept, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
-        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", real, [own]]
+              return [kept, stale, fresh, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
+        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", 0, 2, real, [own]]
         page.unroute("**/api/geo")
         page.unroute("**/api/geo/ds-stub/**")
         page.evaluate("GeoMap.refresh()")

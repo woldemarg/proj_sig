@@ -384,12 +384,9 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.evaluate("if (W.folded) $('mw-fold').click()")
         assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]  # the coarser anchors it
         two = [dict(dataset_id=f"{u}{r}", upload_id=u, resolution=r, cells=c) for u, r, c in (("a", 8, 9), ("a", 7, 5), ("b", 8, 4), ("b", 7, 3))]
-        assert (
-            page.evaluate(
-                f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ return spread('').anchor.dataset_id; }} finally {{ G.datasets = keep; }} }})()"
-            )
-            == "a8"
-        )  # each upload's finest, not its coarser level
+        assert page.evaluate(
+            f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ const s = spread(''); return [s.anchor.dataset_id, s.others]; }} finally {{ G.datasets = keep; }} }})()"
+        ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
         assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
         assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")
@@ -401,6 +398,12 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.wait_for_function("G.focus.length > 0 && !$('map-card').hidden", timeout=20000)
         assert page.evaluate("G.map.getSource('focus').serialize().data.features.length") == page.evaluate("G.focus.length")
         assert page.evaluate(f"GeoMap.placeOf({theirs!r}).length") == page.evaluate("G.focus.length")  # its question carries its cells
+        assert page.evaluate("G.focus.every((h) => /^[0-9a-f]{15}$/.test(h))")  # H3 ids, never the other dataset's row ids
+        said = page.evaluate(f"G.overlay.patterns[{theirs!r}].reading")
+        assert page.evaluate(f"reading({theirs!r})") == f"{said['where']} — {said['what']}"  # the list reads it as the overlay does
+        assert page.evaluate(
+            "[...document.querySelectorAll('#map-window .mw-i')].every((b) => reading(b.dataset.pid) && b.title.startsWith(reading(b.dataset.pid)))"
+        )
         both = page.evaluate(
             "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.by).filter(Boolean).length === 2)"
         )
@@ -408,11 +411,16 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
             f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
         )
         assert all(name in page.inner_text(".sig-pop") for name in ("california_housing.csv", "half.csv"))
+        assert page.evaluate(f"GeoMap.placeOf({theirs!r})") == []  # unfocused, it carries no zone the map does not show
         busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         page.evaluate(f"GeoMap.closePopup(); G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
         page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)  # a hex alone lists its count, over both uploads
         region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights")
+        page.evaluate(f"loadDataset({full['dataset_id']!r})")  # an answer's other dataset: the map is its own, not «Усі датасети»
+        assert page.evaluate("[G.ds, G.others]") == [full["dataset_id"], []]
+        page.evaluate(f"loadDataset({other['dataset_id']!r})")  # its anchor again: «Усі датасети» for the filter to leave
+        assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
         page.select_option("#dataset-filter", full["dataset_id"])
         page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
         assert page.inner_text("#map-title") == "california_housing.csv"
