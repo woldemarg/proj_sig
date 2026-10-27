@@ -186,7 +186,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
-        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
+        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == [
+            "lattice",
+            "latent",
+            "temporal",
+            "activates",
+        ]
         assert page.evaluate("S.cy.edges('[type=\"ACTIVATES\"]').filter('.hidden').length") == 0  # memberships drawn from the start
         assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
         page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
@@ -709,4 +714,59 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
         assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
         browser.close()
+        assert not errors, errors
+
+
+def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tmp_path):
+    """The form sends a time column and its grid; the graph draws the periods of the events behind a legend switch, the
+    drawer draws an insight's curve and names its trend, and an evidence card names its dynamics (docs/08_interface.md)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    from conftest import weekly_retail
+
+    path = weekly_retail(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.set_input_files("#file", str(path))
+        page.evaluate("document.querySelector('#time').closest('details').open = true")  # the form's further options
+        page.fill("#time", "when")
+        page.select_option("#grid", "week")
+        page.click("#upload-btn")
+        page.wait_for_function("S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=90000)
+        (record,) = [b for b in engine.ws.list_batches() if b["status"] == "READY"]
+        assert (record["time"], record["grid"], record["temporal"]["grid"]) == ("when", "week", "week")
+        hub = 'node[kind="TemporalNode"]'
+        assert page.evaluate(f"S.cy.$('{hub}').map((n) => n.id())") == ["T:week:2031-W13"]
+        lowest = "Math.max(...S.cy.nodes().filter((n) => n.data('kind') === 'Pattern').map((n) => n.position('y')))"
+        assert page.evaluate(f"S.cy.$('{hub}')[0].position('y') > {lowest}")  # the periods' row under the insights
+        assert page.get_attribute(".key[data-key='temporal']", "title").startswith(f"{name('temporal_hub')}: ")
+        page.click("#legend .toggle[data-key='temporal']")  # the event layer off, and on again
+        page.wait_for_function(f"S.cy.$('{hub}').every((n) => n.hidden() || n.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        pid = page.evaluate("S.cy.$('edge[type=\"PEAKED_AT\"]')[0].source().id()")
+        page.evaluate("(id) => inspect(id)", pid)
+        page.wait_for_selector("#inspector svg.spark", timeout=10000)
+        drawer = page.inner_text("#inspector").lower()  # headings are upper-cased by the style
+        assert name("trend") in drawer and name("trend_spike") in drawer and "2031-w13" in drawer
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function(f"document.getElementById('drawer-kind').textContent === '{name('temporal_hub').capitalize()}'", timeout=10000)
+        assert "2031-03-24" in page.inner_text("#inspector") and name("PEAKED_AT (in)") in page.inner_text("#inspector").lower()
+        item = {
+            "key": "P1", "pattern_id": pid, "role": "seed", "located": "", "transversal_only": False, "scope": [], "also": [], "scale": "insufficient",
+            "trust": "", "reading": {"where": "де", "what": "що"}, "provenance": {"dataset_id": "ds"}, "path": [],
+            "statistics": {"support": 10, "weight": 0.5, "shifts": [], "covariance": {}, "drivers": []},
+            "time": {"trend": "spike", "words": "динаміка: сплеск; зараз: помітно вище (+2.21 sd); пік у періоді 2031-W13"},
+        }  # fmt: skip
+        qa = {"answer": "", "answer_mode": "fallback", "llm": {}, "citations": {}, "prompt": "", "provenance_footer": "", "metrics": {}}
+        turn = {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [item]}, "traversal": {}}}}
+        card = page.evaluate("(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }", turn)
+        assert item["time"]["words"] in card  # the evidence card's chip, the server's words
         assert not errors, errors

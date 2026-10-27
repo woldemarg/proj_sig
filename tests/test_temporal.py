@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -13,11 +14,15 @@ import pytest
 from conftest import geo_frame, make_config, make_engine, upload_levels, weekly_retail
 from fastapi.testclient import TestClient
 
-from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge
+from graph_query_engine import seeds
+from graph_query_engine.question import parse_query
+from graph_query_engine.seeds import SEED_TIME_WEIGHT, SeedMatch, score_pattern
+from graph_query_engine.temporal import period_interval, time_facts, time_line, time_score
+from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.snapshot import compute_metadata_integrity, metadata_digest
 from insight_graph_service.server.app import create_app
-from insight_graph_service.server.views import cytoscape_elements
+from insight_graph_service.server.views import cytoscape_elements, node_details
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.ingestion import IngestionError, load_dataset, read_times
 from subgroup_miner.spatial import build_cells
@@ -468,3 +473,91 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     assert series[pid]["series"]["load_median"][t]["n"] == own.notna().sum()
     tables = [pid for pid, p in props.items() if p["dataset_id"] == table["dataset_id"]]
     assert tables and all(snap["trajectories"][pid]["metric"] == props[pid]["target"] for pid in tables)  # a table's trend is its target's
+
+
+# the readers: the time line in the evidence, a calendar period in the question (docs/07_question_answering.md §7.2, §7.4)
+
+
+@pytest.mark.parametrize(
+    ("text", "interval"),
+    [
+        ("what happened in 2031-W13?", ("2031-03-24", "2031-03-31")),
+        ("2026-W53 then", ("2026-12-28", "2027-01-04")),
+        ("in Q1 2031", ("2031-01-01", "2031-04-01")),
+        ("in q2 2031 or 2031-w13", ("2031-04-01", "2031-07-01")),  # as typed, in any case
+        ("in 2031-Q4", ("2031-10-01", "2032-01-01")),
+        ("on 2031-03-24", ("2031-03-24", "2031-03-25")),
+        ("during 2031-12", ("2031-12-01", "2032-01-01")),
+        ("in 2031-W54 or 2031-13", None),
+        ("2031-W54, that is 2031-W13", ("2031-03-24", "2031-03-31")),  # the first that names a period
+        ("on 9999-12-31", None),  # its next day runs past the calendar
+        ("2019-2020, v2031-03, 2031-03-24-1", None),
+        ("in March", None),
+    ],
+)
+def test_a_calendar_period_reads_as_its_utc_interval(text, interval):
+    found = period_interval(text)
+    assert (found and tuple(d.strftime("%Y-%m-%d") for d in found)) == interval or found is interval is None
+    assert found is None or found[0].tzinfo is not None
+
+
+def test_every_timed_insight_carries_its_time_line_with_or_without_a_date(timed):
+    engine, _ = timed
+    found = engine.search("Why is the discount higher for phones in the US?")
+    pid = phones_us(engine.ws.load_graph())
+    item = next(it for it in found.evidence.items if it.pattern_id == pid)
+    assert item.time["trend"] and item.time["events"][0]["period"] == "2031-W13" and item.time["bins_measured"] == 6
+    prompt, summary = found.evidence.to_prompt(), found.evidence.summary()
+    assert f"[{item.key}]" in prompt and f"     time: {time_line(item.time)}" in prompt and "| events: peak 2031-W13 (discount, " in prompt
+    assert "have a time line: each finding holds over its dataset's whole span" in prompt
+    assert item.time["words"] == wording.time_words(item.time) and f"({item.time['words']})" in summary
+    assert "динаміка: сплеск; зараз: помітно вище (+2.21 sd); пік у періоді 2031-W13" in summary
+    assert all(it.time for it in found.evidence.items)  # one dataset, with a time column: every item has its line
+
+
+def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_lowers_one(timed):
+    engine, _ = timed
+    graph = engine.graph()
+    pid = phones_us(graph.snapshot)
+    week = period_interval("2031-W13")
+    assert time_score(graph.trajectories[pid], week) == 1.0  # measured all week, its peak in it
+    assert time_score(graph.trajectories[pid], period_interval("2031-W40")) == 0.0  # outside the upload
+    assert time_score(graph.trajectories[pid], period_interval("2031-04")) == pytest.approx(13 / 30)  # its bins cover 1–13 April, no event
+    ins, config = graph.insight(pid), engine.settings.query
+    query = parse_query("discount for phones in the US in 2031-W13", graph)
+    assert query.when == week
+    asked, plain = score_pattern(ins, query, None, None, config, time=1.0), score_pattern(ins, query, None, None, config)
+    assert asked.score - plain.score == pytest.approx(SEED_TIME_WEIGHT) and asked.matched["time"] == 1.0 and "time" not in plain.matched
+    seeds = engine.search("Why is the discount higher for phones in the US in 2031-W13?").seeds
+    assert seeds[0].pattern_id == pid and seeds[0].matched["time"] == 1.0
+
+
+def test_a_series_never_measured_has_no_trend_and_another_metrics_event_is_named():
+    head = {"grid": "week", "span": ["2031-03-03T00:00:00+00:00", "2031-04-14T00:00:00+00:00"], "metric": "margin", "of": 6, "gaps": []}
+    never = time_facts(head | {"trend": FLAT, "current": None, "bins_measured": 0, "events": []}, 0.5)
+    assert (
+        never["trend"] is None
+        and never["words"] == "динаміка: не виміряно"
+        and "| trend not measured (margin) | current not measured |" in time_line(never)
+    )
+    peak = {"kind": "PEAKED_AT", "period": "2031-W13", "metric": "discount", "z_smoothed": 5.0, "prominence": 4.0}
+    other = time_facts(head | {"trend": FLAT, "current": 0.1, "bins_measured": 6, "events": [peak]}, 0.5)
+    assert other["words"] == "динаміка: без змін; зараз: нижче порога (+0.10 sd); пік у періоді 2031-W13 (discount)"
+
+
+def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
+    fixed = {"timed": SeedMatch("timed", 0.6 + SEED_TIME_WEIGHT, {"time": 1.0}), "plain": SeedMatch("plain", 0.6, {})}
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
+    graph = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="margin in 2031-W13", when=None, components=lambda: [])
+    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
+    assert [s.pattern_id for s in found] == ["timed", "plain"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95
+
+
+def test_the_drawer_gets_the_curve_of_its_findings_metric_only(timed):
+    engine, _ = timed
+    graph = engine.graph()
+    pid = phones_us(graph.snapshot)
+    shown = node_details(graph, pid, engine.settings.thresholds)["trajectory"]
+    assert set(shown["series"]) == set(shown["smoothed"]) == {shown["metric"]} and len(graph.trajectories[pid]["series"]) > 1
+    assert shown["events"] == graph.trajectories[pid]["events"]

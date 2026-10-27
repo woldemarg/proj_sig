@@ -45,6 +45,11 @@
           <div class="hint">Рядки — точки: аналізувати комірки H3 — <span class="mono">auto</span> знаходить точку GeoJSON/WKT або колонки lat/lon; <span class="mono">@7</span> — рівень, <span class="mono">@7,5</span> — датасет на кожен рівень, <span class="mono">@auto</span> — рівні за розподілом точок.</div>
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
           <div class="hint">Разом із просторовим аналізом: рядки аналізуються ще й як звичайна таблиця, ще один датасет того самого файлу; його інсайти лягають на регіони мапи за своїми точками.</div>
+          <label class="small" for="time">Колонка часу</label>
+          <input class="field" id="time" placeholder="напр. order_date">
+          <label class="small" for="grid">Сітка часу</label>
+          <select class="field" id="grid"><option value="week">тиждень</option><option value="day">день</option><option value="month">місяць</option><option value="quarter">квартал</option></select>
+          <div class="hint">Колонка часу в пошук не входить: кожен інсайт отримує свою динаміку за календарними періодами — тренд, рівень зараз, піки й спади. Разом із просторовим аналізом — за часом точок.</div>
           <label class="small" for="indicators">Що вимірюють метрики</label>
           <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
           <div class="hint"><span class="mono">metric:indicator[:unit]</span> — що вимірює метрика, щоб порівнювати датасети. З просторовим аналізом метрики — комірок (<span class="mono">price_median</span>). В аналізі не бере участі.</div>
@@ -120,6 +125,7 @@
         <button type="button" class="key toggle" data-key="contrast"><i class="ln contrast"></i><span>Протилежні зсуви</span><b data-n="contrast"></b></button>
         <button type="button" class="key toggle" data-key="sibling"><i class="ln sibling"></i><span>Сусідні варіанти</span><b data-n="sibling"></b></button>
         <button type="button" class="key toggle" data-key="colocated"><i class="ln colocated"></i><span>Те саме місце</span><b data-n="colocated"></b></button>
+        <button type="button" class="key toggle on" data-key="temporal"><i class="sw time"></i><span>Періоди часу</span><b data-n="temporal"></b></button>
         <button type="button" class="key toggle on" data-key="activates"><i class="ln act"></i><span>Належність до теми</span><b data-n="activates"></b></button>
         <button type="button" class="key toggle" data-key="region"><i class="sw region"></i><span>Регіони мапи</span><b data-n="region"></b></button>
         <button type="button" class="key toggle" data-key="schema"><i class="sw col"></i><span>Колонки</span><b data-n="schema"></b></button>

@@ -149,6 +149,9 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         out["reading"] = insight_reading(graph, node_id, thresholds)
         out["numbers"] = wording.value_words(graph.insight(node_id))
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        if node_id in graph.trajectories:  # its series over time, for the drawer's curve (docs/08_interface.md §8.2)
+            t = graph.trajectories[node_id]  # the drawer draws its metric's curve: the other series stay in the snapshot
+            out["trajectory"] = t | {k: {t["metric"]: t[k][t["metric"]]} if t["metric"] in t[k] else {} for k in ("series", "smoothed")}
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
         out["places"] = [
             {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}}

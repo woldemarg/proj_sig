@@ -111,6 +111,7 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
         "- median score of the subgroup",
     ]
     assert jargon("У q2 та quartile: median subgroup", chr(10).join(phrased)) == {"median": 1, "quartile": 1, "q2": 1, "subgroup": 1}
+    assert jargon("Пік у 2031-Q2 і Q3 2031, а в q2 нижче", chr(10).join(phrased)) == {"q2": 1}  # a period, named as rule 13 asks, is no band
 
 
 def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):

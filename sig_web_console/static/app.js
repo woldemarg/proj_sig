@@ -50,8 +50,9 @@ const MARKS = {
   latent: 'edge[type="RELATED_TO"], edge[type="CO_OCCURS"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
   region: 'node[kind="Region"], edge[type="IN_REGION"], edge[type="PARENT_OF"]',
+  temporal: 'node[kind="TemporalNode"], edge[type="PEAKED_AT"], edge[type="DROPPED_AT"]',
 };
-const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot draw
+const NO_VECTORS = ["schema", "region", "temporal"];  // legend entries the sphere cannot draw
 // trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
 // (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
 const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
@@ -61,6 +62,7 @@ const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIA
   latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
   colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
   region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
+  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "стрілка — до періоду піку, пунктирна — спаду"],
   seed: ["role_seed"], cross: ["transversal_only"] };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
@@ -93,6 +95,19 @@ const TERMS = {
   "integrity_ok": ["цілісність підтверджено", "числа збігаються з відбитком, записаним разом із ними"],
   "integrity_mismatch": ["цілісність порушено", "числа змінено після запису; знахідку виключено з відповідей"],
   "integrity_unverified": ["цілісність не перевірено", "записано до появи відбитків"],
+  "trend": ["динаміка", "як рівень знахідки змінювався в часі, від першого до останнього виміряного періоду її датасету"],
+  "trend_rising": ["зростає", "від першого до останнього виміряного періоду рівень знахідки помітно піднявся"],
+  "trend_falling": ["спадає", "від першого до останнього виміряного періоду рівень знахідки помітно опустився"],
+  "trend_flat": ["без змін", "за весь проміжок рівень знахідки помітно не змінився, піків і спадів у ньому немає"],
+  "trend_spike": ["сплеск", "рівень знахідки повернувся туди, де був, але між тим мав пік або спад"],
+  "time_current": ["зараз", "рівень знахідки в останньому виміряному періоді, після згладжування"],
+  "time_unmeasured": ["не виміряно", "у жодному періоді не було досить рядків знахідки, щоб виміряти її рівень"],
+  "time_faded": ["нижче порога", "в останньому виміряному періоді відхилення знахідки слабше за поріг, з якого воно вважається суттєвим"],
+  "temporal_hub": ["період часу", "день, тиждень, місяць чи квартал, у якому одна чи кілька знахідок мали пік або спад; той самий для всіх датасетів"],
+  "PEAKED_AT": ["пік у періоді", "у цьому періоді рівень знахідки був помітно вищим, ніж до і після"],
+  "PEAKED_AT (in)": ["пік знахідки", "знахідка, рівень якої в цьому періоді був помітно вищим, ніж до і після"],
+  "DROPPED_AT": ["спад у періоді", "у цьому періоді рівень знахідки був помітно нижчим, ніж до і після"],
+  "DROPPED_AT (in)": ["спад знахідки", "знахідка, рівень якої в цьому періоді був помітно нижчим, ніж до і після"],
   "scale_regional": ["тримається на ширшому рівні", "той самий зсув є і на ширшому рівні мапи цього завантаження"],
   "scale_scale-dependent": ["змінюється з масштабом", "на ширшому рівні мапи цього завантаження зсув протилежний"],
   "scale_not_found_coarser": ["на ширшому рівні не підтверджено", "на ширшому рівні окремої такої знахідки немає; це не означає, що вона лише місцева"],

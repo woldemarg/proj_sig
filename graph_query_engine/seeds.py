@@ -12,6 +12,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
+from graph_query_engine.temporal import time_score
 from insight_contracts import Insight
 from insight_contracts.text import humanize
 
@@ -19,6 +20,7 @@ SEED_TOP_K = 3
 SEED_MIN_SCORE = 0.25
 SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
 SEED_PLACE_WEIGHT = 0.35  # a map zone: the weight of a pattern's overlap with it (docs/07_question_answering.md §7.2)
+SEED_TIME_WEIGHT = 0.35  # a calendar period in the question: the weight of the pattern's measurement in it (same section)
 
 
 @dataclass
@@ -29,11 +31,18 @@ class SeedMatch:
 
 
 def score_pattern(
-    ins: Insight, query: ParsedQuery, qvec: np.ndarray | None, vec: np.ndarray | None, config: QueryConfig, place: float | None = None
+    ins: Insight,
+    query: ParsedQuery,
+    qvec: np.ndarray | None,
+    vec: np.ndarray | None,
+    config: QueryConfig,
+    place: float | None = None,
+    time: float | None = None,
 ) -> SeedMatch:
     """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight, plus
     ``SEED_PLACE_WEIGHT`` × how much it and the asked map zone are one place (``place``; None: no zone); a zone without
-    text: weight + place, 0 outside the zone."""
+    text: weight + place, 0 outside the zone. ``time``: how much the asked period it was measured in (``temporal.time_score``;
+    None: no period asked, or a pattern without a series) adds ``SEED_TIME_WEIGHT`` × it — a bonus, never a penalty."""
     pair = set(ins.covariance.get("pair", []))
     wanted_targets = set(query.targets)
     material = [s.robust_z for t in query.targets for s in ins.shifts if s.metric == t and config.thresholds.material(s)]
@@ -67,6 +76,8 @@ def score_pattern(
         score += SEED_PLACE_WEIGHT * place
     elif place is not None:
         score = ins.weight + place if place else 0.0
+    if time is not None:
+        score += SEED_TIME_WEIGHT * time
     return SeedMatch(
         ins.id,
         float(score),
@@ -78,7 +89,8 @@ def score_pattern(
             "weight": round(ins.weight, 3),
             "scope_conflicts": conflicts,
         }
-        | ({"place": place} if place is not None else {}),
+        | ({"place": place} if place is not None else {})
+        | ({"time": round(time, 3)} if time is not None else {}),
     )
 
 
@@ -97,17 +109,28 @@ def resolve_seeds(
     qvec = None if alone else encoder.encode_query(scope_text, target_text, query.components(), query.text)
     scored = sorted(
         (
-            score_pattern(ins, query, qvec, pattern_vectors.get(pid), config, None if place_scores is None else place_scores.get(pid, 0.0))
+            score_pattern(
+                ins,
+                query,
+                qvec,
+                pattern_vectors.get(pid),
+                config,
+                None if place_scores is None else place_scores.get(pid, 0.0),
+                time_score(graph.trajectories[pid], query.when) if query.when and pid in graph.trajectories else None,
+            )
             for pid, ins in graph.insights.items()
             if not graph.tampered(pid)  # a tampered pattern never starts a walk
         ),
         key=lambda s: -s.score,
     )
     seeds: list[SeedMatch] = []
-    floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * scored[0].score) if scored else 1.0
+    base = {s.pattern_id: s.score - SEED_TIME_WEIGHT * s.matched.get("time", 0.0) for s in scored}  # a period only reorders
+    floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * max(base.values())) if scored else 1.0
     for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds, unless more of it lies in the zone
-        if len(seeds) >= SEED_TOP_K or cand.score < floor:
+        if len(seeds) >= SEED_TOP_K:
             break
+        if base[cand.pattern_id] < floor:
+            continue
         place = cand.matched.get("place", 0.0)
         near = {o for s in seeds if place <= s.matched.get("place", 0.0) for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:

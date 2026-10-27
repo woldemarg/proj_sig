@@ -14,6 +14,7 @@ function graphStyle() {
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
     { selector: 'node[kind="Metric"]', style: { shape: "tag", width: 48, height: 18, "background-color": cov, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
+    { selector: 'node[kind="TemporalNode"]', style: { shape: "round-rectangle", width: 30, height: 14, "background-color": cssVar("--time"), "font-size": 9 } },
     { selector: 'node[kind="Region"]', style: { shape: "diamond", width: "mapData(patterns, 1, 12, 18, 34)", height: "mapData(patterns, 1, 12, 18, 34)", "background-color": region, "font-size": 9 } },
     { selector: 'node[kind="Dataset"], node[kind="Batch"]', style: { display: "none" } },
     { selector: 'node[kind="PlaneLabel"]', style: { label: "data(label)", "background-opacity": 0, "font-size": 13, "font-weight": 700, color: muted, "text-valign": "center", "text-halign": "right", events: "no", "text-outline-width": 0 } },
@@ -21,6 +22,8 @@ function graphStyle() {
     { selector: 'edge[type="SPECIALIZES"]', style: { "line-color": muted, "target-arrow-shape": "triangle", "target-arrow-color": muted, "arrow-scale": 0.7, opacity: 0.6 } },
     { selector: 'edge[type="SIBLING"]', style: { "line-style": "dotted", "line-color": edge } },
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
+    { selector: 'edge[type="PEAKED_AT"]', style: { "line-color": up, "target-arrow-shape": "triangle", "target-arrow-color": up, "arrow-scale": 0.7, width: 1.4, opacity: 0.75 } },
+    { selector: 'edge[type="DROPPED_AT"]', style: { "line-style": "dashed", "line-color": down, "target-arrow-shape": "triangle", "target-arrow-color": down, "arrow-scale": 0.7, width: 1.4, opacity: 0.75 } },
     { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
     { selector: 'edge[type="IN_REGION"]', style: { "line-style": "dashed", "line-color": region, width: "mapData(weight, 0, 1, 0.5, 2)", opacity: 0.55 } },
     { selector: 'edge[type="PARENT_OF"]', style: { "line-color": region, "target-arrow-shape": "triangle", "target-arrow-color": region, "arrow-scale": 0.6, opacity: 0.6 } },
@@ -80,6 +83,11 @@ function dualPlanePositions(cy) {
       maxY = Math.max(maxY, top + r * rowH);
     });
     x += width + 50;
+  }
+  const hubs = cy.nodes('[kind="TemporalNode"]').sort((a, b) => (a.id() < b.id() ? -1 : 1));  // a timeline under the insights
+  if (hubs.length) {
+    maxY += 130;
+    hubs.forEach((n, i) => { pos[n.id()] = { x: ((i + 0.5) * Math.max(x - 50, 400)) / hubs.length, y: maxY }; });
   }
   const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
   const rows = regionRows(regions, (n) => pos[n.id()], maxY + 150);
@@ -521,7 +529,23 @@ function whereRows(places) {
   return `<h4>Де</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
 }
 
-const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Обробка", Region: "Регіон мапи" };
+const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Обробка", Region: "Регіон мапи", TemporalNode: cap(word("temporal_hub")) };
+
+function timeRows(t) {
+  /* an insight's series over its dataset's calendar periods (docs/02_discovery.md §2.10): its trend and current level,
+     the curve of its metric — the measured z as dots, the smoothed level as a line, the gaps left open — and its events */
+  const z = t.series[t.metric] || [], x = t.smoothed[t.metric] || [], w = 280, h = 64;
+  const vals = [...z.filter(Boolean).map((e) => e.z), ...x.filter((v) => v !== null), 0], lo = Math.min(...vals), hi = Math.max(...vals);
+  const px = (i) => (z.length > 1 ? (i * (w - 8)) / (z.length - 1) + 4 : w / 2), py = (v) => h - 6 - ((v - lo) / (hi - lo || 1)) * (h - 12);
+  const line = x.map((v, i) => (v === null ? null : `${px(i).toFixed(1)},${py(v).toFixed(1)}`)).filter(Boolean).join(" ");
+  const dots = z.map((e, i) => (e ? `<circle cx="${px(i).toFixed(1)}" cy="${py(e.z).toFixed(1)}" r="2"></circle>` : "")).join("");
+  const marks = t.events.filter((e) => e.metric === t.metric).map((e) => `<circle class="ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" cx="${px(e.bin).toFixed(1)}" cy="${py(e.z_smoothed).toFixed(1)}" r="4"></circle>`).join("");
+  const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`;
+  return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` +
+    `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}"><line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
+    t.events.map((e) => `<div class="tl"><span>${esc(word(e.kind))} ${esc(e.period)}</span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd</span></div>`).join("") +
+    (t.gaps.length ? `<div class="tl"><span class="muted">${esc(word("time_unmeasured"))}: ${esc(t.gaps.map(([a, b]) => (a === b ? a : `${a}–${b}`)).join(", "))}</span></div>` : "");
+}
 
 async function inspect(id, note = "") {
   const within = $("drawer").contains(document.activeElement);  // a drawer row followed: the focus stays in the drawer
@@ -544,6 +568,7 @@ async function inspect(id, note = "") {
       [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
       [term("aliases"), esc((p.aliases || []).join("; "))],
     ]);
+    if (d.trajectory) html += timeRows(d.trajectory);
     html += `<h4>Довіра</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
@@ -564,6 +589,9 @@ async function inspect(id, note = "") {
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
+  } else if (n.kind === "TemporalNode") {
+    $("drawer-title").textContent = p.period;
+    html += `<p class="lead">${esc(TERMS.temporal_hub[1])}</p>` + kv([["Від", esc(p.t_start.slice(0, 10))], ["До (не включно)", esc(p.t_end.slice(0, 10))]]);
   } else if (n.kind === "Region") {
     $("drawer-title").textContent = `рівень ${p.resolution} · ${p.h3}`;
     html += `<p class="lead">${esc(d.reading.what)}</p>`;

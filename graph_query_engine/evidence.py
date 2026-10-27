@@ -20,6 +20,7 @@ from typing import Any
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
+from graph_query_engine.temporal import time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
@@ -82,6 +83,7 @@ class EvidenceItem:
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
     reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline"} in Ukrainian (graph.insight_reading)
+    time: dict[str, Any] = field(default_factory=dict)  # a dataset with a time column: its series in short (temporal.time_facts)
 
 
 @dataclass
@@ -252,6 +254,8 @@ class Evidence:
         )
         if it.trust:
             lines.append(f"     trust: {it.trust}")
+        if it.time:
+            lines.append(f"     time: {time_line(it.time)}")
         spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
         if spatial and spatial.cells is not None and spatial.resolution is not None:
             compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
@@ -430,6 +434,7 @@ class Evidence:
             tag += "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
             tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
+            tag += f" ({it.time['words']})" if it.time else ""
             n = it.statistics["support"]
             lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
         if len(trust) == 1:
@@ -644,6 +649,7 @@ def _item(
         credibility_basis=node["props"].get("credibility_basis", {}),
         provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
         reading=insight_reading(graph, pid, config.thresholds),
+        time=time_facts(graph.trajectories.get(pid), config.thresholds.temporal_fade_z),
     )
 
 
@@ -749,6 +755,13 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
         notes.append(
             f"{', '.join(unconfirmed)} were not found at the coarser level of their upload: that is missing evidence at that level,"
             " not proof the effect is local."
+        )
+    timed = [it.key for it in items if it.time and not it.folded_into]  # a folded item prints no line
+    if timed:
+        notes.append(
+            f"{', '.join(timed)} have a time line: each finding holds over its dataset's whole span; the line gives the trend and the"
+            " current level of the metric it names, and its events, the peaks and dips that cleared a significance test. A steady level"
+            " without an event is the finding's state too: read it from the trend and the current level, not from the events alone."
         )
     if place_scores == {}:  # a zone, but no geo dataset of its levels to weigh: it places no finding in or out
         notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")

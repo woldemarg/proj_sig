@@ -133,7 +133,7 @@ trajectories = {pattern_id: {column, grid, span, bins_measured, of,
 
 **Пороги (дім полів).** `temporal_event_excess` (0.5) і `temporal_fade_z` (0.5) — в `insight_contracts.PhenomenonThresholds` (читачі словесно оформлюють стани від них); `temporal_process_noise`, `temporal_event_p`, `temporal_min_rows_bin` — у `MinerConfig`; `temporal_min_bins` — у `Settings`.
 
-**Словник.** З `TERMS` зникають `trajectory_*`, `transition_*`, `EVOLVES_TO`; додаються `trend_rising` (зростає), `trend_falling` (спадає), `trend_flat` (стабільний), `trend_spike` (сплеск), `temporal_hub` (вузол часу), `PEAKED_AT` (пік у періоді) / `PEAKED_AT (in)`, `DROPPED_AT` (спад у періоді) / `DROPPED_AT (in)`.
+**Словник.** З `TERMS` зникають `trajectory_*`, `transition_*`, `EVOLVES_TO`; додаються `trend_rising` (зростає), `trend_falling` (спадає), `trend_flat` (без змін), `trend_spike` (сплеск), `time_unmeasured` (не виміряно — серія без жодного виміряного біна), `temporal_hub` (період часу — «вузол» у текстах консолі заборонене слово), `PEAKED_AT` (пік у періоді) / `PEAKED_AT (in)`, `DROPPED_AT` (спад у періоді) / `DROPPED_AT (in)`.
 
 ---
 
