@@ -157,8 +157,8 @@ def test_a_short_edge_bin_is_unmeasured():
 @pytest.mark.parametrize(
     ("first", "last", "rows", "unit"),
     [
-        ("2026-08-01", "2026-08-31", 30_000, "day"),  # a dense month: 31 days of ~1,000 rows
-        ("2026-08-01", "2026-08-31", 600, "week"),  # a thin month: its days would hold 20 rows, its weeks 120
+        ("2031-03-01", "2031-03-31", 30_000, "day"),  # a dense month: 31 days of ~1,000 rows
+        ("2031-03-01", "2031-03-31", 600, "week"),  # a thin month: its days would hold 20 rows, its weeks 120
         ("2026-03-02", "2026-03-11", 5_000, "day"),  # ten days
         ("2026-01-01", "2026-12-31", 100_000, "week"),  # a year: 53 weeks of ~1,900 rows
         ("2026-01-01", "2026-12-31", 10_000, "month"),  # a thin year: 12 months of ~830 rows
