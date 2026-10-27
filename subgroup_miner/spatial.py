@@ -86,6 +86,7 @@ class SpatialContext:
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
+    point_ts: np.ndarray | None = None  # with a time column: each source row's time, int64 µs since the epoch (UTC), iinfo(int64).min without one
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:

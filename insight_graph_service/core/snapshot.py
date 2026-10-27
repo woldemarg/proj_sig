@@ -444,8 +444,12 @@ def _temporal_plane(
         for pid, entry in sorted(series.items()):
             if pid not in nodes or nodes[pid].props["integrity"] == "mismatch":
                 continue
-            traj = trajectories[pid] = head | dynamics(entry, signed["bins"], nodes[pid].props["target"], settings.miner)
-            nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("trend", "current", "bins_measured", "of")} | {"events": len(traj["events"])}
+            props = nodes[pid].props
+            metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
+            traj = trajectories[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
+            nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
+                "events": len(traj["events"])
+            }
             by_period: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (period, kind) -> its events, the most prominent first
             for e in sorted(traj["events"], key=lambda e: -e["prominence"]):
                 by_period.setdefault((e["period"], e["kind"]), []).append(e)
