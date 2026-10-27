@@ -19,6 +19,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
 # scripts run from scripts/; the package lives one level up (not pip-installed)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -58,6 +61,23 @@ def write_demo_csv(folder: Path) -> Path:
     path = folder / "retail_synthetic_seed7.csv"
     if not path.exists():
         generate_retail_dataset(5000, 7).to_csv(path, index=False)
+    return path
+
+
+def weekly_retail(folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",)) -> Path:
+    """The demo's orders over ``weeks`` ISO weeks from a Monday (``when``; its first ten rows without a readable time),
+    the ``spiked`` metrics of phones in the US raised by 3 sd in the fourth week: a PEAKED_AT there (docs/02_discovery.md §2.10)."""
+    frame = generate_retail_dataset(5000, seed=7)
+    rng = np.random.default_rng(1)
+    week = rng.integers(0, weeks, len(frame))
+    when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
+    frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
+    spike = (frame["category"] == "phones") & (frame["region"] == "US") & (week == 3)
+    for metric in spiked:
+        frame.loc[spike, metric] += 3 * frame[metric].std()
+    frame.loc[:9, "when"] = "unknown"
+    path = folder / "weekly.csv"
+    frame.to_csv(path, index=False, lineterminator="\n")
     return path
 
 

@@ -255,7 +255,7 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 * Ukrainian questions are grounded onto the data's literals through the embedding model (*телефонів* → `phones`, *США* → `US`). The literals Qwen3 cannot bridge on the demo (*маржа*, *частка повернень*, *роздріб*) are left unmatched rather than guessed ([7.1.1](docs/07_question_answering.md#711-literal-grounding)).
 * Deleting a dataset keeps a theme that still links to another theme even when it has no insight left (its centroid can receive future data); such a theme reads `Attractor k` until it has members again.
 * The hypothesis benchmark uses one synthetic dataset with two multi-scope mechanisms; it is an apparatus, not evidence.
-* The model does not always keep to the plain vocabulary: in the measured run three of fifteen answers used an analyst word, and some wrote a category value in Ukrainian ([7.7](docs/07_question_answering.md#77-measured-behaviour)); the console flags the first as *жаргон: n*.
+* The model does not always keep to the plain vocabulary: in the measured run (2026-10-27) five of the ten answers held to it used an analyst word — reruns of five of them the same day used one or two in all —, and some wrote a category value in Ukrainian ([7.7](docs/07_question_answering.md#77-measured-behaviour)); the console flags the first as *жаргон: n*.
 
 ## Repository layout
 ```text
