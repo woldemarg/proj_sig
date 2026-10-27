@@ -41,7 +41,7 @@ class MinerConfig:
     # the dynamics of an insight over the calendar grid of its upload's time column (docs/02_discovery.md §2.10)
     temporal_min_rows_bin: int = 30  # fewer rows in a bin (the upload's, or the insight's) leave it unmeasured
     temporal_process_noise: float = 0.1  # Q of the local-level smoother: how far the level may move per bin, in z²
-    temporal_event_p: float = 0.05  # the event gate's significance, Bonferroni over the measured bins
+    temporal_event_p: float = 0.05  # the event gate's significance, Bonferroni over every pair of measured bins
 
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5

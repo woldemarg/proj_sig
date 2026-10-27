@@ -5,12 +5,14 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.api import guess_datetime_format
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
@@ -214,14 +216,25 @@ def parse_grid(spec: str | None) -> str:
 
 
 def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
-    """A time column as UTC times (a time without a zone is taken as UTC; NaT where a value reads as none). A column the
-    file lacks, a numeric one (no unit to read it in) or one with no value that reads as a time is ``invalid_options``."""
+    """A time column as UTC times (a time without a zone is taken as UTC), read in the one format that reads most of it:
+    ISO 8601, or its first value's with the day before the month, or with the month first (that order on a tie). A
+    value in another format is NaT, never another date. A column the file lacks, a numeric one (no unit to read it in)
+    or one with no value that reads as a time is ``invalid_options``."""
     if column not in frame.columns:
         raise IngestionError("invalid_options", f"time column '{column}' not in dataset")
     values = frame[column]
     if pd.api.types.is_numeric_dtype(values):
         raise IngestionError("invalid_options", f"time column '{column}' holds numbers: give its times as dates")
-    times = pd.to_datetime(values, errors="coerce", utc=True, format=None if pd.api.types.is_datetime64_any_dtype(values) else "mixed")
+    if pd.api.types.is_datetime64_any_dtype(values):
+        times = pd.to_datetime(values, utc=True)
+    else:
+        times = pd.to_datetime(values, errors="coerce", utc=True, format="ISO8601")
+        if times.isna().sum() > values.isna().sum():  # a value that is no ISO 8601 time: its first value's format may read more
+            with warnings.catch_warnings():  # a guess with the day first warns when that value is ISO 8601
+                warnings.simplefilter("ignore", UserWarning)
+                formats = dict.fromkeys(f for d in (True, False) if (f := guess_datetime_format(str(values.dropna().iloc[0]), dayfirst=d)))
+            readings = [times, *(pd.to_datetime(values, errors="coerce", utc=True, format=f) for f in formats)]
+            times = max(readings, key=lambda r: r.notna().sum())
     if times.isna().all():
         raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
     return times

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.ingestion import IngestionError, load_dataset
+from subgroup_miner.ingestion import IngestionError, load_dataset, read_times
 from subgroup_miner.temporal import (
     DROPPED_AT,
     FALLING,
@@ -182,6 +182,14 @@ def test_the_time_column_is_read_apart_and_its_grid_names_another_analysis(tmp_p
     assert len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id}) == 3
     assert any("without a readable time" in w for w in weekly.warnings)
     assert plain.time is None and plain.grid is None
+
+
+def test_a_time_column_reads_in_one_format_never_a_date_per_value():
+    frame = pd.DataFrame({"when": ["02/03/2026", "09/03/2026", "16/03/2026", "23/03/2026", "2026-03-30"], "m": range(5)})
+    times = read_times(frame, "when")  # day first: the only reading of 16/03; another format is no date
+    assert times.dt.strftime("%Y-%m-%d").tolist()[:4] == ["2026-03-02", "2026-03-09", "2026-03-16", "2026-03-23"] and times.isna().tolist()[4]
+    iso = read_times(pd.DataFrame({"when": ["2026-03-02", "2026-03-02 10:00:00", "2026-03-02T10:00:00+03:00", "soon"]}), "when")
+    assert iso.dt.strftime("%Y-%m-%d %H:%M").tolist()[:3] == ["2026-03-02 00:00", "2026-03-02 10:00", "2026-03-02 07:00"] and iso.isna().tolist()[3]
 
 
 @pytest.mark.parametrize(

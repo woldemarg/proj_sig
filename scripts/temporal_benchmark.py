@@ -191,7 +191,7 @@ def wilson(k: int, n: int) -> tuple[float, float]:
 def analyse(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Per planted cohort the share of uploads meeting its expectation; the stationary false-event rate; the flash matrix."""
     planted = [r["planted"] for r in rows if r["kind"] == "planted"]
-    stationary = [r for r in rows if r["kind"] == "stationary"]
+    stationary = [r for r in rows if r["kind"] == "stationary" and r["patterns"]]  # an upload that admits nothing tests no series
     expect = {
         "S1": lambda s: s["trend"] == FLAT and not s["events"],
         "S2": lambda s: s["trend"] == RISING and not any(k == PEAKED_AT for k, _ in s["events"]),

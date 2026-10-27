@@ -109,6 +109,7 @@ def annotate(
 
     G is the bin's whole population; a bin holding fewer than ``min_rows`` rows (the whole upload's) or fewer than
     ``min_rows`` of the insight's values is None — never a z on an unstable median. A metric without a scale has no series."""
+    min_rows = max(min_rows, 1)  # a bin needs a value to have a median
     population = {}
     for metric in {m for ms in metrics.values() for m in ms if scale.get(m)}:
         values = frame[metric].to_numpy(dtype=float)
