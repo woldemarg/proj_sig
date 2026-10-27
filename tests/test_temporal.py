@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import make_config, make_engine, weekly_retail
+from conftest import geo_frame, make_config, make_engine, upload_levels, weekly_retail
 from fastapi.testclient import TestClient
 
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge
@@ -19,6 +20,7 @@ from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import cytoscape_elements
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.ingestion import IngestionError, load_dataset, read_times
+from subgroup_miner.spatial import build_cells
 from subgroup_miner.temporal import (
     DROPPED_AT,
     FALLING,
@@ -30,9 +32,11 @@ from subgroup_miner.temporal import (
     calendar_bins,
     detect_events,
     dynamics,
+    extent_points,
     reference_scale,
     rts_smooth,
 )
+from subgroup_miner.vendor.eda.main_upd import calculate_mad
 
 CFG = MinerConfig()
 
@@ -161,15 +165,15 @@ def entry(zs: list[float | None], se: float = 0.1) -> dict:
 
 def test_dynamics_names_the_trend_the_current_level_the_events_and_the_gaps():
     bins = [{"period": f"2031-W{w:02d}"} for w in range(10, 18)]
-    rising = dynamics(entry([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]), bins, "m", CFG)
+    rising = dynamics(entry([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]), bins, ["m"], CFG)
     assert rising["trend"] == RISING and rising["events"] == [] and rising["current"] == pytest.approx(3.5, abs=0.1)
-    assert dynamics(entry([3.0, 2.0, 1.0, 0.0, -1.0, -1.5, -2.0, -2.5]), bins, "m", CFG)["trend"] == FALLING
-    dip = dynamics(entry([2.0, 2.0, 2.0, None, None, 2.0, 2.0, 2.0]), bins, "m", CFG)
+    assert dynamics(entry([3.0, 2.0, 1.0, 0.0, -1.0, -1.5, -2.0, -2.5]), bins, ["m"], CFG)["trend"] == FALLING
+    dip = dynamics(entry([2.0, 2.0, 2.0, None, None, 2.0, 2.0, 2.0]), bins, ["m"], CFG)
     assert dip["trend"] == FLAT and dip["gaps"] == [["2031-W13", "2031-W14"]] and dip["bins_measured"] == 6 and dip["of"] == 8
-    spike = dynamics(entry([1.0, 1.0, 1.0, 4.0, 1.0, 1.0, 1.0, 1.0]), bins, "m", CFG)
+    spike = dynamics(entry([1.0, 1.0, 1.0, 4.0, 1.0, 1.0, 1.0, 1.0]), bins, ["m"], CFG)
     assert spike["trend"] == SPIKE and [(e["period"], e["kind"], e["metric"]) for e in spike["events"]] == [("2031-W13", PEAKED_AT, "m")]
     assert spike["events"][0]["z_raw"] == 4.0 and spike["series"]["m"][3] == {"period": "2031-W13", "z": 4.0, "se": 0.1}
-    unmeasured = dynamics(entry([None] * 8), bins, "m", CFG)
+    unmeasured = dynamics(entry([None] * 8), bins, ["m"], CFG)
     assert (unmeasured["trend"], unmeasured["current"], unmeasured["bins_measured"], unmeasured["events"]) == (FLAT, None, 0, [])
 
 
@@ -248,8 +252,13 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
     pid = phones_us(snap)
     trajectory = snap["trajectories"][pid]
     assert [(e["kind"], e["period"]) for e in trajectory["events"] if e["metric"] == "discount"] == [("PEAKED_AT", "2031-W13")]
-    assert trajectory["column"] == "when" and trajectory["of"] == 6 and set(trajectory["series"]) == {s["metric"] for s in patterns[pid]["shifts"]}
-    assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("trend", "current", "bins_measured", "of")} | {
+    assert (
+        trajectory["column"] == "when"
+        and trajectory["metric"] == patterns[pid]["target"]
+        and trajectory["of"] == 6
+        and set(trajectory["series"]) == {s["metric"] for s in patterns[pid]["shifts"]}
+    )
+    assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
         "events": len(trajectory["events"])
     }
     hub = nodes["T:week:2031-W13"]
@@ -337,7 +346,6 @@ def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
     for options, message in [
         ({"grid": "week"}, "grid without time"),
         ({"time": "when", "grid": "7D"}, "a calendar unit"),
-        ({"time": "when", "geo": "auto"}, "goes with a table"),
         ({"time": "nope"}, "not in dataset"),
         ({"time": "discount"}, "holds numbers"),
     ]:
@@ -379,3 +387,84 @@ def test_the_upload_form_takes_a_time_column_and_its_grid(engine, tmp_path):
         assert accepted.status_code == 202 and (accepted.json()["time"], accepted.json()["grid"]) == ("when", "day")
         refused = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"grid": "week"})
     assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+
+
+# geo + time: a cell pattern's series are those of its points (docs/02_discovery.md §2.10)
+
+
+def geo_timed(folder: Path) -> Path:
+    """``geo_frame`` with a dimension the table level finds a shift on (kind=a ∧ channel=web: load +3), ten points
+    without a readable time and 300 rows without a point (their load far higher: no cell's population may see them)."""
+    frame = geo_frame()
+    frame["kind"] = np.random.default_rng(5).choice(["a", "b", "c"], len(frame))
+    frame.loc[(frame["kind"] == "a") & (frame["channel"] == "web"), "load"] += 3
+    unlocated = frame.sample(300, random_state=2).assign(latitude=np.nan, longitude=np.nan, load=lambda f: f["load"] + 20)
+    frame = pd.concat([frame, unlocated], ignore_index=True)
+    frame["when"] = frame["when"].astype(str)
+    frame.loc[:9, "when"] = "unknown"
+    path = folder / "points.csv"
+    frame.to_csv(path, index=False)
+    return path
+
+
+def test_a_geo_patterns_points_are_those_of_its_cells():
+    import h3
+
+    frame = geo_frame().head(800)
+    _, ctx, _ = build_cells(frame, "latitude,longitude", 7, min_cell_points=5)
+    rows = {"P": np.array([0, 3, 5]), "Q": np.array([1])}
+    placed = [h3.latlng_to_cell(a, b, 7) for a, b in zip(frame["latitude"], frame["longitude"])]
+    brute = {pid: [i for i, cell in enumerate(placed) if cell in set(ctx.cells[r])] for pid, r in rows.items()}
+    assert {pid: points.tolist() for pid, points in extent_points(ctx.point_cell, rows).items()} == brute
+
+
+def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_their_points(tmp_path, monkeypatch):
+    import h3
+
+    engine = make_engine(make_config(tmp_path / "ws"))
+    annotate = engine._annotate
+
+    def without_placing(*args):  # the commit's annotation reads the stored point → cell map: it never places a point again
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(h3, "latlng_to_cell", lambda *_: pytest.fail("a point placed again at the commit"))
+            return annotate(*args)
+
+    monkeypatch.setattr(engine, "_annotate", without_placing)
+    path = geo_timed(tmp_path)
+    cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when")
+    assert (cells["level"], cells["status"], table["level"], table["status"]) == ("7", "READY", "table", "READY")
+    weeks = [f"2019-W{w}" for w in range(10, 15)]
+    assert [b["period"] for b in cells["temporal"]["bins"]] == [b["period"] for b in table["temporal"]["bins"]] == weeks  # one calendar
+    assert cells["temporal"]["rows_without_time"] == table["temporal"]["rows_without_time"] == 10
+    assert sum(b["rows"] for b in cells["temporal"]["bins"]) == 6000 - 10  # the located points; the table holds the rest too
+    assert sum(b["rows"] for b in table["temporal"]["bins"]) == 6300 - 10
+    assert not any(c.startswith("when") for c in cells["profile"]["numerics"] + cells["profile"]["categoricals"])  # time is never mined
+    stored = engine.ws.load_geo(cells["dataset_id"])
+    raw = pd.read_csv(path)
+    raw["t"] = pd.to_datetime(raw["when"], errors="coerce", utc=True, format="ISO8601")
+    assert stored["point_ts"].tolist() == raw["t"].dt.as_unit("us").array.asi8.tolist() and stored["point_ts"][0] == np.iinfo(np.int64).min
+    snap = engine.ws.load_graph()
+    props = {n["id"]: n["props"] for n in snap["nodes"] if n["kind"] == "Pattern"}
+    geo = [pid for pid, p in props.items() if p["dataset_id"] == cells["dataset_id"]]
+    series = json.loads((engine.ws.datasets_dir / cells["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
+    for pid in geo:  # a median has a series, a share or a counter none; the trend reads the target when it has one
+        shifts = [s["metric"] for s in props[pid]["shifts"]]
+        assert set(series[pid]["series"]) == {m for m in shifts if m.endswith("_median")}
+        assert snap["trajectories"][pid]["metric"] == (props[pid]["target"] if props[pid]["target"] in series[pid]["series"] else "load_median")
+        assert props[pid]["temporal_summary"]["metric"] == snap["trajectories"][pid]["metric"]
+    assert any(not props[pid]["target"].endswith("_median") for pid in geo)  # a target without a series: the trend falls to the median
+    covers = engine.ws.load_covers(cells["dataset_id"])
+    assert all(sum(series[pid]["rows"]) + series[pid]["untimed"] == np.isin(stored["point_cell"], covers[pid]).sum() for pid in geo)
+    # one bin of a cell pattern again from the file with h3 alone: its points in the week against every located point there
+    located = raw[raw["latitude"].notna()].copy()
+    located["cell"] = [h3.latlng_to_cell(a, b, 7) for a, b in zip(located["latitude"], located["longitude"])]
+    pid = next(p for p in geo if any(series[p]["series"]["load_median"]))
+    t = next(i for i, e in enumerate(series[pid]["series"]["load_median"]) if e)
+    bin_ = cells["temporal"]["bins"][t]
+    week = located[(located["t"] >= pd.Timestamp(bin_["t_start"])) & (located["t"] < pd.Timestamp(bin_["t_end"]))]
+    own = week[week["cell"].isin(set(stored["cells"][covers[pid]]))]["load"]
+    s_ref = calculate_mad(located["load"]) / 0.6745
+    assert series[pid]["series"]["load_median"][t]["z"] == pytest.approx((own.median() - week["load"].median()) / s_ref)
+    assert series[pid]["series"]["load_median"][t]["n"] == own.notna().sum()
+    tables = [pid for pid, p in props.items() if p["dataset_id"] == table["dataset_id"]]
+    assert tables and all(snap["trajectories"][pid]["metric"] == props[pid]["target"] for pid in tables)  # a table's trend is its target's

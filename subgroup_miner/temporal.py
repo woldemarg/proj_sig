@@ -144,6 +144,12 @@ def annotate(
     return out
 
 
+def extent_points(point_cell: np.ndarray, covers: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Each geo pattern's points: those whose cell (``point_cell``, the point → cell row map the geo ingest stored) is one
+    of the cell rows it covers — never a point placed again."""
+    return {pid: np.flatnonzero(np.isin(point_cell, rows)) for pid, rows in covers.items()}
+
+
 def rts_smooth(y: Sequence[float | None], r: Sequence[float | None], q: float) -> tuple[list[float | None], list[float | None]]:
     """The local-level model x_t = x_{t−1} + w (Var w = ``q``), y_t = x_t + v (Var v = ``r[t]``) over the bins from the first
     measured one to the last: a Kalman filter (x₀ = y₀, P₀ = R₀; a missing bin, None, only predicts: P += Q) and the
@@ -216,17 +222,20 @@ def trend(x: Sequence[float | None], p: Sequence[float | None], measured: Sequen
     return SPIKE if events else FLAT
 
 
-def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], primary: str, config: MinerConfig) -> dict[str, Any]:
-    """A pattern's trajectory from its ``annotate`` entry: per metric the measured series and the smoothed level, the
-    events of every metric, and of its ``primary`` metric (the insight's target) the trend, the current level (x̂ of its
+def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], metrics: Sequence[str], config: MinerConfig) -> dict[str, Any]:
+    """A pattern's trajectory from its ``annotate`` entry: per metric the measured series and the smoothed level, and the
+    events of every metric. Its ``metric`` is the first of ``metrics`` (the insight's target, then its shifts) with a
+    measured bin — a geo pattern's counter or share has no series —, and of it the trend, the current level (x̂ of its
     last measured bin), the measured bins and the gaps (runs of bins without a measurement, by period)."""
     th = config.thresholds
     series, smoothed, events = {}, {}, []
-    out: dict[str, Any] = {"trend": FLAT, "current": None, "bins_measured": 0, "of": len(bins), "gaps": []}
+    measured_in = {m: [t for t, e in enumerate(entry["series"][m]) if e] for m in entry["series"]}
+    primary = next((m for m in metrics if measured_in.get(m)), metrics[0])
+    out: dict[str, Any] = {"metric": primary, "trend": FLAT, "current": None, "bins_measured": 0, "of": len(bins), "gaps": []}
     for metric, entries in entry["series"].items():
         y = [e["z"] if e else None for e in entries]
         x, p = rts_smooth(y, [e["se"] ** 2 if e else None for e in entries], config.temporal_process_noise)
-        measured = [t for t, v in enumerate(y) if v is not None]
+        measured = measured_in[metric]
         found = detect_events(x, p, measured, config.temporal_event_p, th.temporal_event_excess)
         events += [{"metric": metric, "period": bins[e["bin"]]["period"], "z_raw": y[e["bin"]], **e} for e in found]
         series[metric] = [{"period": bins[t]["period"], "z": e["z"], "se": e["se"]} if e else None for t, e in enumerate(entries)]

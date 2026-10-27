@@ -60,7 +60,7 @@ from subgroup_miner.ingestion import (
 )
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
-from subgroup_miner.temporal import annotate, calendar_bins, reference_scale
+from subgroup_miner.temporal import annotate, calendar_bins, extent_points, reference_scale
 
 log = logging.getLogger(__name__)
 
@@ -354,8 +354,6 @@ class Engine:
         uploads.resolve_declared_metadata(glossary, metadata)
         if grid and not time:
             raise PipelineError("invalid_options", "grid without time: name the time column the grid bins")
-        if time and (geo or table):
-            raise PipelineError("invalid_options", "a time column goes with a table: the geo levels do not read it yet")
         try:
             grid = parse_grid(grid) if time else None
         except IngestionError as exc:
@@ -632,12 +630,19 @@ class Engine:
     def _annotate(self, record: dict[str, Any], mined: _Mined) -> dict[str, Any]:
         """Inside the commit (docs/02_discovery.md §2.10): every admitted insight's series over the time column's grid in
         ``temporal.json``, and what the batch record signs of it — the column, the grid, the span, the bins, the rows
-        without a time, each metric's reference scale and the file's SHA-256."""
+        without a time, each metric's reference scale and the file's SHA-256. A geo level's series are of its located
+        points: a pattern's are those of its cells, a ``<c>_median`` metric's values those of point column ``c``."""
         loaded = mined.loaded
-        codes, bins = calendar_bins(loaded.time, loaded.grid)
-        scale = reference_scale(loaded.frame)
+        times, frame, covers = loaded.time, loaded.frame, mined.rows
+        if loaded.spatial is not None:  # a geo level: the points with a cell, each extent's, the point column a median summarises
+            located = loaded.spatial.point_cell >= 0
+            times = times[located].reset_index(drop=True)
+            frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
+            covers = extent_points(loaded.spatial.point_cell[located], mined.rows)
+        codes, bins = calendar_bins(times, loaded.grid)
+        scale = reference_scale(frame)
         metrics = {i.id: [s.metric for s in i.shifts] for i in mined.kept}
-        series = annotate(loaded.frame, codes, bins, mined.rows, metrics, scale, self.settings.miner.temporal_min_rows_bin)
+        series = annotate(frame, codes, bins, covers, metrics, scale, self.settings.miner.temporal_min_rows_bin)
         return {
             "column": record["time"],
             "grid": loaded.grid,

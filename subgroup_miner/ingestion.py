@@ -39,7 +39,8 @@ class LoadedDataset:
     geo: str | None = None  # the applied geo option, "<locator>@<resolution>"
     spatial: SpatialContext | None = None  # rows are H3 cells when set
     points: str | None = None  # a table level's left-out point columns, as a geo level's ``location`` names them
-    time: pd.Series | None = None  # each row's time (UTC; NaT where its value reads as none), the time column left out
+    time: pd.Series | None = None  # each row's time (UTC; NaT where its value reads as none), the time column left out; a geo level's: each point's
+    point_values: pd.DataFrame | None = None  # a geo level with a time column: the points' numeric columns its cell medians summarise
     grid: str | None = None  # the calendar unit its times are binned by (``TIME_GRIDS``)
 
 
@@ -281,8 +282,6 @@ def load_dataset(
     left_out = []
     times = None
     if time:
-        if geo_spec:
-            raise IngestionError("invalid_options", "a time column goes with a table: the geo levels do not read it yet")
         grid = parse_grid(grid)
         times = read_times(frame, time)
         frame = frame.drop(columns=[time])
@@ -296,9 +295,14 @@ def load_dataset(
         frame = frame.drop(columns=left_out)
         warnings.append(f"point columns {left_out} left out of the table level")
     tolerated = set() if strict else set(frame.columns) if geo_spec else set(cat_spec) | set(bin_spec)
+    point_values = None
     if geo_spec:
+        points = frame
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
         warnings += geo_warnings
+        if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
+            spatial.point_ts = times.dt.as_unit("us").array.asi8  # the unit times are read in: years 1–9999
+            point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)
     bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin", tolerated=tolerated)
@@ -326,6 +330,7 @@ def load_dataset(
         points=",".join(left_out) or None,
         time=times,
         grid=grid if time else None,
+        point_values=point_values,
     )
 
 

@@ -28,7 +28,7 @@ from a region to its parent at the next coarser listed level. A geo ``Pattern`` 
 whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
 ``PEAKED_AT`` / ``DROPPED_AT`` (the temporal plane, never walked) run from a pattern to the TemporalNode of a peak or a
 dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``.
-``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``span``, ``series`` and
+``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``span``, ``metric``, ``series`` and
 ``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of`` and
 ``gaps``; the pattern carries the short form as ``temporal_summary``.
 """

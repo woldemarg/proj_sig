@@ -247,7 +247,8 @@ class Workspace:
             return {k: data[k] for k in data.files}
 
     def save_geo(self, dataset_id: str, spatial: SpatialContext) -> None:
-        """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph."""
+        """A geo dataset's spatial context: its cells, each point's cell, the points, the neighbour graph and, with a time
+        column, each point's time."""
         np.savez_compressed(
             self.dataset_dir(dataset_id) / "geo.npz",
             cells=spatial.cells.astype(str),
@@ -255,6 +256,7 @@ class Workspace:
             lonlat=spatial.lonlat,
             nbr_ptr=spatial.nbr_ptr,
             nbr_idx=spatial.nbr_idx,
+            **({"point_ts": spatial.point_ts} if spatial.point_ts is not None else {}),
         )
 
     def save_temporal(self, dataset_id: str, series: dict[str, Any]) -> str:

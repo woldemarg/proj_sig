@@ -135,7 +135,7 @@ def mine(path: Path, config: Settings) -> tuple[list[Insight], dict[str, dict[st
         reference_scale(loaded.frame),
         cfg.temporal_min_rows_bin,
     )
-    return kept, {i.id: dynamics(series[i.id], bins, i.target, cfg) for i in kept}, bins
+    return kept, {i.id: dynamics(series[i.id], bins, [i.target, *(s.metric for s in i.shifts)], cfg) for i in kept}, bins
 
 
 def cohort(kept: list[Insight], scope: dict[str, str], metric: str) -> Insight | None:
