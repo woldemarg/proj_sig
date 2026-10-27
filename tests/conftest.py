@@ -248,39 +248,6 @@ def hashed_engine(tmp_path_factory, demo_csv):
     return engine
 
 
-def weekly_events(folder: Path) -> Path:
-    """The demo's orders over five weeks (``when``): W0, W1 and W4 hold its planted effects, W2 the same rows with every
-    metric shuffled (nothing to find), W3 ten rows (under ``MIN_ROWS``)."""
-    from insight_graph_service.core.demo import generate_retail_dataset
-
-    frame = generate_retail_dataset(5000, seed=7)
-    rng = np.random.default_rng(1)
-    week = rng.choice([0, 1, 2, 4], len(frame), p=[0.3, 0.3, 0.1, 0.3])
-    when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
-    frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
-    for metric in ("discount", "margin", "delivery_days", "return_rate"):
-        frame.loc[week == 2, metric] = rng.permutation(frame.loc[week == 2, metric].to_numpy())
-    frame = pd.concat([frame, frame.sample(10, random_state=1).assign(when="2031-03-24 12:00:00")], ignore_index=True)
-    path = folder / "events.csv"
-    frame.to_csv(path, index=False, lineterminator="\n")
-    return path
-
-
-@pytest.fixture(scope="session")
-def windowed(tmp_path_factory):
-    """The weekly upload through the graph service (hashing double), with the graph its readers saw after each window —
-    shared, read-only use."""
-    folder = tmp_path_factory.mktemp("windowed")
-    engine = make_engine(make_config(folder / "ws"))
-    with weekly_events(folder).open("rb") as f:
-        uploaded = engine.upload("events.csv", f, time="when", window="7D")
-    records, served = [], []
-    for r in uploaded:
-        records.append(engine.process(r["batch_id"]))
-        served.append(engine.graph())
-    return engine, records, served
-
-
 @pytest.fixture(scope="session")
 def model_engine(tmp_path_factory, demo_csv):
     """Engine with the synthetic demo ingested using the bundled Qwen3 embedding model."""

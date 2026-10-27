@@ -132,7 +132,7 @@ def create_app(engine: Engine) -> FastAPI:
         for record in records:  # one worker thread: the levels run in turn
             run(engine.process, record["batch_id"])
         run(warm)  # after the last level
-        levels = {f"W{r['window']['index']}" if r.get("window") else r["level"]: r["batch_id"] for r in records}  # a window is a level
+        levels = {record["level"]: record["batch_id"] for record in records}
         return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
 
     def warm() -> None:  # a commit's first reads, built before a console asks: the graph view it loads at READY, then the map
@@ -187,8 +187,6 @@ def create_app(engine: Engine) -> FastAPI:
         metadata: UploadFile | None = File(None),
         table: bool = Form(False),
         supersedes: str = Form(""),
-        time: str = Form(""),
-        window: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -207,8 +205,6 @@ def create_app(engine: Engine) -> FastAPI:
             metadata=_text(metadata),
             table=table,
             supersedes=supersedes,
-            time=time.strip() or None,
-            window=window.strip() or None,
         )
 
     @app.post("/api/demo")

@@ -1,12 +1,8 @@
 /* SIG UI — the datasets rail: upload, the batch cards and their polling, deletion (docs/08_interface.md §8.2). */
 "use strict";
 
-const windowWhen = (iso) => (iso.slice(11, 19) === "00:00:00" ? iso.slice(0, 10) : iso.slice(0, 19).replace("T", " "));  // temporal.when
-const windowSpan = (w) => `W${w.index} [${windowWhen(w.t_start)}, ${windowWhen(w.t_end)})`;  // a time window as the evidence names it
-
 function datasetName(b) {
-  /* the file and its level or time window: the levels and windows of one upload are datasets of one file (docs/02_discovery.md §2.9–2.10) */
-  if (b.window) return `${b.filename} · ${windowSpan(b.window)}`;
+  /* the file and its level: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9) */
   const res = /^\d+$/.test(b.level || "") ? b.level : ((b.profile || {}).geo || {}).resolution;
   return res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename;
 }
@@ -28,8 +24,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>${form(m.input_rows, "рядок", "рядки", "рядків")}</span></div></div>` +
       `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · відсіяно: ${num(m.pruned_total, 0)} · ${num(m.processing_duration_s, 1)} с</div>` +
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
-  } else if (neutral) {  // a normal result of a level or a window, not an error: the others stand
-    body = `<div class="ds-note">${b.window ? "У цьому вікні" : "На цьому рівні"} стійких знахідок немає.</div><div class="ds-note mono">${esc(b.error.message)}</div>`;
+  } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
+    body = `<div class="ds-note">На цьому рівні стійких знахідок немає.</div><div class="ds-note mono">${esc(b.error.message)}</div>`;
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +
@@ -51,24 +47,22 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
 
 const geoLevel = (b) => /^\d+$/.test(b.level || "");
 const EMPTY_LEVEL = new Set(["invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"]);  // uploads.EMPTY_LEVEL
-const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && (geoLevel(b) || !!b.window);  // a geo level or a time window with nothing to mine
-const levelRank = (b) => (b.window ? b.window.index : geoLevel(b) ? -Number(b.level) : 99);  // windows in time; finest first, the table last: the queue's order
-// one group per upload's levels, or per cut of its time windows (another column or size is another series)
-const groupKey = (b) => (b.window ? `${b.upload_id}:${b.window.column}:${b.window.size}` : ((geoLevel(b) || b.locator) && b.upload_id) || b.batch_id);
+const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && geoLevel(b);  // a geo level with nothing to mine
+const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
 
 function uploadGroups(cards) {
-  /* the cards of one file's levels or windows together (its newest card's place), in the order they run; a plain upload
-     of the same bytes is no level of it (docs/02_discovery.md §2.9–2.10) */
-  const groups = Map.groupBy(cards, groupKey);
+  /* the cards of one file's levels together (its newest card's place), in the order the levels run; a plain upload of
+     the same bytes is no level of it (docs/02_discovery.md §2.9) */
+  const groups = Map.groupBy(cards, (b) => ((geoLevel(b) || b.locator) && b.upload_id) || b.batch_id);
   return [...groups.values()].map((g) => g.sort((a, b) => levelRank(a) - levelRank(b)));
 }
 
 function uploadGroup(cards, busy) {
   if (cards.length === 1) return datasetCard(cards[0], busy);  // a level alone that finds nothing failed, as its upload did
   const ready = cards.filter((b) => b.status === "READY").length, empty = ready ? cards.filter(emptyLevel).length : 0;
-  const failed = cards.filter((b) => b.status === "FAILED").length - empty, unit = cards[0].window ? "вікон" : "рівнів";
-  return `<div class="ds-group" data-upload="${esc(groupKey(cards[0]))}"><div class="ds-group-head">${esc(cards[0].filename)} · готово ${unit}: ${ready} з ${cards.length}` +
-    (empty ? ` · без знахідок: ${empty}` : "") + (failed ? ` · <b>з помилкою: ${failed}</b>, інші ${cards[0].window ? "вікна" : "рівні"} чинні` : "") + `</div>${cards.map((b) => datasetCard(b, busy, ready > 0 && emptyLevel(b))).join("")}</div>`;
+  const failed = cards.filter((b) => b.status === "FAILED").length - empty;
+  return `<div class="ds-group" data-upload="${esc(cards[0].upload_id)}"><div class="ds-group-head">${esc(cards[0].filename)} · готово рівнів: ${ready} з ${cards.length}` +
+    (empty ? ` · без знахідок: ${empty}` : "") + (failed ? ` · <b>з помилкою: ${failed}</b>, інші рівні чинні` : "") + `</div>${cards.map((b) => datasetCard(b, busy, ready > 0 && emptyLevel(b))).join("")}</div>`;
 }
 
 function datasetTrust(t) {
@@ -130,10 +124,8 @@ async function refreshBatches() {
     S.options = sel.innerHTML = options;
     sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
   }
-  // one key for what every view follows: the READY batches and the dataset filter; the windows of an upload's time
-  // series count once all have ended, so they redraw the views once, after the last (a quiet one too)
-  const running = new Set(batches.filter((b) => b.window && !TERMINAL.has(b.status)).map(groupKey));
-  const viewKey = batches.filter((b) => b.status === "READY" && !running.has(groupKey(b))).map((b) => `${b.batch_id}:${b.metadata_digest || ""}`).join(",") + "|" + sel.value;  // a PATCH re-signs its record
+  // one key for what every view follows: the READY batches and the dataset filter
+  const viewKey = batches.filter((b) => b.status === "READY").map((b) => `${b.batch_id}:${b.metadata_digest || ""}`).join(",") + "|" + sel.value;  // a PATCH re-signs its record
   let map;
   if (viewKey !== S.lastReady) {
     S.lastReady = viewKey;
@@ -156,7 +148,6 @@ async function upload() {
   const fd = new FormData();
   fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
-  fd.append("time", $("time").value); fd.append("window", $("window").value);
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);

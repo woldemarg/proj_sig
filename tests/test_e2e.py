@@ -107,30 +107,6 @@ def test_attractor_benchmark_apparatus(engine, tmp_path):
     assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
 
 
-def test_temporal_benchmark_apparatus(cfg, tmp_path):
-    from temporal_benchmark import PLANTED, analyse, generate, mine_upload, parity, score_planted, wilson
-
-    frame = generate(1, rows=6000, days=21)  # three weekly windows of the planted upload
-    assert {"when", *(c for scope, _ in PLANTED.values() for c in scope)} <= set(frame.columns)
-    csv = tmp_path / "events.csv"
-    frame.to_csv(csv, index=False, lineterminator="\n")
-    trajectories, seconds = mine_upload(csv, "up-test", cfg)
-    scores = score_planted(trajectories)
-    assert len(seconds) == 3 and all(s["trajectories"] == 1 for s in scores.values())
-    assert [(e["from"], e["to"], e["got"]) for e in scores["S1"]["edges"][:2]] == [(0, 1, "CONTINUATION"), (1, 2, "CONTINUATION")]
-    assert [e["got"] for e in scores["S2"]["edges"][:2]] == ["DRIFT", "DRIFT"] and all(x > 0 for x in scores["S2"]["excess"].values())
-    rows = [{"seed": 1, "null": False, "trajectories": len(trajectories), "lasting": 0, "seconds": seconds, "planted": scores}]
-    summary = analyse([*rows, {"seed": 2, "null": True, "trajectories": 0, "lasting": 0, "seconds": [1.0]}], cfg.miner.temporal_drift_excess)
-    assert summary["S1"]["recall"] == pytest.approx(2 / 9) and summary["S5"]["with_false_trajectory"] == 0  # three windows hold 2 of 9 edges
-    assert wilson(0, 100) == pytest.approx((0.0, 0.037), abs=1e-3)
-    engine = make_engine(make_config(tmp_path / "ws"))  # the same upload through the graph service: the same trajectories
-    with csv.open("rb") as f:
-        for record in engine.upload(csv.name, f, time="when", window="7D"):
-            engine.process(record["batch_id"])
-    snapshot = engine.ws.load_graph()
-    assert parity(trajectories, snapshot) == {"same": True, "trajectories": len(trajectories), "differing": []}
-
-
 def test_geo_benchmark_apparatus(engine, tmp_path):
     import h3
     import numpy as np
