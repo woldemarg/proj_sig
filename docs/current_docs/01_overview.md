@@ -113,7 +113,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | | `evidence.py` | the evidence object, the LLM prompt and the evidence-only summary | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `search.py`, `ports.py`, `config.py` | one question end to end over a `CommittedState`; the embedder shape it needs; `QueryConfig` | [7](07_question_answering.md) |
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
-| | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question | [9](09_operations.md) |
+| | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question; `batch.py` also the time column's check and the series signed at the commit | [9](09_operations.md) |
 | | `uploads.py`, `verify.py` | the levels of one upload, the version it replaces and its declared language (glossary, metadata document); an insight recomputed from its stored upload | [6.8](06_graph_and_storage.md#68-deleting-a-dataset), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
 | | `geo_views.py`, `errors.py` | the map's reads over one commit's graph; the error codes as `PipelineError` | [8.7](08_interface.md#87-the-map), [9.4](09_operations.md#94-error-codes) |
 | | `snapshot.py` | the dual-graph compiler and the anchor descriptions | [6.2](06_graph_and_storage.md#62-the-graph-schema), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |

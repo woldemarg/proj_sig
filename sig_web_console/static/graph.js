@@ -84,7 +84,7 @@ function dualPlanePositions(cy) {
     });
     x += width + 50;
   }
-  const hubs = cy.nodes('[kind="TemporalNode"]').sort((a, b) => (a.id() < b.id() ? -1 : 1));  // a timeline under the insights
+  const hubs = cy.nodes('[kind="TemporalNode"]').sort((a, b) => a.data("t_start").localeCompare(b.data("t_start")) || a.id().localeCompare(b.id()));  // a timeline under the insights
   if (hubs.length) {
     maxY += 130;
     hubs.forEach((n, i) => { pos[n.id()] = { x: ((i + 0.5) * Math.max(x - 50, 400)) / hubs.length, y: maxY }; });

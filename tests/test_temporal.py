@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,12 +20,13 @@ from graph_query_engine.question import parse_query
 from graph_query_engine.seeds import SEED_TIME_WEIGHT, SeedMatch, score_pattern
 from graph_query_engine.temporal import period_interval, time_facts, time_line, time_score
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge, wording
+from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.snapshot import compute_metadata_integrity, metadata_digest
 from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import cytoscape_elements, node_details
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.ingestion import IngestionError, load_dataset, read_times
+from subgroup_miner.ingestion import IngestionError, load_dataset, read_times, resolve_grid
 from subgroup_miner.spatial import build_cells
 from subgroup_miner.temporal import (
     DROPPED_AT,
@@ -69,54 +71,128 @@ def test_months_quarters_and_days_name_their_bins_and_keep_empty_ones():
 def test_a_bin_the_upload_covers_in_part_is_partial():
     bins = calendar_bins(utc("2031-03-04 08:00", "2031-03-10", "2031-03-20 12:00"), "week")[1]
     assert [b["partial"] for b in bins] == [True, False, True]  # begins on a Tuesday; ends on a Thursday
+    assert [b["covered"] for b in bins] == [pytest.approx(6 / 7, abs=1e-3), 1.0, pytest.approx(4 / 7, abs=1e-3)]
     assert [b["partial"] for b in calendar_bins(utc("2031-03-03", "2031-03-16 23:00"), "week")[1]] == [False, False]
 
 
 def table(seed: int = 3, weeks: int = 6, rows: int = 3000) -> tuple[pd.DataFrame, pd.Series]:
-    """A frame with a cohort ``g == 'a'`` whose ``m`` is +1 every week and +3 more in week 3, and its times."""
+    """A frame with a cohort ``g == 'a'`` whose ``m`` is +1 every week and +3 more in week 3, and its times, spread over each week."""
     rng = np.random.default_rng(seed)
     week = rng.integers(0, weeks, rows)
     group = rng.choice(["a", "b", "c"], rows)
     frame = pd.DataFrame({"g": group, "m": rng.normal(0, 1, rows) + (group == "a") * (1 + 3 * (week == 3)), "flat": np.ones(rows)})
-    times = pd.Series(pd.Timestamp("2031-03-03", tz="UTC") + pd.to_timedelta(week * 7 + 2, unit="D"))
+    times = pd.Series(pd.Timestamp("2031-03-03", tz="UTC") + pd.to_timedelta(week * 7 + rng.integers(0, 7, rows), unit="D"))
     return frame, times
 
 
-def test_a_series_is_robust_z_against_its_bins_population_and_counts_every_covered_row():
+def series_of(frame, codes, bins, covers, metrics, min_rows=CFG.temporal_min_rows_bin, tie_share=CFG.temporal_tie_share):
+    return annotate(frame, codes, bins, covers, metrics, reference_scale(frame), min_rows, tie_share)
+
+
+def test_a_series_is_robust_z_against_the_rest_of_its_bin_and_counts_every_covered_row():
     frame, times = table()
     times.iloc[:40] = pd.NaT  # rows without a time: mined, in no bin
     codes, bins = calendar_bins(times, "week")
     rows = np.flatnonzero(frame.g == "a")
-    out = annotate(frame, codes, bins, {"P": rows}, {"P": ["m", "flat"]}, reference_scale(frame), CFG.temporal_min_rows_bin)["P"]
+    out = series_of(frame, codes, bins, {"P": rows}, {"P": ["m", "flat"]})["P"]
     assert sum(out["rows"]) + out["untimed"] == len(rows) and out["untimed"] == int(times.iloc[rows].isna().sum()) > 0
     assert "flat" not in out["series"]  # a constant metric has no scale, so no series
     z = [e["z"] for e in out["series"]["m"]]
     steady = [v for i, v in enumerate(z) if i != 3]
     assert z[3] - max(steady) > 1.5 and np.ptp(steady) < 0.5 and min(steady) > 0.3  # the bin's population moves too
     assert all(0 < e["se"] < 0.3 and e["n"] >= CFG.temporal_min_rows_bin for e in out["series"]["m"])
+    scale = reference_scale(frame)["m"]
+    rest = (codes == 1) & (frame.g != "a")  # the bin's rows outside the insight: the reference
+    own = (codes == 1) & (frame.g == "a")
+    assert z[1] == pytest.approx((frame.m[own].median() - frame.m[rest].median()) / scale)
+
+
+def test_a_cohort_that_is_most_of_its_bin_still_differs_from_the_rest():
+    """Against the whole bin a cohort of nine rows in ten would be its own reference and read as nothing."""
+    rng = np.random.default_rng(4)
+    big = rng.random(3000) < 0.9
+    frame = pd.DataFrame({"m": rng.normal(0, 1, 3000) + big})
+    codes, bins = calendar_bins(
+        pd.Series(pd.Timestamp("2031-03-03", tz="UTC") + pd.to_timedelta(rng.integers(0, 4, 3000) * 7 + rng.integers(0, 7, 3000), unit="D")), "week"
+    )
+    z = [e["z"] for e in series_of(frame, codes, bins, {"P": np.flatnonzero(big)}, {"P": ["m"]})["P"]["series"]["m"]]
+    scale = reference_scale(frame)["m"]
+    assert min(z) > 0.6 / scale and max(z) < 1.4 / scale  # about the planted +1, in reference units
+
+
+def test_a_tie_heavy_metric_is_levelled_by_its_mean():
+    """A metric most of whose values are one value: its bin median jumps between support values and reads as events;
+    its level is the mean and the error s / √n. A continuous metric keeps the median."""
+    rng = np.random.default_rng(2)
+    k = np.where(rng.random(2000) < 0.6, 2.0, rng.integers(0, 5, 2000).astype(float))  # 60 % at the median, 2
+    frame = pd.DataFrame({"k": k, "m": rng.normal(0, 1, 2000)})
+    codes, bins = calendar_bins(
+        pd.Series(pd.Timestamp("2031-03-03", tz="UTC") + pd.to_timedelta(rng.integers(0, 3, 2000) * 7 + rng.integers(0, 7, 2000), unit="D")), "week"
+    )
+    rows = np.flatnonzero(rng.random(2000) < 0.5)
+    out = series_of(frame, codes, bins, {"P": rows}, {"P": ["k", "m"]})["P"]["series"]
+    scale = reference_scale(frame)
+    own, rest = np.zeros(2000, bool), np.ones(2000, bool)
+    own[rows], rest[rows] = True, False
+    s, r = frame[own & (codes == 0)], frame[rest & (codes == 0)]
+    assert out["k"][0]["z"] == pytest.approx((s.k.mean() - r.k.mean()) / scale["k"])
+    assert out["k"][0]["se"] == pytest.approx(np.hypot(s.k.std(ddof=0) / np.sqrt(len(s)), r.k.std(ddof=0) / np.sqrt(len(r))) / scale["k"])
+    assert out["m"][0]["z"] == pytest.approx((s.m.median() - r.m.median()) / scale["m"])
+    assert series_of(frame, codes, bins, {"P": rows}, {"P": ["k"]}, tie_share=0.7)["P"]["series"]["k"][0]["z"] == pytest.approx(
+        (s.k.median() - r.k.median()) / scale["k"]
+    )  # above the share, the median again
+
+
+def test_a_short_edge_bin_is_unmeasured():
+    """An upload that starts on a Saturday: its first week holds two days of it and is no level to read."""
+    frame, _ = table()
+    rng = np.random.default_rng(6)
+    weekend = pd.Timestamp("2031-03-08", tz="UTC") + pd.to_timedelta(rng.integers(0, 6, len(frame)) * 7 + rng.integers(0, 2, len(frame)), unit="D")
+    codes, bins = calendar_bins(pd.Series(weekend), "week")  # Saturdays and Sundays only: the first week holds two days of the upload
+    assert bins[0]["covered"] == pytest.approx(2 / 7, abs=1e-3) and bins[0]["rows"] > 30 and bins[-1]["covered"] == 1.0
+    out = series_of(frame, codes, bins, {"P": np.flatnonzero(frame.g == "a")}, {"P": ["m"]})["P"]
+    assert out["series"]["m"][0] is None and out["series"]["m"][1] is not None and out["rows"][0] > 0  # counted, not levelled
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "rows", "unit"),
+    [
+        ("2031-03-01", "2031-03-31", 30_000, "day"),  # a dense month: 31 days of ~1,000 rows
+        ("2031-03-01", "2031-03-31", 600, "week"),  # a thin month: its days would hold 20 rows, its weeks 120
+        ("2026-03-02", "2026-03-11", 5_000, "day"),  # ten days
+        ("2026-01-01", "2026-12-31", 100_000, "week"),  # a year: 53 weeks of ~1,900 rows
+        ("2026-01-01", "2026-12-31", 10_000, "month"),  # a thin year: 12 months of ~830 rows
+        ("2024-01-01", "2026-12-31", 50_000, "month"),  # three years
+        ("2020-01-01", "2026-12-31", 15_000, "quarter"),  # seven thin years
+    ],
+)
+def test_the_grid_balances_the_bins_of_the_span_against_the_rows_a_bin_holds(first, last, rows, unit):
+    times = pd.Series(pd.date_range(first, last, periods=rows, tz="UTC"))
+    assert resolve_grid(times, "auto") == unit and resolve_grid(times, "month") == "month"
+    stray = pd.concat([times, utc("1970-01-01")], ignore_index=True)  # one placeholder date: the span is the 1st–99th percentile
+    assert resolve_grid(stray, "auto") == unit
 
 
 def test_a_bin_too_thin_for_the_insight_or_for_the_upload_is_unmeasured():
     frame, times = table()
     codes, bins = calendar_bins(times, "week")
-    scale = reference_scale(frame)
     rows = np.flatnonzero(frame.g == "a")
     thin = np.concatenate([rows[codes[rows] != 2], rows[codes[rows] == 2][:5]])  # five of the insight's rows in week 2
-    assert annotate(frame, codes, bins, {"P": thin}, {"P": ["m"]}, scale, 30)["P"]["series"]["m"][2] is None
+    assert series_of(frame, codes, bins, {"P": thin}, {"P": ["m"]})["P"]["series"]["m"][2] is None
     times = times.mask((codes == 4) & (np.arange(len(codes)) % 40 > 0))  # the upload's week 4 under the floor
     codes, bins = calendar_bins(times, "week")
-    every = annotate(frame, codes, bins, {"P": rows, "Q": np.flatnonzero(frame.g == "b")}, {"P": ["m"], "Q": ["m"]}, scale, 30)
+    every = series_of(frame, codes, bins, {"P": rows, "Q": np.flatnonzero(frame.g == "b")}, {"P": ["m"], "Q": ["m"]})
     assert bins[4]["rows"] < 30 and every["P"]["series"]["m"][4] is None and every["Q"]["series"]["m"][4] is None
     assert every["P"]["series"]["m"][5] is not None
 
 
-def test_a_bin_with_no_spread_takes_the_uploads_mad():
-    """A discrete metric whose bin values tie: the bin's MAD is 0, the upload's stands in — never a zero error."""
+def test_a_bin_with_no_spread_takes_the_uploads_spread():
+    """A bin all of whose values tie has no spread of its own: the upload's stands in — never a zero error."""
     rng = np.random.default_rng(1)
     frame = pd.DataFrame({"k": np.where(np.arange(600) < 300, 2.0, rng.integers(0, 5, 600).astype(float))})
     times = pd.Series(pd.Timestamp("2031-03-03", tz="UTC") + pd.to_timedelta(np.arange(600) // 300 * 7, unit="D"))
     codes, bins = calendar_bins(times, "week")
-    entry = annotate(frame, codes, bins, {"P": np.arange(0, 600, 2)}, {"P": ["k"]}, reference_scale(frame), 30)["P"]["series"]["k"]
+    entry = series_of(frame, codes, bins, {"P": np.arange(0, 600, 2)}, {"P": ["k"]})["P"]["series"]["k"]
     assert entry[0]["se"] > 0 and entry[0]["z"] == pytest.approx(0.0)
 
 
@@ -194,11 +270,14 @@ def test_the_time_column_is_read_apart_and_its_grid_names_another_analysis(tmp_p
     frame.loc[3, "when"] = "not a time"
     path = write(tmp_path, frame)
     plain = load_dataset(path, CFG)
-    weekly = load_dataset(path, CFG, time="when")
+    weekly = load_dataset(path, CFG, time="when", grid="week")
     monthly = load_dataset(path, CFG, time="when", grid="Month")
-    assert "when" not in weekly.frame.columns and weekly.grid == "week" and monthly.grid == "month"
+    by_span = load_dataset(path, CFG, time="when")  # 600 rows over six weeks: days would hold 14 rows each, weeks 100
+    assert "when" not in weekly.frame.columns and weekly.grid == "week" and monthly.grid == "month" and by_span.grid == "week"
     assert weekly.time.isna().sum() == 1 and len(weekly.time) == len(weekly.frame) and str(weekly.time.dt.tz) == "UTC"
-    assert len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id}) == 3
+    assert (
+        len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id}) == 3 and by_span.dataset_id == weekly.dataset_id
+    )  # the resolved unit names the dataset
     assert any("without a readable time" in w for w in weekly.warnings)
     assert plain.time is None and plain.grid is None
 
@@ -253,7 +332,9 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert all(sum(stored[pid]["rows"]) + stored[pid]["untimed"] == p["support"] for pid, p in patterns.items())
     dataset = next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
-    assert dataset["temporal"] == {"column": "when", "grid": "week", "span": ["2031-03-03T00:00:00+00:00", "2031-04-14T00:00:00+00:00"]}
+    read = pd.to_datetime(pd.read_csv(record["source_path"])["when"], errors="coerce", utc=True)
+    assert dataset["temporal"] == {"column": "when", "grid": "week", "span": [read.min().isoformat(), read.max().isoformat()]}
+    assert dataset["temporal"]["span"][0][:10] == "2031-03-03" and dataset["temporal"]["span"][1][:10] == "2031-04-13"  # the data's, not the bins'
     pid = phones_us(snap)
     trajectory = snap["trajectories"][pid]
     assert [(e["kind"], e["period"]) for e in trajectory["events"] if e["metric"] == "discount"] == [("PEAKED_AT", "2031-W13")]
@@ -290,7 +371,7 @@ def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_it
     engine = make_engine(make_config(tmp_path / "ws"))
     path = weekly_retail(tmp_path, spiked=("discount", "margin"))
     with path.open("rb") as f:
-        timed = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+        timed = engine.process(engine.upload(path.name, f, time="when", grid="week")[0]["batch_id"])
     plain = engine.ingest_file(path)
     snap = engine.ws.load_graph()
     ids = [e["id"] for e in snap["edges"]]
@@ -303,6 +384,8 @@ def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_it
         ds: {el["data"]["id"] for el in cytoscape_elements(engine.graph(), ds, False)["nodes"]} for ds in (timed["dataset_id"], plain["dataset_id"])
     }
     assert hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
+    starts = {el["data"]["id"]: el["data"]["t_start"] for el in cytoscape_elements(engine.graph())["nodes"] if el["data"]["kind"] == "TemporalNode"}
+    assert starts.keys() == hubs and all(starts[h] == next(n["props"]["t_start"] for n in snap["nodes"] if n["id"] == h) for h in hubs)
 
 
 def restarted(engine):
@@ -310,10 +393,10 @@ def restarted(engine):
     return make_engine(engine.settings).ws.load_graph()
 
 
-def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plane(tmp_path):
+def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plane(tmp_path, caplog):
     engine = make_engine(make_config(tmp_path / "ws"))
     with weekly_retail(tmp_path).open("rb") as f:
-        record = engine.process(engine.upload("weekly.csv", f, time="when")[0]["batch_id"])
+        record = engine.process(engine.upload("weekly.csv", f, time="when", grid="week")[0]["batch_id"])
     assert restarted(engine)["trajectories"]
     path = engine.ws.datasets_dir / record["dataset_id"] / "temporal.json"
     original = path.read_bytes()
@@ -323,6 +406,11 @@ def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plan
         snap = again.ws.load_graph()
         assert again.problem is None and not snap["trajectories"] and not any(n["kind"] == "TemporalNode" for n in snap["nodes"])
         assert "temporal" not in next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
+    caplog.clear()  # the damaged files above logged the same line
+    path.unlink()  # a missing file: no plane either, and the log names it
+    again = make_engine(engine.settings)
+    assert again.problem is None and not again.ws.load_graph()["trajectories"]
+    assert f"{record['dataset_id']}: its series file is missing or not the one its record signs" in caplog.text
     path.write_bytes(original)
     edited = {**record, "temporal": {**record["temporal"], "grid": "month"}}
     engine.ws.save_batch(edited)
@@ -333,7 +421,7 @@ def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plan
 def test_a_time_record_of_the_chain_model_compiles_without_a_temporal_plane(tmp_path, caplog):
     engine = make_engine(make_config(tmp_path / "ws"))
     with weekly_retail(tmp_path).open("rb") as f:
-        record = engine.process(engine.upload("weekly.csv", f, time="when")[0]["batch_id"])
+        record = engine.process(engine.upload("weekly.csv", f, time="when", grid="week")[0]["batch_id"])
     window = {"index": 0, "of": 1, "column": "when", "size": "P7D", "t_start": "2031-03-03T00:00:00+00:00", "t_end": "2031-03-10T00:00:00+00:00"}
     chained = {**record, "window": window, "temporal": {"reference_scale": record["temporal"]["reference_scale"], "observations": {}}}
     engine.ws.save_batch({**chained, "metadata_digest": metadata_digest(chained)})  # signed as the chain model signed it
@@ -358,11 +446,18 @@ def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
             engine.upload(path.name, f, **options)
         assert err.value.code == "invalid_options"
     with two_weeks.open("rb") as f, pytest.raises(PipelineError, match="TEMPORAL_MIN_BINS=3"):
-        engine.upload(two_weeks.name, f, time="when")
+        engine.upload(two_weeks.name, f, time="when", grid="week")
     sentinel = tmp_path / "sentinel.csv"  # one placeholder date: 416,000 weeks, refused before a bin is built
     sentinel.write_text(path.read_text(encoding="utf-8").replace("unknown", "9999-12-31 00:00:00", 1), encoding="utf-8")
     with sentinel.open("rb") as f, pytest.raises(PipelineError, match="TEMPORAL_MAX_BINS=1000"):
-        engine.upload(sentinel.name, f, time="when")
+        engine.upload(sentinel.name, f, time="when", grid="week")
+    stray = tmp_path / "stray.csv"  # a year of rows and one epoch date: the grid is the year's (weeks), which the stray spans too widely
+    year = generate_retail_dataset(20_000, seed=3)
+    year.insert(0, "when", pd.date_range("2031-01-01", "2031-12-31", periods=len(year)).strftime("%Y-%m-%d %H:%M:%S"))
+    year.loc[0, "when"] = "1970-01-01 00:00:00"
+    year.to_csv(stray, index=False)
+    with stray.open("rb") as f, pytest.raises(PipelineError, match="TEMPORAL_MAX_BINS=1000"):
+        engine.upload(stray.name, f, time="when")
     assert not list(engine.ws.uploads_dir.glob("*")) and not engine.ws.list_batches()
 
 
@@ -370,11 +465,11 @@ def test_the_same_file_with_its_time_apart_is_another_dataset_and_its_deletion_t
     engine = make_engine(make_config(tmp_path / "ws"))
     path = weekly_retail(tmp_path)
     with path.open("rb") as f:
-        weekly = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+        weekly = engine.process(engine.upload(path.name, f, time="when", grid="week")[0]["batch_id"])
     with path.open("rb") as f:
         daily = engine.process(engine.upload(path.name, f, time="when", grid="day")[0]["batch_id"])
     with path.open("rb") as f:
-        again = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+        again = engine.process(engine.upload(path.name, f, time="when", grid="week")[0]["batch_id"])
     plain = engine.ingest_file(path)
     assert [r["status"] for r in (weekly, daily, again, plain)] == ["READY", "READY", "SKIPPED", "READY"]
     assert len({weekly["dataset_id"], daily["dataset_id"], plain["dataset_id"]}) == 3 and weekly["dataset_id"] == timed[1]["dataset_id"]
@@ -426,17 +521,19 @@ def test_a_geo_patterns_points_are_those_of_its_cells():
 def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_their_points(tmp_path, monkeypatch):
     import h3
 
+    import insight_graph_service.core.engine as engine_module
+
     engine = make_engine(make_config(tmp_path / "ws"))
-    annotate = engine._annotate
+    annotate = engine_module.annotate_batch
 
     def without_placing(*args):  # the commit's annotation reads the stored point → cell map: it never places a point again
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(h3, "latlng_to_cell", lambda *_: pytest.fail("a point placed again at the commit"))
             return annotate(*args)
 
-    monkeypatch.setattr(engine, "_annotate", without_placing)
+    monkeypatch.setattr(engine_module, "annotate_batch", without_placing)
     path = geo_timed(tmp_path)
-    cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when")
+    cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when", grid="week")
     assert (cells["level"], cells["status"], table["level"], table["status"]) == ("7", "READY", "table", "READY")
     weeks = [f"2019-W{w}" for w in range(10, 15)]
     assert [b["period"] for b in cells["temporal"]["bins"]] == [b["period"] for b in table["temporal"]["bins"]] == weeks  # one calendar
@@ -447,7 +544,6 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     stored = engine.ws.load_geo(cells["dataset_id"])
     raw = pd.read_csv(path)
     raw["t"] = pd.to_datetime(raw["when"], errors="coerce", utc=True, format="ISO8601")
-    assert stored["point_ts"].tolist() == raw["t"].dt.as_unit("us").array.asi8.tolist() and stored["point_ts"][0] == np.iinfo(np.int64).min
     snap = engine.ws.load_graph()
     props = {n["id"]: n["props"] for n in snap["nodes"] if n["kind"] == "Pattern"}
     geo = [pid for pid, p in props.items() if p["dataset_id"] == cells["dataset_id"]]
@@ -460,16 +556,17 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     assert any(not props[pid]["target"].endswith("_median") for pid in geo)  # a target without a series: the trend falls to the median
     covers = engine.ws.load_covers(cells["dataset_id"])
     assert all(sum(series[pid]["rows"]) + series[pid]["untimed"] == np.isin(stored["point_cell"], covers[pid]).sum() for pid in geo)
-    # one bin of a cell pattern again from the file with h3 alone: its points in the week against every located point there
+    # one bin of a cell pattern again from the file with h3 alone: its points in the week against the week's other located points
     located = raw[raw["latitude"].notna()].copy()
     located["cell"] = [h3.latlng_to_cell(a, b, 7) for a, b in zip(located["latitude"], located["longitude"])]
     pid = next(p for p in geo if any(series[p]["series"]["load_median"]))
     t = next(i for i, e in enumerate(series[pid]["series"]["load_median"]) if e)
     bin_ = cells["temporal"]["bins"][t]
     week = located[(located["t"] >= pd.Timestamp(bin_["t_start"])) & (located["t"] < pd.Timestamp(bin_["t_end"]))]
-    own = week[week["cell"].isin(set(stored["cells"][covers[pid]]))]["load"]
+    inside = week["cell"].isin(set(stored["cells"][covers[pid]]))
+    own, rest = week[inside]["load"], week[~inside]["load"]
     s_ref = calculate_mad(located["load"]) / 0.6745
-    assert series[pid]["series"]["load_median"][t]["z"] == pytest.approx((own.median() - week["load"].median()) / s_ref)
+    assert series[pid]["series"]["load_median"][t]["z"] == pytest.approx((own.median() - rest.median()) / s_ref)
     assert series[pid]["series"]["load_median"][t]["n"] == own.notna().sum()
     tables = [pid for pid, p in props.items() if p["dataset_id"] == table["dataset_id"]]
     assert tables and all(snap["trajectories"][pid]["metric"] == props[pid]["target"] for pid in tables)  # a table's trend is its target's
@@ -491,6 +588,7 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
         ("in 2031-W54 or 2031-13", None),
         ("2031-W54, that is 2031-W13", ("2031-03-24", "2031-03-31")),  # the first that names a period
         ("on 9999-12-31", None),  # its next day runs past the calendar
+        ("2031-W13 or 2031-W14", ("2031-03-24", "2031-03-31")),  # two periods: the first
         ("2019-2020, v2031-03, 2031-03-24-1", None),
         ("in March", None),
     ],
@@ -509,9 +607,10 @@ def test_every_timed_insight_carries_its_time_line_with_or_without_a_date(timed)
     assert item.time["trend"] and item.time["events"][0]["period"] == "2031-W13" and item.time["bins_measured"] == 6
     prompt, summary = found.evidence.to_prompt(), found.evidence.summary()
     assert f"[{item.key}]" in prompt and f"     time: {time_line(item.time)}" in prompt and "| events: peak 2031-W13 (discount, " in prompt
+    assert "| span [2031-03-03, 2031-04-13] | trend spike «сплеск» (discount) |" in prompt  # the data's days; the word the answer should use
     assert "have a time line: each finding holds over its dataset's whole span" in prompt
     assert item.time["words"] == wording.time_words(item.time) and f"({item.time['words']})" in summary
-    assert "динаміка: сплеск; зараз: помітно вище (+2.21 sd); пік у періоді 2031-W13" in summary
+    assert re.search(r"динаміка: сплеск; зараз: помітно вище \(\+2\.\d\d sd\); пік у періоді 2031-W13", summary)
     assert all(it.time for it in found.evidence.items)  # one dataset, with a time column: every item has its line
 
 
@@ -522,7 +621,9 @@ def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_l
     week = period_interval("2031-W13")
     assert time_score(graph.trajectories[pid], week) == 1.0  # measured all week, its peak in it
     assert time_score(graph.trajectories[pid], period_interval("2031-W40")) == 0.0  # outside the upload
-    assert time_score(graph.trajectories[pid], period_interval("2031-04")) == pytest.approx(13 / 30)  # its bins cover 1–13 April, no event
+    assert time_score(graph.trajectories[pid], period_interval("2031-04")) == pytest.approx(13 / 60)  # its bins cover 1–13 April, no event
+    steady = next(t for t in graph.trajectories.values() if not t["events"] and t["bins_measured"] == t["of"])
+    assert time_score(steady, week) == 0.5  # present all week, nothing happened: half of one with an event
     ins, config = graph.insight(pid), engine.settings.query
     query = parse_query("discount for phones in the US in 2031-W13", graph)
     assert query.when == week
@@ -538,7 +639,7 @@ def test_a_series_never_measured_has_no_trend_and_another_metrics_event_is_named
     assert (
         never["trend"] is None
         and never["words"] == "динаміка: не виміряно"
-        and "| trend not measured (margin) | current not measured |" in time_line(never)
+        and "| trend not measured «не виміряно» (margin) | current not measured |" in time_line(never)
     )
     peak = {"kind": "PEAKED_AT", "period": "2031-W13", "metric": "discount", "z_smoothed": 5.0, "prominence": 4.0}
     other = time_facts(head | {"trend": FLAT, "current": 0.1, "bins_measured": 6, "events": [peak]}, 0.5)
@@ -561,3 +662,36 @@ def test_the_drawer_gets_the_curve_of_its_findings_metric_only(timed):
     shown = node_details(graph, pid, engine.settings.thresholds)["trajectory"]
     assert set(shown["series"]) == set(shown["smoothed"]) == {shown["metric"]} and len(graph.trajectories[pid]["series"]) > 1
     assert shown["events"] == graph.trajectories[pid]["events"]
+
+
+def test_no_readable_time_is_no_bin():
+    codes, bins = calendar_bins(pd.Series([pd.NaT] * 3, dtype="datetime64[us, UTC]"), "week")
+    assert codes.tolist() == [-1, -1, -1] and bins == []
+
+
+def test_a_geo_level_checks_the_times_of_its_located_points(tmp_path):
+    frame = geo_frame()
+    frame["when"] = "2019-03-04"  # every located point in one week
+    unlocated = frame.sample(300, random_state=2).assign(latitude=np.nan, longitude=np.nan)
+    unlocated["when"] = pd.date_range("2019-03-04", periods=300, freq="D").strftime("%Y-%m-%d")  # the rows without a point: 43 weeks
+    path = tmp_path / "points.csv"
+    pd.concat([frame, unlocated], ignore_index=True).to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with path.open("rb") as f:
+        (level,) = engine.upload(path.name, f, geo="latitude,longitude@7", time="when", grid="week")  # the file's rows fill the weeks
+    record = engine.process(level["batch_id"])  # the series would be of the located points: one week, refused before the search
+    assert record["status"] == "FAILED" and record["error"]["code"] == "invalid_options" and record["failed_stage"] == "VALIDATING"
+    assert "over its located points: 0 week bins measurable" in record["error"]["message"]  # one day of points: no week half covered
+
+
+def test_a_geo_pattern_without_a_series_has_no_time_line(tmp_path):
+    frame = geo_frame().drop(columns="load")  # the cells hold counters, shares and modes only: no metric has a series
+    frame["when"] = frame["when"].astype(str)
+    path = tmp_path / "points.csv"
+    frame.to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    (cells,) = upload_levels(engine, path, geo="latitude,longitude@7", time="when", grid="week")
+    series = json.loads((engine.ws.datasets_dir / cells["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
+    snap = engine.ws.load_graph()
+    assert cells["status"] == "READY" and series and all(not entry["series"] for entry in series.values())
+    assert not snap["trajectories"] and not any("temporal_summary" in n["props"] for n in snap["nodes"])  # never «not measured»

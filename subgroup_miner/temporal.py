@@ -23,9 +23,8 @@ import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import EdgeType
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import _MEDIAN_SE_FACTOR
-from subgroup_miner.ingestion import IngestionError
+from subgroup_miner.ingestion import GRID_FREQ, IngestionError
 
-_FREQ = {"day": "D", "week": "W-SUN", "month": "M", "quarter": "Q"}  # a week runs Monday to Sunday, as ISO 8601's
 RISING, FALLING, FLAT, SPIKE = "rising", "falling", "flat", "spike"
 PEAKED_AT, DROPPED_AT = EdgeType.PEAKED_AT.value, EdgeType.DROPPED_AT.value
 
@@ -42,30 +41,35 @@ def period_label(period: pd.Period, grid: str) -> str:
 
 def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Each row's bin (-1 for a row without a time) and the bins from the first time's period to the last's, empty ones
-    included, each ``{period, t_start, t_end, rows, partial}`` (UTC, half-open). ``partial``: the upload's times begin
-    after the bin's first day or end before its last. More bins than ``max_bins`` is ``invalid_options``, before any is built:
-    one placeholder date (``9999-12-31``) would make hundreds of thousands."""
+    included, each ``{period, t_start, t_end, rows, covered, partial}`` (UTC, half-open). ``covered``: the share of the
+    bin's days the upload's times span (1 but for its first and last bin); ``partial``: under 1. More bins than
+    ``max_bins`` is ``invalid_options``, before any is built: one placeholder date (``9999-12-31``) would make hundreds
+    of thousands."""
     known = times.notna().to_numpy()
+    if not known.any():  # no time reads: no bin (the upload's check refuses it)
+        return np.full(len(times), -1, dtype=np.int64), []
     naive = times[known].dt.tz_convert("UTC").dt.tz_localize(None)
-    periods = naive.dt.to_period(_FREQ[grid])
+    periods = naive.dt.to_period(GRID_FREQ[grid])
     first, last = periods.min(), periods.max()
     if max_bins and (count := last.ordinal - first.ordinal + 1) > max_bins:
         raise IngestionError("invalid_options", f"the time column spans {count} {grid} bins, from {first} to {last} (TEMPORAL_MAX_BINS={max_bins})")
-    span = pd.period_range(first, last, freq=_FREQ[grid])
+    span = pd.period_range(first, last, freq=GRID_FREQ[grid])
     codes = np.full(len(times), -1, dtype=np.int64)
     codes[known] = periods.array.asi8 - first.ordinal
     rows = np.bincount(codes[known], minlength=len(span))
-    lo, hi = naive.min().normalize(), naive.max().normalize()
+    lo, hi = naive.min().normalize(), naive.max().normalize() + pd.Timedelta(days=1)  # the days the upload spans
     bins = []
     for i, p in enumerate(span):
         start, end = p.start_time, (p + 1).start_time
+        covered = (min(end, hi) - max(start, lo)) / (end - start)
         bins.append(
             {
                 "period": period_label(p, grid),
                 "t_start": start.tz_localize("UTC").isoformat(),
                 "t_end": end.tz_localize("UTC").isoformat(),
                 "rows": int(rows[i]),
-                "partial": bool((i == 0 and lo > start) or (i == len(span) - 1 and hi < end - pd.Timedelta(days=1))),
+                "covered": round(float(covered), 3),
+                "partial": bool(covered < 1),
             }
         )
     return codes, bins
@@ -89,11 +93,14 @@ def _by_bin(codes: np.ndarray, values: np.ndarray, count: int) -> list[np.ndarra
     return np.split(v[order], np.searchsorted(c[order], np.arange(1, count)))
 
 
-def _median_mad(values: np.ndarray, fallback: float) -> tuple[float, float]:
-    """A bin's median and MAD, the upload's MAD where the bin's is 0 (a discrete metric: no zero standard error)."""
+def _level(values: np.ndarray, tied: bool, fallback: float) -> tuple[float, float]:
+    """A bin's level and its standard error: the mean and s / √n for a tie-heavy metric, else the median and
+    1.2533 · 1.4826 · MAD / √n; ``fallback`` (the upload's s or MAD) stands in for a bin's 0 — never a zero error."""
+    n = math.sqrt(len(values))
+    if tied:
+        return float(np.mean(values)), (float(np.std(values)) or fallback) / n
     med = float(np.median(values))
-    mad = float(np.median(np.abs(values - med)))
-    return med, mad or fallback
+    return med, _MEDIAN_SE_FACTOR * (float(np.median(np.abs(values - med))) or fallback) / n
 
 
 def annotate(
@@ -104,40 +111,44 @@ def annotate(
     metrics: Mapping[str, Sequence[str]],
     scale: Mapping[str, float | None],
     min_rows: int,
+    tie_share: float,
 ) -> dict[str, dict[str, Any]]:
     """Each admitted insight's series over the grid. ``covers``: pattern id → its rows (positions in ``frame``);
     ``metrics``: pattern id → the metrics it shifts; ``scale``: ``reference_scale`` of the upload. Per pattern
     ``{rows: [its rows in each bin], untimed: its rows without a time, series: {metric: [{z, n, se} | None, …]}}``;
-    ``sum(rows) + untimed`` is its support. Per bin t of a metric k:
+    ``sum(rows) + untimed`` is its support. Per bin t of a metric k, S the insight's rows in the bin and R the rest of
+    the bin's rows (an insight that is most of its bin would otherwise move its own reference):
 
-        z = (med_S(t) − med_G(t)) / s_ref        se = sqrt(SE_S² + SE_G²) / s_ref,   SE = 1.2533 · 1.4826 · MAD / √n
+        z = (c_S(t) − c_R(t)) / s_ref        se = sqrt(SE_S² + SE_R²) / s_ref
 
-    G is the bin's whole population; a bin holding fewer than ``min_rows`` rows (the whole upload's) or fewer than
-    ``min_rows`` of the insight's values is None — never a z on an unstable median. A metric without a scale has no series."""
-    min_rows = max(min_rows, 1)  # a bin needs a value to have a median
+    c and SE are a bin's level and its standard error (``_level``): the median's, or, for a metric ``tie_share`` of whose
+    values are one value (a discrete one, whose median jumps between the values it takes), the mean's. A bin holding
+    fewer than ``min_rows`` rows of the upload, of the insight or of the rest, or covering less than half its period
+    (the upload's first or last bin), is None — never a z on an unstable level. A metric without a scale has no series."""
+    min_rows = max(min_rows, 1)  # a bin needs a value to have a level
     population = {}
     for metric in {m for ms in metrics.values() for m in ms if scale.get(m)}:
         values = frame[metric].to_numpy(dtype=float)
-        fallback = scale[metric] * 0.6745
-        population[metric] = (values, fallback, [_median_mad(g, fallback) + (len(g),) if len(g) else None for g in _by_bin(codes, values, len(bins))])
-    sparse = [b["rows"] < min_rows for b in bins]
+        finite = values[np.isfinite(values)]
+        tied = bool(np.unique(finite, return_counts=True)[1].max() >= tie_share * len(finite))  # one value that often: a lump
+        population[metric] = (values, tied, (float(np.std(finite)) if tied else scale[metric] * 0.6745) or scale[metric])
+    sparse = [b["rows"] < min_rows or b["covered"] < 0.5 for b in bins]
     out = {}
     for pid, rows in covers.items():
-        own = codes[rows]
+        own, rest = codes[rows], codes.copy()
+        rest[rows] = -1  # the bin's rows outside the insight
         series = {}
         for metric in metrics[pid]:
             if metric not in population:
                 continue
-            values, fallback, base = population[metric]
+            values, tied, fallback = population[metric]
             entries = []
-            for t, sub in enumerate(_by_bin(own, values[rows], len(bins))):
-                if sparse[t] or len(sub) < min_rows or base[t] is None:
+            for t, (sub, ref) in enumerate(zip(_by_bin(own, values[rows], len(bins)), _by_bin(rest, values, len(bins)))):
+                if sparse[t] or len(sub) < min_rows or len(ref) < min_rows:
                     entries.append(None)
                     continue
-                med_s, mad_s = _median_mad(sub, fallback)
-                med_g, mad_g, n_g = base[t]
-                se = math.hypot(_MEDIAN_SE_FACTOR * mad_s / math.sqrt(len(sub)), _MEDIAN_SE_FACTOR * mad_g / math.sqrt(n_g))
-                entries.append({"z": (med_s - med_g) / scale[metric], "n": len(sub), "se": se / scale[metric]})
+                (c_s, se_s), (c_r, se_r) = _level(sub, tied, fallback), _level(ref, tied, fallback)
+                entries.append({"z": (c_s - c_r) / scale[metric], "n": len(sub), "se": math.hypot(se_s, se_r) / scale[metric]})
             series[metric] = entries
         timed = own[own >= 0]
         out[pid] = {"rows": np.bincount(timed, minlength=len(bins)).tolist(), "untimed": int((own < 0).sum()), "series": series}

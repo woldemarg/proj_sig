@@ -73,6 +73,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
             data.update(mass=p["mass"], n_patterns=p["n_patterns"])
         elif n["kind"] == "Region":
             data.update(resolution=p["resolution"], patterns=members[n["id"]])
+        elif n["kind"] == "TemporalNode":
+            data.update(t_start=p["t_start"])  # the console's row of periods in calendar order
         nodes.append({"data": data})
     edges = [
         {

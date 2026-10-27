@@ -42,6 +42,7 @@ class MinerConfig:
     temporal_min_rows_bin: int = 30  # fewer rows in a bin (the upload's, or the insight's) leave it unmeasured
     temporal_process_noise: float = 0.1  # Q of the local-level smoother: how far the level may move per bin, in z²
     temporal_event_p: float = 0.05  # the event gate's significance, Bonferroni over every pair of measured bins
+    temporal_tie_share: float = 0.25  # a metric this share of whose values are one value is levelled per bin by its mean, not its median
 
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5
