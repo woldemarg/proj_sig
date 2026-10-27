@@ -541,7 +541,9 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     assert cells["temporal"]["rows_without_time"] == table["temporal"]["rows_without_time"] == 10
     assert sum(b["rows"] for b in cells["temporal"]["bins"]) == 6000 - 10  # the located points; the table holds the rest too
     assert sum(b["rows"] for b in table["temporal"]["bins"]) == 6300 - 10
-    assert not any(c.startswith("when") for c in cells["profile"]["numerics"] + cells["profile"]["categoricals"])  # time is never mined
+    plain = load_dataset(path, CFG, geo="latitude,longitude@7")  # time adds a layer: the cells are those of the upload without it
+    assert load_dataset(path, CFG, geo="latitude,longitude@7", time="when", grid="week").frame.equals(plain.frame)
+    assert "when" not in table["profile"]["numerics"] + table["profile"]["categoricals"]  # the table never mines the column itself
     stored = engine.ws.load_geo(cells["dataset_id"])
     raw = pd.read_csv(path)
     raw["t"] = pd.to_datetime(raw["when"], errors="coerce", utc=True, format="ISO8601")

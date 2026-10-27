@@ -333,7 +333,8 @@ def load_dataset(
         tz = parse_tz(tz)
         times = read_times(frame, time, tz)
         grid = resolve_grid(times, parse_grid(grid))
-        frame = frame.drop(columns=[time])
+        if not geo_spec:  # a geo level's cells count its days as they would without a time option: time adds, never removes
+            frame = frame.drop(columns=[time])
         if unread := int(times.isna().sum()):
             warnings.append(f"{unread} rows without a readable time: mined, outside every time bin")
     if locator and not geo_spec:
@@ -347,7 +348,7 @@ def load_dataset(
     point_values = None
     if geo_spec:
         points = frame
-        key = (digest.hexdigest(), geo_spec[0], time) if shared else None  # the levels of one upload: one point profile
+        key = (digest.hexdigest(), geo_spec[0]) if shared else None  # the levels of one upload: one point profile
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
