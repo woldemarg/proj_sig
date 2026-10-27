@@ -26,7 +26,7 @@ from insight_graph_service.core.snapshot import compute_metadata_integrity, meta
 from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import cytoscape_elements, node_details
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.ingestion import IngestionError, load_dataset, read_times, resolve_grid
+from subgroup_miner.ingestion import IngestionError, load_dataset, parse_tz, read_times, resolve_grid
 from subgroup_miner.spatial import build_cells
 from subgroup_miner.temporal import (
     DROPPED_AT,
@@ -437,7 +437,8 @@ def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
     (tmp_path / "short").mkdir()
     two_weeks = weekly_retail(tmp_path / "short", weeks=2)
     for options, message in [
-        ({"grid": "week"}, "grid without time"),
+        ({"grid": "week"}, "grid or tz without time"),
+        ({"tz": "Europe/Kyiv"}, "grid or tz without time"),
         ({"time": "when", "grid": "7D"}, "a calendar unit"),
         ({"time": "nope"}, "not in dataset"),
         ({"time": "discount"}, "holds numbers"),
@@ -695,3 +696,55 @@ def test_a_geo_pattern_without_a_series_has_no_time_line(tmp_path):
     snap = engine.ws.load_graph()
     assert cells["status"] == "READY" and series and all(not entry["series"] for entry in series.values())
     assert not snap["trajectories"] and not any("temporal_summary" in n["props"] for n in snap["nodes"])  # never «not measured»
+
+
+def test_a_time_zone_reads_wall_times_in_it_and_bins_on_its_calendar():
+    """A time written without a zone is a wall time of ``tz``; one with an offset keeps it; the days are that zone's."""
+    frame = pd.DataFrame({"when": ["2031-03-02 01:30", "2031-03-02T01:30:00+00:00", "2031-07-02 01:30"]})
+    kyiv = read_times(frame, "when", "Europe/Kyiv")
+    assert kyiv.dt.strftime("%Y-%m-%d %H:%M").tolist() == ["2031-03-01 23:30", "2031-03-02 01:30", "2031-07-01 22:30"]  # +2 in winter, +3 in summer
+    assert read_times(frame, "when").dt.strftime("%H:%M").tolist() == ["01:30", "01:30", "01:30"]  # no zone: UTC
+    typed = pd.DataFrame({"when": pd.to_datetime(["2031-03-02 01:30"])})  # a parquet's timestamp: typed, without a zone
+    assert read_times(typed, "when", "Europe/Kyiv").dt.strftime("%Y-%m-%d %H:%M").tolist() == ["2031-03-01 23:30"]
+    _, utc_days = calendar_bins(kyiv[:1], "day")
+    _, local_days = calendar_bins(kyiv[:1], "day", tz="Europe/Kyiv")
+    assert utc_days[0]["period"] == "2031-03-01" and local_days[0]["period"] == "2031-03-02"
+    assert local_days[0]["t_start"] == "2031-03-02T00:00:00+02:00" and local_days[0]["t_end"] == "2031-03-03T00:00:00+02:00"
+    assert parse_tz("") is None and parse_tz(" Europe/Kyiv ") == "Europe/Kyiv" and parse_tz("utc") is None  # UTC: no zone
+    for name in ("Kyiv/Europe", "Europe", "europe/kyiv"):  # a folder of the zone database, a name as it is not written
+        with pytest.raises(IngestionError, match="IANA name") as err:
+            parse_tz(name)
+        assert err.value.code == "invalid_options"
+    hm = lambda f, tz: read_times(pd.DataFrame({"when": f}), "when", tz).dt.strftime("%Y-%m-%d %H:%M").tolist()  # noqa: E731
+    assert hm(["02-03-2031", "03-03-2031"], "America/New_York") == ["2031-03-02 05:00", "2031-03-03 05:00"]  # a date's -2031 no offset
+    assert hm(["2031-03-02T10:00:00+03", "2031-03-02T10:00-05"], "America/New_York") == ["2031-03-02 07:00", "2031-03-02 15:00"]
+    assert hm(["2031-10-26 03:30"], "Europe/Kyiv") == ["2031-10-26 00:30"]  # the repeated hour: its first, never no time
+    _, havana = calendar_bins(pd.Series(pd.to_datetime(["2031-11-02T04:30Z"])), "day", tz="America/Havana")
+    assert havana[0]["t_start"] == "2031-11-02T00:00:00-04:00"  # a midnight that repeats: the day starts at its first
+
+
+def test_a_time_zone_names_another_analysis_and_its_upload_bins_on_its_calendar(cfg, tmp_path):
+    frame, times = table(rows=600)
+    frame.insert(0, "when", times.dt.strftime("%Y-%m-%d %H:%M:%S"))
+    path = write(tmp_path, frame)
+    utc = load_dataset(path, CFG, time="when", grid="week")
+    kyiv = load_dataset(path, CFG, time="when", grid="week", tz="Europe/Kyiv")
+    assert kyiv.tz == "Europe/Kyiv" and utc.tz is None and kyiv.dataset_id != utc.dataset_id
+    engine = make_engine(cfg)
+    with path.open("rb") as f, pytest.raises(PipelineError, match="IANA name"):
+        engine.upload(path.name, f, time="when", tz="Mars/Olympus")
+    with weekly_retail(tmp_path).open("rb") as f:
+        (level,) = engine.upload("weekly.csv", f, time="when", grid="week", tz="Europe/Kyiv")
+    record = engine.process(level["batch_id"])
+    assert record["status"] == "READY" and record["tz"] == "Europe/Kyiv"
+    assert all(b["t_start"].endswith(("+02:00", "+03:00")) for b in record["temporal"]["bins"])  # the zone's Mondays
+
+
+def test_a_parquet_upload_keeps_its_timestamps_typed(tmp_path):
+    """A parquet file's time column is a timestamp already: it is read as one, in the zone the upload names."""
+    frame, times = table(rows=600)
+    frame.insert(0, "when", times.dt.tz_localize(None))
+    path = tmp_path / "events.parquet"
+    frame.to_parquet(path)
+    loaded = load_dataset(path, CFG, time="when", grid="week", tz="Europe/Kyiv")
+    assert str(loaded.time.dt.tz) == "UTC" and (loaded.time == (times.dt.tz_localize(None).dt.tz_localize("Europe/Kyiv").dt.tz_convert("UTC"))).all()

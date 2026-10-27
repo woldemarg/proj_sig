@@ -39,16 +39,17 @@ def period_label(period: pd.Period, grid: str) -> str:
     return period.strftime("%Y-%m-%d" if grid == "day" else "%Y-%m")
 
 
-def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
+def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None, tz: str | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Each row's bin (-1 for a row without a time) and the bins from the first time's period to the last's, empty ones
-    included, each ``{period, t_start, t_end, rows, covered, partial}`` (UTC, half-open). ``covered``: the share of the
+    included, each ``{period, t_start, t_end, rows, covered, partial}`` (half-open; the calendar of ``tz``, UTC by
+    default, its bounds written with that zone's offset). ``covered``: the share of the
     bin's days the upload's times span (1 but for its first and last bin); ``partial``: under 1. More bins than
     ``max_bins`` is ``invalid_options``, before any is built: one placeholder date (``9999-12-31``) would make hundreds
     of thousands."""
     known = times.notna().to_numpy()
     if not known.any():  # no time reads: no bin (the upload's check refuses it)
         return np.full(len(times), -1, dtype=np.int64), []
-    naive = times[known].dt.tz_convert("UTC").dt.tz_localize(None)
+    naive = times[known].dt.tz_convert(tz or "UTC").dt.tz_localize(None)  # the wall times of the calendar
     periods = naive.dt.to_period(GRID_FREQ[grid])
     first, last = periods.min(), periods.max()
     if max_bins and (count := last.ordinal - first.ordinal + 1) > max_bins:
@@ -65,8 +66,8 @@ def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None) -> t
         bins.append(
             {
                 "period": period_label(p, grid),
-                "t_start": start.tz_localize("UTC").isoformat(),
-                "t_end": end.tz_localize("UTC").isoformat(),
+                "t_start": start.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
+                "t_end": end.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
                 "rows": int(rows[i]),
                 "covered": round(float(covered), 3),
                 "partial": bool(covered < 1),

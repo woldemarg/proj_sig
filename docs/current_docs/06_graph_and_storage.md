@@ -37,7 +37,7 @@ The structural plane stays within one dataset; CO_LOCATED and the regions join a
 
 | Element | Rule | Weight and properties |
 |---|---|---|
-| TemporalNode `T:<grid>:<period>` | a calendar period of a dataset's grid that holds an event; one node for every dataset with an event there | `granularity`, `period`, `t_start`, `t_end` (UTC, half-open) |
+| TemporalNode `T:<grid>:<period>` | a calendar period of a dataset's grid that holds an event; one node for every dataset with an event there | `granularity`, `period`, `t_start`, `t_end` (half-open; a wall-calendar period, so datasets of different zones share it, its bounds with the offset of the first dataset's zone) |
 | PEAKED_AT / DROPPED_AT, Pattern → TemporalNode | a peak or a dip of one of the pattern's series that passes the gate ([2.10](02_discovery.md#210-time-the-calendar-grid-and-an-insights-dynamics)); one edge per pattern, period and kind, its most prominent event there | 1.0; `metric`, `period`, `z_raw`, `z_smoothed`, `prominence`, `p` of that event, `metrics` (every metric that peaked, or dipped, in the period) |
 | `trajectories` (a section of the snapshot) | every pattern of such a dataset | `column`, `grid`, `span`, `metric` (the first of the target and the shifts with a measured bin, the target when none has one; the trend, the current level, the measured bins and the gaps describe it); `series` (per metric, one `{period, z, se}` or null per bin), `smoothed` (per metric, x̂ or null per bin), `events`, `trend`, `current`, `bins_measured` of `of`, `gaps` |
 | `temporal_summary` on the Pattern, `temporal` on the Dataset | the same patterns, their datasets | `{metric, trend, current, bins_measured, of, events}` (`events` their count); `{column, grid, span}` |

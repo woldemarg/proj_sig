@@ -6,6 +6,7 @@ import csv
 import functools
 import hashlib
 import warnings
+import zoneinfo
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from pandas.tseries.api import guess_datetime_format
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, locate_points, parse_geo, select_levels
+from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, select_levels
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -42,6 +43,7 @@ class LoadedDataset:
     time: pd.Series | None = None  # each row's time (UTC; NaT where its value reads as none), the time column left out; a geo level's: each point's
     point_values: pd.DataFrame | None = None  # a geo level with a time column: the points' numeric columns its cell medians summarise
     grid: str | None = None  # the calendar unit its times are binned by (``TIME_GRIDS``)
+    tz: str | None = None  # the zone whose calendar the grid is, and in which a time without one is read (UTC when None)
 
 
 def parse_bins(spec: str | None) -> dict[str, int]:
@@ -160,8 +162,9 @@ _kept = functools.lru_cache(maxsize=1)(_parse)  # ponytail: one file, as the lev
 
 
 def forget_tables() -> None:
-    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``)."""
+    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``) and its points' profile."""
     _kept.cache_clear()
+    forget_profile()
 
 
 def select_present(
@@ -238,8 +241,23 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
     return max(("quarter", "month", "week", "day"), key=balance)
 
 
-def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
-    """A time column as UTC times (a time without a zone is taken as UTC), read in the one format that reads most of it:
+# a zone after a clock time, never a date's -2031
+ZONED = r"[0-9]:[0-9]{2}(?::[0-9]{2}(?:[.,][0-9]+)?)?\s*(?:Z|UTC|GMT|[+-][0-9]{2}(?::?[0-9]{2})?)\s*$"
+
+
+def parse_tz(tz: str | None) -> str | None:
+    """A time zone by its IANA name (``Europe/Kyiv``, as written); None for none, empty or UTC (one calendar, one dataset id).
+    Another name is ``invalid_options``."""
+    name = (tz or "").strip()
+    if name.upper() in ("", "UTC", "ETC/UTC"):
+        return None
+    if name not in zoneinfo.available_timezones():  # not ZoneInfo: it reads a folder's name as a file, case-blind on Windows
+        raise IngestionError("invalid_options", f"time zone {tz!r}: an IANA name such as Europe/Kyiv")
+    return name
+
+
+def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
+    """A time column as UTC times (a time without a zone is taken in ``tz``, UTC by default), read in the one format that reads most of it:
     ISO 8601, or its first value's with the day before the month, or with the month first (that order on a tie). A
     value in another format is NaT, never another date. A column the file lacks, a numeric one (no unit to read it in)
     or one with no value that reads as a time is ``invalid_options``."""
@@ -260,6 +278,11 @@ def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
             times = max(readings, key=lambda r: r.notna().sum())
     if times.isna().all():
         raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
+    if tz:  # a time written without a zone is a wall time of tz: shift it from UTC to there; one with a zone keeps it
+        zoned = values.astype("string").str.contains(ZONED, case=False, regex=True, na=False)  # a typed timestamp's text too
+        # the autumn's repeated hour read as its first: either lies in the same day; the spring's missing one as the next
+        local = times.dt.tz_localize(None).dt.tz_localize(tz, ambiguous=True, nonexistent="shift_forward").dt.tz_convert("UTC")
+        times = times.where(zoned, local)
     return times
 
 
@@ -276,6 +299,7 @@ def load_dataset(
     shared: bool = False,
     time: str | None = None,
     grid: str | None = None,
+    tz: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -285,7 +309,8 @@ def load_dataset(
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
     of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
     (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
-    ``resolve_grid`` of the span; §2.10) — discovery never sees it."""
+    ``resolve_grid`` of the span; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by default, and the zone of a
+    time written without one) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -305,7 +330,8 @@ def load_dataset(
     left_out = []
     times = None
     if time:
-        times = read_times(frame, time)
+        tz = parse_tz(tz)
+        times = read_times(frame, time, tz)
         grid = resolve_grid(times, parse_grid(grid))
         frame = frame.drop(columns=[time])
         if unread := int(times.isna().sum()):
@@ -321,7 +347,8 @@ def load_dataset(
     point_values = None
     if geo_spec:
         points = frame
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
+        key = (digest.hexdigest(), geo_spec[0], time) if shared else None  # the levels of one upload: one point profile
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
@@ -340,7 +367,7 @@ def load_dataset(
     return LoadedDataset(
         frame=frame,
         dataset_id=dataset_fingerprint(
-            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{grid}" if time else None
+            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{grid}" + (f":{tz}" if tz else "") if time else None
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -352,6 +379,7 @@ def load_dataset(
         points=",".join(left_out) or None,
         time=times,
         grid=grid if time else None,
+        tz=tz if time else None,
         point_values=point_values,
     )
 
@@ -370,13 +398,17 @@ def _geo_text(spec: tuple[str, int] | None) -> str | None:
     return f"{spec[0]}@{spec[1]}" if spec else None
 
 
-def _to_cells(frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
-    """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions."""
+def _to_cells(
+    frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig, profile_key: object = None
+) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
+    """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
+    one upload profile its point columns once (``spatial.point_profile``)."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
             *spec,
             min_cell_points=config.min_cell_points,
+            profile_key=profile_key,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
