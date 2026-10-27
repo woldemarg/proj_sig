@@ -166,7 +166,7 @@ def timed(tmp_path_factory):
     folder = tmp_path_factory.mktemp("timed")
     engine = make_engine(make_config(folder / "ws"))
     with weekly_retail(folder).open("rb") as f:
-        (record,) = engine.upload("weekly.csv", f, time="when")
+        (record,) = engine.upload("weekly.csv", f, time="when", grid="week")
     record = engine.process(record["batch_id"])
     assert record["status"] == "READY", record.get("error")
     return engine, record

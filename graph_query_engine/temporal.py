@@ -56,8 +56,8 @@ def _months_on(day: date, months: int) -> date:
 
 
 def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> float:
-    """How much of the asked interval a pattern was measured in: the share of it its metric's measured bins cover,
-    doubled when one of its events falls in it, at most 1 (``seeds.SEED_TIME_WEIGHT`` weighs it)."""
+    """Half the share of the asked interval its metric's measured bins cover, plus a half when one of its events falls in
+    it — an event in the period outranks mere presence through it (``seeds.SEED_TIME_WEIGHT`` weighs the score)."""
 
     def overlap(period: str) -> float:
         span = period_interval(period)
@@ -65,7 +65,7 @@ def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> 
 
     measured = [e["period"] for e in trajectory["series"].get(trajectory["metric"], []) if e]
     share = sum(map(overlap, measured)) / (asked[1] - asked[0]).total_seconds()
-    return min(1.0, share * (2 if any(overlap(e["period"]) for e in trajectory["events"]) else 1))
+    return 0.5 * share + (0.5 if any(overlap(e["period"]) for e in trajectory["events"]) else 0.0)
 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
@@ -92,14 +92,15 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
 
 
 def time_line(facts: dict[str, Any]) -> str:
-    """The ``time:`` line of an evidence item."""
+    """The ``time:`` line of an evidence item: the span's first and last day, the trend with its Ukrainian name (the word
+    rule 13 asks the answer to use), the current level, the events and the bins."""
     start, end = (t[:10] for t in facts["span"])
-    trend = facts["trend"] or "not measured"
+    trend = f"{facts['trend']} «{wording.name('trend_' + facts['trend'])}»" if facts["trend"] else f"not measured «{wording.name('time_unmeasured')}»"
     current = "not measured" if facts["current"] is None else f"{facts['current']:+.2f} sd" + (" (below the threshold)" if facts["faded"] else "")
     kinds = {"PEAKED_AT": "peak", "DROPPED_AT": "dip"}
     events = "; ".join(f"{kinds[e['kind']]} {e['period']} ({e['metric']}, {e['z_smoothed']:+.2f} sd)" for e in facts["events"][:3]) or "none"
     gaps = f" | unmeasured: {', '.join(a if a == b else f'{a}–{b}' for a, b in facts['gaps'])}" if facts["gaps"] else ""
     return (
-        f"grid {facts['grid']} | span [{start}, {end}) | trend {trend} ({facts['metric']}) | current {current}"
+        f"grid {facts['grid']} | span [{start}, {end}] | trend {trend} ({facts['metric']}) | current {current}"
         f" | events: {events} | bins {facts['bins_measured']}/{facts['of']} measured{gaps}"
     )
