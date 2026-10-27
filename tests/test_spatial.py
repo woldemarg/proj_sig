@@ -27,7 +27,6 @@ from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
-    cells_inside,
     centre_region,
     effective_n_factor,
     footprint,
@@ -416,27 +415,28 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
     assert {e["props"]["basis"] for e in members} >= {"events"}
-    # the map as a window on the graph: every other level's insights on the finest level's cells, a coarser geo one by
-    # every cell inside its own, a base one by the footprint of its events
+    # the map as a window on the graph: every other level's insights on the finest level's cells, each by every cell
+    # holding its events
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
-    assert all(projected[pid]["rows"] and projected[pid]["spatial"]["footprint_share"] >= 0.8 for pid in table_ids)
-    fine_cells, coarse_cells = (engine.ws.load_geo(r["dataset_id"], ("cells",))["cells"] for r in done[:2])
+    assert all(p["rows"] for p in projected.values())
+    point_cell, coarse = (
+        engine.ws.load_geo(fine, ("point_cell",))["point_cell"],
+        engine.ws.load_geo(done[1]["dataset_id"], ("point_cell",))["point_cell"],
+    )
     for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
-        assert projected[pid]["rows"] == np.flatnonzero(cells_inside(fine_cells, coarse_cells[rows].astype(str))).tolist()
-    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every insight at its own share, lift 1
+        assert sorted(projected[pid]["rows"]) == np.unique(point_cell[np.isin(coarse, rows) & (point_cell >= 0)]).tolist()
+    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every region's rows
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
-    assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
+    assert table_ids & set(listed) and all(i["lift"] >= 1 for i in listed.values())
     assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
     overlay = engine.geo_overlay(fine)
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
         assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
-    drawn = engine.geo_pattern(fine, pid)  # drawn by its footprint, counted by all its events
-    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] < listed[pid]["points"] and set(drawn["rows"]) == set(
-        projected[pid]["rows"]
-    )
+    drawn = engine.geo_pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
+    assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
@@ -519,9 +519,8 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     every = {n["id"] for n in finer.graph().of_kind("Region")}
     assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7 (where the level of 9 lies)
     assert all(n["props"]["patterns"] == len(finer.graph().holders(n["id"])) for n in finer.graph().of_kind("Region"))  # the r7 cells too
-    with mock.patch("insight_graph_service.core.geo_views.shown_regions", return_value=every):  # were they shown
-        drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
-    assert drawn and all(f["properties"]["resolution"] <= 7 for f in drawn)  # none inside one of its cells
+    drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
+    assert drawn and all(f["properties"]["resolution"] < 7 for f in drawn)  # none inside one of its cells, nor its cells
 
 
 def test_a_table_level_is_placed_by_its_events(engine, points_csv):

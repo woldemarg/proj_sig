@@ -27,7 +27,7 @@ After the start, the app queues `Engine.startup_sync()` on its worker thread. It
 
 The worker also builds a commit's first reads before a console asks, at the start and after an upload's last level, a `PATCH /api/datasets` and a deletion. It builds the graph view first (`GET /api/graph`, no filter), then the map's reads for each READY geo dataset (`Engine.warm_map`, `geo_views.warm`):
 - **Which datasets:** newest first, and at most as many as the cell-package cache holds (8).
-- **What it reads:** the cell package, which goes to its per-file cache; the overlay, the projected insights and the whole map's window, whose projection and per-insight facts go to the commit's memo.
+- **What it reads:** the cell package, which goes to its per-file cache; the overlay, the projected insights and the whole map's window, whose projection, regions' rows and per-insight facts go to the commit's memo.
 - **When it stops:** while a batch waits, whose commit would throw them away. It builds nothing on a degraded workspace.
 - **With the Neo4j mirror on,** it starts once the mirror's sync has finished, because the sync runs in the commit's job. A console that reads in between builds what it reads itself, as before.
 

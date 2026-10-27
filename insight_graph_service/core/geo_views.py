@@ -19,15 +19,14 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from graph_query_engine.graph import DualGraph, declared_words, insight_reading, primary_anchor, theme_glossary
-from graph_query_engine.vertical import affinity, picture, restating, scale_chain, scale_label, shown_regions
-from insight_contracts import Insight, PhenomenonThresholds, wording
+from graph_query_engine.vertical import affinity, restating, scale_chain, scale_label
+from insight_contracts import Insight, PhenomenonThresholds, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.uploads import same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.spatial import (
     SpatialError,
-    build_projection,
     cell_boundary,
     cell_centres,
     compactness,
@@ -40,10 +39,7 @@ from subgroup_miner.spatial import (
     zone_overlap,
 )
 
-WINDOW_THEMES_UNGROUPED = 8  # the most themes a window lists ungrouped; over it related themes fold together (docs/08 §8.7)
-WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in view and to their expected count (docs/08 §8.7)
-WINDOW_DETAIL_LEVEL = 5  # the regions whose count in view decides which levels a window lists first
-WINDOW_DETAIL_REGIONS = 3  # a view over more of them lists the table and coarser levels first, a closer one the map's own
+WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region and to their expected count (docs/08 §8.7)
 
 
 def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
@@ -52,7 +48,15 @@ def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
     for b in ws.list_batches():
         geo = (b.get("profile") or {}).get("geo")
         if b.get("status") == "READY" and geo:
-            out.append({"dataset_id": b["dataset_id"], "filename": b["filename"], **geo, "metrics": b["profile"].get("numerics", [])})
+            out.append(
+                {
+                    "dataset_id": b["dataset_id"],
+                    "upload_id": b.get("upload_id"),
+                    "filename": b["filename"],
+                    **geo,
+                    "metrics": b["profile"].get("numerics", []),
+                }
+            )
     return out
 
 
@@ -97,7 +101,7 @@ def place_scores(
     ws: Workspace, graph: DualGraph, cells: list[str] | None, geometry: dict[str, Any] | None, resolution: int | None
 ) -> dict[str, float] | None:
     """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
-    datasets of at most ``resolution`` (None: all), and every placed base pattern's by its footprint on the geo level
+    datasets of at most ``resolution`` (None: all), and every placed base pattern's by the cells holding its events on the geo level
     that places it, of at most ``resolution`` too; ``geometry`` becomes the cells of the finest of them. None: no zone."""
     if cells is None and geometry is None:
         return None
@@ -139,7 +143,7 @@ def _zone_scores(
     ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...], tables: tuple[tuple[str, str], ...], strict: bool = True
 ) -> dict[str, float]:
     """``zone_overlap`` over the stored cells and extents of each geo dataset in ``levels``, and over each (table level,
-    geo level placing it) of ``tables`` by the footprints of the table's patterns on that level's cells; ``strict``: a
+    geo level placing it) of ``tables`` by the cells holding the table's patterns' events on that level; ``strict``: a
     missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
     out: dict[str, float] = {}
     for dataset_id, _ in levels:
@@ -155,7 +159,7 @@ def _zone_scores(
             if strict:
                 raise FileNotFoundError(table)
             continue
-        prints = {pid: footprint(geo["point_cell"], rows)[0] for pid, rows in covers.items()}  # a table's rows are the points
+        prints = {pid: footprint(geo["point_cell"], rows, 1.0)[0] for pid, rows in covers.items()}  # a table's rows are the points
         out.update(zone_overlap(geo["cells"], prints, zone))
     return out
 
@@ -253,51 +257,69 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
-def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int) -> dict[str, Any]:
+def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int, rings: bool = False) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
     another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
-    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it."""
+    whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it.
+    With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
+    of this dataset draws and describes it."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
     if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
         raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
     if rows is not None:
-        inside = np.flatnonzero(np.isin(geo["point_cell"], rows))
+        inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
         members = member_rows(ws, batch, ws.ready_batch_for(dataset_id), len(geo["point_cell"])) if batch else None
         if members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-        rows = found.rows
+        rows, level = found.events, found.level
         src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
         inside = src[np.isin(geo["point_cell"][src], rows)]
     step = max(1, int(np.ceil(len(inside) / max_points)))
     points = geo["lonlat"][inside[::step]]
+    ins = graph.insight(pattern_id)
     return {
         "pattern_id": pattern_id,
         "cells": [str(c) for c in geo["cells"][rows]],
         "rows": rows.tolist(),
         "n_points": int(len(inside)),
         "points": np.round(points.astype(float), 5).tolist(),
-    }
+        "level": level,
+        "effect_size": ins.effect_size,
+        "phenomenon_type": ins.phenomenon_type,
+        "support": ins.support,
+        "weight": ins.weight,
+    } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
 
 
-def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds) -> dict[str, Any]:
-    """What the graph says about a geo dataset's map: the regions drawn for its patterns and for the base patterns of its
-    upload and points (``shown_regions``, none finer than its cells) as GeoJSON, each with its ``picture`` and the
-    dataset's cell rows inside it, and each pattern's credibility, integrity, scale and reading; derived once per commit."""
+def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+    """What the map draws over a geo dataset: every region holding a cell of the datasets ``map_set`` keeps, at each
+    level of ``_region_sets``, as GeoJSON with the rows of ``dataset_id``'s cells inside it and ``n``, the IN VIEW rows a
+    view of that region alone lists (``_rows``; the datasets' insights are of different uploads, so their counts add), and
+    ``by``, that count per dataset; and each pattern of the dataset and of the table levels of its upload, and each one
+    another dataset of the set lists, with its credibility, integrity, scale and reading — the latter with ``map_dataset``,
+    the dataset whose ``/patterns`` draws it. Derived once per commit."""
+    kept = map_set(ws, dataset_id, datasets)
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells",))  # inside: a memo hit reads no file
         owner = _owner(ws, dataset_id)
         tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
-        res = owner["profile"]["geo"]["resolution"]
-        drawn = [r for r in shown_regions(graph, pids) if graph.nodes[r]["props"]["resolution"] <= res]  # a finer one is inside a cell
-        features = region_features(geo["cells"], sorted(drawn))
+        held: defaultdict[str, dict[str, int]] = defaultdict(dict)
+        levels = _region_sets(ws, graph, dataset_id).keys()  # the map's: another dataset's finer ones would lie inside its cells
+        for ds in kept:
+            for lv, sets in _region_sets(ws, graph, ds).items():
+                for cell, listed in zip(sets.ids, sets.listed, strict=True) if lv in levels else ():
+                    held[region_node_id(lv, str(cell))][ds] = len(_rows(graph, ds, listed))
+        features = region_features(geo["cells"], sorted(held))
         for f in features:
-            f["properties"].update(picture(graph, f["properties"]["id"]))
+            by = held[f["properties"]["id"]]
+            f["properties"].update(n=sum(by.values()), by=by)
+        elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds)["patterns"]}
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
             | {
@@ -305,14 +327,96 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
                 "reading": insight_reading(graph, pid, thresholds),
                 "numbers": wording.value_words(graph.insight(pid)),
             }
-            for pid in pids
+            | ({"map_dataset": elsewhere[pid]} if pid in elsewhere else {})
+            for pid in [*pids, *elsewhere]
         }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
-    return graph.memoised(("overlay", dataset_id), build)
+    return graph.memoised(("overlay", *kept), build)
 
 
-# ponytail: the map draws other levels' insights on read, once per commit; their regions come from IN_REGION (shown_regions)
+def map_set(ws: Workspace, dataset_id: str, datasets: tuple[str, ...]) -> tuple[str, ...]:
+    """The geo datasets a map counts: ``dataset_id``, then those of ``datasets`` (each a geo dataset, else
+    ``invalid_options``), one per upload — the map's own, else the finest —, since a level counts its upload's others."""
+    if not datasets:
+        return (dataset_id,)
+    geo = {d["dataset_id"]: d for d in geo_datasets(ws)}
+    if unknown := sorted(set(datasets) - set(geo)):
+        raise PipelineError("invalid_options", f"not geo datasets: {', '.join(unknown)}")
+
+    def upload(ds: str) -> str:
+        return (ws.ready_batch_for(ds) or {}).get("upload_id") or ds
+
+    kept = {upload(dataset_id): dataset_id}
+    for ds in sorted(set(datasets), key=lambda d: (-geo[d]["resolution"], d)):
+        kept.setdefault(upload(ds), ds)
+    return (dataset_id, *sorted(ds for ds in kept.values() if ds != dataset_id))
+
+
+class RegionSets(NamedTuple):
+    """One region level over a geo dataset's cells: the regions holding a cell (``ids``, H3), each cell's region
+    (``idx``), and per region the insights it lists with their lift (``listed``) and those characteristic of its own
+    cells (``own``); the others it takes from the coarser region it lies in."""
+
+    ids: np.ndarray
+    idx: np.ndarray
+    listed: list[dict[str, float]]
+    own: list[set[str]]
+
+
+def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, RegionSets]:
+    """``RegionSets`` at every region level of the graph coarser than the dataset's cells (its own cells without one)
+    where a region lists an insight — a level of none gives the map no hint, so it is left out unless every level is —,
+    derived once per commit. An insight of the projection is characteristic of a region by the rule of
+    docs/08_interface.md §8.7: with ``x`` of its ``|P_loc|`` located events in the region's cells and ``E`` the number
+    its map-wide share puts there, ``x ≥ link_min_events(|P_loc|)`` and ``(x + a) / (E + a) ≥ 1``; a base insight the
+    graph leaves unplaced (``geo: partial``) is never one. A region also lists, at their lift there, the insights of the
+    coarser regions holding its cells that have an event in it: a zoom never loses what the coarser region listed."""
+
+    def build() -> dict[int, RegionSets]:
+        proj = _projection(ws, graph, dataset_id)
+        cells = _geo(ws, dataset_id, ("cells",))["cells"]
+        per_cell, res = proj["per_cell"], proj["resolution"]
+        total = int(per_cell.sum())
+        levels = tuple(sorted({n["props"]["resolution"] for n in graph.of_kind("Region")} & set(range(res)))) or (res,)
+        regions = event_regions(cells, levels)
+        out: dict[int, RegionSets] = {}
+        coarser: RegionSets | None = None
+        for lv in sorted(regions):  # coarsest first: a region takes what the region above it lists
+            ids, idx = np.unique(regions[lv], return_inverse=True)
+            here = np.bincount(idx, weights=per_cell, minlength=len(ids))
+            listed: list[dict[str, float]] = [{} for _ in ids]
+            own: list[set[str]] = [set() for _ in ids]
+            events: dict[str, np.ndarray] = {}
+            patterns = proj["patterns"].items() if total else ()  # no located point: the expected count would divide by it
+            for pid, p in patterns:
+                mine = int(p.counts.sum())
+                if graph.nodes[pid]["props"].get("geo") == "partial" or not mine:
+                    continue
+                x = events[pid] = np.bincount(idx[p.events], weights=p.counts, minlength=len(ids))
+                lift = (x + WINDOW_LIFT_PRIOR) / (mine * here / total + WINDOW_LIFT_PRIOR)
+                for r in np.flatnonzero((x >= link_min_events(mine)) & (lift >= 1)):
+                    listed[r][pid] = float(lift[r])
+                    own[r].add(pid)
+            if coarser is not None:
+                for r, up in set(zip(idx.tolist(), coarser.idx.tolist(), strict=True)):  # a region and each coarser one its cells lie in
+                    for pid, lift in coarser.listed[up].items():
+                        if pid not in own[r] and events[pid][r] > 0:
+                            listed[r][pid] = max(listed[r].get(pid, 0.0), lift)
+            out[lv] = coarser = RegionSets(ids, idx, listed, own)
+        return {lv: s for lv, s in out.items() if any(s.listed)} or {min(out): out[min(out)]}
+
+    return graph.memoised(("region_sets", dataset_id), build)
+
+
+def _rows(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> dict[str, list[str]]:
+    """The rows of a set of characteristic insights, each result once: every base insight, and every geo host with the
+    levels it folds (``_fold_levels``)."""
+    hosts = _fold_levels(graph, dataset_id, listed)
+    return {pid: hosts.get(pid, []) for pid in listed if pid in hosts or graph.facts(pid).resolution is None}
+
+
+# ponytail: the map draws other levels' insights on read, once per commit
 def member_rows(ws: Workspace, batch: dict[str, Any], owner: dict[str, Any], n_points: int) -> Callable[[np.ndarray], np.ndarray] | None:
     """The point rows of ``owner`` (the map's batch) that a pattern's covered rows name, for a READY batch of the same
     upload and point columns (``same_points``): a geo level's rows are cells, whose points its ``point_cell`` names; a
@@ -328,10 +432,9 @@ def member_rows(ws: Workspace, batch: dict[str, Any], owner: dict[str, Any], n_p
 
 
 class Projected(NamedTuple):
-    """One insight of a map's upload on the map's cells: the ``rows`` it is drawn by, the ``level`` it was found at, and
-    every cell row holding its located events with their counts (``events``, ``counts``)."""
+    """One insight of a map's upload on the map's cells: the ``level`` it was found at, and every cell row holding its
+    located events with their counts (``events``, the rows it is drawn by, and ``counts``)."""
 
-    rows: np.ndarray
     level: str
     events: np.ndarray
     counts: np.ndarray
@@ -339,10 +442,9 @@ class Projected(NamedTuple):
 
 def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, Any]:
     """Every intact insight of the dataset's upload on the dataset's cells (``Projected``), derived once per commit: an
-    insight of the dataset is drawn by its cells, one of another geo level by the cells inside its own (``cells_inside``),
-    a base one by the ``footprint`` of its events; each counts all its located events. ``per_cell``: points;
-    ``centres``; ``detail``: each cell's region at ``WINDOW_DETAIL_LEVEL`` (its own on a coarser map) as an index, and
-    ``detail_area`` such a region's area in regions of that level."""
+    insight of the dataset is drawn by its cells, one of another level by every cell holding its located events, so it
+    is drawn where it is counted and a region listing it shows it. ``per_cell``: points;
+    ``centres``; ``resolution``: the dataset's."""
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells", "point_cell"))  # inside: a memo hit reads no file
@@ -359,27 +461,19 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
                 continue
             res = ((b.get("profile") or {}).get("geo") or {}).get("resolution", b.get("level"))  # also without upload levels
             level = "table" if b.get("level") == "table" else f"res {res}"
-            other = None if own or b.get("level") == "table" else ws.load_geo(b["dataset_id"], ("cells",))
-            inside = build_projection(cells, other["cells"]) if other else None
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
                 if pid not in graph.nodes or graph.tampered(pid):
                     continue
                 if own:
-                    patterns[pid] = Projected(rows, level, rows, per_cell[rows])
+                    patterns[pid] = Projected(level, rows, per_cell[rows])
                     continue
                 events, counts = footprint(point_cell, members(rows), 1.0)  # every cell holding its located events
-                drawn = inside(rows) if inside else footprint(point_cell, members(rows))[0]
-                patterns[pid] = Projected(drawn, level, events, counts)
-        res = int(owner["profile"]["geo"]["resolution"])
-        lv = min(WINDOW_DETAIL_LEVEL, res)
-        detail = np.unique(event_regions(cells, (lv,))[lv], return_inverse=True)[1]
+                patterns[pid] = Projected(level, events, counts)
         return {
             "patterns": patterns,
             "per_cell": per_cell,
             "centres": cell_centres(cells),
-            "detail": detail,
-            "detail_area": 7 ** (WINDOW_DETAIL_LEVEL - lv),  # an H3 cell holds about seven of the next level
-            "resolution": res,
+            "resolution": int(owner["profile"]["geo"]["resolution"]),
         }
 
     return graph.memoised(("projection", dataset_id), build)
@@ -387,22 +481,13 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
 
 def geo_projected(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds) -> list[dict[str, Any]]:
     """The insights of the dataset's upload found at another level (the table, another resolution) drawn on its cells as
-    ``geo_cells`` draws its own: their drawn rows, scope, shift and reading, and the share of their located events those rows hold."""
+    ``geo_cells`` draws its own: the rows holding their located events, scope, shift and reading."""
     out = []
     for pid, p in _projection(ws, graph, dataset_id)["patterns"].items():
         ins = graph.insight(pid)
         if ins.dataset_id == dataset_id:
             continue
-        held = int(p.counts[np.isin(p.events, p.rows)].sum())
-        out.append(
-            _pattern_json(
-                ins,
-                p.rows,
-                level=p.level,
-                spatial={"footprint_share": round(held / max(int(p.counts.sum()), 1), 3), "footprint_points": held},
-                reading=insight_reading(graph, pid, thresholds),
-            )
-        )
+        out.append(_pattern_json(ins, p.events, level=p.level, reading=insight_reading(graph, pid, thresholds)))
     return out
 
 
@@ -441,31 +526,71 @@ def _restates(graph: DualGraph, pid: str) -> set[str]:
     return graph.memoised(("restates", pid), lambda: next((restating(graph, c) for c in scale_chain(graph, [pid])), set()))
 
 
-def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thresholds: PhenomenonThresholds) -> dict[str, Any]:
-    """The insights of the dataset's upload characteristic of the cells whose centres lie in ``bbox`` (``window_view``),
-    one row per result and level-folded, under their theme (``primary_anchor``), related themes grouped
-    (``group_themes``): the rule of docs/08_interface.md §8.7."""
-    proj = _projection(ws, graph, dataset_id)
-    view = window_view(proj["centres"], bbox)
-    total, here = int(proj["per_cell"].sum()), int(proj["per_cell"][view].sum())
-    if not total:  # a map without a located point lists nothing: the expected count below would divide by it
-        return {"cells": int(view.sum()), "points": 0, "first": "map", "insights": 0, "themes": []}
-    wide = len(np.unique(proj["detail"][view])) * proj["detail_area"] > WINDOW_DETAIL_REGIONS
-    listed: dict[str, tuple[Projected, int, int, float]] = {}
-    for pid, p in proj["patterns"].items():
-        if graph.nodes[pid]["props"].get("geo") == "partial":
-            continue  # a base insight too little located for the graph to place it
-        x, mine = int(p.counts[view[p.events]].sum()), int(p.counts.sum())
-        lift = (x + WINDOW_LIFT_PRIOR) / (mine * here / total + WINDOW_LIFT_PRIOR)
-        if x >= link_min_events(mine) and lift >= 1:
-            listed[pid] = (p, x, mine, lift)
-    hosts = _fold_levels(graph, dataset_id, listed)
+def geo_window(
+    ws: Workspace,
+    graph: DualGraph,
+    dataset_id: str,
+    bbox: str,
+    thresholds: PhenomenonThresholds,
+    level: int | None = None,
+    datasets: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """The IN VIEW list (docs/08_interface.md §8.7): the regions of ``level`` (the finest of ``_region_sets`` without one)
+    holding a cell whose centre lies in ``bbox`` (``window_view``), and the rows of the insights characteristic of any
+    of them, over the datasets ``map_set`` keeps, each result once (``_rows``); ranked (``rank``) by how many of those
+    regions it is characteristic of in its own right — a row a region lists only as a coarser one's comes after —,
+    then its best lift there, then weight, and listed under its theme
+    (``primary_anchor``). A view of one region lists the ``n`` the overlay draws on it."""
+    rows: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    cells = points = 0
+    regions: set[str] = set()
+    own_levels = _region_sets(ws, graph, dataset_id)
+    lv = max(own_levels) if level is None else level  # the map's level reads every dataset of the set
+    if lv not in own_levels:
+        raise PipelineError("invalid_options", f"level {level} is not a region level of {dataset_id}")
+    for ds in map_set(ws, dataset_id, datasets):
+        proj, sets = _projection(ws, graph, ds), _region_sets(ws, graph, ds)
+        if lv not in sets:
+            continue
+        view, at = window_view(proj["centres"], bbox), sets[lv]
+        cells, points = cells + int(view.sum()), points + int(proj["per_cell"][view].sum())
+        own: defaultdict[str, list[float]] = defaultdict(list)  # the regions in focus each insight is characteristic of
+        wide: defaultdict[str, list[float]] = defaultdict(list)  # those listing it only as a coarser region's
+        for r in np.unique(at.idx[view]):
+            regions.add(region_node_id(lv, str(at.ids[r])))
+            for pid, lift in at.listed[r].items():
+                (own if pid in at.own[r] else wide)[pid].append(lift)
+        for pid, folded in _rows(graph, ds, {**wide, **own}).items():
+            ins, p = graph.insight(pid), proj["patterns"][pid]
+            x, mine, lift = int(p.counts[view[p.events]].sum()), int(p.counts.sum()), max(own[pid] or wide[pid])
+            rows.append(
+                (
+                    (-len(own[pid]), -lift, -ins.weight, pid),  # a wider row after every row of the place's own
+                    {
+                        "id": pid,
+                        "dataset_id": ds,
+                        "label": graph.nodes[pid]["label"],
+                        "level": p.level,
+                        "values": wording.short_conditions(ins, *declared_words(graph, pid)),  # a value, or the phrase a code needs
+                        "target": ins.target,
+                        "effect": round(ins.effect_size, 3),
+                        "ptype": ins.phenomenon_type,
+                        "weight": round(ins.weight, 3),
+                        "support": ins.support,
+                        "points": x,
+                        "share": round(x / mine, 3),
+                        "cells": int(view[p.events].sum()),
+                        "regions": len(own[pid]),
+                        "lift": round(lift, 1),  # to one decimal, as lift_words reads it: the badge and its words agree
+                        "lift_words": wording.lift_words("window", lift),
+                        "wider": not own[pid],  # listed only as a coarser region's, at its lift there
+                        "also": [{"id": q, "level": proj["patterns"][q].level} for q in folded],
+                    },
+                )
+            )
     themes: dict[str | None, dict[str, Any]] = {}
-    for pid, (p, x, mine, lift) in listed.items():
-        if pid not in hosts and graph.facts(pid).resolution is not None:
-            continue  # folded into the host that restates it
-        ins, anchor, res = graph.insight(pid), primary_anchor(graph, pid), graph.facts(pid).resolution
-        coarse = res is None or res < proj["resolution"]
+    for rank, (_, row) in enumerate(sorted(rows, key=lambda r: r[0])):
+        anchor = primary_anchor(graph, row["id"])
         aid = anchor["target"] if anchor else None
         node = graph.nodes.get(aid)
         theme = themes.setdefault(
@@ -475,59 +600,11 @@ def geo_window(ws: Workspace, graph: DualGraph, dataset_id: str, bbox: str, thre
                 "label": node["label"] if node else "без теми",
                 "reading": wording.theme_reading(node["props"], theme_glossary(graph, aid)) if node else "",
                 "insights": [],
-                "members": [],
             },
         )
-        theme["insights"].append(
-            (
-                (coarse != wide, -lift, -ins.weight),
-                {
-                    "id": pid,
-                    "label": graph.nodes[pid]["label"],
-                    "level": p.level,
-                    "values": wording.short_conditions(ins, *declared_words(graph, pid)),  # a value, or the phrase a code needs
-                    "target": ins.target,
-                    "effect": round(ins.effect_size, 3),
-                    "ptype": ins.phenomenon_type,
-                    "weight": round(ins.weight, 3),
-                    "points": x,
-                    "share": round(x / mine, 3),
-                    "cells": int(view[p.events].sum()),
-                    "lift": round(lift, 1),  # to one decimal, as lift_words reads it: the badge and its words agree
-                    "lift_words": wording.lift_words("window", lift),
-                    "also": [{"id": q, "level": proj["patterns"][q].level} for q in hosts.get(pid, [])],
-                },
-            )
-        )
-    order = sorted(themes.values(), key=lambda t: (t["id"] is None, min(k for k, _ in t["insights"])))
-    for t in order:
-        t["insights"] = [item for _, item in sorted(t["insights"], key=lambda ki: ki[0])]
-    first = "coarse" if wide else "map"
-    return {
-        "cells": int(view.sum()),
-        "points": here,
-        "first": first,
-        "insights": sum(len(t["insights"]) for t in order),
-        "themes": group_themes(graph, order),
-    }
-
-
-def group_themes(graph: DualGraph, themes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Over ``WINDOW_THEMES_UNGROUPED`` themes, a star merge in the list's order: a theme with a direct RELATED_TO link to
-    a theme kept before it joins the ``members`` (ids) of the one it links to most (an earlier one on a tie), else is
-    kept. One hop, never a chain: a theme linked only to a member is kept. The list keeps every theme in its order, so a
-    reader of the rows needs no group; RELATED_TO comes from the commit's graph, every dataset's themes included, and
-    links between places (CO_LOCATED) group nothing."""
-    if len(themes) > WINDOW_THEMES_UNGROUPED:
-        kept: list[dict[str, Any]] = []
-        for t in themes:
-            links = {other: e["weight"] for e, other in graph.incident(t["id"], ["RELATED_TO"])}
-            host = max((k for k in kept if k["id"] in links), key=lambda k: links[k["id"]], default=None)  # max keeps the earlier on a tie
-            if host:
-                host["members"].append(t["id"])
-            else:
-                kept.append(t)
-    return themes
+        theme["insights"].append(row | {"rank": rank})
+    order = sorted(themes.values(), key=lambda t: t["id"] is None)  # by their leading row; the insights without a theme last
+    return {"cells": cells, "points": points, "level": lv, "regions": len(regions), "insights": len(rows), "themes": order}
 
 
 def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> dict[str, list[str]]:
