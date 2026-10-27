@@ -859,3 +859,39 @@ def test_a_date_column_past_2262_reads_its_own_years():
         table, _, _ = cells_of(frame)
         shares.append(table["when_late_share"].to_numpy())
     assert np.allclose(shares[0], shares[1], equal_nan=True) and np.nanmax(shares[1]) > 0
+
+
+def test_the_point_columns_are_profiled_once_per_upload(monkeypatch):
+    """The levels of one upload read one profile of the point columns (their kinds, codes and dates): the date parse and
+    the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
+    import subgroup_miner.spatial as sp
+
+    parsed = []
+    real = sp._as_datetime
+    monkeypatch.setattr(sp, "_as_datetime", lambda values: parsed.append(values.name) or real(values))
+    sp.forget_profile()
+    frame = geo_frame()
+    six = build_cells(frame, "latitude,longitude", 6, min_cell_points=5, profile_key="upload")
+    five = build_cells(frame, "latitude,longitude", 5, min_cell_points=5, profile_key="upload")
+    columns = len(frame.columns) - 2  # the locator's two are no point column
+    assert len(parsed) == columns and len(six[0]) > len(five[0])  # one profile, two resolutions
+    assert np.array_equal(six[1].lonlat, five[1].lonlat)  # the points located once
+    build_cells(frame, "latitude,longitude", 5, min_cell_points=5)
+    assert len(parsed) == 2 * columns  # no key: profiled again
+    sp.forget_profile()
+
+
+def test_nesting_on_codes_is_the_crosstabs():
+    """Two columns' nesting from their codes equals the one a crosstab of their values gives, both directions."""
+    import subgroup_miner.spatial as sp
+
+    rng = np.random.default_rng(3)
+    av = rng.choice(["x", "y", "z"], 4000).astype(object)
+    bv = np.where(av == "x", "p", rng.choice(["p", "q"], 4000)).astype(object)  # x fixes p; y and z do not
+    av[rng.random(4000) < 0.05], bv[rng.random(4000) < 0.05] = None, None
+    a, b = pd.Series(av, dtype="string"), pd.Series(bv, dtype="string")
+    profile = sp.point_profile(pd.DataFrame({"lat": np.full(4000, 50.0), "lon": np.full(4000, 30.0), "a": a, "b": b}), "lat,lon")
+    both = (a.notna() & b.notna()).to_numpy()
+    table = pd.crosstab(a[both].to_numpy(), b[both].to_numpy()).to_numpy()
+    want = max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum()
+    assert sp._nesting(profile, "a", "b") == pytest.approx(want) and ("a", "b") in profile.nesting

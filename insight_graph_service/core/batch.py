@@ -105,12 +105,12 @@ def series_times(loaded: LoadedDataset) -> pd.Series:
     return loaded.time[loaded.spatial.point_cell >= 0].reset_index(drop=True)
 
 
-def check_time(times: pd.Series, column: str, grid: str, min_bins: int, max_bins: int, rows: str = "") -> None:
+def check_time(times: pd.Series, column: str, grid: str, min_bins: int, max_bins: int, rows: str = "", tz: str | None = None) -> None:
     """A time column spans at most ``max_bins`` bins of ``grid`` (``TEMPORAL_MAX_BINS``) and gives at least ``min_bins``
     measurable ones (``TEMPORAL_MIN_BINS``, never fewer than one) — bins holding rows and covered at least half by the
     span —, else ``invalid_options``: at upload over the file's rows, before a batch exists, and at VALIDATING over the
     rows its series will be of (``series_times``; ``rows`` names them)."""
-    bins = calendar_bins(times, grid, max_bins)[1]
+    bins = calendar_bins(times, grid, max_bins, tz)[1]
     if (filled := sum(b["rows"] > 0 and b["covered"] >= 0.5 for b in bins)) < max(min_bins, 1):
         raise IngestionError(
             "invalid_options",
@@ -131,7 +131,7 @@ def annotate_batch(
         located = loaded.spatial.point_cell >= 0
         frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
         covers = extent_points(loaded.spatial.point_cell[located], rows)
-    codes, bins = calendar_bins(times, loaded.grid)
+    codes, bins = calendar_bins(times, loaded.grid, tz=loaded.tz)
     scale = reference_scale(frame)
     metrics = {i.id: [s.metric for s in i.shifts] for i in kept}
     series = annotate(frame, codes, bins, covers, metrics, scale, config.temporal_min_rows_bin, config.temporal_tie_share)

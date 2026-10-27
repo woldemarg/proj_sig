@@ -54,6 +54,7 @@ from subgroup_miner.ingestion import (
     load_dataset,
     parse_grid,
     parse_indicators,
+    parse_tz,
     read_file,
     read_times,
     resolve_grid,
@@ -342,6 +343,7 @@ class Engine:
         supersedes: str | None = None,
         time: str | None = None,
         grid: str | None = None,
+        tz: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -351,10 +353,11 @@ class Engine:
         gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
-        if grid and not time:
-            raise PipelineError("invalid_options", "grid without time: name the time column the grid bins")
+        if (grid or tz) and not time:
+            raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
         try:
             grid = parse_grid(grid) if time else None
+            tz = parse_tz(tz) if time else None
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
@@ -367,10 +370,10 @@ class Engine:
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
             if time:
-                times = read_times(read_file(path, shared=True)[0], time)
+                times = read_times(read_file(path, shared=True)[0], time, tz)
                 grid = resolve_grid(times, grid)  # the batch records the unit, auto resolved
                 s = self.settings  # the file's rows here; a geo level's located points at VALIDATING
-                check_time(times, time, grid, s.temporal_min_bins, s.temporal_max_bins)
+                check_time(times, time, grid, s.temporal_min_bins, s.temporal_max_bins, tz=tz)
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
@@ -401,6 +404,7 @@ class Engine:
             "supersedes": supersedes,
             "time": time,
             "grid": grid,
+            "tz": tz,
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
@@ -437,6 +441,7 @@ class Engine:
         supersedes: str | None = None,
         time: str | None = None,
         grid: str | None = None,
+        tz: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -449,7 +454,7 @@ class Engine:
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
-        ``time`` and ``grid`` a time column and its calendar unit (docs/02_discovery.md §2.10).
+        ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
@@ -467,7 +472,7 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
-            **({"time": time, "grid": grid} if time else {}),
+            **({"time": time, "grid": grid, "tz": tz} if time else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
             "status": "UPLOADED",
@@ -503,7 +508,7 @@ class Engine:
                         record["grid"] = loaded.grid  # a batch submitted without a unit: the one the span gave it
                         s = self.settings
                         rows = " over its located points" if loaded.spatial is not None else ""
-                        check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, rows)
+                        check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, rows, loaded.tz)
                     record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
@@ -648,6 +653,7 @@ class Engine:
             shared=shared,
             time=record.get("time"),
             grid=record.get("grid"),
+            tz=record.get("tz"),
         )
 
     @_healthy
