@@ -186,6 +186,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
         assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
+        page.wait_for_function("G.overlay", timeout=30000)
+        drawn = "[G.levels, [...new Set(G.overlay.features.map((f) => f.properties.resolution))]]"
+        assert page.evaluate(drawn) == [[5, 3, 1], [1, 3, 5, 7]]  # r7 outlines ~7 of the r8 cells: not drawn over them
         stored = json.loads(engine.ws.geo_cells_path(fine["dataset_id"]).read_text(encoding="utf-8"))["features"]
         rebuilt = page.evaluate("G.data.features")  # the package rebuilds every cell: its ring and the fields its popup shows
         assert [f["properties"] for f in rebuilt] == [{k: v for k, v in f["properties"].items() if not k.endswith("_band")} for f in stored]

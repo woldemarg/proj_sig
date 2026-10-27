@@ -5,6 +5,7 @@ const G = { map: null, ready: null, datasets: [], ds: null, others: [], away: nu
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
+const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
 const GeoMap = {
   has: (pid) => Boolean(G.patterns[pid] || elsewhere(pid)),
@@ -413,7 +414,10 @@ async function loadOverlay(ds, seq = G.loadSeq) {
   $("map-overlay-error").textContent = failed && `Регіони й довіра недоступні, тож інсайти цього рівня не намальовано: ${failed}`;
   mergePatterns();
   const regions = (G.overlay || empty()).features;
-  G.levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
+  const levels = [...new Set(regions.map((f) => f.properties.resolution))].sort((a, b) => b - a);  // finest first
+  const res = (G.datasets.find((d) => d.dataset_id === ds) || {}).resolution;
+  const apart = G.others.length ? levels : levels.filter((lv) => res - lv >= REGION_GAP);  // «Усі датасети» draws no cells
+  G.levels = apart.length ? apart : levels.slice(-1);  // none that far: the coarsest
   G.map.getSource("regions").setData(G.overlay || empty());
   G.map.getSource("region-labels").setData({ type: "FeatureCollection", features: regions.filter((f) => f.properties.n > 0).map((f) => ({  // a 0 is not written
     type: "Feature", geometry: { type: "Point", coordinates: centre(f) }, properties: { resolution: f.properties.resolution, icon: countIcon(f.properties.n) } })) });
