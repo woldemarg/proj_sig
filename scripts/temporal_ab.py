@@ -7,12 +7,15 @@ uploads of ``temporal_benchmark.generate`` — the same bytes on both branches (
 
 ``capture`` uploads each seed's file twice through the graph service, on scratch workspaces: with its time column (the
 chain branch cuts it into ``window=7D``, the event branch bins it by ``grid=week``) and without. Per upload it records
-the Pattern nodes, the edges by type, the journal rows, the seconds (processing and discovery), the latent plane and
-the scopes admitted. ``compare`` prints one table: graph and journal size, time, the latent plane against the plain
+the Pattern nodes, the edges by type, the journal rows, the seconds (processing and discovery), the latent plane, the
+scopes admitted with their targets, and the event edges (type, period, scope). ``compare`` prints one table: graph and journal size, time, the latent plane against the plain
 upload's, the plain upload's patterns recalled, the temporal edges, and the chain's window-only finds — scopes no plain
 upload admits — by class: *nested* (a specialisation or a generalisation of a plain scope), *overlapping* (sharing a
-condition with one) and *new* (sharing none). The event model loses those finds by design (Flash Event Blindness; its
-boundary is the S7 matrix of ``temporal_benchmark``). Results: ``.scratch/results/temporal_ab_<label>.json``.
+condition with one) and *new* (sharing none), then each of them by name: its class, the seeds that admitted it in
+that class, its targets and what its rows are to the planted cohorts S1–S4 of the file — it narrows one, widens one,
+holds part of one (no column of it conflicts), or none (it holds no planted row) —, and each capture's event edges.
+The event model loses those finds by design (Flash Event Blindness; its boundary is the S7 matrix of
+``temporal_benchmark``). Results: ``.scratch/results/temporal_ab_<label>.json``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ import argparse
 import hashlib
 import inspect
 import json
-import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -29,7 +31,7 @@ from typing import Any
 import numpy as np
 from attractor_benchmark import parse_seeds
 from scratch import build_engine, save_result, scratch_dir
-from temporal_benchmark import generate
+from temporal_benchmark import PLANTED, generate
 
 TEMPORAL_EDGES = ("EVOLVES_TO", "PEAKED_AT", "DROPPED_AT")
 
@@ -44,6 +46,13 @@ def measure(engine: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
     """One upload's graph, journal, time and scopes after its batches ran."""
     snapshot = engine.ws.load_graph() or {"nodes": [], "edges": []}
     patterns = [n["props"] for n in snapshot["nodes"] if n["kind"] == "Pattern"]
+    scope = {
+        n["id"]: " ∧ ".join(f"{c['attribute']}={c['value']}" for c in n["props"]["conditions"]) for n in snapshot["nodes"] if n["kind"] == "Pattern"
+    }
+    targets: dict[str, set[str]] = {}
+    for n in snapshot["nodes"]:
+        if n["kind"] == "Pattern":
+            targets.setdefault(scope[n["id"]], set()).add(n["props"]["target"])
     return {
         "batches": dict(Counter(r["status"] for r in records)),
         "patterns": len(patterns),
@@ -53,6 +62,8 @@ def measure(engine: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
         "discover_seconds": sum(r["metrics"].get("timings", {}).get("discover_s", 0.0) for r in records),
         "latent": latent(snapshot),
         "scopes": sorted({tuple(f"{c['attribute']}={c['value']}" for c in p["conditions"]) for p in patterns}),
+        "targets": {s: sorted(t) for s, t in targets.items()},
+        "events": sorted([e["type"], e["target"], scope[e["source"]]] for e in snapshot["edges"] if e["type"] in TEMPORAL_EDGES[1:]),
     }
 
 
@@ -82,6 +93,35 @@ def classify(scope: tuple[str, ...], plain: list[tuple[str, ...]]) -> str:
     if any(own < set(p) or set(p) < own for p in plain):
         return "nested"
     return "overlapping" if any(own & set(p) for p in plain) else "new"
+
+
+def planted(scope: tuple[str, ...]) -> str:
+    """What a scope's rows are to the planted cohorts S1–S4 of the A/B file (independent columns): it narrows one, widens
+    one, holds part of one (no column of it conflicts with the cohort's), or none — it holds no planted row."""
+    own = dict(c.split("=", 1) for c in scope)
+    for verb, test in (
+        ("narrows", lambda p: p.items() <= own.items()),
+        ("widens", lambda p: own.items() < p.items()),
+        ("holds part of", lambda p: all(own.get(c, v) == v for c, v in p.items())),
+    ):
+        hit = [name for name, (conds, _) in list(PLANTED.items())[:4] if test(conds)]
+        if hit:
+            return f"{verb} {', '.join(hit)}"
+    return "none"
+
+
+def window_only(rows: list[dict[str, Any]]) -> list[tuple[str, str, list[int], str, str]]:
+    """The window-only scopes of a capture by name: class, scope, the seeds that admitted it in that class, its targets
+    and its planted relation."""
+    seen: dict[tuple[tuple[str, ...], str], list[int]] = {}
+    targets: dict[tuple[str, ...], set[str]] = {}
+    for r in rows:
+        plain = [tuple(s) for s in r["plain"]["scopes"]]
+        for s in map(tuple, r["timed"]["scopes"]):
+            if s not in plain:
+                seen.setdefault((s, classify(s, plain)), []).append(r["seed"])
+                targets.setdefault(s, set()).update(r["timed"]["targets"].get(" ∧ ".join(s), []))
+    return sorted((cls, " ∧ ".join(s), seeds, ", ".join(sorted(targets[s])), planted(s)) for (s, cls), seeds in seen.items())
 
 
 def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -136,6 +176,11 @@ def compare(chain: dict[str, Any], event: dict[str, Any]) -> str:
         lines.append(f"| {key} | {a[key]:.2f} | {b[key]:.2f} |")
     for cls in ("nested", "overlapping", "new"):
         lines.append(f"| window-only, {cls} | {a['window_only'].get(cls, 0.0):.2f} | {b['window_only'].get(cls, 0.0):.2f} |")
+    for side, capture in (("chain", chain), ("event", event)):
+        found = window_only(capture["per_seed"])
+        lines += ["", f"window-only scopes of the {side} model: {len({s for _, s, *_ in found})}, admitted {sum(len(f[2]) for f in found)} times"]
+        lines += [f"  {c:<11} {s}  (seeds {seeds}; target {t}; {p})" for c, s, seeds, t, p in found]
+        lines += [f"  seed {r['seed']} event: {' '.join(e)}" for r in capture["per_seed"] for e in r["timed"].get("events", [])]
     return "\n".join(lines)
 
 
@@ -155,7 +200,6 @@ def main() -> int:
         return 0
     embedder = None
     if args.encoder == "hashing":
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from tests.doubles import HashingEmbedder
 
         embedder = HashingEmbedder()

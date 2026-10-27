@@ -17,7 +17,7 @@ import pytest
 from doubles import HashingEmbedder
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from scratch import serve
+from scratch import serve, weekly_retail
 
 from evidence_narrator_service.llm_client import LLMResponse
 from insight_contracts import Condition, Insight
@@ -156,23 +156,6 @@ def demo_csv(tmp_path_factory, demo_df):
     ``os.linesep`` by default, so CRLF on Windows would give other dataset and pattern ids than ``tests/golden/``."""
     path = tmp_path_factory.mktemp("data") / "retail_synthetic.csv"
     demo_df.to_csv(path, index=False, lineterminator="\n")
-    return path
-
-
-def weekly_retail(folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",)) -> Path:
-    """The demo's orders over ``weeks`` ISO weeks from a Monday (``when``; its first ten rows without a readable time),
-    the ``spiked`` metrics of phones in the US raised by 3 sd in the fourth week: a PEAKED_AT there (docs/02_discovery.md §2.10)."""
-    frame = generate_retail_dataset(5000, seed=7)
-    rng = np.random.default_rng(1)
-    week = rng.integers(0, weeks, len(frame))
-    when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
-    frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
-    spike = (frame["category"] == "phones") & (frame["region"] == "US") & (week == 3)
-    for metric in spiked:
-        frame.loc[spike, metric] += 3 * frame[metric].std()
-    frame.loc[:9, "when"] = "unknown"
-    path = folder / "weekly.csv"
-    frame.to_csv(path, index=False, lineterminator="\n")
     return path
 
 
