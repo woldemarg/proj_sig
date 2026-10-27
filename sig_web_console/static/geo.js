@@ -154,10 +154,13 @@ async function refreshPass() {
   if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
+  if (G.focusId && !GeoMap.has(G.focusId)) GeoMap.unfocus();  // another dataset's insight left the set: its zone goes with it
   const want = all ? all.anchor : G.datasets.find((d) => d.dataset_id === filter) || G.datasets.find((d) => d.dataset_id === G.want) || G.datasets[0];
   G.want = want.dataset_id;
-  // the wanted dataset's load in flight (an answer's): its graph may be read before this pass, so it is read again after it
-  if (S.view === "map" && G.loading && G.target === want.dataset_id) await G.load?.catch(() => false);
+  if (S.view === "map" && G.loading && G.target === want.dataset_id) {  // the wanted dataset's load in flight (an answer's)
+    await G.load?.catch(() => false);  // its graph may be read before this pass, so it is read again after it
+    if (G.want !== want.dataset_id) { G.dirty = true; return; }  // another answer's dataset meanwhile: the pass runs again on it
+  }
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
   else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
   else if (!G.loading) {  // a commit changes the graph over the same cells, a filter the mode: a new mode is fitted as a load is

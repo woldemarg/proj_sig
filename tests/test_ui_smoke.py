@@ -417,12 +417,13 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             try { const a = G.load = loadDataset(stub); await wait(50);  // an answer's load in flight
               $("dataset-filter").value = ""; await GeoMap.refresh(); await a;  // a refresh with no filter keeps to it
               const kept = G.ds, stale = reads.filter((p) => p.includes(`/${real}/overlay`)).length;  // nothing of the map it leaves
+              const fresh = reads.filter((p) => p.includes(`/${stub}/overlay`)).length;  // the load's read, then the pass's after it
               await loadDataset(real);
               const b = loadDataset(stub); await wait(50);  // an answer on the map still shown arrives during a load: it wins
               GeoMap.onAnswer({ view: { evidence: { items: [{ pattern_id: own, provenance: { dataset_id: real }, statistics: {} }] } } });
               await b; await wait(800);
-              return [kept, stale, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
-        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", 0, real, [own]]
+              return [kept, stale, fresh, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
+        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", 0, 2, real, [own]]
         page.unroute("**/api/geo")
         page.unroute("**/api/geo/ds-stub/**")
         page.evaluate("GeoMap.refresh()")

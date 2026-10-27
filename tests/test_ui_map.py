@@ -419,6 +419,8 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights")
         page.evaluate(f"loadDataset({full['dataset_id']!r})")  # an answer's other dataset: the map is its own, not «Усі датасети»
         assert page.evaluate("[G.ds, G.others]") == [full["dataset_id"], []]
+        page.evaluate(f"loadDataset({other['dataset_id']!r})")  # its anchor again: «Усі датасети» for the filter to leave
+        assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
         page.select_option("#dataset-filter", full["dataset_id"])
         page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
         assert page.inner_text("#map-title") == "california_housing.csv"
