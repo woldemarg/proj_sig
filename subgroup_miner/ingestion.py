@@ -241,7 +241,8 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
     return max(("quarter", "month", "week", "day"), key=balance)
 
 
-ZONED = r"[0-9]:[0-9]{2}(?::[0-9]{2}(?:[.,][0-9]+)?)?\s*(?:Z|UTC|GMT|[+-][0-9]{2}(?::?[0-9]{2})?)\s*$"  # a zone after a clock time, never a date's -2031
+# a zone after a clock time, never a date's -2031
+ZONED = r"[0-9]:[0-9]{2}(?::[0-9]{2}(?:[.,][0-9]+)?)?\s*(?:Z|UTC|GMT|[+-][0-9]{2}(?::?[0-9]{2})?)\s*$"
 
 
 def parse_tz(tz: str | None) -> str | None:
