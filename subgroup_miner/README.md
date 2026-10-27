@@ -19,6 +19,6 @@ prompt_context = describe(insights, limit=10)  # numbered ASCII lines, ready for
 
 `Insight.to_record()` is a plain dictionary that can be stored or sent anywhere. `structural_edges(insights, config)` adds the subgroup lattice: SPECIALIZES, SIBLING and CONTRASTS between the scopes; `spatial.derive_spatial` derives the spatial plane of geo patterns (regions, IN_REGION, PARENT_OF, CO_LOCATED, compactness) from their cells.
 
-A table with a time column can also be followed through time (`temporal`, docs/02_discovery.md §2.10): `temporal.upload_windows` cuts it into fixed windows, `load_dataset(..., window=)` reads one, `run_discovery(..., known=temporal.open_rules(...))` evaluates the rules of the cohorts earlier windows admitted outside the search's ranking and budget, and `temporal.fold_trajectories` turns what each window observed into trajectories and the transitions between them. `scripts/temporal_benchmark.py` runs the loop.
+A table with a time column is mined once like any other (`load_dataset(..., time=, grid=)` reads the column apart); `temporal.calendar_bins` lays the rows on a calendar grid, `temporal.annotate` gives each admitted insight a series per metric it shifts and `temporal.dynamics` smooths it, names its trend and finds its events (docs/02_discovery.md §2.10). `scripts/temporal_benchmark.py` runs the loop.
 
 The EDA engine under `vendor/eda/` is a modified copy (`vendor/PROVENANCE.md`). `tests/test_subgroup_miner_standalone.py` runs the example above; `tests/test_architecture.py` checks that the package imports only the kernel.

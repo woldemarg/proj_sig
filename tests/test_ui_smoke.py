@@ -184,14 +184,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert httpx.patch(f"{url}/api/datasets/{housing['dataset_id']}", json={"reliability": "B"}, timeout=60).status_code == 200
         page.evaluate("S.lastReady = null; refreshBatches()")  # a rated dataset's rail card shows its rating in words
         page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
-        # one legend for every view; by default Hierarchy, Theme links, Later in time and Memberships are on, with live counts
+        # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
-        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == [
-            "lattice",
-            "latent",
-            "temporal",
-            "activates",
-        ]
+        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
         assert page.evaluate("S.cy.edges('[type=\"ACTIVATES\"]').filter('.hidden').length") == 0  # memberships drawn from the start
         assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
         page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
@@ -713,93 +708,5 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.evaluate(question)
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
         assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
-        browser.close()
-        assert not errors, errors
-
-
-# /api/batches with a running upload of three time windows ahead of the real ones; a test moves window.__wins on
-_WINDOWS = """() => { const real = api, at = new Date().toISOString();
-  const win = (i, status) => ({ batch_id: `B-w${i}`, dataset_id: `D-w${i}`, upload_id: 'U-t', level: 'table', filename: 'weeks.csv', status,
-    created_at: at, stage_times: { [status]: at }, window: { index: i, of: 3, column: 'when', size: 'P7DT0H0M0S', t_start: '2031-01-0' + (1 + i) + 'T00:00:00+00:00', t_end: '2031-01-0' + (2 + i) + 'T00:00:00+00:00', rows: 100 } });
-  window.__win = win; window.__wins = [win(0, 'READY'), win(1, 'EMBEDDING'), win(2, 'UPLOADED')];
-  window.api = async (path, opts) => (path === '/api/batches' ? [...__wins, ...(await real(path, opts))] : real(path, opts));
-  window.__loads = 0; const load = loadGraph; window.loadGraph = async (...a) => { __loads++; return load(...a); }; }"""
-
-
-@pytest.mark.browser
-def test_time_windows_read_as_an_uploads_levels_and_their_trajectories(windowed):
-    """The weekly upload in the console: its windows one group in time order, the quiet ones neutral; EVOLVES_TO drawn,
-    counted and switched in the graph and on the sphere; a window's insight shows its trajectory window by window and
-    its chat card its window and state; the form sends the time fields; an upload's windows redraw the graph once, after
-    the last — a quiet one too —, and another upload's READY batch redraws it meanwhile."""
-    sync_api = pytest.importorskip("playwright.sync_api")
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    engine, records, _ = windowed
-    evolves = sum(e["type"] == "EVOLVES_TO" for e in engine.ws.load_graph()["edges"])
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=exe)
-        page = browser.new_page(viewport={"width": 1500, "height": 900})
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(url)
-        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && !G.refreshing", timeout=60000)
-        # the rail
-        assert re.search(r"готово вікон: 3 з 5 · без знахідок: 2$", page.inner_text("#batches .ds-group-head"))
-        names = page.eval_on_selector_all("#batches .ds-group .ds-name", "els => els.map((e) => e.textContent)")
-        assert [re.search(r"· W(\d) \[", n).group(1) for n in names] == ["0", "1", "2", "3", "4"]
-        assert page.locator("#batches .ds-note", has_text="У цьому вікні стійких знахідок немає").count() == 2
-        assert page.locator("#batches .ds-error").count() == 0
-        # the graph and the sphere
-        assert page.inner_text('[data-n="temporal"]') == str(evolves) and evolves > 0
-        drawn = "S.cy.edges('[type=\"EVOLVES_TO\"]').filter((e) => !e.hasClass('hidden')).length"
-        assert page.evaluate(drawn) == evolves
-        page.click("#legend .toggle[data-key='temporal']")
-        assert page.evaluate(drawn) == 0
-        page.click("#view-switch button[data-view='sphere']")
-        sphere = "document.querySelector('#sphere')"
-        page.wait_for_function(f"(() => {{ const gd = {sphere}; return !!(gd && gd.data && gd.on); }})()", timeout=60000)
-        later = f"{sphere}.data.filter((t) => t.meta === 'temporal').map((t) => t.visible !== false)"
-        assert page.evaluate(later) == [False]
-        page.click("#legend .toggle[data-key='temporal']")
-        assert page.evaluate(later) == [True]
-        page.click("#view-switch button[data-view='graph']")
-        assert page.evaluate(drawn) == evolves
-        # the drawer's trajectory, its admitted windows opening their insights
-        key, t = next(
-            (k, t) for k, t in engine.ws.load_graph()["trajectories"].items() if t["predicate"][0]["value"] == "phones" and len(t["predicate"]) == 2
-        )
-        latest = [w for w in t["windows"] if w["active"]][-1]["pattern_id"]
-        page.evaluate(f"inspect({json.dumps(latest)})")
-        page.wait_for_selector("#drawer:not([hidden]) #inspector .tl", timeout=10000)
-        assert page.inner_text("#inspector .lead >> nth=1").startswith(name("trajectory_ACTIVE"))
-        assert page.eval_on_selector_all("#inspector .tl", "els => els.map((e) => e.firstElementChild.textContent)") == ["W2", "W3"]
-        first = [w for w in t["windows"] if w["active"]][0]["pattern_id"]
-        page.click(f"#inspector .nb[data-id='{first}']")
-        page.wait_for_function(f"document.querySelector('#inspector .nb[data-id=\"{first}\"] span').textContent.includes('це вікно')", timeout=10000)
-        # the chat card
-        page.evaluate("() => { $('use-llm').checked = false; return ask('Why is margin lower for phones in the US?'); }")
-        chip = page.locator("#thread .ev .role", has_text="W4 [2031-03-31, 2031-04-07)").first
-        assert chip.inner_text().endswith(name("trajectory_ACTIVE"))
-        # the form
-        page.evaluate("""() => { window.__sent = null; const real = api;
-          window.api = async (path, opts) => { if (path === '/api/upload') { __sent = Object.fromEntries([...opts.body].filter(([k]) => k === 'time' || k === 'window')); return {}; } return real(path, opts); }; }""")
-        page.set_input_files("#file", files=[{"name": "weeks.csv", "mimeType": "text/csv", "buffer": b"when,a\n2031-01-01,1\n"}])
-        page.evaluate("async () => { $('time').value = 'when'; $('window').value = '7D'; await upload(); }")
-        assert page.evaluate("__sent") == {"time": "when", "window": "7D"}
-        # one redraw per upload of windows, after the last: here the last finds nothing
-        page.evaluate(_WINDOWS)
-        poll = "async () => { await refreshBatches(); clearTimeout(S.poll); return __loads; }"
-        assert page.evaluate(poll) == 0  # W0 READY, W1 running: the rail moves, the graph waits
-        plain = "{ batch_id: 'B-plain', dataset_id: 'D-plain', upload_id: 'U-p', level: 'table', filename: 'plain.csv', status: 'READY' }"
-        page.evaluate(f"() => {{ window.__plain = {plain}; __wins.push(__plain); }}")
-        assert page.evaluate(poll) == 1  # another upload's READY batch redraws at once, windows running or not
-        page.evaluate("() => { __wins = [__win(0, 'READY'), __win(1, 'READY'), __win(2, 'PROFILING'), __plain]; }")
-        assert page.evaluate(poll) == 1
-        quiet = "Object.assign(__win(2, 'FAILED'), { error: { code: 'no_viable_insights', message: '' } })"
-        page.evaluate(f"() => {{ __wins = [__win(0, 'READY'), __win(1, 'READY'), {quiet}, __plain]; }}")
-        assert page.evaluate(poll) == 2 and page.evaluate(poll) == 2
         browser.close()
         assert not errors, errors

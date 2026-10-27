@@ -70,7 +70,6 @@ class DualGraph:
             self.out[e["source"]].append(e)
             self.inc[e["target"]].append(e)
         self.own_cells: dict[str, list[str]] = snapshot.get("own_cells", {})  # a geo pattern at a region level -> its cells
-        self.trajectories: dict[str, dict[str, Any]] = snapshot.get("trajectories", {})  # time windows' (docs/02_discovery.md §2.10)
         self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
         self._memo_lock = threading.RLock()
 

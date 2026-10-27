@@ -96,7 +96,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | `subgroup_miner/` | `config.py` | `MinerConfig` | [2.6](02_discovery.md#26-configuration), [3.5](03_insights.md#35-configuration) |
 | | `ingestion.py` | file validation, categories, bands, dataset id | [2.1](02_discovery.md#21-ingestion) |
 | | `discovery.py`, `vendor/eda/` | EDA adapter: closed intents, deduplication before validation, typed insights | [2](02_discovery.md) |
-| | `temporal.py` | time windows of an upload, the trajectory a cohort opens, what each later window observed of it, the fold into states and transitions | [2.10](02_discovery.md#210-time-windows-and-trajectories) |
+| | `temporal.py` | the calendar grid of a time column, each insight's series over it, its smoothing, events and trend | [2.10](02_discovery.md#210-time-the-calendar-grid-and-an-insights-dynamics) |
 | | `selection.py` | validity rules R1–R3 and `insight_weight` | [3](03_insights.md) |
 | | `lattice.py` | the exact lattice edges | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | | `describe.py` | insights as numbered lines of LLM context | [12.3](12_architecture.md#123-using-a-library-on-its-own) |

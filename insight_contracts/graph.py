@@ -1,7 +1,7 @@
 """The dual graph's vocabulary and its snapshot contract (docs/06_graph_and_storage.md §6.1–6.2).
 
 A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "nodes": [...], "edges": [...],
-"own_cells": {...}, "trajectories": {...}, "stats": {...}}``; the graph service compiles it, the query engine and the console read it. Node
+"own_cells": {...}, "stats": {...}}``; the graph service compiles it, the query engine and the console read it. Node
 ``props`` by kind, as the readers rely on them:
 
 * ``Pattern``   the ``Insight.to_record()`` fields, plus ``row_id`` (its journal row), ``canonical`` (with ``document``
@@ -12,7 +12,7 @@ A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "n
                 of both bases, and the geo patterns whose own cell it is)
 * ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
-* ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence; a time window's ``window``)
+* ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
 
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
 ``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
@@ -23,12 +23,6 @@ Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (
 from a region to its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, a base one
 ``geo: partial`` when too few of its events are located, both derived at the commit. ``own_cells`` maps a geo pattern
 whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
-``EVOLVES_TO`` (the temporal plane, never walked) runs from a trajectory's node in one time window of an upload to its
-next admitted node (docs/02_discovery.md §2.10): ``trajectory``, ``episode``, ``from_window``, ``to_window``, ``gap``
-(windows between), ``transition`` (CONTINUATION | DRIFT | RECOVERY | REAPPEARANCE), ``shifts`` ({metric: {subgroup,
-baseline, excess}} in reference-scale units) and ``drift_metric``. ``trajectories`` maps a trajectory key to its
-``series``, ``predicate``, ``metrics``, ``state``, ``closed_reason``, ``episode``, ``first_window`` and ``windows`` (one
-observation per window it was followed in).
 """
 
 from __future__ import annotations
@@ -37,7 +31,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 12  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 11  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
@@ -54,7 +48,6 @@ class EdgeType(str, Enum):
     PARENT_OF = "PARENT_OF"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
-    EVOLVES_TO = "EVOLVES_TO"
 
 
 STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}  # pattern <-> pattern
@@ -74,7 +67,6 @@ EDGE_PLANE = {
     EdgeType.TARGETS: "schema",
     EdgeType.DISCOVERED_IN: "provenance",
     EdgeType.OF_DATASET: "provenance",
-    EdgeType.EVOLVES_TO: "temporal",
 }
 
 
@@ -141,3 +133,6 @@ def region_node_id(resolution: int, cell: str) -> str:
 
 def dimension_node_id(dataset_id: str, name: str) -> str:
     return f"D:{dataset_id}:{name}"
+
+
+TIME_GRIDS = ("day", "week", "month", "quarter")  # the calendar units an upload's time column is binned by

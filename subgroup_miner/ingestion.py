@@ -5,13 +5,16 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.api import guess_datetime_format
 
+from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, locate_points, parse_geo, select_levels
 
@@ -36,6 +39,8 @@ class LoadedDataset:
     geo: str | None = None  # the applied geo option, "<locator>@<resolution>"
     spatial: SpatialContext | None = None  # rows are H3 cells when set
     points: str | None = None  # a table level's left-out point columns, as a geo level's ``location`` names them
+    time: pd.Series | None = None  # each row's time (UTC; NaT where its value reads as none), the time column left out
+    grid: str | None = None  # the calendar unit its times are binned by (``TIME_GRIDS``)
 
 
 def parse_bins(spec: str | None) -> dict[str, int]:
@@ -83,11 +88,10 @@ def dataset_fingerprint(
     categories: list[str] | None = None,
     geo: str | None = None,
     left_out: list[str] | None = None,
-    window: str | None = None,
+    time: str | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
-    options -> same id. ``window``: a time window's column and bounds (§2.10), not its index — the same file cut by
-    another window size is other data."""
+    options -> same id. ``time``: ``<column>:<grid>`` — the same file with its time apart is another analysis."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -96,8 +100,8 @@ def dataset_fingerprint(
         h.update(f"geo={geo}".encode())
     if left_out:  # the table level of a geo upload: its point columns left out
         h.update(f"left_out={sorted(left_out)}".encode())
-    if window:
-        h.update(f"window={window}".encode())
+    if time:
+        h.update(f"time={time}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -155,9 +159,8 @@ _kept = functools.lru_cache(maxsize=1)(_parse)  # ponytail: one file, as the lev
 
 
 def forget_tables() -> None:
-    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``) and the table its windows share."""
+    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``)."""
     _kept.cache_clear()
-    _upload_table.cache_clear()
 
 
 def select_present(
@@ -203,76 +206,38 @@ def apply_bins(df: pd.DataFrame, bins: dict[str, int]) -> tuple[pd.DataFrame, li
     return out, derived
 
 
-def _derive_columns(
-    frame: pd.DataFrame, cat_spec: list[str], bin_spec: dict[str, int], *, explicit_categories: bool, explicit_bins: bool, tolerated: set[str]
-) -> tuple[pd.DataFrame, list[str], dict[str, int], list[str], list[str]]:
-    """Categories, then bands, then the target check (§2.1 steps 5–6): the frame, the categories and bands applied, the
-    derived columns and the warnings."""
-    warnings = []
-    cats, missing_cats = select_present(cat_spec, frame, explicit=explicit_categories, option="Categorical", tolerated=tolerated)
-    frame = apply_categories(frame, cats)
-    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=explicit_bins, option="Bin", tolerated=tolerated)
-    present_bins = {c: bin_spec[c] for c in bin_cols}
-    frame, derived = apply_bins(frame, present_bins)
-    if missing_cats or missing_bins:
-        warnings.append(f"column options not in this dataset (skipped): {missing_cats + missing_bins}")
-    if not any(pd.api.types.is_numeric_dtype(frame[c]) for c in frame.columns):
-        raise IngestionError("no_numeric_targets", "Dataset has no numeric columns to analyse")
-    empty = [c for c in frame.columns if frame[c].isna().all()]
-    if empty:
-        warnings.append(f"all-null columns ignored by profiling: {empty}")
-    return frame, cats, present_bins, derived, warnings
+def parse_grid(spec: str | None) -> str:
+    """The calendar unit of a time column's grid (``TIME_GRIDS``; ``week`` by default). A duration such as ``7D`` is
+    refused: a bin is a calendar period, the same for every upload."""
+    unit = (spec or "week").strip().lower()
+    if unit not in TIME_GRIDS:
+        raise IngestionError("invalid_options", f"grid {spec!r}: one of {', '.join(TIME_GRIDS)} — a calendar unit, not a duration such as 7D")
+    return unit
 
 
-@dataclass(frozen=True)
-class UploadTable:
-    """An upload's table as its time windows share it (§2.10): categories and bands applied over the whole upload, so
-    a band means the same values in every window, and the time column apart, parsed."""
-
-    frame: pd.DataFrame  # without the time column
-    time: pd.Series  # UTC times; NaT where a value reads as none
-    digest: Any
-    bins: dict[str, int]
-    categories: list[str]
-    derived: list[str]
-    warnings: list[str]
-
-
-def upload_table(path: Path, config: MinerConfig, *, time: str, bins: str | None = None, categories: str | None = None) -> UploadTable:
-    """The table the time windows of a stored upload read, prepared once for all of them and kept with the upload's parse
-    until ``forget_tables``. A time column the file lacks, a numeric one (no unit to read it in) or one with no value that
-    reads as a time is ``invalid_options``; a time without a zone is taken as UTC."""
-    path = Path(path)
-    if not path.is_file():
-        raise IngestionError("unsupported_file", f"File not found: {path}")
-    stat = path.stat()
-    bin_spec = bins if bins is not None else config.bin_columns
-    cat_spec = categories if categories is not None else config.categorical_columns
-    return _upload_table(
-        str(path), stat.st_mtime_ns, stat.st_size, time, bin_spec, bins is not None, cat_spec, categories is not None, config.min_rows
-    )
-
-
-@functools.lru_cache(maxsize=1)  # ponytail: one upload's windows run one after another, as its levels do
-def _upload_table(
-    path: str, _mtime: int, _size: int, time: str, bins: str, explicit_bins: bool, categories: str, explicit_categories: bool, min_rows: int
-) -> UploadTable:
-    frame, digest = read_file(Path(path))  # cached here, prepared: the raw parse is not kept beside it
-    if time not in frame.columns:
-        raise IngestionError("invalid_options", f"time column '{time}' not in dataset")
-    column = frame[time]
-    if pd.api.types.is_numeric_dtype(column):
-        raise IngestionError("invalid_options", f"time column '{time}' holds numbers: give its times as dates")
-    stamps = pd.to_datetime(column, errors="coerce", utc=True, format=None if pd.api.types.is_datetime64_any_dtype(column) else "mixed")
-    if stamps.isna().all():
-        raise IngestionError("invalid_options", f"no value of time column '{time}' reads as a time")
-    frame = frame.drop(columns=[time])
-    if frame.shape[1] < 2 or len(frame) < min_rows:
-        raise IngestionError("invalid_schema", f"{len(frame)} rows x {frame.shape[1]} columns besides the time (MIN_ROWS={min_rows})")
-    frame, cats, present_bins, derived, warnings = _derive_columns(
-        frame, parse_columns(categories), parse_bins(bins), explicit_categories=explicit_categories, explicit_bins=explicit_bins, tolerated=set()
-    )
-    return UploadTable(frame, stamps, digest, present_bins, cats, derived, warnings)
+def read_times(frame: pd.DataFrame, column: str) -> pd.Series:
+    """A time column as UTC times (a time without a zone is taken as UTC), read in the one format that reads most of it:
+    ISO 8601, or its first value's with the day before the month, or with the month first (that order on a tie). A
+    value in another format is NaT, never another date. A column the file lacks, a numeric one (no unit to read it in)
+    or one with no value that reads as a time is ``invalid_options``."""
+    if column not in frame.columns:
+        raise IngestionError("invalid_options", f"time column '{column}' not in dataset")
+    values = frame[column]
+    if pd.api.types.is_numeric_dtype(values):
+        raise IngestionError("invalid_options", f"time column '{column}' holds numbers: give its times as dates")
+    if pd.api.types.is_datetime64_any_dtype(values):
+        times = pd.to_datetime(values, utc=True)
+    else:
+        times = pd.to_datetime(values, errors="coerce", utc=True, format="ISO8601")
+        if times.isna().sum() > values.isna().sum():  # a value that is no ISO 8601 time: its first value's format may read more
+            with warnings.catch_warnings():  # a guess with the day first warns when that value is ISO 8601
+                warnings.simplefilter("ignore", UserWarning)
+                formats = dict.fromkeys(f for d in (True, False) if (f := guess_datetime_format(str(values.dropna().iloc[0]), dayfirst=d)))
+            readings = [times, *(pd.to_datetime(values, errors="coerce", utc=True, format=f) for f in formats)]
+            times = max(readings, key=lambda r: r.notna().sum())
+    if times.isna().all():
+        raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
+    return times
 
 
 def load_dataset(
@@ -286,7 +251,8 @@ def load_dataset(
     strict: bool = True,
     locator: str | None = None,
     shared: bool = False,
-    window: dict[str, Any] | None = None,
+    time: str | None = None,
+    grid: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -294,32 +260,11 @@ def load_dataset(
     neither the file nor the cells still fails the geo levels. ``locator`` (the table level of a geo upload) leaves
     the columns it locates the points in out of the table. ``geo`` turns the
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
-    of an upload, reading the parse its levels share (``read_file``). ``window``: a time window of the upload
-    (``temporal.upload_windows``: ``column``, ``t_start``, ``t_end``), its rows ``[t_start, t_end)`` of the table the
-    upload's windows share (``upload_table``), the time column left out; fewer than ``MIN_ROWS`` is ``invalid_schema``."""
+    of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
+    (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; §2.10) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
-    if window:
-        if geo or locator:
-            raise IngestionError("invalid_options", "a time window is a table's: no geo option, no point columns left out")
-        table = upload_table(path, config, time=window["column"], bins=bins, categories=categories)
-        start, end = (pd.to_datetime(window[k], utc=True) for k in ("t_start", "t_end"))  # one instant, however it is spelled
-        inside = ((table.time >= start) & (table.time < end)).to_numpy()
-        frame = table.frame[inside].reset_index(drop=True)  # its rows renumbered: a window's covers are rows of the window
-        if len(frame) < config.min_rows:
-            raise IngestionError("invalid_schema", f"Only {len(frame)} rows in window {window['index']} (MIN_ROWS={config.min_rows})")
-        unread = int(table.time.isna().sum())
-        bounds = f"{window['column']}:{start.isoformat()}/{end.isoformat()}"
-        return LoadedDataset(
-            frame=frame,
-            dataset_id=dataset_fingerprint(table.digest, table.bins, table.categories, window=bounds),
-            filename=filename or path.name,
-            bins=table.bins,
-            categories=table.categories,
-            derived_columns=table.derived,
-            warnings=[*table.warnings, *([f"{unread} rows without a readable time belong to no window"] if unread else [])],
-        )
     bin_spec = parse_bins(bins if bins is not None else config.bin_columns)
     cat_spec = parse_columns(categories if categories is not None else config.categorical_columns)
     try:
@@ -334,6 +279,15 @@ def load_dataset(
     warnings = []
     spatial = None
     left_out = []
+    times = None
+    if time:
+        if geo_spec:
+            raise IngestionError("invalid_options", "a time column goes with a table: the geo levels do not read it yet")
+        grid = parse_grid(grid)
+        times = read_times(frame, time)
+        frame = frame.drop(columns=[time])
+        if unread := int(times.isna().sum()):
+            warnings.append(f"{unread} rows without a readable time: mined, outside every time bin")
     if locator and not geo_spec:
         try:
             left_out = locate_points(frame, locator)[2]
@@ -345,13 +299,23 @@ def load_dataset(
     if geo_spec:
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config)
         warnings += geo_warnings
-    frame, cats, present_bins, derived, derived_warnings = _derive_columns(
-        frame, cat_spec, bin_spec, explicit_categories=categories is not None, explicit_bins=bins is not None, tolerated=tolerated
-    )
-    warnings += derived_warnings
+    cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
+    frame = apply_categories(frame, cats)
+    bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin", tolerated=tolerated)
+    present_bins = {c: bin_spec[c] for c in bin_cols}
+    frame, derived = apply_bins(frame, present_bins)
+    if missing_cats or missing_bins:
+        warnings.append(f"column options not in this dataset (skipped): {missing_cats + missing_bins}")
+    if not any(pd.api.types.is_numeric_dtype(frame[c]) for c in frame.columns):
+        raise IngestionError("no_numeric_targets", "Dataset has no numeric columns to analyse")
+    empty = [c for c in frame.columns if frame[c].isna().all()]
+    if empty:
+        warnings.append(f"all-null columns ignored by profiling: {empty}")
     return LoadedDataset(
         frame=frame,
-        dataset_id=dataset_fingerprint(digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out),
+        dataset_id=dataset_fingerprint(
+            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{grid}" if time else None
+        ),
         filename=filename or path.name,
         bins=present_bins,
         categories=cats,
@@ -360,6 +324,8 @@ def load_dataset(
         geo=_geo_text(geo_spec),
         spatial=spatial,
         points=",".join(left_out) or None,
+        time=times,
+        grid=grid if time else None,
     )
 
 

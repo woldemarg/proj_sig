@@ -42,9 +42,8 @@ from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
 
-if TYPE_CHECKING:  # the ontology and the temporal plane are passed in, never constructed here
+if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
-    from insight_graph_service.core.temporal import TemporalStructure
 
 Member = tuple[dict[str, Any], float, float]  # (pattern record, alignment, strength)
 
@@ -92,7 +91,7 @@ def _schema_plane(
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
                 "integrity": integrity[bid],
-                **{k: b[k] for k in ("upload_id", "level", "supersedes", "window") if k in b},
+                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
@@ -397,16 +396,6 @@ def _attractor_nodes(
     return nodes
 
 
-def _temporal_plane(temporal: TemporalStructure) -> tuple[list[GraphEdge], dict[str, Any]]:
-    """The EVOLVES_TO edges of every trajectory, and the ``trajectories`` section: key -> its series and record."""
-    edges, trajectories = [], {}
-    for name, folded in sorted(temporal.series.items()):
-        for key, t in folded.items():
-            edges += [GraphEdge(a, b, EdgeType.EVOLVES_TO, 1.0, props) for a, b, props in t.edges]
-            trajectories[key] = {"series": name, **t.record()}
-    return edges, trajectories
-
-
 def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], structural: list[GraphEdge]) -> list[GraphEdge]:
     """Region nodes (added to ``nodes``), IN_REGION (``basis`` cells for a geo pattern, events with their props for a base
     one), PARENT_OF and CO_LOCATED edges, each geo pattern's ``compactness`` and a base pattern's ``geo: partial``; a
@@ -454,8 +443,6 @@ BATCH_DIGEST_FIELDS = (
     "metadata_doc",
     "supersedes",
     "profile",
-    "window",  # a time window's bounds and what it observed of its series' trajectories (docs/02_discovery.md §2.10)
-    "temporal",
 )
 
 
@@ -491,13 +478,11 @@ def build_snapshot(
     ontology: LatentOntology,
     settings: Settings,
     spatial: SpatialStructure | None = None,
-    temporal: TemporalStructure | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
     ``profile``); ``representation``: the recorded vector contract; ``spatial``: the derived spatial plane of the geo
-    patterns (``subgroup_miner.spatial.derive_spatial``); ``temporal``: the derived temporal plane of the time windows
-    (``core.temporal.derive_temporal``)."""
+    patterns (``subgroup_miner.spatial.derive_spatial``)."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
@@ -527,8 +512,6 @@ def build_snapshot(
             )
         )
 
-    evolves, trajectories = _temporal_plane(temporal) if temporal else ([], {})
-    edges += evolves
     counts = Counter(e.type.value for e in edges)
     n_attr = len(ontology.attractor_ids)
     return {
@@ -538,7 +521,6 @@ def build_snapshot(
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
         "own_cells": {pid: sorted(cells) for pid, cells in spatial.own_cells.items() if pid in nodes},
-        "trajectories": trajectories,
         "stats": {
             "patterns": len(insights),
             "attractors": n_attr,

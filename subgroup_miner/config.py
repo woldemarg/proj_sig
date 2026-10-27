@@ -38,10 +38,10 @@ class MinerConfig:
     weight_exponents: tuple[float, ...] = (0.35, 0.25, 0.10, 0.10)  # one per WEIGHT_FACTORS entry
     weight_floor: float = 0.05
 
-    # trajectories through the time windows of one upload (docs/02_discovery.md §2.10)
-    temporal_dormant_windows: int = 3  # evaluated-but-refused windows since the last admission before a trajectory ends
-    temporal_unobserved_windows: int = 4  # windows in a row without an evaluation before tracking stops (not a finding)
-    temporal_drift_excess: float = 0.5  # |excess shift| (reference-scale units) from which a transition is a drift
+    # the dynamics of an insight over the calendar grid of its upload's time column (docs/02_discovery.md §2.10)
+    temporal_min_rows_bin: int = 30  # fewer rows in a bin (the upload's, or the insight's) leave it unmeasured
+    temporal_process_noise: float = 0.1  # Q of the local-level smoother: how far the level may move per bin, in z²
+    temporal_event_p: float = 0.05  # the event gate's significance, Bonferroni over every pair of measured bins
 
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5

@@ -108,27 +108,39 @@ def test_attractor_benchmark_apparatus(engine, tmp_path):
 
 
 def test_temporal_benchmark_apparatus(cfg, tmp_path):
-    from temporal_benchmark import PLANTED, analyse, generate, mine_upload, parity, score_planted, wilson
+    from temporal_benchmark import FLASH, PLANTED, analyse, cohort, generate, mine, score_planted, wilson
 
-    frame = generate(1, rows=6000, days=21)  # three weekly windows of the planted upload
-    assert {"when", *(c for scope, _ in PLANTED.values() for c in scope)} <= set(frame.columns)
+    frame = generate(1, rows=8000, days=35, spike=True)  # five weeks of the planted upload
+    assert {"when", "pulse", *(c for scope, _ in PLANTED.values() for c in scope)} <= set(frame.columns)
     csv = tmp_path / "events.csv"
     frame.to_csv(csv, index=False, lineterminator="\n")
-    trajectories, seconds = mine_upload(csv, "up-test", cfg)
-    scores = score_planted(trajectories)
-    assert len(seconds) == 3 and all(s["trajectories"] == 1 for s in scores.values())
-    assert [(e["from"], e["to"], e["got"]) for e in scores["S1"]["edges"][:2]] == [(0, 1, "CONTINUATION"), (1, 2, "CONTINUATION")]
-    assert [e["got"] for e in scores["S2"]["edges"][:2]] == ["DRIFT", "DRIFT"] and all(x > 0 for x in scores["S2"]["excess"].values())
-    rows = [{"seed": 1, "null": False, "trajectories": len(trajectories), "lasting": 0, "seconds": seconds, "planted": scores}]
-    summary = analyse([*rows, {"seed": 2, "null": True, "trajectories": 0, "lasting": 0, "seconds": [1.0]}], cfg.miner.temporal_drift_excess)
-    assert summary["S1"]["recall"] == pytest.approx(2 / 9) and summary["S5"]["with_false_trajectory"] == 0  # three windows hold 2 of 9 edges
+    kept, trajectories, bins = mine(csv, cfg)
+    assert [b["period"] for b in bins] == ["2031-W10", "2031-W11", "2031-W12", "2031-W13", "2031-W14"]
+    assert kept and all(trajectories[i.id]["of"] == 5 for i in kept)
+    scores = score_planted(kept, trajectories)
+    assert scores["S1"]["trend"] == "flat" and scores["S2"]["trend"] == "rising" and not scores["S1"]["events"]
+    assert cohort(kept, *FLASH) is None and "flash" in generate(2, rows=500, flash=(5, 3.0)).columns
+    rows = [{"kind": "planted", "seconds": 1.0, "planted": scores}, {"kind": "stationary", "events": 0, "patterns": 3}]
+    summary = analyse([*rows, {"kind": "flash", "flash": [5, 3.0], "found": True, "evented": False}])
+    assert summary["S1"]["as_expected"] == 1.0 and summary["S5"]["with_false_event"] == 0 and summary["S7"] == {"5x3": {"found": 1.0, "evented": 0.0}}
     assert wilson(0, 100) == pytest.approx((0.0, 0.037), abs=1e-3)
-    engine = make_engine(make_config(tmp_path / "ws"))  # the same upload through the graph service: the same trajectories
-    with csv.open("rb") as f:
-        for record in engine.upload(csv.name, f, time="when", window="7D"):
-            engine.process(record["batch_id"])
-    snapshot = engine.ws.load_graph()
-    assert parity(trajectories, snapshot) == {"same": True, "trajectories": len(trajectories), "differing": []}
+
+
+def test_temporal_ab_apparatus():
+    from temporal_ab import classify, compare
+
+    plain = [("channel=online", "segment=C"), ("segment=B",)]
+    assert classify(("channel=online", "segment=C", "tier=t1"), plain) == "nested"  # a specialisation of a plain scope
+    assert classify(("segment=B", "tier=t2"), plain) == "nested"
+    assert classify(("channel=online", "tier=t2"), plain) == "overlapping"
+    assert classify(("tier=t3",), plain) == "new"
+    measure = {"patterns": 4.0, "plain_patterns": 2.0, "edges": 9.0, "temporal_edges": 1.0, "journal_rows": 4.0, "seconds": 1.0}
+    measure |= {"discover_seconds": 0.5, "anchors": 2.0, "plain_anchors": 1.0, "patterns_per_anchor": 2.0, "plain_recall": 1.0}
+    chain = {"summary": {**measure, "seeds": [1], "window_only": {"nested": 2.0}}, "per_seed": [{"seed": 1, "file_sha256": "f"}]}
+    event = {"summary": {**measure, "seeds": [1], "window_only": {}}, "per_seed": [{"seed": 1, "file_sha256": "f"}]}
+    assert "| window-only, nested | 2.00 | 0.00 |" in compare(chain, event)
+    with pytest.raises(SystemExit, match="same files"):
+        compare(chain, {**event, "per_seed": [{"seed": 1, "file_sha256": "other"}]})
 
 
 def test_geo_benchmark_apparatus(engine, tmp_path):

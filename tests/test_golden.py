@@ -18,7 +18,7 @@ GOLDEN = Path(__file__).parent / "golden"
 QUESTION = "Why is margin lower for phones in the US?"
 BATCH_ID = re.compile(r"B\d{8}T\d{6}-[0-9a-f]{6}")  # a batch id carries its creation time
 FLOAT = re.compile(r"(?<![\w.-])(-?\d+\.\d+(?:e[-+]?\d+)?|-?\d+e[-+]?\d+)(?![\w.])")  # not inside an id like P-4684602e780d
-EXACT = ("version", "nodes", "props", "datasets", "edge_counts", "trajectories")
+EXACT = ("version", "nodes", "props", "datasets", "edge_counts")
 
 
 def _round(value: Any) -> Any:
@@ -53,8 +53,7 @@ def _same(a: str, b: str) -> bool:
 
 
 def summarise(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Node counts, how many nodes of each kind carry each prop, the dataset, the trajectories, every pattern's statistics
-    and every edge."""
+    """Node counts, how many nodes of each kind carry each prop, the dataset, every pattern's statistics and every edge."""
     snapshot = json.loads(BATCH_ID.sub("<batch>", json.dumps(snapshot)))
     nodes = snapshot["nodes"]
     kinds = sorted({n["kind"] for n in nodes})
@@ -64,7 +63,6 @@ def summarise(snapshot: dict[str, Any]) -> dict[str, Any]:
         "props": {k: dict(sorted(Counter(p for n in nodes if n["kind"] == k for p in n["props"]).items())) for k in kinds},
         "datasets": _round([n["props"] for n in nodes if n["kind"] == "Dataset"]),
         "edge_counts": dict(sorted(snapshot["stats"]["edge_counts"].items())),
-        "trajectories": _round(snapshot["trajectories"]),
         "patterns": sorted(_pattern(n["props"]) for n in nodes if n["kind"] == "Pattern"),
         "edges": sorted(_edge(e) for e in snapshot["edges"]),
     }

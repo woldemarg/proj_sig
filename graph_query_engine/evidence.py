@@ -20,7 +20,6 @@ from typing import Any
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.temporal import span, time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
@@ -83,7 +82,6 @@ class EvidenceItem:
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
     reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline"} in Ukrainian (graph.insight_reading)
-    time: dict[str, Any] = field(default_factory=dict)  # a time window's insight: its window and trajectory (temporal.time_facts)
 
 
 @dataclass
@@ -158,8 +156,7 @@ class Evidence:
             trust = f" source={json.dumps(d['source'], ensure_ascii=False)}" if d.get("source") else ""  # quoted: free text
             if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
                 trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
-            window = f" window={span(d['window'])}" if d.get("window") else ""
-            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{window}{trust}")
+            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
     def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
@@ -204,13 +201,11 @@ class Evidence:
 
     def _baseline_lines(self) -> list[str]:
         lines = ["", "METRIC BASELINES (whole dataset):"]
-        windows = {d["dataset_id"]: d["window"] for d in self.datasets if d.get("window")}
         for m in self.metrics:
             parts = [f"{k} {json.dumps(m[k], ensure_ascii=False)}" for k in ("indicator", "unit") if k in m]
             meaning = f" ({', '.join(parts)})" if parts else ""
             name = humanize(m["metric"]) if parts else self.reword(humanize(m["metric"]), m["dataset_id"])  # the indicator already says it
-            where = f" in window {span(w)}" if (w := windows.get(m["dataset_id"])) else ""  # one metric's baseline per window
-            lines.append(f"- {name}{meaning}{where}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
+            lines.append(f"- {name}{meaning}: median {format_value(m['global_median'])}, MAD {format_value(m['global_mad'])}")
         return lines
 
     def _anchor_lines(self) -> list[str]:
@@ -257,8 +252,6 @@ class Evidence:
         )
         if it.trust:
             lines.append(f"     trust: {it.trust}")
-        if it.time:
-            lines.append(f"     time: {time_line(it.time)}")
         spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
         if spatial and spatial.cells is not None and spatial.resolution is not None:
             compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
@@ -437,9 +430,6 @@ class Evidence:
             tag += "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
             tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
-            if it.time:  # its window and its trajectory's state, in the console's words
-                state = wording.name(f"trajectory_{it.time['state']}")
-                tag += f" ({wording.name('time_window')} {span(it.time['window'])}; {wording.name('trajectory')}: {state})"
             n = it.statistics["support"]
             lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
         if len(trust) == 1:
@@ -654,7 +644,6 @@ def _item(
         credibility_basis=node["props"].get("credibility_basis", {}),
         provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
         reading=insight_reading(graph, pid, config.thresholds),
-        time=time_facts(graph, pid),
     )
 
 
@@ -708,7 +697,7 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary", "window") if props.get(k)}
+            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary") if props.get(k)}
         )
         mine = [it for it in items if it.provenance["dataset_id"] == ds]
         if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):
@@ -760,12 +749,6 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
         notes.append(
             f"{', '.join(unconfirmed)} were not found at the coarser level of their upload: that is missing evidence at that level,"
             " not proof the effect is local."
-        )
-    timed = [it.key for it in items if it.time]
-    if timed:
-        notes.append(
-            f"{', '.join(timed)} come from time windows: each finding holds for its own window; name the window and its trajectory's"
-            " state, and do not present a finding of an earlier window or of an ended trajectory as current."
         )
     if place_scores == {}:  # a zone, but no geo dataset of its levels to weigh: it places no finding in or out
         notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")
