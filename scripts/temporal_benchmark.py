@@ -1,8 +1,8 @@
 """The temporal benchmark (docs/10_verification.md §10.4): planted cohorts in one upload mined once, their series over
 the weekly grid, stationary uploads for the false-event rate, and the flash matrix of what one global pass misses.
 
-    python scripts/temporal_benchmark.py [--seeds 1-20] [--stationary-seeds 1-100] [--flash-seeds 1-5] [--workers 8]
-                                         [--label current] [--override TEMPORAL_PROCESS_NOISE=0.1 ...]
+    python scripts/temporal_benchmark.py [--seeds 1-20] [--stationary-seeds 1-100] [--flash-seeds 1-5] [--engine-seeds 1-3]
+                                         [--workers 8] [--label current] [--override TEMPORAL_PROCESS_NOISE=0.1 ...]
 
 ``generate(seed)`` writes 20,000 events over 70 days from a Monday (ten ISO weeks) with five categorical columns and
 five metrics drawn N(0, 1), and plants four cohorts, each on a metric of its own (the same bytes as the chain model's
@@ -24,12 +24,16 @@ threshold (docs/extra_funcs/temporal_analytics/temporal_event_graph_architecture
 
 Each upload runs what a batch runs of the miner — ``load_dataset(time=, grid="week")``, ``run_discovery``,
 ``build_insights``, ``select_insights``, the graph's admission — then ``annotate`` and ``dynamics``, without vectors,
-anchors or a workspace. Results: ``.scratch/results/temporal_benchmark_<label>.json``.
+anchors or a workspace. The engine mode (``--engine-seeds``) sends a planted upload through the graph service as well
+(``time=when``, ``grid=week``, the hashing embedder): its snapshot's trajectories must equal the library's — trend,
+current level, measured bins and events of every pattern —, and the batch's stage times are recorded. Results:
+``.scratch/results/temporal_benchmark_<label>.json``.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -39,7 +43,7 @@ import numpy as np
 import pandas as pd
 from attractor_benchmark import parse_seeds
 from scipy.stats import binomtest
-from scratch import parse_overrides, save_result, scratch_dir, settings
+from scratch import build_engine, parse_overrides, save_result, scratch_dir, settings
 
 from insight_contracts import Condition, Insight
 from insight_graph_service.core.batch import admit_insights
@@ -182,6 +186,38 @@ def run_seed(seed: int, kind: str, overrides: dict[str, Any], flash: tuple[int, 
     return row
 
 
+def parity(library: dict[str, dict[str, Any]], served: dict[str, dict[str, Any]]) -> list[str]:
+    """The patterns whose trajectory the library pipeline and the graph service tell apart — any field ``dynamics``
+    gives, as the snapshot stores it (series, smoothed levels, events, trend, current level, bins, gaps) — or that only
+    one of them has."""
+
+    def same(p: str) -> bool:
+        return json.loads(json.dumps(library[p], default=float)) == {k: served[p].get(k) for k in library[p]}
+
+    return sorted(p for p in library.keys() | served.keys() if p not in library or p not in served or not same(p))
+
+
+def run_engine(seed: int, overrides: dict[str, Any], embedder: Any) -> dict[str, Any]:
+    """One planted upload through the library pipeline and through the graph service: their parity, the batch's stages."""
+    folder = scratch_dir(f"temporal_benchmark/engine_{seed}", fresh=True)
+    path = folder / "events.csv"
+    generate(seed, spike=True).to_csv(path, index=False, lineterminator="\n")
+    _, library, _ = mine(path, settings(**overrides))
+    engine = build_engine(folder / "ws", embedder=embedder, **overrides)
+    with path.open("rb") as f:
+        (record,) = [engine.process(r["batch_id"]) for r in engine.upload(path.name, f, time="when", grid="week")]
+    served = (engine.ws.load_graph() or {}).get("trajectories", {})
+    timings = record.get("metrics", {}).get("timings", {})
+    return {
+        "seed": seed,
+        "kind": "engine",
+        "status": record["status"],
+        "patterns": len(served),
+        "differing": parity(library, served),
+        "stages": timings,
+    }
+
+
 def wilson(k: int, n: int) -> tuple[float, float]:
     """The Wilson score 95 % interval of a proportion k / n."""
     interval = binomtest(k, n).proportion_ci(method="wilson") if n else None
@@ -226,6 +262,13 @@ def analyse(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
     seconds = [r["seconds"] for r in rows if "seconds" in r]
     summary["seconds_per_upload"] = float(np.mean(seconds)) if seconds else None
+    served = [r for r in rows if r["kind"] == "engine"]
+    summary["engine"] = {
+        "uploads": len(served),
+        "identical": sum(r["status"] == "READY" and r["patterns"] > 0 and not r["differing"] for r in served),  # never on nothing
+        "patterns": int(sum(r["patterns"] for r in served)),
+        "stages": {k: float(np.mean([r["stages"].get(k, 0.0) for r in served])) for k in sorted({k for r in served for k in r["stages"]})},
+    }
     return summary
 
 
@@ -249,6 +292,10 @@ def format_summary(summary: dict[str, Any]) -> str:
             lines.append(f"    k={k:>2}: " + "  ".join(f"m={m:g} {c['found']:.2f}/{c['evented']:.2f}" for m, c in zip(FLASH_SIZES, cells) if c))
     if summary["seconds_per_upload"] is not None:
         lines.append(f"  {summary['seconds_per_upload']:.2f} s per upload")
+    if summary["engine"]["uploads"]:
+        e = summary["engine"]
+        lines.append(f"  engine: {e['identical']}/{e['uploads']} uploads READY with the library's trajectories ({e['patterns']} patterns)")
+        lines.append("  stage seconds (mean): " + ", ".join(f"{k} {v:.2f}" for k, v in e["stages"].items()))
     return "\n".join(lines)
 
 
@@ -257,6 +304,7 @@ def main() -> int:
     parser.add_argument("--seeds", default="1-20", help="planted upload seeds, a range a-b or a list a,b,c")
     parser.add_argument("--stationary-seeds", default="1-100", help="stationary upload seeds (S5)")
     parser.add_argument("--flash-seeds", default="1-5", help="seeds of each flash cell (S7); empty to skip the matrix")
+    parser.add_argument("--engine-seeds", default="1-3", help="planted seeds also sent through the graph service; empty to skip")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--label", default="current")
     parser.add_argument("--override", action="append", default=[], metavar="NAME=VALUE", help="a settings field by its upper-case name")
@@ -268,6 +316,10 @@ def main() -> int:
         jobs += [(s, "flash", (k, m)) for k in FLASH_WEEKS for m in FLASH_SIZES for s in parse_seeds(args.flash_seeds)]
     with ProcessPoolExecutor(args.workers) as pool:
         rows = list(pool.map(run_seed, *zip(*[(s, kind, overrides, flash) for s, kind, flash in jobs])))
+    if args.engine_seeds:
+        from tests.doubles import HashingEmbedder
+
+        rows += [run_engine(s, overrides, HashingEmbedder()) for s in parse_seeds(args.engine_seeds)]
     summary = analyse(rows)
     print(format_summary(summary))
     print(save_result("temporal_benchmark", args.label, {"summary": summary, "overrides": overrides, "per_upload": rows}))

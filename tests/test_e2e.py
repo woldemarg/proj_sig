@@ -107,8 +107,8 @@ def test_attractor_benchmark_apparatus(engine, tmp_path):
     assert holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06]) and holm([0.6, 0.5]) == [1.0, 1.0]
 
 
-def test_temporal_benchmark_apparatus(cfg, tmp_path):
-    from temporal_benchmark import FLASH, PLANTED, analyse, cohort, generate, mine, score_planted, wilson
+def test_temporal_benchmark_apparatus(cfg, engine, tmp_path):
+    from temporal_benchmark import FLASH, PLANTED, analyse, cohort, generate, mine, parity, score_planted, wilson
 
     frame = generate(1, rows=8000, days=35, spike=True)  # five weeks of the planted upload
     assert {"when", "pulse", *(c for scope, _ in PLANTED.values() for c in scope)} <= set(frame.columns)
@@ -117,30 +117,56 @@ def test_temporal_benchmark_apparatus(cfg, tmp_path):
     kept, trajectories, bins = mine(csv, cfg)
     assert [b["period"] for b in bins] == ["2031-W10", "2031-W11", "2031-W12", "2031-W13", "2031-W14"]
     assert kept and all(trajectories[i.id]["of"] == 5 for i in kept)
+    with csv.open("rb") as f:  # the engine mode: the graph service's trajectories are the library's
+        (record,) = [engine.process(r["batch_id"]) for r in engine.upload(csv.name, f, time="when", grid="week")]
+    served = engine.ws.load_graph()["trajectories"]
+    assert record["status"] == "READY" and len(served) == len(kept) and parity(trajectories, served) == []
+    first = kept[0].id
+    assert parity(trajectories, {**served, first: {**served[first], "smoothed": {}}}) == [first]  # any field, not only the trend
+    assert parity(trajectories, {k: v for k, v in served.items() if k != first}) == [first]  # a pattern on one side only
     scores = score_planted(kept, trajectories)
     assert scores["S1"]["trend"] == "flat" and scores["S2"]["trend"] == "rising" and not scores["S1"]["events"]
     assert cohort(kept, *FLASH) is None and "flash" in generate(2, rows=500, flash=(5, 3.0)).columns
     rows = [{"kind": "planted", "seconds": 1.0, "planted": scores}, {"kind": "stationary", "events": 0, "patterns": 3}]
-    summary = analyse([*rows, {"kind": "flash", "flash": [5, 3.0], "found": True, "evented": False}])
+    served_row = {"kind": "engine", "status": "READY", "patterns": 4, "differing": [], "stages": {"discover_s": 2.0}}
+    summary = analyse([*rows, {"kind": "flash", "flash": [5, 3.0], "found": True, "evented": False}, served_row])
+    assert summary["engine"] == {"uploads": 1, "identical": 1, "patterns": 4, "stages": {"discover_s": 2.0}}
     assert summary["S1"]["as_expected"] == 1.0 and summary["S5"]["with_false_event"] == 0 and summary["S7"] == {"5x3": {"found": 1.0, "evented": 0.0}}
     assert wilson(0, 100) == pytest.approx((0.0, 0.037), abs=1e-3)
 
 
 def test_temporal_ab_apparatus():
-    from temporal_ab import classify, compare
+    from temporal_ab import classify, compare, planted, window_only
 
     plain = [("channel=online", "segment=C"), ("segment=B",)]
     assert classify(("channel=online", "segment=C", "tier=t1"), plain) == "nested"  # a specialisation of a plain scope
     assert classify(("segment=B", "tier=t2"), plain) == "nested"
     assert classify(("channel=online", "tier=t2"), plain) == "overlapping"
     assert classify(("tier=t3",), plain) == "new"
+    assert planted(("channel=online", "segment=C", "tier=t1")) == "narrows S2" and planted(("segment=C",)) == "widens S2"
+    assert (
+        planted(("channel=online", "segment=D")) == "holds part of S3" and planted(("channel=online", "region_type=rural")) == "holds part of S2, S3"
+    )
+    assert planted(("channel=partner", "segment=A")) == planted(("channel=partner", "region_type=suburban", "segment=C")) == "none"  # no planted row
+    timed = {"scopes": [["tier=t3"], ["segment=B"]], "targets": {"tier=t3": ["value"]}}
+    rows = [{"seed": s, "plain": {"scopes": [list(p) for p in plain]}, "timed": timed} for s in (1, 2)]
+    rows.append({"seed": 3, "plain": {"scopes": [["tier=t3", "segment=B"]]}, "timed": timed})  # the same scope nested on seed 3
+    assert window_only(rows) == [
+        ("nested", "segment=B", [3], "", "widens S1"),
+        ("nested", "tier=t3", [3], "value", "holds part of S1, S2, S3, S4"),
+        ("new", "tier=t3", [1, 2], "value", "holds part of S1, S2, S3, S4"),
+    ]
     measure = {"patterns": 4.0, "plain_patterns": 2.0, "edges": 9.0, "temporal_edges": 1.0, "journal_rows": 4.0, "seconds": 1.0}
     measure |= {"discover_seconds": 0.5, "anchors": 2.0, "plain_anchors": 1.0, "patterns_per_anchor": 2.0, "plain_recall": 1.0}
-    chain = {"summary": {**measure, "seeds": [1], "window_only": {"nested": 2.0}}, "per_seed": [{"seed": 1, "file_sha256": "f"}]}
-    event = {"summary": {**measure, "seeds": [1], "window_only": {}}, "per_seed": [{"seed": 1, "file_sha256": "f"}]}
-    assert "| window-only, nested | 2.00 | 0.00 |" in compare(chain, event)
+    chain = {"summary": {**measure, "seeds": [1], "window_only": {"nested": 2.0}}, "per_seed": [{**rows[0], "file_sha256": "f"}]}
+    event = {"summary": {**measure, "seeds": [1], "window_only": {}}, "per_seed": [{**rows[0], "timed": rows[0]["plain"], "file_sha256": "f"}]}
+    table = compare(chain, event)
+    assert (
+        "| window-only, nested | 2.00 | 0.00 |" in table and "new         tier=t3  (seeds [1]; target value; holds part of S1, S2, S3, S4)" in table
+    )
+    assert "window-only scopes of the event model: 0, admitted 0 times" in table
     with pytest.raises(SystemExit, match="same files"):
-        compare(chain, {**event, "per_seed": [{"seed": 1, "file_sha256": "other"}]})
+        compare(chain, {**event, "per_seed": [{**event["per_seed"][0], "file_sha256": "other"}]})
 
 
 def test_geo_benchmark_apparatus(engine, tmp_path):
