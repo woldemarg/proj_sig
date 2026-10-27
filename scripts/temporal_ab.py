@@ -35,14 +35,9 @@ TEMPORAL_EDGES = ("EVOLVES_TO", "PEAKED_AT", "DROPPED_AT")
 
 
 def latent(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """The latent plane of a snapshot: anchors, their members, the heaviest anchor's mass, CO_OCCURS links."""
+    """The latent plane of a snapshot: its anchors and their members per anchor."""
     anchors = [n["props"] for n in snapshot["nodes"] if n["kind"] == "Attractor"]
-    return {
-        "anchors": len(anchors),
-        "patterns_per_anchor": float(np.mean([a["n_patterns"] for a in anchors])) if anchors else 0.0,
-        "max_mass": max((a["mass"] for a in anchors), default=0.0),
-        "co_occurs": sum(e["type"] == "CO_OCCURS" for e in snapshot["edges"]),
-    }
+    return {"anchors": len(anchors), "patterns_per_anchor": float(np.mean([a["n_patterns"] for a in anchors])) if anchors else 0.0}
 
 
 def measure(engine: Any, records: list[dict[str, Any]]) -> dict[str, Any]:

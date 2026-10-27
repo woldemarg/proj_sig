@@ -45,7 +45,7 @@ from insight_contracts import Condition, Insight
 from insight_graph_service.core.batch import admit_insights
 from insight_graph_service.core.settings import Settings
 from subgroup_miner.discovery import DiscoveryError, build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, load_dataset
+from subgroup_miner.ingestion import load_dataset
 from subgroup_miner.selection import select_insights
 from subgroup_miner.temporal import FLAT, PEAKED_AT, RISING, annotate, calendar_bins, dynamics, reference_scale
 
@@ -170,10 +170,7 @@ def run_seed(seed: int, kind: str, overrides: dict[str, Any], flash: tuple[int, 
     path = folder / "events.csv"
     generate(seed, stationary=kind == "stationary", spike=kind == "planted", flash=flash).to_csv(path, index=False, lineterminator="\n")
     start = time.perf_counter()
-    try:
-        kept, trajectories, bins = mine(path, settings(**overrides))
-    except IngestionError as exc:
-        return {"seed": seed, "kind": kind, "error": str(exc)}
+    kept, trajectories, bins = mine(path, settings(**overrides))
     row = {"seed": seed, "kind": kind, "seconds": time.perf_counter() - start, "patterns": len(kept), "bins": len(bins)}
     row["events"] = sum(len(t["events"]) for t in trajectories.values())
     if kind == "planted":

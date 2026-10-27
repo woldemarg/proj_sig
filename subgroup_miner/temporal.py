@@ -237,11 +237,6 @@ def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], primar
 
 def _gaps(y: Sequence[float | None], bins: Sequence[Mapping[str, Any]]) -> list[list[str]]:
     """The runs of bins without a measurement, as ``[first period, last period]``."""
-    runs: list[list[str]] = []
-    for t, v in enumerate(y):
-        if v is None:
-            if runs and runs[-1][2] == t - 1:
-                runs[-1][1:] = [bins[t]["period"], t]
-            else:
-                runs.append([bins[t]["period"], bins[t]["period"], t])
-    return [r[:2] for r in runs]
+    missing = [t for t, v in enumerate(y) if v is None]
+    runs = np.split(np.array(missing, dtype=int), np.flatnonzero(np.diff(missing) != 1) + 1) if missing else []
+    return [[bins[r[0]]["period"], bins[r[-1]]["period"]] for r in runs]
