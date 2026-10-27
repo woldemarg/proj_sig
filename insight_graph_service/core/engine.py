@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
+import pandas as pd
 
 from attractor_topology.canonical import canonicalize
 from attractor_topology.encoder import InsightEncoder, SentenceTransformerEmbedder, TextEmbedder
@@ -46,9 +47,20 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
-from subgroup_miner.ingestion import IngestionError, LoadedDataset, auto_levels, forget_tables, load_dataset, parse_indicators
+from subgroup_miner.ingestion import (
+    IngestionError,
+    LoadedDataset,
+    auto_levels,
+    forget_tables,
+    load_dataset,
+    parse_grid,
+    parse_indicators,
+    read_file,
+    read_times,
+)
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
+from subgroup_miner.temporal import annotate, calendar_bins, reference_scale
 
 log = logging.getLogger(__name__)
 
@@ -268,6 +280,14 @@ class Engine:
             if stored is not None:
                 geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
         tables = [t for b in batches.values() if (t := self._table_placement(b, batches)) is not None]
+        temporal = {}  # every READY dataset's series and the file's digest: the temporal plane is derived, never journaled
+        for b in batches.values():
+            if b.get("status") != "READY" or not (signed := b.get("temporal")):
+                continue
+            if "series_digest" not in signed:
+                log.warning("%s: its time record is of another model (no series_digest): no temporal plane", b["dataset_id"])
+            elif (stored := self.ws.load_temporal(b["dataset_id"])) is not None:
+                temporal[b["batch_id"]] = stored
         snapshot = build_snapshot(
             records=records,
             activations=self.ws.activations(),
@@ -277,6 +297,7 @@ class Engine:
             ontology=ontology,
             settings=self.settings,
             spatial=derive_spatial(geo, self.settings.region_levels, tables, self._spatial_memo),
+            temporal=temporal,
         )
         if self._writer:  # a read-only engine rebuilds an outdated snapshot in memory only
             self.ws.save_graph(snapshot)
@@ -320,24 +341,38 @@ class Engine:
         metadata: str | None = None,
         table: bool = False,
         supersedes: str | None = None,
+        time: str | None = None,
+        grid: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
         levels from the points (``select_levels``); ``supersedes`` names the dataset or upload this one replaces once it is
-        READY (``uploads.replaced_by``). Processing is a separate call."""
+        READY (``uploads.replaced_by``). ``time`` names a time column, binned by ``grid`` (``week`` by default) after
+        admission (docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
+        fills fewer than ``TEMPORAL_MIN_BINS`` refuses the upload. Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
+        if grid and not time:
+            raise PipelineError("invalid_options", "grid without time: name the time column the grid bins")
+        if time and (geo or table):
+            raise PipelineError("invalid_options", "a time column goes with a table: the geo levels do not read it yet")
+        try:
+            grid = parse_grid(grid) if time else None
+        except IngestionError as exc:
+            raise PipelineError(exc.code, str(exc)) from exc
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
         levels = [] if auto else uploads.resolve_levels(geo, table, self.settings.region_levels, self.settings.miner.geo_resolution)
         path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
-        if auto:
-            try:
+        try:
+            if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
-            except IngestionError as exc:
-                refused = PipelineError(exc.code, str(exc))
+            if time:
+                self._check_time(read_times(read_file(path, shared=True)[0], time), time, grid)
+        except IngestionError as exc:
+            refused = PipelineError(exc.code, str(exc))
         if not path.exists():  # the workspace was reset while the file streamed in or was read
             forget_tables()
             raise PipelineError("busy", "the workspace was reset during the upload; upload again")
@@ -364,6 +399,8 @@ class Engine:
             "glossary": glossary,
             "metadata": metadata,
             "supersedes": supersedes,
+            "time": time,
+            "grid": grid,
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
@@ -378,6 +415,16 @@ class Engine:
             )
             for g, level in levels
         ]
+
+    def _check_time(self, times: pd.Series, time: str, grid: str) -> None:
+        """A time column spans at most ``TEMPORAL_MAX_BINS`` bins of ``grid`` and fills at least ``TEMPORAL_MIN_BINS`` of
+        them (``invalid_options`` otherwise): at upload, before a batch exists, and at VALIDATING for a batch submitted
+        without one."""
+        bins = calendar_bins(times, grid, self.settings.temporal_max_bins)[1]
+        if (filled := sum(b["rows"] > 0 for b in bins)) < self.settings.temporal_min_bins:
+            raise IngestionError(
+                "invalid_options", f"time column '{time}': {filled} {grid} bins hold rows (TEMPORAL_MIN_BINS={self.settings.temporal_min_bins})"
+            )
 
     @_healthy
     def submit(
@@ -398,6 +445,8 @@ class Engine:
         geo_levels: dict[str, Any] | None = None,
         locator: str | None = None,
         supersedes: str | None = None,
+        time: str | None = None,
+        grid: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -409,7 +458,8 @@ class Engine:
         mean (``uploads.resolve_declared_metadata``); none enters the dataset id. ``upload`` is ``{upload_id, level}`` for
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
-        columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too).
+        columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
+        ``time`` and ``grid`` a time column and its calendar unit (docs/02_discovery.md §2.10).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
@@ -427,6 +477,7 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
+            **({"time": time, "grid": grid} if time else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
             "status": "UPLOADED",
@@ -458,6 +509,8 @@ class Engine:
             try:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = self._load(record, shared=True)
+                    if loaded.time is not None:
+                        self._check_time(loaded.time, record["time"], loaded.grid)
                     record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
@@ -547,6 +600,8 @@ class Engine:
                 for rec in patterns:
                     rec["provenance"]["rows_ref"] = self.ws.covers_ref(ds, rec["id"])
                 self.ws.save_covers(ds, mined.rows)
+                if mined.loaded.time is not None:  # each insight's series over the grid, signed with the record
+                    record["temporal"] = self._annotate(record, mined)
 
             with self._stage(record, "PERSISTING", timings, "persist_s"):
                 self._refuse_journaled(mined.kept)
@@ -574,6 +629,25 @@ class Engine:
             self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
         return snapshot, state
 
+    def _annotate(self, record: dict[str, Any], mined: _Mined) -> dict[str, Any]:
+        """Inside the commit (docs/02_discovery.md §2.10): every admitted insight's series over the time column's grid in
+        ``temporal.json``, and what the batch record signs of it — the column, the grid, the span, the bins, the rows
+        without a time, each metric's reference scale and the file's SHA-256."""
+        loaded = mined.loaded
+        codes, bins = calendar_bins(loaded.time, loaded.grid)
+        scale = reference_scale(loaded.frame)
+        metrics = {i.id: [s.metric for s in i.shifts] for i in mined.kept}
+        series = annotate(loaded.frame, codes, bins, mined.rows, metrics, scale, self.settings.miner.temporal_min_rows_bin)
+        return {
+            "column": record["time"],
+            "grid": loaded.grid,
+            "span": [bins[0]["t_start"], bins[-1]["t_end"]],
+            "bins": bins,
+            "rows_without_time": int((codes < 0).sum()),
+            "reference_scale": scale,
+            "series_digest": self.ws.save_temporal(record["dataset_id"], series),
+        }
+
     # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
 
     @_healthy
@@ -597,6 +671,8 @@ class Engine:
             strict=record.get("strict", True),
             locator=record.get("locator"),
             shared=shared,
+            time=record.get("time"),
+            grid=record.get("grid"),
         )
 
     @_healthy

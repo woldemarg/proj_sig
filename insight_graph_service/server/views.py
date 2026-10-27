@@ -50,6 +50,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
             continue
         if dataset and n["kind"] == "Attractor" and dataset not in p.get("datasets", []):
             continue
+        if dataset and n["kind"] == "TemporalNode" and not any(e["source"] in pids for e in graph.inc.get(n["id"], [])):
+            continue  # a period of other datasets' events
         keep.add(n["id"])
         data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n, members[n["id"]]), "full_label": n["label"]}
         if n["kind"] == "Pattern":

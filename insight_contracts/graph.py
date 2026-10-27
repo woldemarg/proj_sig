@@ -1,7 +1,7 @@
 """The dual graph's vocabulary and its snapshot contract (docs/06_graph_and_storage.md §6.1–6.2).
 
 A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "nodes": [...], "edges": [...],
-"own_cells": {...}, "stats": {...}}``; the graph service compiles it, the query engine and the console read it. Node
+"own_cells": {...}, "trajectories": {...}, "stats": {...}}``; the graph service compiles it, the query engine and the console read it. Node
 ``props`` by kind, as the readers rely on them:
 
 * ``Pattern``   the ``Insight.to_record()`` fields, plus ``row_id`` (its journal row), ``canonical`` (with ``document``
@@ -12,7 +12,10 @@ A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "n
                 of both bases, and the geo patterns whose own cell it is)
 * ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
-* ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence)
+* ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence); a dataset with a time column ``temporal``
+                {column, grid, span}
+* ``TemporalNode`` ``granularity``, ``period``, ``t_start``, ``t_end``: a calendar period, the same node for every
+                dataset that has an event in it
 
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
 ``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
@@ -23,6 +26,11 @@ Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (
 from a region to its parent at the next coarser listed level. A geo ``Pattern`` also carries ``compactness``, a base one
 ``geo: partial`` when too few of its events are located, both derived at the commit. ``own_cells`` maps a geo pattern
 whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
+``PEAKED_AT`` / ``DROPPED_AT`` (the temporal plane, never walked) run from a pattern to the TemporalNode of a peak or a
+dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``.
+``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``span``, ``series`` and
+``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of`` and
+``gaps``; the pattern carries the short form as ``temporal_summary``.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 11  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 13  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
@@ -48,6 +56,8 @@ class EdgeType(str, Enum):
     PARENT_OF = "PARENT_OF"
     DISCOVERED_IN = "DISCOVERED_IN"
     OF_DATASET = "OF_DATASET"
+    PEAKED_AT = "PEAKED_AT"
+    DROPPED_AT = "DROPPED_AT"
 
 
 STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}  # pattern <-> pattern
@@ -67,13 +77,15 @@ EDGE_PLANE = {
     EdgeType.TARGETS: "schema",
     EdgeType.DISCOVERED_IN: "provenance",
     EdgeType.OF_DATASET: "provenance",
+    EdgeType.PEAKED_AT: "temporal",
+    EdgeType.DROPPED_AT: "temporal",
 }
 
 
 @dataclass
 class GraphNode:
     id: str
-    kind: str  # Pattern | Attractor | Region | Dimension | Metric | Dataset | Batch
+    kind: str  # Pattern | Attractor | Region | TemporalNode | Dimension | Metric | Dataset | Batch
     label: str
     props: dict[str, Any] = field(default_factory=dict)
 
@@ -136,3 +148,8 @@ def dimension_node_id(dataset_id: str, name: str) -> str:
 
 
 TIME_GRIDS = ("day", "week", "month", "quarter")  # the calendar units an upload's time column is binned by
+
+
+def temporal_node_id(grid: str, period: str) -> str:
+    """A calendar period of a grid (``T:week:2026-W35``), the same node for every dataset that has an event in it."""
+    return f"T:{grid}:{period}"

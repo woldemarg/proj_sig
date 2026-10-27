@@ -1,12 +1,22 @@
 """Time in one upload: the time column apart, the calendar grid, each insight's series, its smoothing and its events
-(docs/02_discovery.md §2.10)."""
+(docs/02_discovery.md §2.10), and the temporal plane the graph service derives from them (docs/06_graph_and_storage.md §6.2)."""
 
 from __future__ import annotations
+
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_config, make_engine, weekly_retail
+from fastapi.testclient import TestClient
 
+from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge
+from insight_graph_service.core.errors import PipelineError
+from insight_graph_service.core.snapshot import compute_metadata_integrity, metadata_digest
+from insight_graph_service.server.app import create_app
+from insight_graph_service.server.views import cytoscape_elements
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.ingestion import IngestionError, load_dataset, read_times
 from subgroup_miner.temporal import (
@@ -207,3 +217,165 @@ def test_time_options_are_refused(tmp_path, options, message):
     with pytest.raises(IngestionError, match=message) as err:
         load_dataset(write(tmp_path, frame), CFG, **options)
     assert err.value.code == "invalid_options"
+
+
+# the graph service: the series signed at the commit, the temporal plane derived at every compile
+
+
+def phones_us(snapshot: dict) -> str:
+    return next(
+        n["id"]
+        for n in snapshot["nodes"]
+        if n["kind"] == "Pattern" and {(c["attribute"], c["value"]) for c in n["props"]["conditions"]} == {("category", "phones"), ("region", "US")}
+    )
+
+
+def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(timed):
+    engine, record = timed
+    signed = record["temporal"]
+    assert (signed["column"], signed["grid"], signed["rows_without_time"]) == ("when", "week", 10)
+    assert [b["period"] for b in signed["bins"]] == [f"2031-W{w}" for w in range(10, 16)] and "when" not in record["profile"]["numerics"]
+    path = engine.ws.datasets_dir / record["dataset_id"] / "temporal.json"
+    assert signed["series_digest"] == hashlib.sha256(path.read_bytes()).hexdigest() and compute_metadata_integrity(record) == "ok"
+    snap = engine.ws.load_graph()
+    nodes = {n["id"]: n for n in snap["nodes"]}
+    patterns = {n["id"]: n["props"] for n in snap["nodes"] if n["kind"] == "Pattern"}
+    assert set(snap["trajectories"]) == set(patterns)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert all(sum(stored[pid]["rows"]) + stored[pid]["untimed"] == p["support"] for pid, p in patterns.items())
+    dataset = next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
+    assert dataset["temporal"] == {"column": "when", "grid": "week", "span": ["2031-03-03T00:00:00+00:00", "2031-04-14T00:00:00+00:00"]}
+    pid = phones_us(snap)
+    trajectory = snap["trajectories"][pid]
+    assert [(e["kind"], e["period"]) for e in trajectory["events"] if e["metric"] == "discount"] == [("PEAKED_AT", "2031-W13")]
+    assert trajectory["column"] == "when" and trajectory["of"] == 6 and set(trajectory["series"]) == {s["metric"] for s in patterns[pid]["shifts"]}
+    assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("trend", "current", "bins_measured", "of")} | {
+        "events": len(trajectory["events"])
+    }
+    hub = nodes["T:week:2031-W13"]
+    assert hub["kind"] == "TemporalNode" and hub["props"] == {
+        "granularity": "week",
+        "period": "2031-W13",
+        "t_start": "2031-03-24T00:00:00+00:00",
+        "t_end": "2031-03-31T00:00:00+00:00",
+    }
+    events = [e for e in snap["edges"] if e["plane"] == "temporal"]
+    assert {e["target"] for e in events} == {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"}  # a hub only with an event
+    assert all(e["type"] in ("PEAKED_AT", "DROPPED_AT") and e["source"] in patterns for e in events)
+
+
+def test_the_events_are_a_plane_no_walk_follows(timed):
+    engine, _ = timed
+    events = {EdgeType.PEAKED_AT, EdgeType.DROPPED_AT}
+    assert events.isdisjoint(STRUCTURAL_EDGES | LATENT_EDGES | UNDIRECTED_EDGES) and {GraphEdge("a", "b", t).plane for t in events} == {"temporal"}
+    found = engine.search("Why is the discount higher for phones in the US?")
+    assert found.evidence.items and not [e for e in found.traversal.used_edges if e.split(":", 1)[0] in {t.value for t in events}]
+
+
+def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_its_own_periods(tmp_path):
+    engine = make_engine(make_config(tmp_path / "ws"))
+    path = weekly_retail(tmp_path, spiked=("discount", "margin"))
+    with path.open("rb") as f:
+        timed = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+    plain = engine.ingest_file(path)
+    snap = engine.ws.load_graph()
+    ids = [e["id"] for e in snap["edges"]]
+    assert len(ids) == len(set(ids))
+    peaks = [e for e in snap["edges"] if e["source"] == phones_us(snap) and e["target"] == "T:week:2031-W13"]
+    assert len(peaks) == 1 and sorted(peaks[0]["props"]["metrics"]) == ["discount", "margin"]
+    assert peaks[0]["props"]["metric"] == peaks[0]["props"]["metrics"][0]  # the most prominent of them
+    hubs = {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"}
+    shown = {
+        ds: {el["data"]["id"] for el in cytoscape_elements(engine.graph(), ds, False)["nodes"]} for ds in (timed["dataset_id"], plain["dataset_id"])
+    }
+    assert hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
+
+
+def restarted(engine):
+    """The same workspace opened again: its snapshot compiled anew from the journals, the records and the files."""
+    return make_engine(engine.settings).ws.load_graph()
+
+
+def test_an_edited_time_record_or_series_file_gives_its_dataset_no_temporal_plane(tmp_path):
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with weekly_retail(tmp_path).open("rb") as f:
+        record = engine.process(engine.upload("weekly.csv", f, time="when")[0]["batch_id"])
+    assert restarted(engine)["trajectories"]
+    path = engine.ws.datasets_dir / record["dataset_id"] / "temporal.json"
+    original = path.read_bytes()
+    for damaged in (original.replace(b'"z":', b'"z": ', 1), original[:-10]):  # other bytes; a file that no longer reads
+        path.write_bytes(damaged)
+        again = make_engine(engine.settings)
+        snap = again.ws.load_graph()
+        assert again.problem is None and not snap["trajectories"] and not any(n["kind"] == "TemporalNode" for n in snap["nodes"])
+        assert "temporal" not in next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
+    path.write_bytes(original)
+    edited = {**record, "temporal": {**record["temporal"], "grid": "month"}}
+    engine.ws.save_batch(edited)
+    snap = restarted(engine)
+    assert not snap["trajectories"] and next(n["props"]["integrity"] for n in snap["nodes"] if n["kind"] == "Dataset") == "mismatch"
+
+
+def test_a_time_record_of_the_chain_model_compiles_without_a_temporal_plane(tmp_path, caplog):
+    engine = make_engine(make_config(tmp_path / "ws"))
+    with weekly_retail(tmp_path).open("rb") as f:
+        record = engine.process(engine.upload("weekly.csv", f, time="when")[0]["batch_id"])
+    window = {"index": 0, "of": 1, "column": "when", "size": "P7D", "t_start": "2031-03-03T00:00:00+00:00", "t_end": "2031-03-10T00:00:00+00:00"}
+    chained = {**record, "window": window, "temporal": {"reference_scale": record["temporal"]["reference_scale"], "observations": {}}}
+    engine.ws.save_batch({**chained, "metadata_digest": metadata_digest(chained)})  # signed as the chain model signed it
+    snap = restarted(engine)
+    assert not snap["trajectories"] and any(n["kind"] == "Pattern" for n in snap["nodes"])
+    assert next(n["props"]["integrity"] for n in snap["nodes"] if n["kind"] == "Dataset") == "ok"  # still verifiable: its window is signed
+    assert "no series_digest" in caplog.text
+
+
+def test_time_options_are_refused_before_the_file_is_kept(cfg, tmp_path):
+    engine = make_engine(cfg)
+    path = weekly_retail(tmp_path)
+    (tmp_path / "short").mkdir()
+    two_weeks = weekly_retail(tmp_path / "short", weeks=2)
+    for options, message in [
+        ({"grid": "week"}, "grid without time"),
+        ({"time": "when", "grid": "7D"}, "a calendar unit"),
+        ({"time": "when", "geo": "auto"}, "goes with a table"),
+        ({"time": "nope"}, "not in dataset"),
+        ({"time": "discount"}, "holds numbers"),
+    ]:
+        with path.open("rb") as f, pytest.raises(PipelineError, match=message) as err:
+            engine.upload(path.name, f, **options)
+        assert err.value.code == "invalid_options"
+    with two_weeks.open("rb") as f, pytest.raises(PipelineError, match="TEMPORAL_MIN_BINS=3"):
+        engine.upload(two_weeks.name, f, time="when")
+    sentinel = tmp_path / "sentinel.csv"  # one placeholder date: 416,000 weeks, refused before a bin is built
+    sentinel.write_text(path.read_text(encoding="utf-8").replace("unknown", "9999-12-31 00:00:00", 1), encoding="utf-8")
+    with sentinel.open("rb") as f, pytest.raises(PipelineError, match="TEMPORAL_MAX_BINS=1000"):
+        engine.upload(sentinel.name, f, time="when")
+    assert not list(engine.ws.uploads_dir.glob("*")) and not engine.ws.list_batches()
+
+
+def test_the_same_file_with_its_time_apart_is_another_dataset_and_its_deletion_takes_the_series(timed, tmp_path):
+    engine = make_engine(make_config(tmp_path / "ws"))
+    path = weekly_retail(tmp_path)
+    with path.open("rb") as f:
+        weekly = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+    with path.open("rb") as f:
+        daily = engine.process(engine.upload(path.name, f, time="when", grid="day")[0]["batch_id"])
+    with path.open("rb") as f:
+        again = engine.process(engine.upload(path.name, f, time="when")[0]["batch_id"])
+    plain = engine.ingest_file(path)
+    assert [r["status"] for r in (weekly, daily, again, plain)] == ["READY", "READY", "SKIPPED", "READY"]
+    assert len({weekly["dataset_id"], daily["dataset_id"], plain["dataset_id"]}) == 3 and weekly["dataset_id"] == timed[1]["dataset_id"]
+    assert daily["temporal"]["grid"] == "day" and len(daily["temporal"]["bins"]) == 42 and "temporal" not in plain
+    engine.delete_dataset(weekly["dataset_id"])
+    snap = engine.ws.load_graph()
+    assert not (engine.ws.datasets_dir / weekly["dataset_id"] / "temporal.json").exists()
+    assert {t["grid"] for t in snap["trajectories"].values()} == {"day"}
+
+
+def test_the_upload_form_takes_a_time_column_and_its_grid(engine, tmp_path):
+    path = weekly_retail(tmp_path)
+    with TestClient(create_app(engine)) as client, path.open("rb") as f:
+        accepted = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"time": "when", "grid": "day"})
+        assert accepted.status_code == 202 and (accepted.json()["time"], accepted.json()["grid"]) == ("when", "day")
+        refused = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"grid": "week"})
+    assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
