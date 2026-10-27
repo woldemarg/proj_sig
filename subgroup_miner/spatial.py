@@ -320,21 +320,21 @@ def subgroup_moran(values: np.ndarray, rows: np.ndarray, ctx: SpatialContext) ->
     return moran_i(np.asarray(values, dtype=float), w.indptr, w.indices)
 
 
+Coded = tuple[np.ndarray, pd.Index]  # a categorical column's levels by frequency and each row's (-1: missing)
+
+
 @dataclass
 class PointProfile:
     """What ``build_cells`` reads of the points, the same at every resolution of one upload: where they are
-    (``locate_points``), each column's kind, a date column's times, a categorical column's codes (its levels by
-    frequency, -1 for a missing value), and the nesting of two columns and the hints of a level as first asked for."""
+    (``locate_points``), each column's kind, a date column's times and a categorical column's codes."""
 
     lat: np.ndarray
     lon: np.ndarray
     location: list[str]
     times: dict[str, np.ndarray] = field(default_factory=dict)
     numeric: list[str] = field(default_factory=list)
-    codes: dict[str, tuple[np.ndarray, pd.Index]] = field(default_factory=dict)
+    codes: dict[str, Coded] = field(default_factory=dict)
     dropped: list[str] = field(default_factory=list)
-    nesting: dict[tuple[str, str], float] = field(default_factory=dict)
-    hints: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 _profile: tuple[object, PointProfile] | None = None  # ponytail: one upload's, as its levels run one after another
@@ -344,18 +344,15 @@ def point_profile(frame: pd.DataFrame, locator: str, key: object = None) -> Poin
     """The profile of the points of ``frame`` (``locator`` names their columns); with ``key`` (the upload's parse and
     options) the levels of one upload share it until ``forget_profile``."""
     global _profile
-    if key is not None and _profile is not None and _profile[0] == key:
-        return _profile[1]
+    if key is not None and (kept := _profile) and kept[0] == key:  # read once: an upload's refusal may forget it meanwhile
+        return kept[1]
     lat, lon, location = locate_points(frame, locator)
     ok = np.isfinite(lat) & np.isfinite(lon)
     if not ok.any():
         raise SpatialError(f"No valid point in {location}")
     profile = PointProfile(lat, lon, location)
-    rows = frame.loc[ok].drop(columns=location)
-    for col in rows.columns:
-        values = rows[col]
-        times = _as_datetime(values)
-        if times is not None:
+    for col, values in frame.loc[ok].drop(columns=location).items():
+        if (times := _as_datetime(values)) is not None:
             profile.times[str(col)] = times.to_numpy(dtype="datetime64[us]")  # nanoseconds end in 2262
         elif pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
             profile.numeric.append(str(col))
@@ -366,8 +363,7 @@ def point_profile(frame: pd.DataFrame, locator: str, key: object = None) -> Poin
                 profile.codes[str(col)] = (order.get_indexer(text), order)
             else:
                 profile.dropped.append(str(col))
-    if key is not None:
-        _profile = (key, profile)
+    _profile = (key, profile) if key is not None else _profile
     return profile
 
 
@@ -385,8 +381,7 @@ def build_cells(
     min_cell_points: int,
     profile_key: object = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
-    """Source rows -> (cell table, spatial context, warnings). ``profile_key``: the levels of one upload read one
-    ``point_profile``."""
+    """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``."""
     profile = point_profile(frame, locator, profile_key)
     lat, lon, location = profile.lat, profile.lon, profile.location
     ok = np.isfinite(lat) & np.isfinite(lon)
@@ -403,11 +398,8 @@ def build_cells(
     out: dict[str, np.ndarray] = {COUNTER: counts}
     glossary = {COUNTER: "number of events in the map cell"}
     counters = [COUNTER]
-    dropped: list[str] = []
-    rows = frame.loc[ok].drop(columns=location)
-    categorical = profile.codes
-    for col in rows.columns:
-        values = rows[col]
+    dropped = list(profile.dropped)
+    for col, values in frame.loc[ok].drop(columns=location).items():
         if (t := profile.times.get(str(col))) is not None:
             good = ~np.isnat(t)
             mid = t[good].min() + (t[good].max() - t[good].min()) / 2
@@ -423,20 +415,19 @@ def build_cells(
             med = values.groupby(codes).median().reindex(range(len(cells))).to_numpy(float)
             out[f"{col}_median"] = np.where(dense, med, np.nan)
             glossary[f"{col}_median"] = f"typical (median) {_words(col)} of the cell's events"
-    dropped += profile.dropped
-    mode_cols, share_cols = _categorical_roles(categorical, codes, len(cells), dense)
+    mode_cols, share_cols = _categorical_roles(profile.codes, codes, len(cells), dense)
     nested: dict[str, list[str]] = {}  # mode column -> share columns it is (largely) nested with
     for col in mode_cols:
         if any(_nesting(profile, col, o) >= FUNCTIONAL_SHARE for o in share_cols):
             dropped.append(col)  # its mode would explain those shares by construction
             continue
         nested[col] = [o for o in share_cols if _nesting(profile, col, o) >= NESTED_SHARE]
-        table = _level_counts(categorical[col], codes, len(cells))
+        table = _level_counts(profile.codes[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
         out[f"{col}_mode"] = np.where(total > 0, table.columns.to_numpy()[table.to_numpy().argmax(axis=1)], "missing")
         glossary[f"{col}_mode"] = f"the most frequent {_words(col)} among the cell's events"
     for col in share_cols:
-        table = _level_counts(categorical[col], codes, len(cells))
+        table = _level_counts(profile.codes[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
         kept = table.columns[-1:] if table.shape[1] == 2 else table.columns  # a binary column: its rarer level
         for level in kept:
@@ -500,21 +491,18 @@ def _words(name: str) -> str:
 
 
 def _kind_of(profile: PointProfile, col: str, level: str) -> str:
-    """' (every such event also has: <column> <value>, ...)' for coarser columns whose value is fixed among ``level``'s
-    rows; worked out once per upload."""
-    if (col, level) not in profile.hints:
-        codes, order = profile.codes[col]
-        rows = codes == order.get_loc(level)
-        hints = []
-        for other, (other_codes, other_order) in profile.codes.items():
-            if other == col or len(other_order) >= len(order):
-                continue
-            present = other_codes[rows]
-            present = present[present >= 0]
-            if len(present) and (counts := np.bincount(present)).max() >= FUNCTIONAL_SHARE * len(present):
-                hints.append(f"{_words(other)} {other_order[counts.argmax()]}")
-        profile.hints[(col, level)] = f" (every such event also has: {', '.join(hints[:3])})" if hints else ""
-    return profile.hints[(col, level)]
+    """' (every such event also has: <column> <value>, ...)' for coarser columns whose value is fixed among ``level``'s rows."""
+    codes, order = profile.codes[col]
+    rows = codes == order.get_loc(level)
+    hints = []
+    for other, (other_codes, other_order) in profile.codes.items():
+        if other == col or len(other_order) >= len(order):
+            continue
+        present = other_codes[rows]
+        present = present[present >= 0]
+        if len(present) and (counts := np.bincount(present)).max() >= FUNCTIONAL_SHARE * len(present):
+            hints.append(f"{_words(other)} {other_order[counts.argmax()]}")
+    return f" (every such event also has: {', '.join(hints[:3])})" if hints else ""
 
 
 def distinct_points(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -523,7 +511,7 @@ def distinct_points(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.nd
     return pairs, back.ravel()
 
 
-def _level_counts(column: tuple[np.ndarray, pd.Index], codes: np.ndarray, n_cells: int) -> pd.DataFrame:
+def _level_counts(column: Coded, codes: np.ndarray, n_cells: int) -> pd.DataFrame:
     """Points per (cell, level) of a profiled column; columns ordered by overall frequency (a missing value counts in none)."""
     level, order = column
     kept = level >= 0
@@ -531,9 +519,7 @@ def _level_counts(column: tuple[np.ndarray, pd.Index], codes: np.ndarray, n_cell
     return pd.DataFrame(counts.reshape(n_cells, len(order)), index=pd.RangeIndex(n_cells), columns=order)
 
 
-def _categorical_roles(
-    columns: dict[str, tuple[np.ndarray, pd.Index]], codes: np.ndarray, n_cells: int, dense: np.ndarray
-) -> tuple[list[str], list[str]]:
+def _categorical_roles(columns: dict[str, Coded], codes: np.ndarray, n_cells: int, dense: np.ndarray) -> tuple[list[str], list[str]]:
     """(mode columns, share columns). A column whose dense cells are almost pure (mean top-level share >=
     ``PLACE_PURITY``) describes the place: its mode is a condition. A mixed column with few levels becomes
     per-level share metrics; a mixed column with more levels a mode condition."""
@@ -550,16 +536,13 @@ def _categorical_roles(
 
 
 def _nesting(profile: PointProfile, a: str, b: str) -> float:
-    """Share of rows on which one column's level fixes the other's (the larger of both directions); once per pair and upload."""
-    if (a, b) not in profile.nesting:
-        (ca, oa), (cb, ob) = profile.codes[a], profile.codes[b]
-        both = (ca >= 0) & (cb >= 0)
-        if not both.any():
-            profile.nesting[(a, b)] = 0.0
-        else:
-            table = np.bincount(ca[both] * len(ob) + cb[both], minlength=len(oa) * len(ob)).reshape(len(oa), len(ob))
-            profile.nesting[(a, b)] = float(max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum())
-    return profile.nesting[(a, b)]
+    """Share of rows on which one column's level fixes the other's (the larger of both directions)."""
+    (ca, oa), (cb, ob) = profile.codes[a], profile.codes[b]
+    both = (ca >= 0) & (cb >= 0)
+    if not both.any():
+        return 0.0
+    table = np.bincount(ca[both] * len(ob) + cb[both], minlength=len(oa) * len(ob)).reshape(len(oa), len(ob))
+    return float(max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum())
 
 
 def compactness(rows: np.ndarray, nbr_ptr: np.ndarray, nbr_idx: np.ndarray) -> float:

@@ -710,10 +710,17 @@ def test_a_time_zone_reads_wall_times_in_it_and_bins_on_its_calendar():
     _, local_days = calendar_bins(kyiv[:1], "day", tz="Europe/Kyiv")
     assert utc_days[0]["period"] == "2031-03-01" and local_days[0]["period"] == "2031-03-02"
     assert local_days[0]["t_start"] == "2031-03-02T00:00:00+02:00" and local_days[0]["t_end"] == "2031-03-03T00:00:00+02:00"
-    assert parse_tz("") is None and parse_tz(" Europe/Kyiv ") == "Europe/Kyiv"
-    with pytest.raises(IngestionError, match="IANA name") as err:
-        parse_tz("Kyiv/Europe")
-    assert err.value.code == "invalid_options"
+    assert parse_tz("") is None and parse_tz(" Europe/Kyiv ") == "Europe/Kyiv" and parse_tz("utc") is None  # UTC: no zone
+    for name in ("Kyiv/Europe", "Europe", "europe/kyiv"):  # a folder of the zone database, a name as it is not written
+        with pytest.raises(IngestionError, match="IANA name") as err:
+            parse_tz(name)
+        assert err.value.code == "invalid_options"
+    hm = lambda f, tz: read_times(pd.DataFrame({"when": f}), "when", tz).dt.strftime("%Y-%m-%d %H:%M").tolist()  # noqa: E731
+    assert hm(["02-03-2031", "03-03-2031"], "America/New_York") == ["2031-03-02 05:00", "2031-03-03 05:00"]  # a date's -2031 no offset
+    assert hm(["2031-03-02T10:00:00+03", "2031-03-02T10:00-05"], "America/New_York") == ["2031-03-02 07:00", "2031-03-02 15:00"]
+    assert hm(["2031-10-26 03:30"], "Europe/Kyiv") == ["2031-10-26 00:30"]  # the repeated hour: its first, never no time
+    _, havana = calendar_bins(pd.Series(pd.to_datetime(["2031-11-02T04:30Z"])), "day", tz="America/Havana")
+    assert havana[0]["t_start"] == "2031-11-02T00:00:00-04:00"  # a midnight that repeats: the day starts at its first
 
 
 def test_a_time_zone_names_another_analysis_and_its_upload_bins_on_its_calendar(cfg, tmp_path):
@@ -735,7 +742,6 @@ def test_a_time_zone_names_another_analysis_and_its_upload_bins_on_its_calendar(
 
 def test_a_parquet_upload_keeps_its_timestamps_typed(tmp_path):
     """A parquet file's time column is a timestamp already: it is read as one, in the zone the upload names."""
-    pytest.importorskip("pyarrow")
     frame, times = table(rows=600)
     frame.insert(0, "when", times.dt.tz_localize(None))
     path = tmp_path / "events.parquet"

@@ -241,15 +241,17 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
     return max(("quarter", "month", "week", "day"), key=balance)
 
 
+ZONED = r"\d:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:Z|UTC|GMT|[+-]\d{2}(?::?\d{2})?)\s*$"  # a zone after a clock time, never a date's -2031
+
+
 def parse_tz(tz: str | None) -> str | None:
-    """A time zone by its IANA name (``Europe/Kyiv``); None or empty for UTC. An unknown name is ``invalid_options``."""
+    """A time zone by its IANA name (``Europe/Kyiv``, as written); None for none, empty or UTC (one calendar, one dataset id).
+    Another name is ``invalid_options``."""
     name = (tz or "").strip()
-    if not name:
+    if name.upper() in ("", "UTC", "ETC/UTC"):
         return None
-    try:
-        zoneinfo.ZoneInfo(name)
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError) as exc:
-        raise IngestionError("invalid_options", f"time zone {tz!r}: an IANA name such as Europe/Kyiv") from exc
+    if name not in zoneinfo.available_timezones():  # not ZoneInfo: it reads a folder's name as a file, case-blind on Windows
+        raise IngestionError("invalid_options", f"time zone {tz!r}: an IANA name such as Europe/Kyiv")
     return name
 
 
@@ -276,12 +278,10 @@ def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Se
     if times.isna().all():
         raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
     if tz:  # a time written without a zone is a wall time of tz: shift it from UTC to there; one with a zone keeps it
-        if pd.api.types.is_datetime64_any_dtype(values):
-            naive = pd.Series(values.dt.tz is None, index=values.index)
-        else:
-            naive = ~values.astype("string").str.contains(r"(?:Z|[+-]\d{2}:?\d{2})\s*$", regex=True, na=False)
-        local = times.dt.tz_localize(None).dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
-        times = times.where(~naive, local)
+        zoned = values.astype("string").str.contains(ZONED, case=False, regex=True, na=False)  # a typed timestamp's text too
+        # the autumn's repeated hour read as its first: either lies in the same day; the spring's missing one as the next
+        local = times.dt.tz_localize(None).dt.tz_localize(tz, ambiguous=True, nonexistent="shift_forward").dt.tz_convert("UTC")
+        times = times.where(zoned, local)
     return times
 
 

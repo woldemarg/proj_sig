@@ -138,7 +138,7 @@ def annotate_batch(
     signed = {
         "column": column,
         "grid": loaded.grid,
-        "span": [times.min().isoformat(), times.max().isoformat()],
+        "span": [t.tz_convert(loaded.tz or "UTC").isoformat() for t in (times.min(), times.max())],  # in the grid's zone, as its bins
         "bins": bins,
         "rows_without_time": int((codes < 0).sum()),
         "reference_scale": scale,

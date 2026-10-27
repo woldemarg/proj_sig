@@ -23,7 +23,7 @@ from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
-from subgroup_miner.ingestion import IngestionError, load_dataset
+from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
@@ -861,7 +861,7 @@ def test_a_date_column_past_2262_reads_its_own_years():
     assert np.allclose(shares[0], shares[1], equal_nan=True) and np.nanmax(shares[1]) > 0
 
 
-def test_the_point_columns_are_profiled_once_per_upload(monkeypatch):
+def test_the_point_columns_are_profiled_once_per_upload(monkeypatch, tmp_path):
     """The levels of one upload read one profile of the point columns (their kinds, codes and dates): the date parse and
     the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
     import subgroup_miner.spatial as sp
@@ -878,7 +878,15 @@ def test_the_point_columns_are_profiled_once_per_upload(monkeypatch):
     assert np.array_equal(six[1].lonlat, five[1].lonlat)  # the points located once
     build_cells(frame, "latitude,longitude", 5, min_cell_points=5)
     assert len(parsed) == 2 * columns  # no key: profiled again
-    sp.forget_profile()
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    before = len(parsed)
+    for res in (6, 5):  # an upload's levels, as the engine loads them
+        load_dataset(path, MinerConfig(min_rows=5), geo=f"latitude,longitude@{res}", shared=True)
+    once = len(parsed) - before
+    forget_tables()  # the upload done: the next one profiles anew
+    load_dataset(path, MinerConfig(min_rows=5), geo="latitude,longitude@5", shared=True)
+    assert once > 0 and len(parsed) == before + 2 * once
+    forget_tables()
 
 
 def test_nesting_on_codes_is_the_crosstabs():
@@ -894,4 +902,4 @@ def test_nesting_on_codes_is_the_crosstabs():
     both = (a.notna() & b.notna()).to_numpy()
     table = pd.crosstab(a[both].to_numpy(), b[both].to_numpy()).to_numpy()
     want = max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum()
-    assert sp._nesting(profile, "a", "b") == pytest.approx(want) and ("a", "b") in profile.nesting
+    assert sp._nesting(profile, "a", "b") == pytest.approx(want)

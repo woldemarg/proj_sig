@@ -66,8 +66,8 @@ def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None, tz: 
         bins.append(
             {
                 "period": period_label(p, grid),
-                "t_start": start.tz_localize(tz or "UTC", ambiguous=False, nonexistent="shift_forward").isoformat(),
-                "t_end": end.tz_localize(tz or "UTC", ambiguous=False, nonexistent="shift_forward").isoformat(),
+                "t_start": start.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
+                "t_end": end.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
                 "rows": int(rows[i]),
                 "covered": round(float(covered), 3),
                 "partial": bool(covered < 1),
