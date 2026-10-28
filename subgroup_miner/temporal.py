@@ -6,14 +6,16 @@ After admission an ``auto`` grid is fitted to the insights (``fit_grid``), each 
 grid (``calendar_bins``) and every metric it shifts gets a series of robust z against its bin's population
 (``annotate``). ``dynamics`` smooths a series (``rts_smooth``: a local-level Kalman filter and its Rauch–Tung–Striebel
 pass, each bin's sampling noise its measurement noise), keeps the extrema a deterministic gate passes
-(``detect_events``) and names the trend; ``carriers`` names the condition inside an insight that carries an event,
-``echoes`` the events a broader insight has too. All functions are pure.
+(``detect_events``), names the trend and the core — the shortest run of bins holding most of the insight's rows
+(``core_span``); ``carriers`` names the condition inside an insight that carries an event, ``echoes`` the events a
+broader insight has too. The calendar above a bin — its week, month, quarter — is ``parent_period``'s. All functions are pure.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
 import numpy as np
@@ -29,6 +31,7 @@ from subgroup_miner.ingestion import GRID_FREQ, IngestionError
 
 RISING, FALLING, FLAT, SPIKE = "rising", "falling", "flat", "spike"
 PEAKED_AT, DROPPED_AT = EdgeType.PEAKED_AT.value, EdgeType.DROPPED_AT.value
+TIME_CORE_SHARE = 0.8  # the share of a pattern's timed rows its core holds: the twin of spatial.GEO_FOOTPRINT_SHARE
 
 
 def period_label(period: pd.Period, grid: str) -> str:
@@ -39,6 +42,39 @@ def period_label(period: pd.Period, grid: str) -> str:
     if grid == "quarter":
         return f"{period.year}-Q{period.quarter}"
     return period.strftime("%Y-%m-%d" if grid == "day" else "%Y-%m")
+
+
+def _period(label: str, grid: str) -> pd.Period:
+    """The period a bin's calendar name (``period_label``'s) names."""
+    if grid == "week":
+        year, week = (int(x) for x in label.split("-W"))
+        return pd.Period(pd.Timestamp(date.fromisocalendar(year, week, 1)), freq=GRID_FREQ[grid])
+    if grid == "quarter":
+        year, quarter = (int(x) for x in label.split("-Q"))
+        return pd.Period(year=year, quarter=quarter, freq=GRID_FREQ[grid])
+    return pd.Period(label, freq=GRID_FREQ[grid])
+
+
+def _localised(wall: pd.Timestamp, tz: str | None) -> str:
+    """A wall time of the calendar of ``tz`` (UTC by default), written with that zone's offset."""
+    return wall.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat()
+
+
+def period_bounds(label: str, grid: str, tz: str | None = None) -> tuple[str, str]:
+    """A period's half-open bounds on the calendar of ``tz``, written as ``calendar_bins`` writes a bin's."""
+    p = _period(label, grid)
+    return _localised(p.start_time, tz), _localised((p + 1).start_time, tz)
+
+
+def parent_period(label: str, grid: str) -> tuple[str, str] | None:
+    """The period above a bin's, ``(grid, label)``, one chain day → week → month → quarter: a day's ISO week, a week's
+    month — the one holding most of its days, its Thursday's, as ISO 8601 gives a week its year —, a month's quarter;
+    None above a quarter. A day's month is so its week's: 2031-03-31, a Monday, lies in 2031-W14 and with it in 2031-04."""
+    if grid == "quarter":
+        return None
+    up = TIME_GRIDS[TIME_GRIDS.index(grid) + 1]
+    anchor = _period(label, grid).start_time + pd.Timedelta(days=3 if grid == "week" else 0)
+    return up, period_label(pd.Period(anchor, freq=GRID_FREQ[up]), up)
 
 
 def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None, tz: str | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
@@ -68,8 +104,8 @@ def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None, tz: 
         bins.append(
             {
                 "period": period_label(p, grid),
-                "t_start": start.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
-                "t_end": end.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat(),
+                "t_start": _localised(start, tz),
+                "t_end": _localised(end, tz),
                 "rows": int(rows[i]),
                 "covered": round(float(covered), 3),
                 "partial": bool(covered < 1),
@@ -260,16 +296,53 @@ def trend(x: Sequence[float | None], p: Sequence[float | None], measured: Sequen
     return SPIKE if events else FLAT
 
 
+def core_span(rows: Sequence[int], share: float = TIME_CORE_SHARE) -> tuple[int, int] | None:
+    """The bins a pattern's core spans, ``(first, last)``: the shortest run of consecutive bins holding ``share`` of its
+    timed rows (``rows``: its rows in each bin) — where it lives in time, as a geo pattern's footprint is where on the
+    map —, the earliest of equal length; None without a timed row."""
+    total = sum(rows)
+    if not total:
+        return None
+    best = None
+    for lo in range(len(rows)):  # ponytail: O(n²) over at most TEMPORAL_MAX_BINS bins; two pointers if it ever shows
+        held = 0
+        for hi in range(lo, len(rows)):
+            held += rows[hi]
+            if held >= share * total - 1e-9:
+                if best is None or hi - lo < best[1] - best[0]:
+                    best = (lo, hi)
+                break
+    return best
+
+
 def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], metrics: Sequence[str], config: MinerConfig) -> dict[str, Any]:
     """A pattern's trajectory from its ``annotate`` entry: per metric the measured series and the smoothed level, and the
     events of every metric. Its ``metric`` is the first of ``metrics`` (the insight's target, then its shifts) with a
     measured bin — a geo pattern's counter or share has no series —, and of it the trend, the current level (x̂ of its
-    last measured bin), the measured bins and the gaps (runs of bins without a measurement, by period)."""
+    last measured bin), the measured bins and the gaps (runs of bins without a measurement, by period). Its ``core``
+    (``core_span`` of its rows): the first and last period and bound, the share of its timed rows held, the bins
+    spanned and their indices; None without a timed row."""
     th = config.thresholds
     series, smoothed, events = {}, {}, []
     measured_in = {m: [t for t, e in enumerate(entry["series"][m]) if e] for m in entry["series"]}
     primary = next((m for m in metrics if measured_in.get(m)), metrics[0])
     out: dict[str, Any] = {"metric": primary, "trend": FLAT, "current": None, "bins_measured": 0, "of": len(bins), "gaps": []}
+    rows = entry.get("rows", [])
+    core = core_span(rows)
+    out["core"] = (
+        {
+            "start": bins[core[0]]["period"],
+            "end": bins[core[1]]["period"],
+            "t_start": bins[core[0]]["t_start"],
+            "t_end": bins[core[1]]["t_end"],
+            "share": round(sum(rows[core[0] : core[1] + 1]) / sum(rows), 3),
+            "bins": core[1] - core[0] + 1,
+            "first": core[0],
+            "last": core[1],
+        }
+        if core
+        else None
+    )
     for metric, entries in entry["series"].items():
         y = [e["z"] if e else None for e in entries]
         x, p = rts_smooth(y, [e["se"] ** 2 if e else None for e in entries], config.temporal_process_noise)

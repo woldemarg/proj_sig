@@ -7,10 +7,13 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
+from graph_query_engine.temporal import period_interval
 from insight_contracts import (
     SNAPSHOT_VERSION,
     Insight,
@@ -71,6 +74,8 @@ class DualGraph:
             self.inc[e["target"]].append(e)
         self.own_cells: dict[str, list[str]] = snapshot.get("own_cells", {})  # a geo pattern at a region level -> its cells
         self.trajectories: dict[str, dict[str, Any]] = snapshot.get("trajectories", {})  # pattern -> its series over time (§6.1)
+        stamp = snapshot.get("stats", {}).get("as_of")
+        self.as_of: datetime | None = datetime.fromisoformat(stamp) if stamp else None  # the latest data of the timed datasets
         self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
         self._memo_lock = threading.RLock()
 
@@ -105,6 +110,31 @@ class DualGraph:
 
         own = self.memoised(("own_holders", ""), build)
         return [e["source"] for e in self.inc.get(region, []) if e["type"] == "IN_REGION"] + own.get(region, [])
+
+    def members(self, asked: tuple[datetime, datetime]) -> dict[str, list[Any]]:
+        """The patterns of a period, any period, a hub's or not, no edge walked: ``active`` — those whose core (the bins
+        holding most of their rows, ``trajectories``) overlaps it —, ``peaked`` and ``dropped`` — ``(pattern, period)`` of
+        the events whose bin lies inside it. The period is read on each pattern's own calendar (its ``tz``), as
+        ``temporal.time_score`` reads one: the same wall-clock bounds in its zone."""
+
+        def build() -> dict[str, tuple[Any, ...]]:  # pattern -> (its zone, its core's bounds, [(an event's bounds, kind, period)])
+            spans = {}
+            for pid, t in self.trajectories.items():
+                core = t.get("core")
+                bounds = (datetime.fromisoformat(core["t_start"]), datetime.fromisoformat(core["t_end"])) if core else None
+                events = [(period_interval(e["period"]), e["kind"], e["period"]) for e in t["events"]]
+                spans[pid] = (ZoneInfo(t["tz"]) if t.get("tz") else UTC, bounds, events)
+            return spans
+
+        out: dict[str, list[Any]] = {"active": [], "peaked": [], "dropped": []}
+        for pid, (zone, core, events) in self.memoised(("spans", ""), build).items():
+            lo, hi = (t.replace(tzinfo=zone) for t in asked)
+            if core and core[0] < hi and lo < core[1]:
+                out["active"].append(pid)
+            for bounds, kind, period in events:
+                if bounds and lo <= bounds[0].replace(tzinfo=zone) and bounds[1].replace(tzinfo=zone) <= hi:
+                    out["peaked" if kind == "PEAKED_AT" else "dropped"].append((pid, period))
+        return out
 
     def facts(self, pattern_id: str) -> PatternFacts:
         """``pattern_id``'s facts, derived once per graph (``memoised``)."""

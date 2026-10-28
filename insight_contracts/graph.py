@@ -15,7 +15,8 @@ A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "n
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence); a dataset with a time column ``temporal``
                 {column, grid, span}
 * ``TemporalNode`` ``granularity``, ``period``, ``t_start``, ``t_end``: a calendar period, the same node for every
-                dataset that has an event in it
+                dataset that has an event or a core end in it, and every period above such a one (its week, month,
+                quarter: one chain, ``subgroup_miner.temporal.parent_period``); the bounds are the first dataset's calendar
 
 Edge ``props``: ``ACTIVATES`` carries ``alignment``, ``strength`` and ``weak`` (coverage only, never walked);
 ``RELATED_TO`` carries ``kind: mutual_knn``; ``CO_OCCURS`` carries ``kind: co_occurrence`` and ``shared`` (member insights);
@@ -30,9 +31,15 @@ whose resolution is a listed region level to its H3 cells: its regions at that l
 dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``,
 ``metrics``, and when it has them ``carrier`` (the condition inside the pattern that carries the event: ``attribute``,
 ``value``, ``rows``, ``of``, ``shift``, ``p``) and ``echo_of`` (the broader pattern of the dataset with the same event).
+``STARTS_AT`` / ``ENDS_AT`` (the temporal plane too) run from a pattern to the TemporalNode of the first / last bin of
+its core — the shortest run of bins holding most of its rows, where it lives in time — at its dataset's grid, with
+``period``, ``share`` (of its timed rows the core holds) and ``bins``; the one hub twice for a core of one bin.
+``WITHIN`` runs from a TemporalNode to the period above it (a day's week, a week's month, a month's quarter), never
+walked, read by the console and the mirror; who is active in a period is read from the cores, not from an edge.
 ``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``tz``, ``span``, ``metric``, ``series`` and
-``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of`` and
-``gaps``; the pattern carries the short form as ``temporal_summary``.
+``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of``, ``gaps`` and
+``core`` ({start, end, t_start, t_end, share, bins, first, last} | None); the pattern carries the short form as
+``temporal_summary`` (its ``core`` without the bounds and indices).
 """
 
 from __future__ import annotations
@@ -41,7 +48,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 13  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 14  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):
@@ -60,6 +67,9 @@ class EdgeType(str, Enum):
     OF_DATASET = "OF_DATASET"
     PEAKED_AT = "PEAKED_AT"
     DROPPED_AT = "DROPPED_AT"
+    STARTS_AT = "STARTS_AT"
+    ENDS_AT = "ENDS_AT"
+    WITHIN = "WITHIN"
 
 
 STRUCTURAL_EDGES = {EdgeType.SPECIALIZES, EdgeType.SIBLING, EdgeType.CONTRASTS, EdgeType.CO_LOCATED}  # pattern <-> pattern
@@ -81,6 +91,9 @@ EDGE_PLANE = {
     EdgeType.OF_DATASET: "provenance",
     EdgeType.PEAKED_AT: "temporal",
     EdgeType.DROPPED_AT: "temporal",
+    EdgeType.STARTS_AT: "temporal",
+    EdgeType.ENDS_AT: "temporal",
+    EdgeType.WITHIN: "temporal",
 }
 
 
@@ -153,5 +166,6 @@ TIME_GRIDS = ("day", "week", "month", "quarter")  # the calendar units an upload
 
 
 def temporal_node_id(grid: str, period: str) -> str:
-    """A calendar period of a grid (``T:week:2026-W35``), the same node for every dataset that has an event in it."""
+    """A calendar period of a grid (``T:week:2026-W35``), the same node for every dataset that has an event or a core end
+    in it, and for the periods above those (``WITHIN``)."""
     return f"T:{grid}:{period}"

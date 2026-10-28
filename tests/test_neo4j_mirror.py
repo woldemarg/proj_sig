@@ -90,9 +90,17 @@ def test_the_mirror_holds_the_time_hubs_and_the_events(timed):
     out = Mirror().publish(snap, timed[0].settings, driver=driver)
     hubs = {row["id"] for q, p in driver.log if q == node_query("TemporalNode") for row in p["rows"]}
     peaks = [row for q, p in driver.log if q == edge_query("PEAKED_AT") for row in p["rows"]]
-    assert EDGE_ENDPOINTS["PEAKED_AT"] == EDGE_ENDPOINTS["DROPPED_AT"] == ("Pattern", "TemporalNode")
-    assert hubs == {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"} and "T:week:2031-W13" in hubs
+    assert (
+        EDGE_ENDPOINTS["PEAKED_AT"]
+        == EDGE_ENDPOINTS["DROPPED_AT"]
+        == EDGE_ENDPOINTS["STARTS_AT"]
+        == EDGE_ENDPOINTS["ENDS_AT"]
+        == ("Pattern", "TemporalNode")
+    )
+    assert EDGE_ENDPOINTS["WITHIN"] == ("TemporalNode", "TemporalNode")
+    assert hubs == {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"} and {"T:week:2031-W13", "T:month:2031-03"} <= hubs
     assert out["edges"]["PEAKED_AT"] == len(peaks) == sum(e["type"] == "PEAKED_AT" for e in snap["edges"]) > 0
+    assert out["edges"]["WITHIN"] == sum(e["type"] == "WITHIN" for e in snap["edges"]) > 0  # the periods above, mirrored with the chain
     assert all({"metric", "period", "z_raw", "z_smoothed", "prominence", "p"} <= r["props"].keys() for r in peaks)
 
 
