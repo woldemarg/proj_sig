@@ -865,3 +865,51 @@ def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
         said = f"{name('as_of')} 2031-03-31"
         assert said in page.inner_text("#thread .msg-user") and said in page.inner_text("#thread .bot-meta")
         assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_date(timed):
+    """The «Час» tab: a row an insight placed in time, its core a bar within the span, a mark for each peak, the as-of
+    line, the rows whose core holds that date highlighted; the levels the graph holds enabled, a level's ruler its
+    periods in calendar order; a period or a row opens its drawer, by click or by Enter; the line follows the as-of
+    field (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, _ = timed
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        page.click("#time-tab")
+        page.wait_for_selector("#time-body .tl-row", timeout=10000)
+        timed_insights = (
+            'S.nodes.filter((d) => d.core || S.cy.edges(\'[type="PEAKED_AT"], [type="DROPPED_AT"]\').some((e) => e.source().id() === d.id)).length'
+        )
+        assert page.locator("#time-body .tl-row").count() == page.evaluate(timed_insights) > 0
+        assert page.locator("#time-body .tl-ev.up").count() == page.evaluate("S.cy.edges('[type=\"PEAKED_AT\"]').length") > 0
+        bars = page.evaluate(
+            "[...document.querySelectorAll('#time-body .tl-core')].map((b) => [parseFloat(b.style.left), parseFloat(b.style.width)])"
+        )
+        assert bars and all(0 <= left and left + width <= 100.01 for left, width in bars)
+        assert page.locator("#time-body .tl-asof").count() == 1
+        holding = "S.nodes.filter((d) => d.core && Date.parse(d.core.t_start) <= Date.parse(S.asOf) && Date.parse(S.asOf) < Date.parse(d.core.t_end)).length"
+        assert page.locator("#time-body .tl-row.active").count() == page.evaluate(holding)
+        assert page.is_disabled('#time-levels [data-level="day"]') and page.is_enabled('#time-levels [data-level="week"]')
+        page.click('#time-levels [data-level="month"]')
+        ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
+        assert ticks == sorted(ticks) and len(ticks) == page.evaluate('S.cy.nodes(\'[kind="TemporalNode"][granularity="month"]\').length')
+        page.click('#time-levels [data-level="week"]')
+        page.click('#time-body .tl-tick:has-text("2031-W13")')
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        page.focus("#time-body .tl-row")
+        page.keyboard.press("Enter")
+        page.wait_for_function("document.getElementById('drawer-kind').textContent === 'Інсайт'", timeout=10000)
+        before = page.get_attribute("#time-body .tl-asof", "style")
+        page.fill("#as-of", "2031-03-10")
+        assert "2031-03-10" in page.inner_text("#time-caption") and page.get_attribute("#time-body .tl-asof", "style") != before
+        assert not errors, errors

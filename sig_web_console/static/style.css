@@ -163,6 +163,22 @@ details.adv > summary::before { content: "▸ "; color: var(--muted); } details.
 .canvas-empty h3 { color: var(--ink); margin: 12px 0 4px; font-size: 16px; }
 .canvas-empty .art { width: 84px; height: 84px; margin: 0 auto; border-radius: 24px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
 
+/* time axis (timeline.js): a row an insight, its core a bar, its events marks, the as-of date a dashed line */
+.time-wrap { position: absolute; inset: 0; overflow: auto; padding: 0 14px 14px; background: var(--surface); }
+.tl-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 12px; padding: 10px 0; background: var(--surface); font-size: 12.5px; }
+.tl-body { position: relative; --tl-gutter: 240px; }
+.tl-head, .tl-row { display: grid; grid-template-columns: var(--tl-gutter) 1fr; align-items: center; border-bottom: 1px solid var(--line); }
+.tl-head { position: sticky; top: 48px; z-index: 2; background: var(--surface); }
+.tl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; font-size: 12.5px; }
+.tl-track { position: relative; height: 24px; }
+.tl-tick { position: absolute; top: 0; bottom: 0; border: 0; border-left: 1px solid var(--line-2); padding: 0 4px; background: transparent; color: var(--muted); font-size: 11px; text-align: left; overflow: hidden; white-space: nowrap; cursor: pointer; }
+.tl-tick:hover, .tl-row:hover { background: var(--surface-2); color: var(--ink); }
+.tl-row { cursor: pointer; opacity: .6; } .tl-row.active { opacity: 1; }
+.tl-core { position: absolute; top: 8px; height: 8px; min-width: 3px; border-radius: 99px; background: var(--time); }
+.tl-row.active .tl-core { box-shadow: 0 0 0 2px var(--accent-soft); }
+.tl-ev { position: absolute; top: 4px; transform: translateX(-50%); font-size: 11px; line-height: 1; } .tl-ev.up { color: var(--up); } .tl-ev.down { color: var(--down); }
+.tl-asof { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--accent); pointer-events: none; }
+
 /* insights table */
 .table-wrap { position: absolute; inset: 0; overflow: auto; padding: 14px; }
 .table-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; } .table-tools .field { max-width: 340px; }

@@ -353,6 +353,7 @@ async function loadGraph() {
   if (S.hl) highlight(S.hl);
   renderTable();
   renderSphere();
+  Timeline.load(g);
   if (layerState().region && !S.regionsIn) toggleRegions();  // switched on while this graph loaded without them
 }
 
@@ -365,17 +366,19 @@ function setView(view) {
   $("sphere").hidden = view !== "sphere";
   $("table-view").hidden = view !== "table";
   $("map-view").hidden = view !== "map";
+  $("time-view").hidden = view !== "time";
   document.querySelector(".canvas-body").classList.toggle("map-mode", view === "map");
   document.querySelectorAll(".graph-only").forEach((el) => { el.hidden = view !== "graph"; });
-  $("fit-btn").hidden = view === "table" || view === "map";
+  $("fit-btn").hidden = view === "table" || view === "map" || view === "time";
   for (const key of NO_VECTORS) {  // column and region nodes have no vectors: graph only
     const t = document.querySelector(`.toggle[data-key="${key}"]`);
     t.dataset.title = t.dataset.title || t.title;
     t.disabled = view === "sphere"; t.title = view === "sphere" ? "Не малюється в 3D (немає координат)" : t.dataset.title;
   }
-  $("empty-hint").hidden = view === "table" || view === "map" || S.nodes.length > 0;
+  $("empty-hint").hidden = view === "table" || view === "map" || view === "time" || S.nodes.length > 0;
   if (view === "sphere") renderSphere();
   if (view === "map") GeoMap.show();
+  if (view === "time") Timeline.render();
   if (view === "graph" && S.cy) { S.cy.resize(); S.cy.fit(S.cy.elements(":visible"), 40); }
 }
 

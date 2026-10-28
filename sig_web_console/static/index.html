@@ -100,6 +100,7 @@
         <button type="button" data-view="sphere" role="tab" aria-selected="false">3D-сфера</button>
         <button type="button" data-view="table" role="tab" aria-selected="false">Інсайти <span class="count" id="ins-count"></span></button>
         <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Мапа</button>
+        <button type="button" data-view="time" role="tab" aria-selected="false" id="time-tab" hidden>Час</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Датасет"><option value="">Усі датасети</option></select>
@@ -144,6 +145,10 @@
     <div class="view">
       <div id="cy"></div>
       <div id="sphere" role="img" aria-label="Сфера інсайтів і тем" hidden></div>
+      <div class="time-wrap" id="time-view" hidden>
+        <div class="tl-bar"><div class="tabs" id="time-levels" role="group" aria-label="Рівень календаря"></div><span class="muted" id="time-caption"></span></div>
+        <div class="tl-body" id="time-body"></div>
+      </div>
       <div class="map-wrap" id="map-view" hidden>
         <div id="map"></div>
         <div class="map-hud">
@@ -244,6 +249,7 @@
 <script src="/app.js"></script>
 <script src="/datasets.js"></script>
 <script src="/graph.js"></script>
+<script src="/timeline.js"></script>
 <script src="/chat.js"></script>
 <script src="/geo.js"></script>
 </body>
