@@ -22,10 +22,10 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
-from insight_graph_service.core.demo import generate_retail_dataset
+from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
-from insight_graph_service.core.settings import PROJECT_ROOT, Settings
+from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
@@ -173,10 +173,15 @@ def create_app(engine: Engine) -> FastAPI:
             raise HTTPException(404, "unknown batch")
         return engine.polled(record)
 
+    @app.get("/api/demo/datasets")
+    def demo_list() -> list[dict[str, Any]]:
+        return demo_datasets()
+
     @app.post("/api/upload")
     def upload(
         request: Request,
-        file: UploadFile = File(...),
+        file: UploadFile | None = File(None),
+        demo: str = Form(""),
         bins: str = Form(""),
         categories: str = Form(""),
         geo: str = Form(""),
@@ -192,26 +197,29 @@ def create_app(engine: Engine) -> FastAPI:
         tz: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
-            raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
+            raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
+        # a shipped dataset by its key (GET /api/demo/datasets) instead of a file: the form's options as sent
+        shipped = next((d for d in demo_datasets() if d["key"] == demo), None) if demo else None
+        if (file is None) == (shipped is None):
+            raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
-        name = Path(file.filename or "upload.csv").name
-        return accept(
-            name,
-            file.file,
-            bins.strip() or None,
-            categories.strip() or None,
-            geo.strip() or None,
-            source=source,
-            reliability=reliability,
-            indicators=indicators,
-            glossary=glossary,
-            metadata=_text(metadata),
-            table=table,
-            supersedes=supersedes,
-            time=time.strip() or None,
-            grid=grid.strip() or None,
-            tz=tz.strip() or None,
-        )
+        options = {
+            "source": source,
+            "reliability": reliability,
+            "indicators": indicators,
+            "glossary": glossary,
+            "metadata": _text(metadata),
+            "table": table,
+            "supersedes": supersedes,
+            "time": time.strip() or None,
+            "grid": grid.strip() or None,
+            "tz": tz.strip() or None,
+        }
+        parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
+        if shipped:
+            with (DEMO_DIR / shipped["file"]).open("rb") as stream:
+                return accept(shipped["file"], stream, *parsed, **options)
+        return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -221,8 +229,8 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/demo/geo")
     def demo_geo() -> JSONResponse:
         # the shipped California housing table (located block groups) as H3 cells at resolution 5, with the cells' typical
-        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies this one file of data/
-        with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as table:
+        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies data/demo/
+        with (DEMO_DIR / "california_housing.csv").open("rb") as table:
             return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")

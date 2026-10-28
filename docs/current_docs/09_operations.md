@@ -75,6 +75,8 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 |---|---|---|
 | ingest the demo | `POST /api/demo` | 202 + the `UPLOADED` record |
 | ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
+| list the shipped datasets | `GET /api/demo/datasets` | each table of `data/demo/` with its title, rows, span, licence and upload options |
+| ingest a shipped dataset | `POST /api/upload`, form `demo=<key>` and the options (`curl -F demo=us_wildfires -F time=discovery_dttm -F geo=lat,lon@auto -F table=true`) | as a file's |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record, with `levels`: every level's batch id |
 | status | `GET /api/batches[?upload_id=]`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
 | ask | `POST /api/chat/query` `{question, use_llm}`, a map zone optional (`cells`, `geometry`, `resolution`) | the answer (`QAResult`, [7.5](07_question_answering.md#75-the-language-model-and-citation-check)) |

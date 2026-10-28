@@ -28,7 +28,7 @@ COPY subgroup_miner ./subgroup_miner
 COPY attractor_topology ./attractor_topology
 COPY graph_query_engine ./graph_query_engine
 COPY insight_graph_service ./insight_graph_service
-COPY data/demo/california_housing.csv data/demo/
+COPY data/demo ./data/demo
 USER sig
 # auto: the GPU when the container has one (compose.gpu.yaml), else the CPU (the `test` image below runs without one)
 ENV PYTHONPATH=/app WORKSPACE_DIR=/data/workspace MODEL_DIR=/app/models EMBEDDING_DEVICE=auto WEB_HOST=0.0.0.0 WEB_PORT=8000 HOME=/tmp TMPDIR=/data/tmp

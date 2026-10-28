@@ -1,0 +1,2 @@
+# the shipped datasets are pinned by the SHA-256 of their bytes (data/demo/datasets.json): no line-end conversion
+data/demo/* -text

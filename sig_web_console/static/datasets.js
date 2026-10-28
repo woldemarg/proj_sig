@@ -134,7 +134,7 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">Датасетів ще немає.<br>Завантажте таблицю або спробуйте демо.</div>`);  // after the graph: the cards read its trust
+  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">Датасетів ще немає.<br>Завантажте таблицю або оберіть готовий датасет.</div>`);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
   // a caller that acts on the map afterwards (ask) awaits its load too, or the pass a poll began for this key; the poll does not
@@ -144,16 +144,20 @@ async function refreshBatches() {
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
 async function upload() {
-  const f = $("file").files[0]; if (!f) return;
+  const f = $("file").files[0], sample = $("sample").value; if (!f && !sample) return;
   const fd = new FormData();
-  fd.append("file", f); fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
+  if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
+  fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
   if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
-  setUploadMsg(`Завантажую ${f.name}…`);
+  setUploadMsg(`Завантажую ${f ? f.name : $("file-name").textContent}…`);
   $("upload-btn").disabled = true;
-  try { await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче."); $("file").value = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; refreshBatches(); }
+  try {
+    await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; refreshBatches();
+  }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
