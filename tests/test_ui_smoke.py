@@ -171,7 +171,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
         heads = page.evaluate("[...document.querySelectorAll('#inspector .nb-group summary')].map((s) => s.firstChild.textContent.trim())")
-        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава"}
+        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава", "Події", "Решта"}
         assert relations and relations <= {name(k)[0].upper() + name(k)[1:] for k in TERMS}  # the relations in TERMS' words, as the chain's
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
@@ -447,6 +447,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             const k = Object.keys(WALK).find((k) => (n[k] || []).some(free)), id = n[k].find(free).id, has = (d) => insightCard(d).includes(`data-id="${id}"`);
             return [has(t), has({ ...t, insight: { ...t.insight, neighbors: { ...n, [k]: n[k].map((it) => (it.id === id ? { ...it, integrity: "mismatch" } : it)) } } })]; }"""
         assert page.evaluate(walk) == [True, False]  # Walk on offers intact insights only
+        page.click(f"#map-window .mw-i[data-pid='{pid}']")  # the focused one clicked again: off, and no second card
+        page.wait_for_function("G.focusId === null", timeout=10000)
+        assert page.evaluate("S.chat.length") == turns + 1 and page.locator("#map-window .mw-i.on").count() == 0
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")

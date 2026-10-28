@@ -515,18 +515,21 @@ function trustRows(p, ds, labels) {
   ]) + (others.length ? `<details class="nb-group"><summary>Підстава <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "підтверджує" : "")).join("")}</details>` : "");
 }
 
+const SHOWN = 3;  // rows of a long list shown before the rest folds under «Решта»
+const folded = (rows) => rows.slice(0, SHOWN).join("") + (rows.length > SHOWN ? `<details class="nb-group"><summary>Решта <span class="muted">(${rows.length - SHOWN})</span></summary>${rows.slice(SHOWN).join("")}</details>` : "");
+
 function scaleRows(c, labels) {
   /* the scale chain the graph already holds: ↑ coarser and ↓ finer levels of one phenomenon, then the regions above it */
   const step = (st, arrow) => nbRow(st.pattern_id, `${arrow} ${nodeLabel(st.pattern_id, labels)}`, st.relation === "corresponds" ? "той самий зсув" : "протилежний зсув");
   return `<h4>Масштаб</h4><p class="lead">${term(`scale_${c.scale || "insufficient"}`)}</p>` +
     c.up.map((st) => step(st, "↑")).join("") + c.down.map((st) => step(st, "↓")).join("") +
-    c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))).join("");
+    folded(c.regions.map((r) => nbRow(r.id, `▣ ${r.id}`, picture(r))));
 }
 
 function whereRows(places) {
   /* a base insight's places: the regions its events lie in more than the map's (docs/07 §7.4), where a geo one has its scale */
   const note = (r) => [r.share !== undefined ? `${num(r.share * 100, 1)}% інсайту` : "", r.lift_words ? `${word("place_lift")}: ${r.lift_words}` : "", r.n !== undefined ? plural(r.n, "подія", "події", "подій") : ""].filter(Boolean).join(" · ");
-  return `<h4>Де</h4>` + places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))).join("");
+  return `<h4>Де</h4>` + folded(places.map((r) => nbRow(r.id, `▣ ${r.id}`, note(r))));
 }
 
 const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Обробка", Region: "Регіон мапи", TemporalNode: cap(word("temporal_hub")) };
@@ -544,8 +547,9 @@ function timeRows(t) {
   const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`;
   return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` +
     `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}"><line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
-    t.events.map((e) => `<div class="tl${e.echo_of ? " muted" : ""}"><span>${esc(word(e.kind))} ${esc(e.period)}</span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd` +
-      (e.carrier ? ` · ${term("time_carrier")}: ${esc(human(e.carrier.attribute))} — ${esc(e.carrier.value)}` : "") + (e.echo_of ? ` · ${term("time_echo")}` : "") + `</span></div>`).join("") +
+    (t.events.length ? `<details class="nb-group"${t.events.length <= SHOWN ? " open" : ""}><summary>Події <span class="muted">(${t.events.length})</span></summary>` +
+      t.events.map((e) => `<div class="tl${e.echo_of ? " muted" : ""}"><span>${esc(word(e.kind))} <time>${esc(e.period)}</time></span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd` +
+        (e.carrier ? ` · ${term("time_carrier")}: ${esc(human(e.carrier.attribute))} — ${esc(e.carrier.value)}` : "") + (e.echo_of ? ` · ${term("time_echo")}` : "") + `</span></div>`).join("") + `</details>` : "") +
     (t.gaps.length ? `<div class="tl"><span class="muted">${esc(word("time_unmeasured"))}: ${esc(t.gaps.map(([a, b]) => (a === b ? a : `${a}–${b}`)).join(", "))}</span></div>` : "");
 }
 
@@ -568,10 +572,10 @@ async function inspect(id, note = "") {
       [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
       [term("covariance"), cov ? `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}` : ""],
       [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
-      [term("aliases"), esc((p.aliases || []).join("; "))],
     ]);
-    if (d.trajectory) html += timeRows(d.trajectory);
+    if ((p.aliases || []).length) html += `<details class="nb-group"><summary>${esc(cap(word("aliases")))} <span class="muted">(${p.aliases.length})</span></summary>${p.aliases.map((a) => `<div class="tl"><span class="mono">${esc(a)}</span></div>`).join("")}</details>`;
     html += `<h4>Довіра</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
+    if (d.trajectory) html += timeRows(d.trajectory);
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
