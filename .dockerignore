@@ -14,5 +14,5 @@ workspace.*
 *.writer.lock
 models
 data
-!data/demo/california_housing.csv
+!data/demo
 docs
