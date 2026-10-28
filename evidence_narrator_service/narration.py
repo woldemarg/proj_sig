@@ -22,7 +22,7 @@ RULE_TERMS = (  # the words rules 10, 11 and 13 take from wording: as the consol
     *("cell", "segment", "located", "region", "zone", "scale_regional", "scale_scale-dependent", "scale_not_found_coarser"),
     *("credibility_1", "credibility_5", "credibility_6"),
     *("trend_rising", "trend_falling", "trend_flat", "trend_spike", "time_unmeasured", "time_faded", "PEAKED_AT", "DROPPED_AT"),
-    *("time_carrier", "time_echo"),
+    *("time_carrier", "time_echo", "time_core", "as_of"),
 )
 
 SYSTEM_PROMPT = f"""You are a careful data analyst answering questions about a tabular dataset.
@@ -82,6 +82,9 @@ Rules:
    finding's: tell it once.
    A finding with no event still has a trend and a current level: never call it gone unless its current level is
    below the threshold.
+   An "AS OF:" line is the reference date ("{W("as_of")}"). A time line's "core" ("{W("time_core")}") is the stretch of
+   periods holding most of the finding's rows, and its age is counted from that date: give both as the line does and
+   compute no date yourself. An event "outside its core" happened apart from that stretch: tell it as a separate episode.
    Name a period only as the time line does. Without a "time:" line this rule does not apply.
 Be concise (at most ~250 words)."""
 

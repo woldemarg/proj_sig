@@ -1,19 +1,31 @@
 """The calendar above the time hubs and where an insight lives in time (docs/02_discovery.md §2.10,
 docs/06_graph_and_storage.md §6.1): a pattern's core, the period above a bin, the patterns of a period, and what the
-console is sent of them."""
+console is sent of them; and the answer's reference date: the findings' freshness and age, a period's hub
+(docs/07_question_answering.md §7.2–7.4)."""
 
 from __future__ import annotations
 
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
 from test_temporal import entry, phones_us, utc
 
+from graph_query_engine import seeds
+from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
-from graph_query_engine.temporal import period_interval
+from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SeedMatch
+from graph_query_engine.temporal import age_days, parse_as_of, period_hub, period_interval, recency, time_facts, time_line
+from graph_query_engine.traversal import RECENCY_RANK_WEIGHT, traverse
 from insight_contracts import SNAPSHOT_VERSION
+from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import cytoscape_elements, node_details
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.temporal import calendar_bins, core_span, dynamics, parent_period, period_bounds
 
 CFG = MinerConfig()
+QUESTION = "Why is the discount higher for phones in the US?"
 
 
 def test_the_core_is_the_shortest_run_of_bins_holding_most_of_the_rows_the_earliest_on_a_tie():
@@ -74,3 +86,109 @@ def test_the_graph_payload_carries_the_periods_levels_the_cores_and_the_referenc
     month = node_details(graph, "T:month:2031-03", CFG.thresholds)["members"]  # the month holds the week's events, named by their week
     assert peaked <= {m["id"] for m in month["peaked"]} and all(m["period"].startswith("2031-W") for m in month["peaked"])
     assert [m["weight"] for m in month["active"]] == sorted((m["weight"] for m in month["active"]), reverse=True)
+
+
+# the answer's reference date (docs/07_question_answering.md §7.2–7.4)
+
+
+def test_freshness_halves_every_half_life_from_the_core_and_a_question_names_its_periods_hub():
+    traj = {"core": {"t_start": "2031-03-03T00:00:00+00:00", "t_end": "2031-04-07T00:00:00+00:00"}}
+    inside, after, before = parse_as_of("2031-03-20"), parse_as_of("2031-07-06"), parse_as_of("2030-12-03")  # 90 days past each end
+    assert (age_days(traj["core"], inside), age_days(traj["core"], after), age_days(traj["core"], before)) == (0.0, 90.0, -90.0)
+    assert recency(traj, inside, 90) == 1.0 and recency(traj, after, 90) == pytest.approx(0.5) == recency(traj, before, 90)  # the future as the past
+    assert (
+        recency(traj, None, 90) is None
+        and recency(traj, inside, 0) is None
+        and recency({"core": None}, inside, 90) is None
+        and recency(None, inside, 90) is None
+    )
+    assert parse_as_of("2031-04-01T12:00+03:00").utcoffset().total_seconds() == 3 * 3600 and parse_as_of(" 2031-04-01 ").tzinfo is not None
+    for bad in ("nope", "31.03.2031", "2031-13-01"):
+        with pytest.raises(ValueError):
+            parse_as_of(bad)
+    assert [period_hub(t) for t in ("in 2031-w13?", "Q1 2031", "2031-q2", "on 2031-03-24", "2031-03", "2031-W54", "nothing")] == [
+        "T:week:2031-W13",
+        "T:quarter:2031-Q1",
+        "T:quarter:2031-Q2",
+        "T:day:2031-03-24",
+        "T:month:2031-03",
+        None,
+        None,
+    ]
+
+
+def test_the_time_line_gives_the_core_its_age_and_an_event_outside_it():
+    core = {
+        "start": "2031-W10",
+        "end": "2031-W12",
+        "t_start": "2031-03-03T00:00:00+00:00",
+        "t_end": "2031-03-24T00:00:00+00:00",
+        "share": 0.83,
+        "bins": 3,
+    }
+    peak = {"kind": "PEAKED_AT", "period": "2031-W14", "metric": "m", "z_smoothed": 2.0, "prominence": 1.0, "bin": 4}
+    traj = {"grid": "week", "span": ["2031-03-03", "2031-04-13"], "metric": "m", "trend": "spike", "current": 0.1, "bins_measured": 6, "of": 6}
+    facts = time_facts(traj | {"gaps": [], "core": core | {"first": 0, "last": 2}, "events": [peak]}, 0.5)
+    assert facts["core"] == core and facts["events"][0]["outside"] is True
+    assert "| core 2031-W10–2031-W12 (3 bins, 83% of its timed rows) | events: peak 2031-W14 (m, +2.00 sd, outside its core) |" in time_line(facts)
+    for asked, words in (
+        ("2031-04-13", "ended 20 days before"),
+        ("2031-03-10", "the reference date inside it"),
+        ("2031-02-20", "starts 11 days after"),
+    ):
+        assert f"timed rows), {words}" in time_line(facts | {"age_days": age_days(core, parse_as_of(asked))})
+    alone = time_facts(traj | {"gaps": [], "core": None, "events": [peak]}, 0.5)
+    assert "| core: none (no timed rows) |" in time_line(alone) and "outside" not in alone["events"][0]
+
+
+def test_the_reference_date_is_the_latest_data_and_a_question_may_set_its_own(timed):
+    engine, record = timed
+    assert engine.graph().as_of == datetime.fromisoformat(record["temporal"]["span"][1])
+    latest = engine.search(QUESTION).evidence
+    assert latest.as_of == {"date": "2031-04-13", "source": "latest data", "recency": True}
+    prompt = latest.to_prompt()
+    assert (
+        "\nAS OF: 2031-04-13 (latest data)\nUNITS:" in prompt
+        and "fresher findings (the closer their core to the AS OF date, half-life 90 days)" in prompt
+    )
+    later = engine.search(QUESTION, as_of=parse_as_of("2031-06-01")).evidence
+    item = next(it for it in later.items if it.pattern_id == phones_us(engine.ws.load_graph()))
+    assert later.as_of["source"] == "asked" and "AS OF: 2031-06-01 (asked)" in later.to_prompt()
+    assert (
+        item.time["age_days"] > 0
+        and "days before the reference date" in time_line(item.time)
+        and f"     time: {time_line(item.time)}" in later.to_prompt()
+    )
+    timed_week = engine.search(QUESTION.rstrip("?") + " in 2031-W13?").evidence
+    assert timed_week.as_of["recency"] is False and "fresher findings" not in timed_week.to_prompt()  # an asked period is its own window
+    with TestClient(create_app(engine)) as client:
+        refused = client.post("/api/search", json={"question": QUESTION, "as_of": "31.03.2031"})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        asked = client.post("/api/search", json={"question": QUESTION, "as_of": "2031-03-25"})
+        assert asked.status_code == 200 and "AS OF: 2031-03-25 (asked)" in asked.json()["evidence_prompt"]
+
+
+def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed, hashed_engine, monkeypatch):
+    engine, _ = timed
+    assert all("recency" in s.matched for s in engine.search(QUESTION).seeds)
+    assert not any("recency" in s.matched for s in engine.search(QUESTION.rstrip("?") + " in 2031-W13?").seeds)
+    graph, config, far = engine.graph(), engine.settings.query, parse_as_of("2032-01-01")
+    start = engine.search(QUESTION).seeds
+    before = {r.node_id: r.score for r in traverse(graph, start, config).patterns}
+    reached = [r for r in traverse(graph, start, config, far).patterns if r.route != "seed" and r.node_id in before]
+    assert reached and all(  # the walk's paths are the same; a reached finding's rank is scaled by its freshness
+        r.score
+        == pytest.approx(before[r.node_id] * (1 - RECENCY_RANK_WEIGHT + RECENCY_RANK_WEIGHT * recency(graph.trajectories[r.node_id], far, 90)))
+        for r in reached
+    )
+    plain = hashed_engine.graph()  # no time column: no core, no change
+    found = hashed_engine.search("Why is margin lower for phones in the US?").seeds
+    assert [(r.node_id, r.score) for r in traverse(plain, found, config, far).patterns] == [
+        (r.node_id, r.score) for r in traverse(plain, found, config).patterns
+    ]
+    fixed = {"fresh": SeedMatch("fresh", 0.6 + SEED_RECENCY_WEIGHT, {"recency": 1.0}), "stale": SeedMatch("stale", 0.6, {"recency": 0.0})}
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
+    stub = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, components=lambda: [])
+    picked = seeds.resolve_seeds(query, stub, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig(), None, far)
+    assert [s.pattern_id for s in picked] == ["fresh", "stale"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95

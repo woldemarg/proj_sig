@@ -17,3 +17,5 @@ class QueryConfig:
     max_latent_hops: int = 1
     traversal_max_depth: int = 5
     max_retrieved: int = 12
+    # a finding's freshness halves every this many days from its core to the reference date (§7.2); 0 switches it off
+    temporal_recency_half_life_days: int = 90

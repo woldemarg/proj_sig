@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
+from graph_query_engine.temporal import parse_as_of
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
@@ -72,6 +73,7 @@ class SearchIn(BaseModel):
     cells: list[str] | None = None  # a map zone as H3 cells
     geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
+    as_of: str | None = None  # the reference date, ISO; the latest data when absent
 
 
 class DatasetMetadataIn(BaseModel):
@@ -247,7 +249,11 @@ def create_app(engine: Engine) -> FastAPI:
             raise HTTPException(400, "a zone is cells or geometry, not both")
         if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
-        return engine.evidence(body.question, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        try:
+            as_of = parse_as_of(body.as_of) if body.as_of else None
+        except ValueError as exc:
+            raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
+        return engine.evidence(body.question, as_of, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:

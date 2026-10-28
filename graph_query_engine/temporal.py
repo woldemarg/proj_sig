@@ -1,11 +1,13 @@
 """Time in the answer (docs/07_question_answering.md §7.2, §7.4): an insight of a dataset with a time column carries
 its time line — the grid, the span, the trend and current level of its metric (its target, unless only a shift has a
-series), its events and the bins measured — from the snapshot's ``trajectories``; a calendar period in the question
-raises the seed score of the patterns measured in it."""
+series), its core and its age, its events and the bins measured — from the snapshot's ``trajectories``; a calendar
+period in the question raises the seed score of the patterns measured in it, and without one the fresher findings —
+the closer their core to the reference date — rank first (``recency``)."""
 
 from __future__ import annotations
 
 import functools
+import math
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -19,6 +21,45 @@ def period_interval(text: str) -> tuple[datetime, datetime] | None:
     (``wording.PERIOD``); a token that only looks like one (``2031-W54``, ``2019-20``) or whose period runs past the
     calendar (``9999-12-31``) is passed over. None when there is none."""
     return next((span for m in wording.PERIOD.finditer(text) if (span := _interval(m.group(0)))), None)
+
+
+def period_hub(text: str) -> str | None:
+    """The time hub id (``T:<unit>:<label>``, as the grid names the period) of the first calendar period
+    ``period_interval`` reads in ``text``; None when there is none."""
+    for m in wording.PERIOD.finditer(text):
+        if _interval(m.group(0)):
+            g = m.groups()
+            if g[0]:
+                return f"T:week:{g[0]}-W{g[1]}"
+            if g[2] or g[4]:
+                return f"T:quarter:{g[2] or g[5]}-Q{g[3] or g[4]}"
+            return f"T:day:{g[6]}-{g[7]}-{g[8]}" if g[6] else f"T:month:{g[9]}-{g[10]}"
+    return None
+
+
+def parse_as_of(text: str) -> datetime:
+    """A reference date as asked: an ISO date (its midnight) or an ISO date and time, UTC unless it names a zone;
+    ``ValueError`` otherwise."""
+    stamp = datetime.fromisoformat(text.strip())
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+
+def age_days(core: dict[str, Any], as_of: datetime) -> float:
+    """Days from a core (``[t_start, t_end)``) to ``as_of``: 0 inside it, positive after its end, negative before its start."""
+    start, end = datetime.fromisoformat(core["t_start"]), datetime.fromisoformat(core["t_end"])
+    if as_of < start:
+        return (as_of - start).total_seconds() / 86_400
+    return (as_of - end).total_seconds() / 86_400 if as_of >= end else 0.0
+
+
+def recency(trajectory: dict[str, Any] | None, as_of: datetime | None, half_life_days: float) -> float | None:
+    """How fresh a finding is at ``as_of``: 2^(−|age| / half-life), its age the days from its core to that date (1 inside
+    the core; the future decays as the past does). None — no bonus, no penalty — without a core, a date or a positive
+    half-life (0 switches it off)."""
+    core = (trajectory or {}).get("core")
+    if not core or as_of is None or half_life_days <= 0:
+        return None
+    return 0.5 ** (abs(age_days(core, as_of)) / half_life_days)
 
 
 def strip_periods(text: str) -> str:
@@ -80,14 +121,15 @@ def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
     """What an insight's time line says (empty for an insight of a dataset without a time column): its grid and span,
-    its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its own events —
-    the strongest first, each with the condition that carries it when one does —, the ``echoes`` (the events a broader
-    insight has too, told once, there), the bins measured and all of it in words (``wording.time_words``), as the
-    evidence-only answer and the console say it."""
+    its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its core (the
+    run of bins holding most of its rows; ``age_days`` from the reference date is added by the evidence), its own events —
+    the strongest first, each with the condition that carries it when one does and ``outside: True`` when its bin is not
+    in the core —, the ``echoes`` (the events a broader insight has too, told once, there), the bins measured and all of it
+    in words (``wording.time_words``), as the evidence-only answer and the console say it."""
     if not trajectory:
         return {}
     events = sorted(trajectory["events"], key=lambda e: -e["prominence"])
-    current = trajectory["current"]
+    current, core = trajectory["current"], trajectory.get("core")
     facts = {
         "grid": trajectory["grid"],
         "span": trajectory["span"],
@@ -95,7 +137,13 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
         "trend": trajectory["trend"] if trajectory["bins_measured"] else None,  # a series never measured has no trend
         "current": current,
         "faded": current is not None and abs(current) < fade_z,
-        "events": [{k: e[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier") if k in e} for e in events if "echo_of" not in e],
+        "core": {k: core[k] for k in ("start", "end", "t_start", "t_end", "share", "bins")} if core else None,
+        "events": [
+            {k: e[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier") if k in e}
+            | ({"outside": True} if core and not core["first"] <= e["bin"] <= core["last"] else {})
+            for e in events
+            if "echo_of" not in e
+        ],
         "echoes": [{k: e[k] for k in ("kind", "period", "metric", "echo_of")} for e in events if "echo_of" in e],
         "bins_measured": trajectory["bins_measured"],
         "of": trajectory["of"],
@@ -106,8 +154,9 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
 
 def time_line(facts: dict[str, Any]) -> str:
     """The ``time:`` line of an evidence item: the span's first and last day, the trend with its Ukrainian name (the word
-    rule 13 asks the answer to use), the current level, the events — each with the condition that carries it —, the
-    echoes of a broader finding's events and the bins."""
+    rule 13 asks the answer to use), the current level, the core and its age from the reference date, the events — each
+    with the condition that carries it, and whether it fell outside the core —, the echoes of a broader finding's events
+    and the bins."""
     start, end = (t[:10] for t in facts["span"])
     trend = f"{facts['trend']} «{wording.name('trend_' + facts['trend'])}»" if facts["trend"] else f"not measured «{wording.name('time_unmeasured')}»"
     current = "not measured" if facts["current"] is None else f"{facts['current']:+.2f} sd" + (" (below the threshold)" if facts["faded"] else "")
@@ -115,7 +164,8 @@ def time_line(facts: dict[str, Any]) -> str:
 
     def where(e: dict[str, Any]) -> str:
         c = e.get("carrier")
-        return f", in {c['attribute']} = {c['value']}: {c['rows']} of its {c['of']} rows, {c['shift']:+.2f} sd against the rest" if c else ""
+        found = f", in {c['attribute']} = {c['value']}: {c['rows']} of its {c['of']} rows, {c['shift']:+.2f} sd against the rest" if c else ""
+        return found + (", outside its core" if e.get("outside") else "")
 
     events = (
         "; ".join(f"{kinds[e['kind']]} {e['period']} ({e['metric']}, {e['z_smoothed']:+.2f} sd{where(e)})" for e in facts["events"][:3]) or "none"
@@ -124,6 +174,23 @@ def time_line(facts: dict[str, Any]) -> str:
     echo = f" | the same as a broader finding's: {echoes}" if echoes else ""
     gaps = f" | unmeasured: {', '.join(a if a == b else f'{a}–{b}' for a, b in facts['gaps'])}" if facts["gaps"] else ""
     return (
-        f"grid {facts['grid']} | span [{start}, {end}] | trend {trend} ({facts['metric']}) | current {current}"
+        f"grid {facts['grid']} | span [{start}, {end}] | trend {trend} ({facts['metric']}) | current {current}{_core(facts)}"
         f" | events: {events}{echo} | bins {facts['bins_measured']}/{facts['of']} measured{gaps}"
     )
+
+
+def _core(facts: dict[str, Any]) -> str:
+    """The time line's core: its periods, the bins and the share of the finding's timed rows they hold, and its age."""
+    core = facts.get("core")
+    if not core:
+        return " | core: none (no timed rows)" if "core" in facts else ""
+    periods = core["start"] if core["start"] == core["end"] else f"{core['start']}–{core['end']}"
+    bins = f"{core['bins']} bin{'s' if core['bins'] > 1 else ''}"
+    line = f" | core {periods} ({bins}, {core['share']:.0%} of its timed rows)"
+    age = facts.get("age_days")
+    if age is None:
+        return line
+    days = math.ceil(abs(age))
+    if age > 0:
+        return f"{line}, ended {days} days before the reference date"
+    return f"{line}, starts {days} days after the reference date" if age < 0 else f"{line}, the reference date inside it"
