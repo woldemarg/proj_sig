@@ -2,10 +2,12 @@
 admitted insight over it.
 
 Discovery never sees time: ``load_dataset(time=)`` keeps the column apart and the search runs once over every row.
-After admission each insight's covered rows are binned by the grid (``calendar_bins``) and every metric it shifts gets
-a series of robust z against its bin's population (``annotate``). ``dynamics`` smooths a series (``rts_smooth``: a
-local-level Kalman filter and its Rauch–Tung–Striebel pass, each bin's sampling noise its measurement noise), keeps the
-extrema a deterministic gate passes (``detect_events``) and names the trend. All functions are pure.
+After admission an ``auto`` grid is fitted to the insights (``fit_grid``), each insight's covered rows are binned by the
+grid (``calendar_bins``) and every metric it shifts gets a series of robust z against its bin's population
+(``annotate``). ``dynamics`` smooths a series (``rts_smooth``: a local-level Kalman filter and its Rauch–Tung–Striebel
+pass, each bin's sampling noise its measurement noise), keeps the extrema a deterministic gate passes
+(``detect_events``) and names the trend; ``carriers`` names the condition inside an insight that carries an event,
+``echoes`` the events a broader insight has too. All functions are pure.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from scipy.signal import find_peaks
 from scipy.stats import norm
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import EdgeType
+from insight_contracts import TIME_GRIDS, EdgeType
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import _MEDIAN_SE_FACTOR
 from subgroup_miner.ingestion import GRID_FREQ, IngestionError
@@ -76,6 +78,26 @@ def calendar_bins(times: pd.Series, grid: str, max_bins: int | None = None, tz: 
     return codes, bins
 
 
+def fit_grid(times: pd.Series, grid: str, covers: Mapping[str, np.ndarray], min_rows: int, min_bins: int, tz: str | None = None) -> str:
+    """``auto``'s unit once the insights are admitted: ``grid`` (``resolve_grid``'s, which weighs the upload's rows, not
+    an insight's — 3 % of 20,000 rows over 35 weeks is 17 a week, under ``min_rows``) or the first coarser unit at which
+    the median insight is measurable in at least half the bins its span covers by half — ``min_rows`` of its rows there
+    and as many of the rest (``annotate``'s floor). A unit with fewer than ``min_bins`` bins holding rows and covered by
+    half (``check_time``'s) is never taken: with none fit, the coarsest one that has them. ``covers``: pattern id → its
+    rows (positions in ``times``)."""
+    fit = grid
+    for unit in TIME_GRIDS[TIME_GRIDS.index(grid) :]:
+        codes, bins = calendar_bins(times, unit, tz=tz)
+        whole, rows = np.array([b["covered"] >= 0.5 for b in bins]), np.array([b["rows"] for b in bins])
+        if (whole & (rows > 0)).sum() < max(min_bins, 1):
+            break
+        fit = unit
+        own = [np.bincount(c[c >= 0], minlength=len(bins)) for c in (codes[r] for r in covers.values())]
+        if np.median([(whole & (o >= min_rows) & (rows - o >= min_rows)).sum() / whole.sum() for o in own]) >= 0.5:
+            break
+    return fit
+
+
 def reference_scale(frame: pd.DataFrame) -> dict[str, float | None]:
     """Each numeric column's robust scale over the whole upload, s_ref = MAD / 0.6745 (the EDA's MAD, with its fallback):
     the unit of every series. None for a constant column."""
@@ -104,6 +126,15 @@ def _level(values: np.ndarray, tied: bool, fallback: float) -> tuple[float, floa
     return med, _MEDIAN_SE_FACTOR * (float(np.median(np.abs(values - med))) or fallback) / n
 
 
+def _population(frame: pd.DataFrame, metric: str, scale: float, tie_share: float) -> tuple[np.ndarray, bool, float]:
+    """A metric's values over the upload, whether ``tie_share`` of them is one value (a lump: levels are means) and the
+    spread that stands in for a bin's zero (``_level``)."""
+    values = frame[metric].to_numpy(dtype=float)
+    finite = values[np.isfinite(values)]
+    tied = bool(np.unique(finite, return_counts=True)[1].max() >= tie_share * len(finite))  # one value that often: a lump
+    return values, tied, (float(np.std(finite)) if tied else scale * 0.6745) or scale
+
+
 def annotate(
     frame: pd.DataFrame,
     codes: np.ndarray,
@@ -127,12 +158,7 @@ def annotate(
     fewer than ``min_rows`` rows of the upload, of the insight or of the rest, or covering less than half its period
     (the upload's first or last bin), is None — never a z on an unstable level. A metric without a scale has no series."""
     min_rows = max(min_rows, 1)  # a bin needs a value to have a level
-    population = {}
-    for metric in {m for ms in metrics.values() for m in ms if scale.get(m)}:
-        values = frame[metric].to_numpy(dtype=float)
-        finite = values[np.isfinite(values)]
-        tied = bool(np.unique(finite, return_counts=True)[1].max() >= tie_share * len(finite))  # one value that often: a lump
-        population[metric] = (values, tied, (float(np.std(finite)) if tied else scale[metric] * 0.6745) or scale[metric])
+    population = {m: _population(frame, m, scale[m], tie_share) for m in {m for ms in metrics.values() for m in ms if scale.get(m)}}
     sparse = [b["rows"] < min_rows or b["covered"] < 0.5 for b in bins]
     out = {}
     for pid, rows in covers.items():
@@ -267,3 +293,83 @@ def _gaps(y: Sequence[float | None], bins: Sequence[Mapping[str, Any]]) -> list[
     missing = [t for t, v in enumerate(y) if v is None]
     runs = np.split(np.array(missing, dtype=int), np.flatnonzero(np.diff(missing) != 1) + 1) if missing else []
     return [[bins[r[0]]["period"], bins[r[-1]]["period"]] for r in runs]
+
+
+def carriers(
+    frame: pd.DataFrame,
+    codes: np.ndarray,
+    covers: Mapping[str, np.ndarray],
+    events: Mapping[str, Sequence[Mapping[str, Any]]],
+    scale: Mapping[str, float | None],
+    config: MinerConfig,
+    dimensions: Sequence[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Per pattern, the condition ``a = v`` of one of the ``dimensions`` (the columns the search groups by) that carries
+    each of its events (``dynamics``'): of the insight's rows, those with a = v (in) moved in the event's bin t against
+    its other rows (out) beyond how the two differ over its other timed rows (¬t) — a difference in differences of their
+    levels (``_level``) — and moved themselves, against the rest of the upload (R, the reference of the series):
+
+        d = ((c_in(t) − c_out(t)) − (c_in(¬t) − c_out(¬t))) / s_ref
+        se = sqrt(SE_in(t)² + SE_out(t)² + SE_in(¬t)² + SE_out(¬t)²) / s_ref
+        m = ((c_in(t) − c_R(t)) − (c_in(¬t) − c_R(¬t))) / s_ref
+
+    each of the four holding ``temporal_min_rows_bin`` values. Of the conditions whose d and m both clear the least
+    event excess in the event's direction — the part moved, and more than the rest of the insight (out moving the other
+    way alone moves in by d, never by m) — the one with the largest d / se carries it when d / se clears Φ⁻¹(1 − p / N),
+    N every condition tried (Bonferroni: every value of every dimension is). A shift the whole insight shares has none;
+    a cohort the one global search could not mine, alive for a bin inside a broader insight, is named through it
+    (docs/02_discovery.md §2.10). Each ``{metric, bin, attribute, value, rows (its rows in the bin), of (the insight's),
+    shift (d), p}``."""
+    dims = {c: pd.factorize(frame[c]) for c in dimensions}
+    min_rows, excess = config.temporal_min_rows_bin, config.thresholds.temporal_event_excess
+    population: dict[str, tuple[np.ndarray, bool, float]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for pid, found in events.items():
+        rows = covers[pid]
+        own, others = codes[rows], np.ones(len(codes), dtype=bool)
+        others[rows] = False
+        for e in found:
+            metric, sign, s = e["metric"], 1.0 if e["kind"] == PEAKED_AT else -1.0, scale[e["metric"]]
+            if metric not in population:
+                population[metric] = _population(frame, metric, s, config.temporal_tie_share)
+            values, tied, fallback = population[metric]
+            v, finite = values[rows], others & np.isfinite(values)
+            at, rest = (own == e["bin"]) & np.isfinite(v), (own >= 0) & (own != e["bin"]) & np.isfinite(v)
+            ref_t, ref_o = (_level(values[finite & m], tied, fallback)[0] for m in (codes == e["bin"], (codes >= 0) & (codes != e["bin"])))
+            tried, kept = 0, []
+            for attribute, (labels, uniques) in dims.items():
+                label = labels[rows]
+                counts = np.bincount(label[at & (label >= 0)], minlength=len(uniques))
+                for k in np.flatnonzero((counts >= min_rows) & (at.sum() - counts >= min_rows)):  # a split the bin can level
+                    inside = label == k
+                    groups = [v[at & inside], v[at & ~inside], v[rest & inside], v[rest & ~inside]]
+                    if min(map(len, groups)) < min_rows:
+                        continue
+                    tried += 1
+                    (c1, s1), (c2, s2), (c3, s3), (c4, s4) = (_level(g, tied, fallback) for g in groups)
+                    d = ((c1 - c2) - (c3 - c4)) / s
+                    if sign * d >= excess and sign * ((c1 - ref_t) - (c3 - ref_o)) / s >= excess:
+                        kept.append((sign * d * s / math.sqrt(s1**2 + s2**2 + s3**2 + s4**2), d, attribute, uniques[k], len(groups[0])))
+            if not kept:
+                continue
+            stat, d, attribute, value, n = max(kept, key=lambda t: t[0])
+            if (p := min(1.0, tried * float(norm.sf(stat)))) <= config.temporal_event_p:
+                found_at = {"metric": metric, "bin": e["bin"], "attribute": attribute, "value": str(value), "rows": n, "of": int(at.sum())}
+                out.setdefault(pid, []).append(found_at | {"shift": d, "p": p})
+    return out
+
+
+def echoes(trajectories: Mapping[str, dict[str, Any]], patterns: Mapping[str, Mapping[str, Any]]) -> None:
+    """Marks each event a broader insight of the same upload has too — the same metric, bin and kind, of an insight whose
+    conditions are a strict subset of this one's, so whose rows hold its rows — with ``echo_of``: the broadest such
+    insight (the fewest conditions, then the most rows, then the id). One shift nested cohorts all read is one event to
+    a reader, and ``carriers`` says where in the broadest it sits. ``patterns``: id → its ``conditions`` and ``support``."""
+    scope = {pid: frozenset((c["attribute"], c["value"]) for c in patterns[pid]["conditions"]) for pid in trajectories}
+    fired: dict[tuple[str, int, str], list[str]] = {}
+    for pid, t in trajectories.items():
+        for e in t["events"]:
+            fired.setdefault((e["metric"], e["bin"], e["kind"]), []).append(pid)
+    for pid, t in trajectories.items():
+        for e in t["events"]:
+            if broader := [q for q in fired[(e["metric"], e["bin"], e["kind"])] if scope[q] < scope[pid]]:
+                e["echo_of"] = min(broader, key=lambda q: (len(scope[q]), -patterns[q]["support"], q))

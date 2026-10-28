@@ -43,7 +43,7 @@ from insight_graph_service.core.uploads import declared_glossary
 from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
-from subgroup_miner.temporal import dynamics
+from subgroup_miner.temporal import dynamics, echoes
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -436,7 +436,9 @@ def _temporal_plane(
     reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
     whose metrics has a series (a geo counter or share), gets no trajectory. A trajectory is
     ``subgroup_miner.temporal.dynamics`` of the pattern's series; its short form is the pattern's ``temporal_summary``,
-    the dataset's ``temporal`` its column, grid and span. A hub exists only with an event in it, and a pattern has one
+    the dataset's ``temporal`` its column, grid and span. An event keeps the condition that carries it (``carrier``,
+    signed in the series at the commit, ``subgroup_miner.temporal.carriers``) and, when a broader insight of the dataset
+    has it too, ``echo_of`` that insight (``echoes``). A hub exists only with an event in it, and a pattern has one
     edge per hub and kind: its most prominent event there, ``metrics`` naming every metric that peaked (or dipped) then."""
     edges, trajectories = [], {}
     for bid, (series, digest) in sorted(temporal.items()):
@@ -448,15 +450,23 @@ def _temporal_plane(
             continue
         head = {k: signed[k] for k in ("column", "grid", "span")}
         nodes[dataset_node_id(batches[bid]["dataset_id"])].props["temporal"] = head
+        mine = {}
         for pid, entry in sorted(series.items()):
             if pid not in nodes or nodes[pid].props["integrity"] == "mismatch" or not entry["series"]:
                 continue  # no metric of it has a series (a geo counter or share): it has no time line
             props = nodes[pid].props
             metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
-            traj = trajectories[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
+            traj = mine[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
+            carried = {(c["metric"], c["bin"]): c for c in entry.get("carriers", [])}
+            for e in traj["events"]:
+                if c := carried.get((e["metric"], e["bin"])):
+                    e["carrier"] = {k: c[k] for k in ("attribute", "value", "rows", "of", "shift", "p")}
             nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
                 "events": len(traj["events"])
             }
+        echoes(mine, {pid: nodes[pid].props for pid in mine})
+        trajectories |= mine
+        for pid, traj in mine.items():
             by_period: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (period, kind) -> its events, the most prominent first
             for e in sorted(traj["events"], key=lambda e: -e["prominence"]):
                 by_period.setdefault((e["period"], e["kind"]), []).append(e)
@@ -464,7 +474,7 @@ def _temporal_plane(
                 hub, cell = temporal_node_id(signed["grid"], period), signed["bins"][same[0]["bin"]]
                 props = {"granularity": signed["grid"], "period": period, "t_start": cell["t_start"], "t_end": cell["t_end"]}
                 nodes.setdefault(hub, GraphNode(hub, "TemporalNode", period, props))
-                first = {k: same[0][k] for k in ("metric", "period", "z_raw", "z_smoothed", "prominence", "p")}
+                first = {k: same[0][k] for k in ("metric", "period", "z_raw", "z_smoothed", "prominence", "p", "carrier", "echo_of") if k in same[0]}
                 edges.append(GraphEdge(pid, hub, EdgeType(kind), 1.0, first | {"metrics": [e["metric"] for e in same]}))
     return edges, trajectories
 

@@ -76,8 +76,10 @@ Rules:
    span. Name its trend in words — rising "{W("trend_rising")}", falling "{W("trend_falling")}", flat "{W("trend_flat")}",
    spike "{W("trend_spike")}", not measured "{W("time_unmeasured")}" —, its current level as the line gives it
    ("{W("time_faded")}" when it says below the threshold), and an event as a peak "{W("PEAKED_AT")}" or a dip
-   "{W("DROPPED_AT")}" in its named period. A finding with no event still has a trend and a current level: never call
-   it gone unless its current level is below the threshold.
+   "{W("DROPPED_AT")}" in its named period. An event "in <column> = <value>" sits in that part of the finding: name the
+   part ("{W("time_carrier")}"). Events "the same as a broader finding's" are one event with that finding's: tell it once.
+   A finding with no event still has a trend and a current level: never call it gone unless its current level is
+   below the threshold.
    Name a period only as the time line does. Without a "time:" line this rule does not apply.
 Be concise (at most ~250 words)."""
 

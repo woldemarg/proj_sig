@@ -533,7 +533,8 @@ const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: 
 
 function timeRows(t) {
   /* an insight's series over its dataset's calendar periods (docs/02_discovery.md §2.10): its trend and current level,
-     the curve of its metric — the measured z as dots, the smoothed level as a line, the gaps left open — and its events */
+     the curve of its metric — the measured z as dots, the smoothed level as a line, the gaps left open — and its events,
+     each with the part of the insight that carries it; a broader insight's event (an echo) is greyed and named so */
   const z = t.series[t.metric] || [], x = t.smoothed[t.metric] || [], w = 280, h = 64;
   const vals = [...z.filter(Boolean).map((e) => e.z), ...x.filter((v) => v !== null), 0], lo = Math.min(...vals), hi = Math.max(...vals);
   const px = (i) => (z.length > 1 ? (i * (w - 8)) / (z.length - 1) + 4 : w / 2), py = (v) => h - 6 - ((v - lo) / (hi - lo || 1)) * (h - 12);
@@ -543,7 +544,8 @@ function timeRows(t) {
   const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`;
   return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` +
     `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}"><line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
-    t.events.map((e) => `<div class="tl"><span>${esc(word(e.kind))} ${esc(e.period)}</span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd</span></div>`).join("") +
+    t.events.map((e) => `<div class="tl${e.echo_of ? " muted" : ""}"><span>${esc(word(e.kind))} ${esc(e.period)}</span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd` +
+      (e.carrier ? ` · ${term("time_carrier")}: ${esc(human(e.carrier.attribute))} — ${esc(e.carrier.value)}` : "") + (e.echo_of ? ` · ${term("time_echo")}` : "") + `</span></div>`).join("") +
     (t.gaps.length ? `<div class="tl"><span class="muted">${esc(word("time_unmeasured"))}: ${esc(t.gaps.map(([a, b]) => (a === b ? a : `${a}–${b}`)).join(", "))}</span></div>` : "");
 }
 

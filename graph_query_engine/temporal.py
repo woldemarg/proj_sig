@@ -70,8 +70,10 @@ def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
     """What an insight's time line says (empty for an insight of a dataset without a time column): its grid and span,
-    its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its events — the
-    strongest first —, the bins measured and all of it in words (``wording.time_words``), as the evidence-only answer and the console say it."""
+    its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its own events —
+    the strongest first, each with the condition that carries it when one does —, the ``echoes`` (the events a broader
+    insight has too, told once, there), the bins measured and all of it in words (``wording.time_words``), as the
+    evidence-only answer and the console say it."""
     if not trajectory:
         return {}
     events = sorted(trajectory["events"], key=lambda e: -e["prominence"])
@@ -83,7 +85,8 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
         "trend": trajectory["trend"] if trajectory["bins_measured"] else None,  # a series never measured has no trend
         "current": current,
         "faded": current is not None and abs(current) < fade_z,
-        "events": [{k: e[k] for k in ("kind", "period", "metric", "z_smoothed")} for e in events],
+        "events": [{k: e[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier") if k in e} for e in events if "echo_of" not in e],
+        "echoes": [{k: e[k] for k in ("kind", "period", "metric", "echo_of")} for e in events if "echo_of" in e],
         "bins_measured": trajectory["bins_measured"],
         "of": trajectory["of"],
         "gaps": trajectory["gaps"],
@@ -93,14 +96,24 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
 
 def time_line(facts: dict[str, Any]) -> str:
     """The ``time:`` line of an evidence item: the span's first and last day, the trend with its Ukrainian name (the word
-    rule 13 asks the answer to use), the current level, the events and the bins."""
+    rule 13 asks the answer to use), the current level, the events — each with the condition that carries it —, the
+    echoes of a broader finding's events and the bins."""
     start, end = (t[:10] for t in facts["span"])
     trend = f"{facts['trend']} «{wording.name('trend_' + facts['trend'])}»" if facts["trend"] else f"not measured «{wording.name('time_unmeasured')}»"
     current = "not measured" if facts["current"] is None else f"{facts['current']:+.2f} sd" + (" (below the threshold)" if facts["faded"] else "")
     kinds = {"PEAKED_AT": "peak", "DROPPED_AT": "dip"}
-    events = "; ".join(f"{kinds[e['kind']]} {e['period']} ({e['metric']}, {e['z_smoothed']:+.2f} sd)" for e in facts["events"][:3]) or "none"
+
+    def where(e: dict[str, Any]) -> str:
+        c = e.get("carrier")
+        return f", in {c['attribute']} = {c['value']}: {c['rows']} of its {c['of']} rows, {c['shift']:+.2f} sd against the rest" if c else ""
+
+    events = (
+        "; ".join(f"{kinds[e['kind']]} {e['period']} ({e['metric']}, {e['z_smoothed']:+.2f} sd{where(e)})" for e in facts["events"][:3]) or "none"
+    )
+    echoes = "; ".join(f"{kinds[e['kind']]} {e['period']} ({e['metric']})" for e in facts.get("echoes", [])[:3])
+    echo = f" | the same as a broader finding's: {echoes}" if echoes else ""
     gaps = f" | unmeasured: {', '.join(a if a == b else f'{a}–{b}' for a, b in facts['gaps'])}" if facts["gaps"] else ""
     return (
         f"grid {facts['grid']} | span [{start}, {end}] | trend {trend} ({facts['metric']}) | current {current}"
-        f" | events: {events} | bins {facts['bins_measured']}/{facts['of']} measured{gaps}"
+        f" | events: {events}{echo} | bins {facts['bins_measured']}/{facts['of']} measured{gaps}"
     )

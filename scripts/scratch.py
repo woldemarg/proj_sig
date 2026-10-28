@@ -64,15 +64,18 @@ def write_demo_csv(folder: Path) -> Path:
     return path
 
 
-def weekly_retail(folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",)) -> Path:
-    """The demo's orders over ``weeks`` ISO weeks from a Monday (``when``; its first ten rows without a readable time),
-    the ``spiked`` metrics of phones in the US raised by 3 sd in the fourth week: a PEAKED_AT there (docs/02_discovery.md §2.10)."""
-    frame = generate_retail_dataset(5000, seed=7)
+def weekly_retail(
+    folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",), rows: int = 5000, channel: str | None = None
+) -> Path:
+    """``rows`` of the demo's orders over ``weeks`` ISO weeks from a Monday (``when``; its first ten rows without a
+    readable time), the ``spiked`` metrics of phones in the US — those sold through ``channel`` only, when named — raised
+    by 3 sd in the fourth week: a PEAKED_AT there (docs/02_discovery.md §2.10)."""
+    frame = generate_retail_dataset(rows, seed=7)
     rng = np.random.default_rng(1)
     week = rng.integers(0, weeks, len(frame))
     when = pd.Timestamp("2031-03-03") + pd.to_timedelta(week * 7 * 86_400 + rng.uniform(0, 7 * 86_400, len(frame)), unit="s")
     frame.insert(0, "when", when.strftime("%Y-%m-%d %H:%M:%S"))
-    spike = (frame["category"] == "phones") & (frame["region"] == "US") & (week == 3)
+    spike = (frame["category"] == "phones") & (frame["region"] == "US") & (week == 3) & (frame["channel"] == channel if channel else True)
     for metric in spiked:
         frame.loc[spike, metric] += 3 * frame[metric].std()
     frame.loc[:9, "when"] = "unknown"

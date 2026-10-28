@@ -27,7 +27,9 @@ from a region to its parent at the next coarser listed level. A geo ``Pattern`` 
 ``geo: partial`` when too few of its events are located, both derived at the commit. ``own_cells`` maps a geo pattern
 whose resolution is a listed region level to its H3 cells: its regions at that level, which no IN_REGION repeats.
 ``PEAKED_AT`` / ``DROPPED_AT`` (the temporal plane, never walked) run from a pattern to the TemporalNode of a peak or a
-dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``.
+dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``,
+``metrics``, and when it has them ``carrier`` (the condition inside the pattern that carries the event: ``attribute``,
+``value``, ``rows``, ``of``, ``shift``, ``p``) and ``echo_of`` (the broader pattern of the dataset with the same event).
 ``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``span``, ``metric``, ``series`` and
 ``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of`` and
 ``gaps``; the pattern carries the short form as ``temporal_summary``.
