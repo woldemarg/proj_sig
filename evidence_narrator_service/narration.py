@@ -22,6 +22,7 @@ RULE_TERMS = (  # the words rules 10, 11 and 13 take from wording: as the consol
     *("cell", "segment", "located", "region", "zone", "scale_regional", "scale_scale-dependent", "scale_not_found_coarser"),
     *("credibility_1", "credibility_5", "credibility_6"),
     *("trend_rising", "trend_falling", "trend_flat", "trend_spike", "time_unmeasured", "time_faded", "PEAKED_AT", "DROPPED_AT"),
+    "time_carrier",
 )
 
 SYSTEM_PROMPT = f"""You are a careful data analyst answering questions about a tabular dataset.
