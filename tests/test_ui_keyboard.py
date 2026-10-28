@@ -12,8 +12,9 @@ from dev import chromium
 @pytest.mark.browser
 def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv, points_csv):
     """Every clickable row and link is reached by Tab and answers Enter or Space; a legend key spotlights on focus; the
-    tabs say which is selected; the demo buttons wait for their request; reduced motion moves no camera; at 1,000 and
-    390 px the map's panels overlap neither each other nor the next section, and the rail's buttons wrap."""
+    tabs say which is selected; a shipped dataset chosen fills the form and its upload waits for its request; reduced
+    motion moves no camera; at 1,000 and 390 px the map's panels overlap neither each other nor the next section, and the
+    rail's controls fit it."""
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
@@ -30,8 +31,8 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && !G.refreshing", timeout=60000)
-        rail = page.evaluate("[$('demo-geo-btn').getBoundingClientRect().right, document.querySelector('.rail').getBoundingClientRect().right]")
-        assert rail[0] <= rail[1]  # the rail's buttons wrap rather than clip
+        rail = page.evaluate("[$('sample').getBoundingClientRect().right, document.querySelector('.rail').getBoundingClientRect().right]")
+        assert rail[0] <= rail[1]  # the list of shipped datasets fits the rail rather than clips
         page.click("#view-switch button[data-view='table']")
         assert page.evaluate("[...document.querySelectorAll('#view-switch button')].map((b) => b.getAttribute('aria-selected'))")[:3] == [
             "false",
@@ -70,13 +71,18 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.focus("#thread .ev >> nth=0")
         page.keyboard.press("Enter")
         assert page.evaluate("S.hl && S.hl.evidence.length === 1")  # the card's path isolated, as a click does
-        page.evaluate(  # the demo request held, and never sent: both buttons wait for it
-            "() => { window.__real = api; window.api = (path, opts) => path === '/api/demo' ? new Promise((r) => { window.__go = () => r({}); }) : __real(path, opts); }"
+        page.evaluate(  # a shipped dataset's upload held, and never sent: the button waits for it
+            "() => { window.__real = api; window.__sent = []; window.api = (path, opts) => path === '/api/upload'"
+            " ? (__sent.push(opts.body.get('demo')), new Promise((r) => { window.__go = () => r({}); })) : __real(path, opts); }"
         )
-        page.click("#demo-btn")
-        assert page.is_disabled("#demo-btn") and page.is_disabled("#demo-geo-btn")
+        page.wait_for_function("$('sample').options.length > 1", timeout=10000)
+        page.select_option("#sample", "retail_synthetic")  # the form takes its options and shows them
+        assert page.evaluate("$('file-name').textContent === 'retail_synthetic.csv' && document.querySelector('#upload-form details.adv').open")
+        page.click("#upload-btn")
+        assert page.is_disabled("#upload-btn")
         page.evaluate("() => { window.api = __real; __go(); }")
-        page.wait_for_function("!$('demo-btn').disabled && !$('demo-geo-btn').disabled", timeout=10000)
+        page.wait_for_function("$('sample').value === '' && $('upload-msg').textContent.startsWith('У черзі')", timeout=10000)
+        assert page.evaluate("__sent") == ["retail_synthetic"]  # one request, by the dataset's key
         page.wait_for_function("!S.cy.animated()", timeout=5000)  # the flight to the evidence card ended
         page.emulate_media(reduced_motion="reduce")
         page.evaluate("() => focusNodes([S.nodes[0].id])")

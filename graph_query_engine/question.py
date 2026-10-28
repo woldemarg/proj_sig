@@ -15,6 +15,7 @@ import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,7 @@ import numpy as np
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import Embedder
+from graph_query_engine.temporal import period_interval, strip_periods
 from insight_contracts.text import covariance_label, humanize
 
 NEG_WORDS = frozenset(
@@ -166,6 +168,7 @@ class ParsedQuery:
     grounding: list[dict[str, Any]] = field(
         default_factory=list
     )  # spans resolved by the literal catalog (§7.1.1): span, literal, layer, score, symbol
+    when: tuple[datetime, datetime] | None = None  # a calendar period the question names (temporal.period_interval), UTC
 
     @property
     def is_lexical(self) -> bool:
@@ -313,9 +316,9 @@ def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, floa
 def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, catalog: LiteralCatalog | None = None) -> ParsedQuery:
     """Targets, conditions, direction and relationship intent of a question. Literals typed as the data holds
     them match lexically; with ``catalog`` (``build_catalog``) the rest of the question is grounded (§7.1.1)."""
-    raw_tokens = _TOKEN.findall(text.replace("’", "'").replace("ʼ", "'"))
+    raw_tokens = _TOKEN.findall(strip_periods(text).replace("’", "'").replace("ʼ", "'"))  # a period is no literal: 2031-Q1 is no q1
     tokens = [t.lower() for t in raw_tokens]
-    q = ParsedQuery(text=text)
+    q = ParsedQuery(text=text, when=period_interval(text))
     claimed: set[int] = set()  # token positions taken by a literal, then by direction and relationship words
 
     metrics, values = _vocabulary(graph)

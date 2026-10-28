@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from html import escape
 from typing import Any
 
@@ -42,6 +43,7 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
     pids = {n["id"] for n in graph.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset}
     members = Counter({r["id"]: sum(p in pids for p in graph.holders(r["id"])) for r in graph.of_kind("Region")})  # the insights in view: a size
     regions = shown_regions(graph, list(pids))  # their places and a scale chain's regions above, with none in view too
+    hubs = _hubs_of(graph, pids) if dataset else None
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and (not with_regions or n["id"] not in regions):
@@ -50,6 +52,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
             continue
         if dataset and n["kind"] == "Attractor" and dataset not in p.get("datasets", []):
             continue
+        if hubs is not None and n["kind"] == "TemporalNode" and n["id"] not in hubs:
+            continue  # a period of other datasets' events and cores, or above those only
         keep.add(n["id"])
         data = {"id": n["id"], "kind": n["kind"], "label": _short_label(graph, n, members[n["id"]]), "full_label": n["label"]}
         if n["kind"] == "Pattern":
@@ -66,11 +70,14 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
                 scope=[c.expr for c in ins.conditions],
                 anchor=anchor["target"] if anchor else None,
                 anchor_label=graph.nodes[anchor["target"]]["label"] if anchor else None,
+                core=graph.trajectories.get(n["id"], {}).get("core"),  # where it lives in time: the console's time axis
             )
         elif n["kind"] == "Attractor":
             data.update(mass=p["mass"], n_patterns=p["n_patterns"])
         elif n["kind"] == "Region":
             data.update(resolution=p["resolution"], patterns=members[n["id"]])
+        elif n["kind"] == "TemporalNode":  # the console's rows of periods, one per level, in calendar order
+            data.update(t_start=p["t_start"], t_end=p["t_end"], granularity=p["granularity"], period=p["period"])
         nodes.append({"data": data})
     edges = [
         {
@@ -92,6 +99,16 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust and declared language, whatever the filter
     return {"nodes": nodes, "edges": edges, "regions": len(regions), "stats": graph.snapshot.get("stats", {}), "datasets": trust}
+
+
+def _hubs_of(graph: DualGraph, pids: set[str]) -> set[str]:
+    """The periods the patterns reach — an event's, a core's ends — and every period above those (WITHIN)."""
+    hubs = {e["target"] for pid in pids for e in graph.out.get(pid, []) if e["plane"] == "temporal"}
+    frontier = hubs
+    while frontier:
+        frontier = {e["target"] for h in frontier for e in graph.out.get(h, []) if e["type"] == "WITHIN"} - hubs
+        hubs |= frontier
+    return hubs
 
 
 def _declared(props: dict[str, Any]) -> dict[str, Any]:
@@ -147,6 +164,9 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         out["reading"] = insight_reading(graph, node_id, thresholds)
         out["numbers"] = wording.value_words(graph.insight(node_id))
         out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        if node_id in graph.trajectories:  # its series over time, for the drawer's curve (docs/08_interface.md §8.2)
+            t = graph.trajectories[node_id]  # the drawer draws its metric's curve: the other series stay in the snapshot
+            out["trajectory"] = t | {k: {t["metric"]: t[k][t["metric"]]} if t["metric"] in t[k] else {} for k in ("series", "smoothed")}
         edges = {e["target"]: e for e in graph.out.get(node_id, []) if e["type"] == "IN_REGION"}
         out["places"] = [
             {"id": r, **{k: edges[r]["props"][k] for k in ("share", "lift", "n") if k in edges[r]["props"]}}
@@ -166,9 +186,32 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     elif node["kind"] == "Region":
         out["picture"] = picture(graph, node_id)
         out["reading"] = {"what": wording.region_reading(out["picture"])}
+    elif node["kind"] == "TemporalNode":  # who is active in it or had an event inside it, at any level (``DualGraph.members``)
+        found = graph.members((datetime.fromisoformat(node["props"]["t_start"]), datetime.fromisoformat(node["props"]["t_end"])))
+        out["members"] = {
+            "active": _members(graph, [(pid, None) for pid in found["active"]]),
+            "peaked": _members(graph, found["peaked"]),
+            "dropped": _members(graph, found["dropped"]),
+        }
     elif node["kind"] == "Attractor":
         out["reading"] = {"what": wording.theme_reading(node["props"], theme_glossary(graph, node_id))}
     return out
+
+
+def _members(graph: DualGraph, found: list[tuple[str, str | None]]) -> list[dict[str, Any]]:
+    """A period's patterns for its panel, the strongest first, ``NEIGHBOURS_SHOWN`` of them: id, label, weight,
+    integrity and, of an event, the period (the bin) it fell in."""
+    items = [
+        {
+            "id": pid,
+            "label": graph.nodes[pid]["label"],
+            "weight": round(graph.insight(pid).weight, 3),
+            "integrity": graph.nodes[pid]["props"].get("integrity"),
+        }
+        | ({"period": period} if period else {})
+        for pid, period in found
+    ]
+    return sorted(items, key=lambda x: -x["weight"])[:NEIGHBOURS_SHOWN]
 
 
 # --- the latent sphere: pattern vectors and attractor centroids in the unit ball; the console draws them (§8.4)

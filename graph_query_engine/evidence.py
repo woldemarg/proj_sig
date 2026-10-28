@@ -14,12 +14,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from functools import cached_property
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
+from graph_query_engine.temporal import core_age, time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
@@ -82,6 +84,7 @@ class EvidenceItem:
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
     reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline"} in Ukrainian (graph.insight_reading)
+    time: dict[str, Any] = field(default_factory=dict)  # a dataset with a time column: its series in short (temporal.time_facts)
 
 
 @dataclass
@@ -100,6 +103,7 @@ class Evidence:
     zones: list[dict[str, Any]] = field(default_factory=list)  # rank_zones: a question without scope over geo items
     area: dict[str, float] | None = None  # an asked map zone: item key -> place (0 outside) for the levels it weighed; None: no zone
     excluded: list[str] = field(default_factory=list)  # tampered patterns the walk ranked within its budget, left out
+    as_of: dict[str, Any] | None = None  # the reference date: {date, source (asked | latest data), recency (it ranked)}; None: no timed data
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -145,6 +149,8 @@ class Evidence:
                 )
                 + (f"; outside it: {outside}." if outside else ".")
             )
+        if self.as_of:  # the date the findings' ages count from
+            lines.append(f"AS OF: {self.as_of['date']} ({self.as_of['source']})")
         lines.append(
             "UNITS: shifts are robust standard deviations (sd = median difference scaled by the MAD); medians compare the subgroup with the whole dataset."
         )
@@ -252,6 +258,8 @@ class Evidence:
         )
         if it.trust:
             lines.append(f"     trust: {it.trust}")
+        if it.time:
+            lines.append(f"     time: {time_line(it.time)}")
         spatial = SpatialProvenance.from_dict(it.provenance.get("spatial"))
         if spatial and spatial.cells is not None and spatial.resolution is not None:
             compactness = f", compactness {s['compactness']:.2f}" if s.get("compactness") is not None else ""
@@ -430,6 +438,7 @@ class Evidence:
             tag += "".join(f" (також [{key}])" for key in it.also)
             tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
             tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
+            tag += f" ({it.time['words']})" if it.time else ""
             n = it.statistics["support"]
             lines.append(f"- {wording.sentence(it.reading)}; {n:,} {wording.plural(n, 'рядок', 'рядки', 'рядків')} [{it.key}]{tag}")
         if len(trust) == 1:
@@ -644,6 +653,7 @@ def _item(
         credibility_basis=node["props"].get("credibility_basis", {}),
         provenance={**ins.provenance, "pattern_id": pid, "expression": ins.expression, "dataset_id": ins.dataset_id, "batch_id": ins.batch_id},
         reading=insight_reading(graph, pid, config.thresholds),
+        time=time_facts(graph.trajectories.get(pid), config.thresholds.temporal_fade_z),
     )
 
 
@@ -729,8 +739,15 @@ def _baselines(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig)
     return list(metrics.values())
 
 
-def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: list[Retrieved], place_scores: dict[str, float] | None) -> list[str]:
-    """The NOTEs: how the items were reached, what is missing, what was excluded or ignored."""
+def _notes(
+    items: list[EvidenceItem],
+    datasets: list[dict[str, Any]],
+    forged: list[Retrieved],
+    place_scores: dict[str, float] | None,
+    half_life: int | None = None,
+) -> list[str]:
+    """The NOTEs: how the items were reached, what is missing, what was excluded or ignored; ``half_life``: the
+    freshness ranked the findings (no period asked)."""
     notes = []
     located = [it.key for it in items if it.located]
     if located:
@@ -750,6 +767,19 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
             f"{', '.join(unconfirmed)} were not found at the coarser level of their upload: that is missing evidence at that level,"
             " not proof the effect is local."
         )
+    timed = [it.key for it in items if it.time and not it.folded_into]  # a folded item prints no line
+    if timed:
+        notes.append(
+            f"{', '.join(timed)} have a time line: each finding holds over its dataset's whole span; the line gives the trend and the"
+            " current level of the metric it names, and its events, the peaks and dips that cleared a significance test. A steady level"
+            " without an event is the finding's state too: read it from the trend and the current level, not from the events alone."
+            + (
+                f" With no period in the question, the fresher findings (the closer their core to the AS OF date, half-life {half_life} days)"
+                " were ranked first; a finding without a time line was not penalised."
+                if half_life
+                else ""
+            )
+        )
     if place_scores == {}:  # a zone, but no geo dataset of its levels to weigh: it places no finding in or out
         notes.append("The asked map area weighs no geo dataset (none at the levels it was asked for), so no finding is placed in or out of it.")
     notes += [f"{r.node_id} excluded: integrity check failed (its statistics no longer match the record digest)." for r in forged]
@@ -765,10 +795,16 @@ def _notes(items: list[EvidenceItem], datasets: list[dict[str, Any]], forged: li
 
 
 def build_evidence(
-    query: ParsedQuery, result: TraversalResult, graph: DualGraph, config: QueryConfig, place_scores: dict[str, float] | None = None
+    query: ParsedQuery,
+    result: TraversalResult,
+    graph: DualGraph,
+    config: QueryConfig,
+    place_scores: dict[str, float] | None = None,
+    as_of: tuple[datetime, str] | None = None,
 ) -> Evidence:
     """The walk's patterns as citable evidence: the items (with the vertical zoom's and the trust lines), the anchors
-    visited, the datasets and their baselines, the notes, the zones or the asked area."""
+    visited, the datasets and their baselines, the notes, the zones or the asked area; ``as_of``: the reference date and
+    where it came from (``asked`` | ``latest data``), each timed item's age counted from it."""
     chosen, forged = result.patterns[:EVIDENCE_MAX_PATTERNS], result.excluded  # the walk ranks intact patterns only
     trusted = _trust_applies(graph)
     items = [
@@ -779,6 +815,11 @@ def build_evidence(
     if trusted:
         _add_trust(items, graph)
     datasets = _datasets(items, graph)
+    ranked = bool(as_of) and query.when is None and config.temporal_recency_half_life_days > 0
+    for it in items if as_of else ():
+        if it.time.get("core"):
+            age = core_age(it.time["core"], as_of[0])
+            it.time["age"] = age | {"days": round(age["days"], 2)}
     return Evidence(
         query=query.text,
         parsed=query.to_dict(),
@@ -789,9 +830,10 @@ def build_evidence(
         metrics=_baselines(items, graph, config),
         datasets=datasets,
         provenance=[{"key": it.key, **it.provenance} for it in items],
-        notes=_notes(items, datasets, forged, place_scores),
+        notes=_notes(items, datasets, forged, place_scores, config.temporal_recency_half_life_days if ranked else None),
         scale_chains=chains,
         zones=[] if place_scores else _zones(query, items, graph, config),  # an asked area is the question's place: no second one
         area={it.key: place_scores[it.pattern_id] for it in items if not it.folded_into and it.pattern_id in place_scores} if place_scores else None,
         excluded=[r.node_id for r in forged],
+        as_of={"date": as_of[0].date().isoformat(), "source": as_of[1], "recency": ranked} if as_of else None,
     )

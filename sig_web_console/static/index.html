@@ -32,6 +32,9 @@
           <span class="file" id="file-name"></span>
           <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
         </label>
+        <label class="small" for="sample">Або готовий датасет</label>
+        <select class="field" id="sample"><option value="">— не обрано —</option></select>
+        <div class="hint" id="sample-hint"></div>
         <details class="adv">
           <summary>Параметри колонок</summary>
           <label class="small" for="categories">Вважати категоріями</label>
@@ -45,6 +48,13 @@
           <div class="hint">Рядки — точки: аналізувати комірки H3 — <span class="mono">auto</span> знаходить точку GeoJSON/WKT або колонки lat/lon; <span class="mono">@7</span> — рівень, <span class="mono">@7,5</span> — датасет на кожен рівень, <span class="mono">@auto</span> — рівні за розподілом точок.</div>
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
           <div class="hint">Разом із просторовим аналізом: рядки аналізуються ще й як звичайна таблиця, ще один датасет того самого файлу; його інсайти лягають на регіони мапи за своїми точками.</div>
+          <label class="small" for="time">Колонка часу</label>
+          <input class="field" id="time" placeholder="напр. order_date">
+          <label class="small" for="tz">Часовий пояс</label>
+          <input class="field" id="tz" placeholder="напр. Europe/Kyiv; порожньо — UTC">
+          <label class="small" for="grid">Сітка часу</label>
+          <select class="field" id="grid"><option value="auto">за проміжком даних</option><option value="week">тиждень</option><option value="day">день</option><option value="month">місяць</option><option value="quarter">квартал</option></select>
+          <div class="hint">Колонка часу в пошук не входить: кожен інсайт отримує свою динаміку за календарними періодами — тренд, рівень зараз, піки й спади. Разом із просторовим аналізом — за часом точок.</div>
           <label class="small" for="indicators">Що вимірюють метрики</label>
           <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
           <div class="hint"><span class="mono">metric:indicator[:unit]</span> — що вимірює метрика, щоб порівнювати датасети. З просторовим аналізом метрики — комірок (<span class="mono">price_median</span>). В аналізі не бере участі.</div>
@@ -70,8 +80,6 @@
         </details>
         <div class="rail-actions">
           <button type="submit" class="btn" id="upload-btn" disabled>Аналізувати</button>
-          <button type="button" class="btn ghost" id="demo-btn" title="Синтетична таблиця роздрібних продажів із закладеними явищами">Демо: таблиця</button>
-          <button type="button" class="btn ghost" id="demo-geo-btn" title="Житло Каліфорнії: 20 640 кварталів із координатами, проаналізованих як комірки H3">Демо: мапа</button>
         </div>
       </form>
       <div id="upload-msg" class="msg"></div>
@@ -92,6 +100,7 @@
         <button type="button" data-view="sphere" role="tab" aria-selected="false">3D-сфера</button>
         <button type="button" data-view="table" role="tab" aria-selected="false">Інсайти <span class="count" id="ins-count"></span></button>
         <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Мапа</button>
+        <button type="button" data-view="time" role="tab" aria-selected="false" id="time-tab" hidden>Час</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Датасет"><option value="">Усі датасети</option></select>
@@ -120,6 +129,7 @@
         <button type="button" class="key toggle" data-key="contrast"><i class="ln contrast"></i><span>Протилежні зсуви</span><b data-n="contrast"></b></button>
         <button type="button" class="key toggle" data-key="sibling"><i class="ln sibling"></i><span>Сусідні варіанти</span><b data-n="sibling"></b></button>
         <button type="button" class="key toggle" data-key="colocated"><i class="ln colocated"></i><span>Те саме місце</span><b data-n="colocated"></b></button>
+        <button type="button" class="key toggle on" data-key="temporal"><i class="sw time"></i><span>Періоди часу</span><b data-n="temporal"></b></button>
         <button type="button" class="key toggle on" data-key="activates"><i class="ln act"></i><span>Належність до теми</span><b data-n="activates"></b></button>
         <button type="button" class="key toggle" data-key="region"><i class="sw region"></i><span>Регіони мапи</span><b data-n="region"></b></button>
         <button type="button" class="key toggle" data-key="schema"><i class="sw col"></i><span>Колонки</span><b data-n="schema"></b></button>
@@ -135,6 +145,10 @@
     <div class="view">
       <div id="cy"></div>
       <div id="sphere" role="img" aria-label="Сфера інсайтів і тем" hidden></div>
+      <div class="time-wrap" id="time-view" hidden>
+        <div class="tl-bar"><div class="tabs" id="time-levels" role="group" aria-label="Рівень календаря"></div><span class="muted" id="time-caption"></span></div>
+        <div class="tl-body" id="time-body"></div>
+      </div>
       <div class="map-wrap" id="map-view" hidden>
         <div id="map"></div>
         <div class="map-hud">
@@ -188,7 +202,7 @@
         <div class="inner">
           <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
           <h3>Інсайтів ще немає</h3>
-          <p>Додайте таблицю ліворуч — або спробуйте демо: таблицю продажів чи мапу записів із координатами, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
+          <p>Додайте таблицю ліворуч — або оберіть там готовий датасет: продажі, житло Каліфорнії, пожежні виклики, ДТП, лісові пожежі, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
         </div>
       </div>
 
@@ -223,6 +237,7 @@
       </div>
       <div class="composer-foot">
         <label class="switch"><input type="checkbox" id="use-llm" checked><span class="track"></span><span id="llm-label">пояснення моделлю</span></label>
+        <label class="asof" title="Дата, від якої відповідь рахує свіжість знахідок, РРРР-ММ-ДД; порожньо — остання дата даних">станом на <input class="field" id="as-of" type="text" inputmode="numeric" maxlength="10" placeholder="РРРР-ММ-ДД" autocomplete="off"></label>
         <span>Enter — надіслати · Shift+Enter — новий рядок</span>
       </div>
     </form>
@@ -234,6 +249,7 @@
 <script src="/app.js"></script>
 <script src="/datasets.js"></script>
 <script src="/graph.js"></script>
+<script src="/timeline.js"></script>
 <script src="/chat.js"></script>
 <script src="/geo.js"></script>
 </body>

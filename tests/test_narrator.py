@@ -81,6 +81,8 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert client.post("/api/chat/query", json={"question": "  "}).status_code == 400
             zone = client.post("/api/chat/query", json={"cells": ["nope"], "resolution": 7})  # a zone alone, passed on as given
             assert zone.status_code == 400 and zone.json() == bad_zone and bodies[-1] == {"question": "", "cells": ["nope"], "resolution": 7}
+            dated = client.post("/api/chat/query", json={"question": "empty?", "as_of": "2031-04-01"})  # a reference date, passed on as given
+            assert dated.status_code == 200 and bodies[-1] == {"question": "empty?", "as_of": "2031-04-01"}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
 
@@ -111,6 +113,7 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
         "- median score of the subgroup",
     ]
     assert jargon("У q2 та quartile: median subgroup", chr(10).join(phrased)) == {"median": 1, "quartile": 1, "q2": 1, "subgroup": 1}
+    assert jargon("Пік у 2031-Q2 і Q3 2031, а в q2 нижче", chr(10).join(phrased)) == {"q2": 1}  # a period, named as rule 13 asks, is no band
 
 
 def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):

@@ -21,7 +21,7 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
     their union, ranked by how many of them an insight is characteristic of, then by lift. A level that is not a region
     level of the map is refused; without one the finest is read."""
     from insight_graph_service.core.geo_views import _projection, _region_sets, _rows, window_view
-    from subgroup_miner.spatial import cell_centres, link_min_events
+    from subgroup_miner.spatial_plane import cell_centres, link_min_events
 
     frame = geo_frame()
     frame.loc[frame.sample(frac=0.1, random_state=1).index, ["latitude", "longitude"]] = np.nan  # events no map locates
@@ -86,7 +86,7 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     each count by dataset and carries the trust of every insight another dataset lists, with the dataset that draws it,
     whose ``/patterns`` gives its cells' rings."""
     from insight_graph_service.core.geo_views import _projection, _region_sets, map_set
-    from subgroup_miner.spatial import cell_centres
+    from subgroup_miner.spatial_plane import cell_centres
 
     fine, coarse = upload_levels(engine, points_csv, geo="auto@8,7")
     geo_frame(seed=4).to_csv(other_path := tmp_path / "other.csv", index=False)
@@ -181,7 +181,7 @@ def test_a_window_across_the_antimeridian_holds_the_cells_of_both_sides():
     """``west > east`` is a view across ±180°: the cells on both sides of it, and none elsewhere; a bbox out of range
     is refused."""
     from insight_graph_service.core.geo_views import window_view
-    from subgroup_miner.spatial import cell_centres
+    from subgroup_miner.spatial_plane import cell_centres
 
     lons = (179.6, 179.9, -179.9, -179.6, 10.0)
     centres = cell_centres(np.array([h3.latlng_to_cell(-17.0, x, 6) for x in lons]))

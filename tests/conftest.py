@@ -17,7 +17,7 @@ import pytest
 from doubles import HashingEmbedder
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from scratch import serve
+from scratch import serve, weekly_retail
 
 from evidence_narrator_service.llm_client import LLMResponse
 from insight_contracts import Condition, Insight
@@ -157,6 +157,19 @@ def demo_csv(tmp_path_factory, demo_df):
     path = tmp_path_factory.mktemp("data") / "retail_synthetic.csv"
     demo_df.to_csv(path, index=False, lineterminator="\n")
     return path
+
+
+@pytest.fixture(scope="session")
+def timed(tmp_path_factory):
+    """The weekly demo uploaded with its time column through the graph service (hashing double): the engine and the
+    batch record — shared, read-only use."""
+    folder = tmp_path_factory.mktemp("timed")
+    engine = make_engine(make_config(folder / "ws"))
+    with weekly_retail(folder).open("rb") as f:
+        (record,) = engine.upload("weekly.csv", f, time="when", grid="week")
+    record = engine.process(record["batch_id"])
+    assert record["status"] == "READY", record.get("error")
+    return engine, record
 
 
 def toy_insight(scope, shifts, **fields) -> Insight:

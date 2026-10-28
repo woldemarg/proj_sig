@@ -23,18 +23,17 @@ from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
-from subgroup_miner.ingestion import IngestionError, load_dataset
+from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
-    centre_region,
     effective_n_factor,
-    footprint,
     locate_points,
     parse_geo,
     parse_points,
     subgroup_moran,
 )
+from subgroup_miner.spatial_plane import centre_region, footprint
 
 
 def cells_of(frame: pd.DataFrame, **kw):
@@ -253,7 +252,8 @@ def test_spatial_provenance_is_the_five_ingest_fields():
 
 
 def _geo_dataset(name, cells, covers):
-    from subgroup_miner.spatial import GeoDataset, _neighbour_graph
+    from subgroup_miner.spatial import _neighbour_graph
+    from subgroup_miner.spatial_plane import GeoDataset
 
     cells = np.array(sorted(set(cells)), dtype=object)
     ptr, idx, _ = _neighbour_graph(cells)
@@ -262,7 +262,7 @@ def _geo_dataset(name, cells, covers):
 
 
 def test_derive_spatial_relations_regions_and_the_partner_cap():
-    from subgroup_miner.spatial import derive_spatial, region_features
+    from subgroup_miner.spatial_plane import derive_spatial, region_features
 
     c = h3.latlng_to_cell(36.5, -119.2, 8)
     touching = h3.grid_ring(c, 7)[0]  # two radius-3 disks seven cells apart touch without overlapping
@@ -332,7 +332,7 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
 
 def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
     """An overlap or a region share of exactly 2/3 stays below a threshold of 0.66667, although it is stored as 0.6667."""
-    import subgroup_miner.spatial as spatial
+    import subgroup_miner.spatial_plane as spatial  # the thresholds it compares are bound there
 
     monkeypatch.setattr(spatial, "GEO_COLOCATION_MIN", 0.66667)
     monkeypatch.setattr(spatial, "GEO_REGION_MIN_SHARE", 0.66667)
@@ -529,7 +529,7 @@ def test_a_table_level_is_placed_by_its_events(engine, points_csv):
     places it. On a wide map a random subgroup is placed nowhere where the level places by lift,
     and in one region where it places by share (the coarsest level); a pattern with 30 % of its rows unlocated is
     partial and unplaced."""
-    from subgroup_miner.spatial import TableDataset, place_table
+    from subgroup_miner.spatial_plane import TableDataset, place_table
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     table = done[2]["dataset_id"]
@@ -664,7 +664,7 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
     """The map's cell package (docs/08_interface.md §8.1) rebuilds every vertex within half its step, which follows the
     resolution: 1e-5° up to 12, 1e-7° finer, where a cell's edge is a metre or less."""
     from insight_graph_service.core.geo_views import _pack
-    from subgroup_miner.spatial import cell_boundary
+    from subgroup_miner.spatial_plane import cell_boundary
 
     for res, step in ((7, 1e-5), (14, 1e-7)):
         cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
@@ -695,7 +695,7 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
     anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
     by its centre, also where the centre lies outside its H3 parent."""
-    from subgroup_miner.spatial import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
+    from subgroup_miner.spatial_plane import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
 
     crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
     assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
@@ -847,3 +847,58 @@ def test_a_centre_on_a_boundary_goes_by_one_rule_on_every_platform():
             assert {c: centre_region(c, 5) for c in cells} == rule
     ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 5) != h3.latlng_to_cell(*exact(c), 5)]
     assert ties and centre_region("8829aab493fffff", 5) == "8529a86bfffffff" != h3.cell_to_parent("8829aab493fffff", 5)
+
+
+def test_a_date_column_past_2262_reads_its_own_years():
+    """The cell counters of a date column read the points' dates in their own unit: years 2250 and 2300 order as written."""
+    shares = []
+    for early, late in (("2150-06-01", "2200-06-01"), ("2250-06-01", "2300-06-01")):  # the second pair crosses 2262
+        frame = geo_frame()
+        frame["when"] = np.where(frame.index % 2 == 0, early, late)
+        table, _, _ = cells_of(frame)
+        shares.append(table["when_late_share"].to_numpy())
+    assert np.allclose(shares[0], shares[1], equal_nan=True) and np.nanmax(shares[1]) > 0
+
+
+def test_the_point_columns_are_profiled_once_per_upload(monkeypatch, tmp_path):
+    """The levels of one upload read one profile of the point columns (their kinds, codes and dates): the date parse and
+    the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
+    import subgroup_miner.spatial as sp
+
+    parsed = []
+    real = sp._as_datetime
+    monkeypatch.setattr(sp, "_as_datetime", lambda values: parsed.append(values.name) or real(values))
+    sp.forget_profile()
+    frame = geo_frame()
+    six = build_cells(frame, "latitude,longitude", 6, min_cell_points=5, profile_key="upload")
+    five = build_cells(frame, "latitude,longitude", 5, min_cell_points=5, profile_key="upload")
+    columns = len(frame.columns) - 2  # the locator's two are no point column
+    assert len(parsed) == columns and len(six[0]) > len(five[0])  # one profile, two resolutions
+    assert np.array_equal(six[1].lonlat, five[1].lonlat)  # the points located once
+    build_cells(frame, "latitude,longitude", 5, min_cell_points=5)
+    assert len(parsed) == 2 * columns  # no key: profiled again
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    before = len(parsed)
+    for res in (6, 5):  # an upload's levels, as the engine loads them
+        load_dataset(path, MinerConfig(min_rows=5), geo=f"latitude,longitude@{res}", shared=True)
+    once = len(parsed) - before
+    forget_tables()  # the upload done: the next one profiles anew
+    load_dataset(path, MinerConfig(min_rows=5), geo="latitude,longitude@5", shared=True)
+    assert once > 0 and len(parsed) == before + 2 * once
+    forget_tables()
+
+
+def test_nesting_on_codes_is_the_crosstabs():
+    """Two columns' nesting from their codes equals the one a crosstab of their values gives, both directions."""
+    import subgroup_miner.spatial as sp
+
+    rng = np.random.default_rng(3)
+    av = rng.choice(["x", "y", "z"], 4000).astype(object)
+    bv = np.where(av == "x", "p", rng.choice(["p", "q"], 4000)).astype(object)  # x fixes p; y and z do not
+    av[rng.random(4000) < 0.05], bv[rng.random(4000) < 0.05] = None, None
+    a, b = pd.Series(av, dtype="string"), pd.Series(bv, dtype="string")
+    profile = sp.point_profile(pd.DataFrame({"lat": np.full(4000, 50.0), "lon": np.full(4000, 30.0), "a": a, "b": b}), "lat,lon")
+    both = (a.notna() & b.notna()).to_numpy()
+    table = pd.crosstab(a[both].to_numpy(), b[both].to_numpy()).to_numpy()
+    want = max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum()
+    assert sp._nesting(profile, "a", "b") == pytest.approx(want)

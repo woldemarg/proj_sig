@@ -45,8 +45,9 @@ from subgroup_miner.spatial import GEO_LIFT_MIN as LIFT_MIN  # the rules' bounds
 from subgroup_miner.spatial import GEO_LIFT_MIN_REGIONS as LIFT_MIN_REGIONS
 from subgroup_miner.spatial import GEO_LINK_FDR as FDR_Q
 from subgroup_miner.spatial import GEO_LINK_MIN_EVENTS as EVENTS_MIN
-from subgroup_miner.spatial import GEO_LOCATED_MIN, event_regions, footprint, link_min_events
+from subgroup_miner.spatial import GEO_LOCATED_MIN
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE as SHARE_MIN
+from subgroup_miner.spatial_plane import event_regions, footprint, link_min_events
 
 RULES = ("S", "E", "F", "L", "P")
 

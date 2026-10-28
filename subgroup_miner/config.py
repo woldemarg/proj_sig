@@ -38,6 +38,12 @@ class MinerConfig:
     weight_exponents: tuple[float, ...] = (0.35, 0.25, 0.10, 0.10)  # one per WEIGHT_FACTORS entry
     weight_floor: float = 0.05
 
+    # the dynamics of an insight over the calendar grid of its upload's time column (docs/02_discovery.md §2.10)
+    temporal_min_rows_bin: int = 30  # fewer rows in a bin (the upload's, or the insight's) leave it unmeasured
+    temporal_process_noise: float = 0.1  # Q of the local-level smoother: how far the level may move per bin, in z²
+    temporal_event_p: float = 0.05  # the event gate's significance, Bonferroni over every pair of measured bins
+    temporal_tie_share: float = 0.25  # a metric this share of whose values are one value is levelled per bin by its mean, not its median
+
     # the subgroup lattice (docs/06_graph_and_storage.md §6.1)
     contrast_min_overlap: float = 0.5
     contrast_min_shift: float = 0.5

@@ -287,6 +287,18 @@ def correlation_change(local_ranks, global_corr, allowed):
     return float(np.linalg.norm(delta) / np.sqrt(m * (m - 1)))
 
 
+def cached_covers(selector, data, masks):
+    """``selector.covers(data)`` with each (attribute, value) mask computed once per pass and kept in ``masks``:
+    pysubgroup converts the whole column to NumPy on every call, the pass's main cost on a large table."""
+    out = None
+    for sel in selector.selectors:
+        key = (sel.attribute_name, sel.attribute_value)
+        if key not in masks:
+            masks[key] = sel.covers(data)
+        out = masks[key] if out is None else out & masks[key]
+    return out
+
+
 def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
     """``forbidden``: dimension -> metrics a subgroup on that dimension must not score (a neighbourhood condition
     restating the counter it was computed from); excluded here, before the rank, so the validation budget is
@@ -302,9 +314,10 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
 
     min_sg_size = max(len(numerics) * 5, int(total_rows * 0.005))
     insights = []
+    masks = {}
 
     for selector in search_vectors:
-        cover_mask = selector.covers(data)
+        cover_mask = cached_covers(selector, data, masks)
         row_indices = np.flatnonzero(cover_mask)
         sg_size = len(row_indices)
 
@@ -392,11 +405,12 @@ def step4b_deep_validation(
 
     for _, row in top_candidates.iterrows():
         sg_data = subgroup_from_indices(data, row["row_indices"])
+        sg_shifts = sg_data[[num_col for num_col, _ in row["top_shifts"]]]  # a draw copies only what it scores
 
         bootstrap_scores = []
         groups = list(pd.Series(np.arange(len(sg_data))).groupby(blocks[row["row_indices"]]).indices.values())
         for _ in range(BOOTSTRAP_RESAMPLES):
-            sample = sg_data.iloc[np.concatenate([groups[k] for k in np.random.randint(0, len(groups), len(groups))])]
+            sample = sg_shifts.iloc[np.concatenate([groups[k] for k in np.random.randint(0, len(groups), len(groups))])]
             b_score = 0
             for num_col, _ in row["top_shifts"]:
                 values = sample[num_col].dropna()

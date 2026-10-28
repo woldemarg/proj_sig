@@ -171,7 +171,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
         heads = page.evaluate("[...document.querySelectorAll('#inspector .nb-group summary')].map((s) => s.firstChild.textContent.trim())")
-        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава"}
+        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава", "Події", "Решта"}
         assert relations and relations <= {name(k)[0].upper() + name(k)[1:] for k in TERMS}  # the relations in TERMS' words, as the chain's
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
@@ -186,7 +186,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
-        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
+        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == [
+            "lattice",
+            "latent",
+            "temporal",
+            "activates",
+        ]
         assert page.evaluate("S.cy.edges('[type=\"ACTIVATES\"]').filter('.hidden').length") == 0  # memberships drawn from the start
         assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
         page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
@@ -442,6 +447,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             const k = Object.keys(WALK).find((k) => (n[k] || []).some(free)), id = n[k].find(free).id, has = (d) => insightCard(d).includes(`data-id="${id}"`);
             return [has(t), has({ ...t, insight: { ...t.insight, neighbors: { ...n, [k]: n[k].map((it) => (it.id === id ? { ...it, integrity: "mismatch" } : it)) } } })]; }"""
         assert page.evaluate(walk) == [True, False]  # Walk on offers intact insights only
+        page.click(f"#map-window .mw-i[data-pid='{pid}']")  # the focused one clicked again: off, and no second card
+        page.wait_for_function("G.focusId === null", timeout=10000)
+        assert page.evaluate("S.chat.length") == turns + 1 and page.locator("#map-window .mw-i.on").count() == 0
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
@@ -711,4 +719,204 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
         assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
         browser.close()
+        assert not errors, errors
+
+
+def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tmp_path):
+    """The form sends a time column and its grid; the graph draws the periods of the events behind a legend switch, the
+    drawer draws an insight's curve and names its trend, and an evidence card names its dynamics (docs/08_interface.md)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    from conftest import weekly_retail
+
+    path = weekly_retail(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.set_input_files("#file", str(path))
+        page.evaluate("document.querySelector('#time').closest('details').open = true")  # the form's further options
+        page.fill("#time", "when")
+        page.select_option("#grid", "week")
+        page.click("#upload-btn")
+        page.wait_for_function("S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=90000)
+        (record,) = [b for b in engine.ws.list_batches() if b["status"] == "READY"]
+        assert (record["time"], record["grid"], record["temporal"]["grid"]) == ("when", "week", "week")
+        hub = 'node[kind="TemporalNode"]'
+        assert "T:week:2031-W13" in page.evaluate(f"S.cy.$('{hub}').map((n) => n.id())")  # with the cores' ends and the periods above
+        lowest = "Math.max(...S.cy.nodes().filter((n) => n.data('kind') === 'Pattern').map((n) => n.position('y')))"
+        assert page.evaluate(f"S.cy.$('{hub}')[0].position('y') > {lowest}")  # the periods' row under the insights
+        assert page.get_attribute(".key[data-key='temporal']", "title").startswith(f"{name('temporal_hub')}: ")
+        page.click("#legend .toggle[data-key='temporal']")  # the event layer off, and on again
+        page.wait_for_function(f"S.cy.$('{hub}').every((n) => n.hidden() || n.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        pid = page.evaluate("S.cy.$('edge[type=\"PEAKED_AT\"]')[0].source().id()")
+        page.evaluate("(id) => inspect(id)", pid)
+        page.wait_for_selector("#inspector svg.spark", timeout=10000)
+        drawer = page.inner_text("#inspector").lower()  # headings are upper-cased by the style
+        assert name("trend") in drawer and name("trend_spike") in drawer and "2031-w13" in drawer
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function(f"document.getElementById('drawer-kind').textContent === '{name('temporal_hub').capitalize()}'", timeout=10000)
+        assert "2031-03-24" in page.inner_text("#inspector") and name("PEAKED_AT (in)") in page.inner_text("#inspector").lower()
+        item = {
+            "key": "P1", "pattern_id": pid, "role": "seed", "located": "", "transversal_only": False, "scope": [], "also": [], "scale": "insufficient",
+            "trust": "", "reading": {"where": "де", "what": "що"}, "provenance": {"dataset_id": "ds"}, "path": [],
+            "statistics": {"support": 10, "weight": 0.5, "shifts": [], "covariance": {}, "drivers": []},
+            "time": {"trend": "spike", "words": "динаміка: сплеск; зараз: помітно вище (+2.21 sd); пік у періоді 2031-W13"},
+        }  # fmt: skip
+        qa = {"answer": "", "answer_mode": "fallback", "llm": {}, "citations": {}, "prompt": "", "provenance_footer": "", "metrics": {}}
+        turn = {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [item]}, "traversal": {}}}}
+        card = page.evaluate("(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }", turn)
+        assert item["time"]["words"] in card  # the evidence card's chip, the server's words
+        assert not errors, errors
+
+
+HUB_ROWS = """() => { const by = {}; S.cy.nodes('[kind="TemporalNode"]').forEach((n) => { (by[n.data('granularity')] ||= []).push([n.position('y'), n.position('x'), n.data('t_start')]); }); return by; }"""
+
+
+def _hub_levels(page) -> dict[str, float]:
+    """The y of each level's row of periods; asserts one row a level, in calendar order along it."""
+    rows = page.evaluate(HUB_ROWS)
+    assert all(len({round(y) for y, _, _ in hubs}) == 1 for hubs in rows.values()), rows
+    assert all([r[2] for r in sorted(hubs, key=lambda r: r[1])] == sorted(r[2] for r in hubs) for hubs in rows.values())
+    return {level: hubs[0][0] for level, hubs in rows.items()}
+
+
+@pytest.mark.browser
+def test_the_periods_lie_in_rows_by_level_and_a_periods_drawer_lists_who_lives_and_moved_there(timed):
+    """The time hubs of each calendar level in a row of their own under the insights, the finest nearest them, WITHIN
+    arrows from a row to the next, in both layouts and behind the periods' switch; a period's drawer lists the insights
+    active in it and those that peaked or dipped there, a month's by their week; an insight's drawer its core and where
+    it stands at the latest data (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    latest = record["temporal"]["span"][1][:10]
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        y = _hub_levels(page)
+        lowest = page.evaluate("Math.max(...S.cy.nodes('[kind=\"Pattern\"]').map((n) => n.position('y')))")
+        assert {"week", "month", "quarter"} <= y.keys() and lowest < y["week"] < y["month"] < y["quarter"]
+        within = page.evaluate("S.cy.edges('[type=\"WITHIN\"]').map((e) => [e.source().data('granularity'), e.target().data('granularity')])")
+        assert within and {tuple(w) for w in within} <= {("day", "week"), ("week", "month"), ("month", "quarter")}
+        assert name("WITHIN") in page.get_attribute(".key[data-key='temporal']", "title")
+        page.click("#legend .toggle[data-key='temporal']")  # the periods' layer off: the new edges with it
+        page.wait_for_function("S.cy.$(MARKS.temporal).every((el) => el.hidden() || el.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        page.select_option("#layout", "force")
+        y = _hub_levels(page)
+        assert y["week"] < y["month"] < y["quarter"]
+        page.select_option("#layout", "dual")
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert "тиждень" in text and name("time_active") in text and name("PEAKED_AT (in)") in text
+        assert page.locator('#inspector .nb[data-id^="P-"]').count() > 0
+        page.evaluate("inspect('T:month:2031-03')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-03'", timeout=10000)
+        assert "2031-W13" in page.inner_text("#inspector")  # the month's peak, named by the week it fell in
+        page.click('#inspector .nb[data-id^="P-"]')
+        page.wait_for_selector("#inspector svg.spark rect.core", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert name("time_core") in text and f"{name('as_of')} {latest}" in text
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
+    """The date by the question box goes with the question (the latest data its placeholder); one that does not read as
+    a date sends nothing; the question and the answer both say the date (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    question = "Why is the discount higher for phones in the US?"
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes().length > 0", timeout=30000)
+        assert page.get_attribute("#as-of", "placeholder") == record["temporal"]["span"][1][:10]
+        page.evaluate("document.getElementById('use-llm').checked = false")
+        page.fill("#as-of", "31.03.2031")
+        page.evaluate("(q) => ask(q)", question)
+        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
+        page.fill("#as-of", "2031-02-29")  # a day the calendar does not have (Date.parse would read 1 March): refused the same way
+        page.evaluate("(q) => ask(q)", question)
+        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
+        page.fill("#as-of", "2032-02-29")
+        assert page.evaluate("asOfDate()") == "2032-02-29"  # a leap day is a day
+        page.fill("#as-of", "2031-03-31")
+        with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
+            page.evaluate("(q) => ask(q)", question)
+        assert json.loads(sent.value.post_data)["as_of"] == "2031-03-31"
+        page.wait_for_selector("#thread .bot-meta", timeout=60000)
+        said = f"{name('as_of')} 2031-03-31"
+        assert said in page.inner_text("#thread .msg-user") and said in page.inner_text("#thread .bot-meta")
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_date(timed):
+    """The «Час» tab: a row an insight placed in time, its core a bar within the span, a mark for each peak, the as-of
+    line, the rows whose core holds that date highlighted; the levels the graph holds enabled, a level's ruler its
+    periods in calendar order; a period or a row opens its drawer, by click or by Enter; the line follows the as-of
+    field (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, _ = timed
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        page.click("#time-tab")
+        page.wait_for_selector("#time-body .tl-row", timeout=10000)
+        timed_insights = (
+            'S.nodes.filter((d) => d.core || S.cy.edges(\'[type="PEAKED_AT"], [type="DROPPED_AT"]\').some((e) => e.source().id() === d.id)).length'
+        )
+        assert page.locator("#time-body .tl-row").count() == page.evaluate(timed_insights) > 0
+        assert page.locator("#time-body .tl-ev.up").count() == page.evaluate("S.cy.edges('[type=\"PEAKED_AT\"]').length") > 0
+        bars = page.evaluate(
+            "[...document.querySelectorAll('#time-body .tl-core')].map((b) => [parseFloat(b.style.left), parseFloat(b.style.width)])"
+        )
+        assert bars and all(0 <= left and left + width <= 100.01 for left, width in bars)
+        assert page.locator("#time-body .tl-asof").count() == 1
+        holding = "S.nodes.filter((d) => d.core && Date.parse(d.core.t_start) <= Date.parse(S.asOf) && Date.parse(S.asOf) < Date.parse(d.core.t_end)).length"
+        assert page.locator("#time-body .tl-row.active").count() == page.evaluate(holding)
+        assert page.is_disabled('#time-levels [data-level="day"]') and page.is_enabled('#time-levels [data-level="week"]')
+        page.click('#time-levels [data-level="month"]')
+        ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
+        assert ticks == sorted(ticks) and len(ticks) == page.evaluate('S.cy.nodes(\'[kind="TemporalNode"][granularity="month"]\').length')
+        page.click('#time-levels [data-level="week"]')
+        page.click('#time-body .tl-tick:has-text("2031-W13")')
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        page.focus("#time-body .tl-row")
+        page.keyboard.press("Enter")
+        page.wait_for_function("document.getElementById('drawer-kind').textContent === 'Інсайт'", timeout=10000)
+        before = page.get_attribute("#time-body .tl-asof", "style")
+        page.fill("#as-of", "2031-03-10")
+        assert "2031-03-10" in page.inner_text("#time-caption") and page.get_attribute("#time-body .tl-asof", "style") != before
+        page.fill("#as-of", "2031-02-29")  # no such day: the line stays at the latest data, where the empty field put it
+        assert page.get_attribute("#time-body .tl-asof", "style") == before and "2031-02-29" not in page.inner_text("#time-caption")
         assert not errors, errors

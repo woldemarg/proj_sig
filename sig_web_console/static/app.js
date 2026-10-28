@@ -1,4 +1,4 @@
-/* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, chat.js and geo.js hold the surfaces. */
+/* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
 const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
@@ -17,7 +17,7 @@ const ERROR_HELP = {
   no_viable_insights: ["Стійких знахідок немає", "Сегменти перевірено, але жоден не пройшов перевірок тесту медіани, стабільності й сили зсуву.", "Спробуйте більше рядків або інші колонки для групування."],
   unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
   unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
-  invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, або зону мапи не вдалося прочитати.", "Перевірте назви колонок і формат значень або комірки чи форму зони."],
+  invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, зону мапи не вдалося прочитати, або колонка часу не читається чи дає замало періодів.", "Перевірте назви колонок і формат значень, комірки чи форму зони; для часу — колонку з датами, календарну одиницю сітки (день, тиждень, місяць, квартал — не 7D) і пояс за назвою IANA."],
   metadata_mismatch: ["Метадані змінено", `Запис датасету більше не збігається з цифровим відбитком своїх метаданих: ${DECLARED} ігноруються, а їхні зміни відхиляються.`, "Завантажте файл ще раз із потрібними метаданими."],
   representation_mismatch: ["Робочий простір несумісний", "Цей робочий простір побудовано з іншою моделлю опису інсайтів або іншими вагами.", "Скиньте робочий простір, щоб змінити модель або ваги."],
   duplicate_patterns: ["Уже завантажено", "Ці інсайти вже є в графі.", ""],
@@ -50,8 +50,11 @@ const MARKS = {
   latent: 'edge[type="RELATED_TO"], edge[type="CO_OCCURS"]', activates: 'edge[type="ACTIVATES"]',
   schema: 'node[kind="Dimension"], node[kind="Metric"], edge[type="HAS_SCOPE"], edge[type="TARGETS"]',
   region: 'node[kind="Region"], edge[type="IN_REGION"], edge[type="PARENT_OF"]',
+  temporal: 'node[kind="TemporalNode"], edge[type="PEAKED_AT"], edge[type="DROPPED_AT"], edge[type="STARTS_AT"], edge[type="ENDS_AT"], edge[type="WITHIN"]',
 };
-const NO_VECTORS = ["schema", "region"];  // legend entries the sphere cannot draw
+const NO_VECTORS = ["schema", "region", "temporal"];  // legend entries the sphere cannot draw
+const TIME_LEVELS = ["day", "week", "month", "quarter"];  // the calendar's levels, finest first (insight_contracts.TIME_GRIDS)
+const TIME_LEVEL_NAMES = { day: "день", week: "тиждень", month: "місяць", quarter: "квартал" };  // as the upload form names them
 // trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
 // (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
 const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
@@ -61,6 +64,8 @@ const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIA
   latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
   colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
   region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
+  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "STARTS_AT", "ENDS_AT", "WITHIN",
+    "стрілка — до періоду піку, пунктирна — спаду; тонка лінія — початок ядра, крапки — кінець; коричнева стрілка — до ширшого періоду"],
   seed: ["role_seed"], cross: ["transversal_only"] };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
@@ -93,6 +98,30 @@ const TERMS = {
   "integrity_ok": ["цілісність підтверджено", "числа збігаються з відбитком, записаним разом із ними"],
   "integrity_mismatch": ["цілісність порушено", "числа змінено після запису; знахідку виключено з відповідей"],
   "integrity_unverified": ["цілісність не перевірено", "записано до появи відбитків"],
+  "trend": ["динаміка", "як рівень знахідки змінювався в часі, від першого до останнього виміряного періоду її датасету"],
+  "trend_rising": ["зростає", "від першого до останнього виміряного періоду рівень знахідки помітно піднявся"],
+  "trend_falling": ["спадає", "від першого до останнього виміряного періоду рівень знахідки помітно опустився"],
+  "trend_flat": ["без змін", "за весь проміжок рівень знахідки помітно не змінився, піків і спадів у ньому немає"],
+  "trend_spike": ["сплеск", "рівень знахідки повернувся туди, де був, але між тим мав пік або спад"],
+  "time_current": ["зараз", "рівень знахідки в останньому виміряному періоді, після згладжування"],
+  "time_unmeasured": ["не виміряно", "у жодному періоді не було досить рядків знахідки, щоб виміряти її рівень"],
+  "time_faded": ["нижче порога", "в останньому виміряному періоді відхилення знахідки слабше за поріг, з якого воно вважається суттєвим"],
+  "time_carrier": ["зосереджено в", "частина знахідки, рядки якої в цьому періоді змістилися найбільше порівняно з рештою знахідки — понад звичну різницю між ними"],
+  "time_echo": ["як у ширшої знахідки", "ширша знахідка, що охоплює всі рядки цієї, має той самий пік чи спад у тому самому періоді: це одна подія"],
+  "temporal_hub": ["період часу", "день, тиждень, місяць чи квартал, у якому знахідки мали пік або спад чи починали або закінчували своє ядро, і кожен ширший період над ним; той самий для всіх датасетів"],
+  "PEAKED_AT": ["пік у періоді", "у цьому періоді рівень знахідки був помітно вищим, ніж до і після"],
+  "PEAKED_AT (in)": ["пік знахідки", "знахідка, рівень якої в цьому періоді був помітно вищим, ніж до і після"],
+  "DROPPED_AT": ["спад у періоді", "у цьому періоді рівень знахідки був помітно нижчим, ніж до і після"],
+  "DROPPED_AT (in)": ["спад знахідки", "знахідка, рівень якої в цьому періоді був помітно нижчим, ніж до і після"],
+  "time_core": ["ядро", "найкоротший проміжок послідовних періодів, у якому лежить 80 % рядків знахідки з датою: де вона живе в часі"],
+  "time_active": ["діє в періоді", "знахідка, ядро якої перетинає цей період"],
+  "as_of": ["станом на", "дата, від якої рахують свіжість знахідок у відповіді; порожньо — остання дата даних"],
+  "STARTS_AT": ["починається в періоді", "перший період ядра знахідки"],
+  "STARTS_AT (in)": ["початок ядра знахідки", "знахідка, ядро якої починається в цьому періоді"],
+  "ENDS_AT": ["закінчується в періоді", "останній період ядра знахідки"],
+  "ENDS_AT (in)": ["кінець ядра знахідки", "знахідка, ядро якої закінчується в цьому періоді"],
+  "WITHIN": ["входить у період", "ширший період календаря, що містить цей: день у тижні, тиждень у місяці, якому належить більшість його днів, місяць у кварталі"],
+  "WITHIN (in)": ["вужчий період", "період детальнішого рівня календаря всередині цього"],
   "scale_regional": ["тримається на ширшому рівні", "той самий зсув є і на ширшому рівні мапи цього завантаження"],
   "scale_scale-dependent": ["змінюється з масштабом", "на ширшому рівні мапи цього завантаження зсув протилежний"],
   "scale_not_found_coarser": ["на ширшому рівні не підтверджено", "на ширшому рівні окремої такої знахідки немає; це не означає, що вона лише місцева"],
@@ -261,7 +290,11 @@ function init() {
   // upload: click or drop
   const drop = $("drop");
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
-  $("file").addEventListener("change", () => { const f = $("file").files[0]; $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f; });
+  $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
+    const f = $("file").files[0];
+    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; }
+    $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
+  });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
@@ -269,15 +302,23 @@ function init() {
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
-  for (const [id, path] of [["demo-btn", "/api/demo"], ["demo-geo-btn", "/api/demo/geo"]]) {
-    $(id).addEventListener("click", async () => {  // both wait for the request: a double click queues one demo
-      const demos = [$("demo-btn"), $("demo-geo-btn")];
-      demos.forEach((b) => { b.disabled = true; });
-      setUploadMsg("Готую демо-датасет…");
-      try { await api(path, { method: "POST" }); setUploadMsg("Демо в черзі — поступ видно нижче."); refreshBatches(); } catch (err) { setUploadMsg(err.message, true); }
-      demos.forEach((b) => { b.disabled = false; });
-    });
-  }
+  // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
+  api("/api/demo/datasets").then((list) => {
+    S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
+    $("sample").insertAdjacentHTML("beforeend", list.map((d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`).join(""));
+  }).catch(() => {});  // no list: the form still takes a file
+  $("sample").addEventListener("change", () => {
+    const d = (S.samples || {})[$("sample").value];
+    $("sample-hint").textContent = d ? `${d.description} ${d.span ? `${d.span[0]} — ${d.span[1]}. ` : ""}Ліцензія: ${d.license}.` : "";
+    if (!d) { $("upload-btn").disabled = !$("file").files[0]; return; }
+    $("file").value = ""; $("file-name").textContent = d.file;
+    const o = d.options || {};
+    for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
+    $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
+    syncTable();
+    document.querySelector("#upload-form details.adv").open = true;  // what the dataset will be read with, before it is
+    $("upload-btn").disabled = false;
+  });
   $("reset-btn").addEventListener("click", async () => {
     if (!confirm("Скинути робочий простір?\n\nУсі датасети, інсайти й теми буде видалено; дані доведеться завантажити знову.")) return;
     try { await api("/api/reset", { method: "POST" }); setUploadMsg("Робочий простір скинуто."); } catch (err) { setUploadMsg(err.message, true); }
@@ -332,6 +373,8 @@ function init() {
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
+  on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer
+  on($("time-levels"), ".tl-level", (b) => Timeline.setLevel(b.dataset.level));
   on($("inspector"), ".nb", async (el) => {  // the drawer follows the row; on the map an insight is focused there when drawn, as reveal does
     const id = el.dataset.id, onMap = S.view === "map" && id.startsWith("P-");
     if (S.view === "graph" && id.startsWith("R:") && !layerState().region) {  // a region asked for: the Map regions switch goes on
@@ -344,11 +387,12 @@ function init() {
     focusNodes([id]);
   });
   on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });
-  on($("mw-body"), ".mw-i", (b) => GeoMap.pick(b.dataset.pid));
+  on($("mw-body"), ".mw-i", (b) => (b.classList.contains("on") ? GeoMap.unfocus() : GeoMap.pick(b.dataset.pid)));  // the focused one clicked again: off
   on($("mw-body"), ".mw-all", () => { W.all = !W.all; renderWindow(); });
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
+  $("as-of").addEventListener("input", () => { $("as-of").setCustomValidity(""); if (S.view === "time") Timeline.render(); });  // the axis' as-of line follows the field
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
