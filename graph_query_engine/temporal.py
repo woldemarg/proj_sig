@@ -7,7 +7,6 @@ the closer their core to the reference date — rank first (``recency``)."""
 from __future__ import annotations
 
 import functools
-import math
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -44,22 +43,24 @@ def parse_as_of(text: str) -> datetime:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
-def age_days(core: dict[str, Any], as_of: datetime) -> float:
-    """Days from a core (``[t_start, t_end)``) to ``as_of``: 0 inside it, positive after its end, negative before its start."""
+def core_age(core: dict[str, Any], as_of: datetime) -> dict[str, Any]:
+    """Where ``as_of`` lies from a core, ``[t_start, t_end)``, and how far: ``{side: before, days: to its start}``,
+    ``{side: inside, days: 0}`` or ``{side: after, days: since its end}`` — at ``t_end``, which the core excludes, it has
+    ended 0 days ago. The one reading of the core against a date: the freshness, the time line and the console agree."""
     start, end = datetime.fromisoformat(core["t_start"]), datetime.fromisoformat(core["t_end"])
     if as_of < start:
-        return (as_of - start).total_seconds() / 86_400
-    return (as_of - end).total_seconds() / 86_400 if as_of >= end else 0.0
+        return {"side": "before", "days": (start - as_of).total_seconds() / 86_400}
+    return {"side": "inside", "days": 0.0} if as_of < end else {"side": "after", "days": (as_of - end).total_seconds() / 86_400}
 
 
 def recency(trajectory: dict[str, Any] | None, as_of: datetime | None, half_life_days: float) -> float | None:
-    """How fresh a finding is at ``as_of``: 2^(−|age| / half-life), its age the days from its core to that date (1 inside
+    """How fresh a finding is at ``as_of``: 2^(−age / half-life), its age the days from its core to that date (1 inside
     the core; the future decays as the past does). None — no bonus, no penalty — without a core, a date or a positive
     half-life (0 switches it off)."""
     core = (trajectory or {}).get("core")
     if not core or as_of is None or half_life_days <= 0:
         return None
-    return 0.5 ** (abs(age_days(core, as_of)) / half_life_days)
+    return 0.5 ** (core_age(core, as_of)["days"] / half_life_days)
 
 
 def strip_periods(text: str) -> str:
@@ -184,10 +185,14 @@ def _core(facts: dict[str, Any]) -> str:
     periods = core["start"] if core["start"] == core["end"] else f"{core['start']}–{core['end']}"
     bins = f"{core['bins']} bin{'s' if core['bins'] > 1 else ''}"
     line = f" | core {periods} ({bins}, {core['share']:.0%} of its timed rows)"
-    age = facts.get("age_days")
-    if age is None:
+    age = facts.get("age")  # ``core_age`` from the reference date, added by the evidence
+    if not age:
         return line
-    days = math.ceil(abs(age))
-    if age > 0:
-        return f"{line}, ended {days} days before the reference date"
-    return f"{line}, starts {days} days after the reference date" if age < 0 else f"{line}, the reference date inside it"
+    days = round(age["days"])
+    gap = "less than a day" if age["days"] < 1 else f"{days} day{'s' if days > 1 else ''}"
+    said = {
+        "inside": "the reference date inside it",
+        "after": f"ended {gap} before the reference date",
+        "before": f"starts {gap} after the reference date",
+    }
+    return f"{line}, {said[age['side']]}"

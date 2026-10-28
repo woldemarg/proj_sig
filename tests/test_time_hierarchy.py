@@ -17,7 +17,7 @@ from graph_query_engine import seeds
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SeedMatch
-from graph_query_engine.temporal import age_days, parse_as_of, period_hub, period_interval, recency, time_facts, time_line
+from graph_query_engine.temporal import core_age, parse_as_of, period_hub, period_interval, recency, time_facts, time_line
 from graph_query_engine.traversal import RECENCY_RANK_WEIGHT, traverse
 from insight_contracts import SNAPSHOT_VERSION
 from insight_graph_service.core.snapshot import metadata_digest
@@ -119,8 +119,14 @@ def test_the_zone_is_signed_in_the_time_record_and_the_calendar_is_read_from_the
 def test_freshness_halves_every_half_life_from_the_core_and_a_question_names_its_periods_hub():
     traj = {"core": {"t_start": "2031-03-03T00:00:00+00:00", "t_end": "2031-04-07T00:00:00+00:00"}}
     inside, after, before = parse_as_of("2031-03-20"), parse_as_of("2031-07-06"), parse_as_of("2030-12-03")  # 90 days past each end
-    assert (age_days(traj["core"], inside), age_days(traj["core"], after), age_days(traj["core"], before)) == (0.0, 90.0, -90.0)
+    assert [core_age(traj["core"], t) for t in (inside, after, before)] == [
+        {"side": "inside", "days": 0.0},
+        {"side": "after", "days": 90.0},
+        {"side": "before", "days": 90.0},
+    ]
+    assert core_age(traj["core"], parse_as_of("2031-04-07")) == {"side": "after", "days": 0.0}  # the core's end, which it excludes: ended
     assert recency(traj, inside, 90) == 1.0 and recency(traj, after, 90) == pytest.approx(0.5) == recency(traj, before, 90)  # the future as the past
+    assert recency(traj, parse_as_of("2031-04-07"), 90) == 1.0  # a distance of 0 either way
     assert (
         recency(traj, None, 90) is None
         and recency(traj, inside, 0) is None
@@ -162,8 +168,12 @@ def test_the_time_line_gives_the_core_its_age_and_an_event_outside_it():
         ("2031-04-13", "ended 20 days before"),
         ("2031-03-10", "the reference date inside it"),
         ("2031-02-20", "starts 11 days after"),
+        ("2031-03-24", "ended less than a day before"),  # the core's last instant is not in it, and 0 days is no day
+        ("2031-03-24T06:00", "ended less than a day before"),
+        ("2031-03-25T06:00", "ended 1 day before"),
+        ("2031-02-21T06:00", "starts 10 days after"),  # 9.75 days: the nearest day, never a day for every started one
     ):
-        assert f"timed rows), {words}" in time_line(facts | {"age_days": age_days(core, parse_as_of(asked))})
+        assert f"timed rows), {words}" in time_line(facts | {"age": core_age(core, parse_as_of(asked))})
     alone = time_facts(traj | {"gaps": [], "core": None, "events": [peak]}, 0.5)
     assert "| core: none (no timed rows) |" in time_line(alone) and "outside" not in alone["events"][0]
 
@@ -182,7 +192,7 @@ def test_the_reference_date_is_the_latest_data_and_a_question_may_set_its_own(ti
     item = next(it for it in later.items if it.pattern_id == phones_us(engine.ws.load_graph()))
     assert later.as_of["source"] == "asked" and "AS OF: 2031-06-01 (asked)" in later.to_prompt()
     assert (
-        item.time["age_days"] > 0
+        item.time["age"]["side"] == "after"
         and "days before the reference date" in time_line(item.time)
         and f"     time: {time_line(item.time)}" in later.to_prompt()
     )
