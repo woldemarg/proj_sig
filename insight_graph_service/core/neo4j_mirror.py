@@ -36,6 +36,9 @@ EDGE_ENDPOINTS = {
     "OF_DATASET": ("Batch", "Dataset"),
     "PEAKED_AT": ("Pattern", "TemporalNode"),
     "DROPPED_AT": ("Pattern", "TemporalNode"),
+    "STARTS_AT": ("Pattern", "TemporalNode"),
+    "ENDS_AT": ("Pattern", "TemporalNode"),
+    "WITHIN": ("TemporalNode", "TemporalNode"),
 }
 STALE_TYPES_QUERY = (  # relationships between SIG nodes of a type EDGE_ENDPOINTS no longer lists
     "MATCH (s)-[r]->(t) WHERE NOT type(r) IN $types AND any(l IN labels(s) WHERE l IN $labels) AND any(l IN labels(t) WHERE l IN $labels) DELETE r"

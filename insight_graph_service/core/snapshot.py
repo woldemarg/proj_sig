@@ -17,6 +17,7 @@ import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -44,7 +45,7 @@ from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
 from subgroup_miner.spatial import GEO_REGION_MIN_SHARE
 from subgroup_miner.spatial_plane import SpatialStructure
-from subgroup_miner.temporal import dynamics, echoes
+from subgroup_miner.temporal import dynamics, echoes, parent_period, period_bounds
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
@@ -431,7 +432,7 @@ def _temporal_plane(
     nodes: dict[str, GraphNode],
     settings: Settings,
 ) -> tuple[list[GraphEdge], dict[str, Any]]:
-    """TemporalNode hubs (added to ``nodes``), PEAKED_AT / DROPPED_AT edges and the ``trajectories`` section from each
+    """TemporalNode hubs (added to ``nodes``), the temporal plane's edges and the ``trajectories`` section from each
     READY dataset's signed time record and its series file (``temporal``: batch id → (series, the file's SHA-256)). A
     record that fails its metadata digest, or a file other than the one it signed (a missing one or one that no longer
     reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
@@ -439,9 +440,11 @@ def _temporal_plane(
     ``subgroup_miner.temporal.dynamics`` of the pattern's series; its short form is the pattern's ``temporal_summary``,
     the dataset's ``temporal`` its column, grid, zone and span. An event keeps the condition that carries it (``carrier``,
     signed in the series at the commit, ``subgroup_miner.temporal.carriers``) and, when a broader insight of the dataset
-    has it too, ``echo_of`` that insight (``echoes``). A hub exists only with an event in it, and a pattern has one
-    edge per hub and kind: its most prominent event there, ``metrics`` naming every metric that peaked (or dipped) then."""
-    edges, trajectories = [], {}
+    has it too, ``echo_of`` that insight (``echoes``). A hub exists with an event in it or a core's end — a pattern has
+    one PEAKED_AT / DROPPED_AT edge per hub and kind, its most prominent event there, ``metrics`` naming every metric
+    that peaked (or dipped) then, and a STARTS_AT and an ENDS_AT edge to the hubs of its core's first and last bin —
+    and so does every period above a hub, WITHIN edges between them (``_hub``)."""
+    edges, trajectories, chained = [], {}, set()
     for bid, (series, digest) in sorted(temporal.items()):
         signed = batches[bid]["temporal"]
         if integrity.get(bid) == "mismatch":
@@ -462,8 +465,10 @@ def _temporal_plane(
             for e in traj["events"]:
                 if c := carried.get((e["metric"], e["bin"])):
                     e["carrier"] = {k: c[k] for k in ("attribute", "value", "rows", "of", "shift", "p")}
+            core = traj["core"]
             nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
-                "events": len(traj["events"])
+                "events": len(traj["events"]),
+                "core": {k: core[k] for k in ("start", "end", "share", "bins")} if core else None,
             }
         echoes(mine, {pid: nodes[pid].props for pid in mine})
         trajectories |= mine
@@ -471,13 +476,38 @@ def _temporal_plane(
             by_period: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (period, kind) -> its events, the most prominent first
             for e in sorted(traj["events"], key=lambda e: -e["prominence"]):
                 by_period.setdefault((e["period"], e["kind"]), []).append(e)
-            for (period, kind), same in by_period.items():
-                hub, cell = temporal_node_id(signed["grid"], period), signed["bins"][same[0]["bin"]]
-                props = {"granularity": signed["grid"], "period": period, "t_start": cell["t_start"], "t_end": cell["t_end"]}
-                nodes.setdefault(hub, GraphNode(hub, "TemporalNode", period, props))
+            for (_, kind), same in by_period.items():
+                hub = _hub(signed, same[0]["bin"], head["tz"], nodes, edges, chained)
                 first = {k: same[0][k] for k in ("metric", "period", "z_raw", "z_smoothed", "prominence", "p", "carrier", "echo_of") if k in same[0]}
                 edges.append(GraphEdge(pid, hub, EdgeType(kind), 1.0, first | {"metrics": [e["metric"] for e in same]}))
+            if core := traj["core"]:
+                for kind, t in ((EdgeType.STARTS_AT, core["first"]), (EdgeType.ENDS_AT, core["last"])):
+                    props = {"period": signed["bins"][t]["period"], "share": core["share"], "bins": core["bins"]}
+                    edges.append(GraphEdge(pid, _hub(signed, t, head["tz"], nodes, edges, chained), kind, 1.0, props))
     return edges, trajectories
+
+
+def _hub(signed: dict[str, Any], t: int, tz: str | None, nodes: dict[str, GraphNode], edges: list[GraphEdge], chained: set[str]) -> str:
+    """The TemporalNode of bin ``t`` of a dataset's grid, made when new (``signed``: the dataset's time record), and the
+    periods above it to the quarter — one chain, ``subgroup_miner.temporal.parent_period`` —, each made when new on the
+    dataset's calendar (``tz``) with its WITHIN edge, once (``chained``: the hubs whose chain stands; a period two datasets
+    reach keeps the first one's bounds). Returns the bin's hub id."""
+    cell, grid = signed["bins"][t], signed["grid"]
+    label = cell["period"]
+    hub = temporal_node_id(grid, label)
+    nodes.setdefault(
+        hub, GraphNode(hub, "TemporalNode", label, {"granularity": grid, "period": label, "t_start": cell["t_start"], "t_end": cell["t_end"]})
+    )
+    child = hub
+    while child not in chained and (up := parent_period(label, grid)):
+        chained.add(child)
+        grid, label = up
+        parent, (start, end) = temporal_node_id(grid, label), period_bounds(label, grid, tz)
+        nodes.setdefault(parent, GraphNode(parent, "TemporalNode", label, {"granularity": grid, "period": label, "t_start": start, "t_end": end}))
+        edges.append(GraphEdge(child, parent, EdgeType.WITHIN))
+        child = parent
+    chained.add(child)
+    return hub
 
 
 def _checked(record: dict[str, Any], key: str, digest: Callable[[dict[str, Any]], str]) -> str:
@@ -582,6 +612,7 @@ def build_snapshot(
 
     counts = Counter(e.type.value for e in edges)
     n_attr = len(ontology.attractor_ids)
+    spans = [n.props["temporal"]["span"][1] for n in nodes.values() if n.kind == "Dataset" and "temporal" in n.props]
     return {
         "version": SNAPSHOT_VERSION,
         "created_at": utc_now(),
@@ -596,5 +627,6 @@ def build_snapshot(
             "edges": len(edges),
             "edge_counts": dict(counts),
             "avg_attractor_degree": (2 * counts["RELATED_TO"] / n_attr) if n_attr else 0.0,
+            "as_of": max(spans, key=datetime.fromisoformat, default=None),  # the latest data: the reference date of an answer (§7.2)
         },
     }

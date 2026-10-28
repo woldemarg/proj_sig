@@ -749,7 +749,7 @@ def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tm
         (record,) = [b for b in engine.ws.list_batches() if b["status"] == "READY"]
         assert (record["time"], record["grid"], record["temporal"]["grid"]) == ("when", "week", "week")
         hub = 'node[kind="TemporalNode"]'
-        assert page.evaluate(f"S.cy.$('{hub}').map((n) => n.id())") == ["T:week:2031-W13"]
+        assert "T:week:2031-W13" in page.evaluate(f"S.cy.$('{hub}').map((n) => n.id())")  # with the cores' ends and the periods above
         lowest = "Math.max(...S.cy.nodes().filter((n) => n.data('kind') === 'Pattern').map((n) => n.position('y')))"
         assert page.evaluate(f"S.cy.$('{hub}')[0].position('y') > {lowest}")  # the periods' row under the insights
         assert page.get_attribute(".key[data-key='temporal']", "title").startswith(f"{name('temporal_hub')}: ")

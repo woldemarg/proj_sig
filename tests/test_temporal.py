@@ -417,9 +417,15 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
         and trajectory["of"] == 6
         and set(trajectory["series"]) == {s["metric"] for s in patterns[pid]["shifts"]}
     )
+    core = trajectory["core"]  # where the insight lives: the shortest run of weeks holding 80 % of its timed rows
     assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
-        "events": len(trajectory["events"])
+        "events": len(trajectory["events"]),
+        "core": {k: core[k] for k in ("start", "end", "share", "bins")},
     }
+    rows = stored[pid]["rows"]
+    assert core["share"] >= 0.8 and core["bins"] == core["last"] - core["first"] + 1 <= 5 and core["start"] == signed["bins"][core["first"]]["period"]
+    assert sum(rows[core["first"] : core["last"] + 1]) / sum(rows) == pytest.approx(core["share"], abs=1e-3)
+    assert (core["t_start"], core["t_end"]) == (signed["bins"][core["first"]]["t_start"], signed["bins"][core["last"]]["t_end"])
     hub = nodes["T:week:2031-W13"]
     assert hub["kind"] == "TemporalNode" and hub["props"] == {
         "granularity": "week",
@@ -427,17 +433,33 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
         "t_start": "2031-03-24T00:00:00+00:00",
         "t_end": "2031-03-31T00:00:00+00:00",
     }
-    events = [e for e in snap["edges"] if e["plane"] == "temporal"]
-    assert {e["target"] for e in events} == {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"}  # a hub only with an event
-    assert all(e["type"] in ("PEAKED_AT", "DROPPED_AT") and e["source"] in patterns for e in events)
+    plane = [e for e in snap["edges"] if e["plane"] == "temporal"]
+    hubs = {n["id"] for n in snap["nodes"] if n["kind"] == "TemporalNode"}
+    assert {e["target"] for e in plane} == hubs  # a hub with an event or a core's end in it, or above such a one
+    assert {e["type"] for e in plane} <= {"PEAKED_AT", "DROPPED_AT", "STARTS_AT", "ENDS_AT", "WITHIN"}
+    assert all(e["source"] in patterns or (e["type"] == "WITHIN" and e["source"] in hubs) for e in plane)
+    ends = {e["type"]: e for e in plane if e["source"] == pid and e["type"] in ("STARTS_AT", "ENDS_AT")}
+    assert (ends["STARTS_AT"]["target"], ends["ENDS_AT"]["target"]) == (f"T:week:{core['start']}", f"T:week:{core['end']}")
+    assert ends["ENDS_AT"]["props"] == {"period": core["end"], "share": core["share"], "bins": core["bins"]}
+    within = {(e["source"], e["target"]) for e in plane if e["type"] == "WITHIN"}
+    assert {("T:week:2031-W13", "T:month:2031-03"), ("T:month:2031-03", "T:quarter:2031-Q1"), ("T:month:2031-04", "T:quarter:2031-Q2")} <= within
+    assert any(s in ("T:week:2031-W14", "T:week:2031-W15") and t == "T:month:2031-04" for s, t in within)  # a week in its Thursday's month
+    assert len(within) == len({s for s, _ in within})  # one period above each
+    assert nodes["T:month:2031-04"]["props"] == {
+        "granularity": "month",
+        "period": "2031-04",
+        "t_start": "2031-04-01T00:00:00+00:00",
+        "t_end": "2031-05-01T00:00:00+00:00",
+    }
+    assert snap["stats"]["as_of"] == dataset["temporal"]["span"][1]  # the latest data: the reference date
 
 
 def test_the_events_are_a_plane_no_walk_follows(timed):
     engine, _ = timed
-    events = {EdgeType.PEAKED_AT, EdgeType.DROPPED_AT}
-    assert events.isdisjoint(STRUCTURAL_EDGES | LATENT_EDGES | UNDIRECTED_EDGES) and {GraphEdge("a", "b", t).plane for t in events} == {"temporal"}
+    plane = {EdgeType.PEAKED_AT, EdgeType.DROPPED_AT, EdgeType.STARTS_AT, EdgeType.ENDS_AT, EdgeType.WITHIN}
+    assert plane.isdisjoint(STRUCTURAL_EDGES | LATENT_EDGES | UNDIRECTED_EDGES) and {GraphEdge("a", "b", t).plane for t in plane} == {"temporal"}
     found = engine.search("Why is the discount higher for phones in the US?")
-    assert found.evidence.items and not [e for e in found.traversal.used_edges if e.split(":", 1)[0] in {t.value for t in events}]
+    assert found.evidence.items and not [e for e in found.traversal.used_edges if e.split(":", 1)[0] in {t.value for t in plane}]
 
 
 def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_its_own_periods(tmp_path):
@@ -456,7 +478,7 @@ def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_it
     shown = {
         ds: {el["data"]["id"] for el in cytoscape_elements(engine.graph(), ds, False)["nodes"]} for ds in (timed["dataset_id"], plain["dataset_id"])
     }
-    assert hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
+    assert {"T:month:2031-03", "T:quarter:2031-Q1"} <= hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
     starts = {el["data"]["id"]: el["data"]["t_start"] for el in cytoscape_elements(engine.graph())["nodes"] if el["data"]["kind"] == "TemporalNode"}
     assert starts.keys() == hubs and all(starts[h] == next(n["props"]["t_start"] for n in snap["nodes"] if n["id"] == h) for h in hubs)
 
