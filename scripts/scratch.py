@@ -64,9 +64,7 @@ def write_demo_csv(folder: Path) -> Path:
     return path
 
 
-def weekly_retail(
-    folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",), rows: int = 5000, channel: str | None = None
-) -> Path:
+def weekly_retail(folder: Path, weeks: int = 6, spiked: tuple[str, ...] = ("discount",), rows: int = 5000, channel: str | None = None) -> Path:
     """``rows`` of the demo's orders over ``weeks`` ISO weeks from a Monday (``when``; its first ten rows without a
     readable time), the ``spiked`` metrics of phones in the US — those sold through ``channel`` only, when named — raised
     by 3 sd in the fourth week: a PEAKED_AT there (docs/02_discovery.md §2.10)."""

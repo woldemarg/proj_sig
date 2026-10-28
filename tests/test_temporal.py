@@ -769,7 +769,11 @@ def test_an_events_carrier_is_named_and_an_echo_told_once_as_the_broader_finding
     assert "| the same as a broader finding's: dip 2031-W11 (discount) |" in line
     assert facts["words"].endswith("пік у періоді 2031-W13, зосереджено в: channel — online")
     echoed = time_facts(head | {"trend": SPIKE, "current": 0.1, "bins_measured": 6, "events": [dip]}, 0.5)
-    assert echoed["events"] == [] and echoed["words"].endswith("спад у періоді 2031-W11 (як у ширшої знахідки)") and "| events: none |" in time_line(echoed)
+    assert (
+        echoed["events"] == []
+        and echoed["words"].endswith("спад у періоді 2031-W11 (як у ширшої знахідки)")
+        and "| events: none |" in time_line(echoed)
+    )
 
 
 def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
