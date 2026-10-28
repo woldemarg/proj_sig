@@ -522,7 +522,7 @@ def test_a_commit_derives_only_the_new_datasets_spatial_part(cfg, points_csv):
     deletion drops what it held from the memo, a reset all of it."""
     from unittest import mock
 
-    from subgroup_miner import spatial
+    from subgroup_miner import spatial_plane as spatial  # the plane: what the commit derives
 
     engine = make_engine(cfg)
     with (

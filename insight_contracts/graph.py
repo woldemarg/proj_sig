@@ -30,7 +30,7 @@ whose resolution is a listed region level to its H3 cells: its regions at that l
 dip of its series (docs/02_discovery.md §2.10): ``metric``, ``period``, ``z_raw``, ``z_smoothed``, ``prominence``, ``p``,
 ``metrics``, and when it has them ``carrier`` (the condition inside the pattern that carries the event: ``attribute``,
 ``value``, ``rows``, ``of``, ``shift``, ``p``) and ``echo_of`` (the broader pattern of the dataset with the same event).
-``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``span``, ``metric``, ``series`` and
+``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``tz``, ``span``, ``metric``, ``series`` and
 ``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of`` and
 ``gaps``; the pattern carries the short form as ``temporal_summary``.
 """

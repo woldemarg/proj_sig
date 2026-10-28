@@ -25,11 +25,10 @@ from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.uploads import same_points
 from insight_graph_service.core.workspace import Workspace
-from subgroup_miner.spatial import (
-    SpatialError,
+from subgroup_miner.spatial import SpatialError, compactness
+from subgroup_miner.spatial_plane import (
     cell_boundary,
     cell_centres,
-    compactness,
     event_regions,
     footprint,
     geometry_to_cells,

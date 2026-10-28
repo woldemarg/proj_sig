@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import geo_frame, make_config, make_engine, upload_levels, weekly_retail
+from conftest import EPOCH, geo_frame, make_config, make_engine, upload_levels, weekly_retail
 from fastapi.testclient import TestClient
 
 from graph_query_engine import seeds
@@ -27,7 +27,7 @@ from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import cytoscape_elements, node_details
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.ingestion import IngestionError, load_dataset, parse_tz, read_times, resolve_grid
-from subgroup_miner.spatial import build_cells
+from subgroup_miner.spatial import build_cells, point_profile
 from subgroup_miner.temporal import (
     DROPPED_AT,
     FALLING,
@@ -350,6 +350,19 @@ def test_a_time_column_reads_in_one_format_never_a_date_per_value():
     assert iso.dt.strftime("%Y-%m-%d %H:%M").tolist()[:3] == ["2026-03-02 00:00", "2026-03-02 10:00", "2026-03-02 07:00"] and iso.isna().tolist()[3]
 
 
+def test_a_geo_levels_cells_count_the_days_the_series_read():
+    """One reading of a date column: the days a cell counts and the series of its patterns read the same dates — the
+    day before the month where the column reads so, a value in another format NaT in both, never a day of its own."""
+    frame = geo_frame().head(600)
+    frame["when"] = [f"{1 + i % 28:02d}-{1 + i % 3:02d}-2026" for i in range(600)]  # 15-02-2026 reads one way only
+    frame.loc[5, "when"] = "2026-07-08"  # ISO among them: not the column's format
+    read = read_times(frame, "when")
+    assert read.isna().tolist()[5] and (read.dt.day.tolist()[14], read.dt.month.tolist()[14]) == (15, 3)
+    days = point_profile(frame, "latitude,longitude").times["when"]
+    expected = read.dt.tz_localize(None).to_numpy().astype("datetime64[us]")
+    assert np.array_equal(np.isnat(days), np.isnat(expected)) and np.array_equal(days[~np.isnat(days)], expected[~np.isnat(expected)])
+
+
 @pytest.mark.parametrize(
     ("options", "message"),
     [
@@ -393,7 +406,7 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
     assert all(sum(stored[pid]["rows"]) + stored[pid]["untimed"] == p["support"] for pid, p in patterns.items())
     dataset = next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
     read = pd.to_datetime(pd.read_csv(record["source_path"])["when"], errors="coerce", utc=True)
-    assert dataset["temporal"] == {"column": "when", "grid": "week", "span": [read.min().isoformat(), read.max().isoformat()]}
+    assert dataset["temporal"] == {"column": "when", "grid": "week", "tz": None, "span": [read.min().isoformat(), read.max().isoformat()]}
     assert dataset["temporal"]["span"][0][:10] == "2031-03-03" and dataset["temporal"]["span"][1][:10] == "2031-04-13"  # the data's, not the bins'
     pid = phones_us(snap)
     trajectory = snap["trajectories"][pid]
@@ -744,6 +757,22 @@ def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_l
     assert seeds[0].pattern_id == pid and seeds[0].matched["time"] == 1.0
 
 
+def test_a_coarse_event_is_no_peak_of_each_finer_period_and_a_period_is_read_on_the_datasets_calendar():
+    def trajectory(periods: list[str], event: str | None, tz: str | None = None) -> dict:
+        series = {"m": [{"period": p, "z": 0.0, "se": 0.1} for p in periods]}
+        return {"metric": "m", "tz": tz, "series": series, "events": [{"period": event, "metric": "m"}] if event else []}
+
+    monthly = trajectory([f"2031-{m:02d}" for m in range(1, 7)], "2031-03")
+    assert time_score(monthly, period_interval("2031-W13")) == 0.5  # measured through the week; the event is the month's
+    assert time_score(monthly, period_interval("2031-03")) == 1.0 and time_score(monthly, period_interval("2031-Q1")) == 1.0
+    weekly = trajectory([f"2031-W{w:02d}" for w in range(9, 15)], "2031-W13")  # 24 February … 6 April
+    assert time_score(weekly, period_interval("2031-03")) == 1.0  # the week's peak lies in the month, measured throughout
+    assert time_score(weekly, period_interval("2031-W13")) == 1.0 and time_score(weekly, period_interval("2031-W10")) == 0.5
+    day = trajectory(["2031-03-24"], None, "America/Los_Angeles")
+    assert time_score(day, period_interval("2031-03-24")) == 0.5  # its day on its own calendar, not 16 of 24 UTC hours
+    assert time_score(day, period_interval("2031-03-25")) == 0.0
+
+
 def test_a_series_never_measured_has_no_trend_and_another_metrics_event_is_named():
     head = {"grid": "week", "span": ["2031-03-03T00:00:00+00:00", "2031-04-14T00:00:00+00:00"], "metric": "margin", "of": 6, "gaps": []}
     never = time_facts(head | {"trend": FLAT, "current": None, "bins_measured": 0, "events": []}, 0.5)
@@ -786,6 +815,23 @@ def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
     assert [s.pattern_id for s in found] == ["timed", "plain"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95
 
 
+def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch):
+    """Under the floor with nothing lexical, a question naming a period falls back to the timed pattern with the highest
+    time score, as a zone without text falls back to what lies in it; with words the catalog knows, to the semantic best."""
+    fixed = {
+        "steady": SeedMatch("steady", 0.2, {"semantic": 0.2, "time": 0.5}),
+        "peaked": SeedMatch("peaked", 0.1 + SEED_TIME_WEIGHT, {"semantic": 0.1, "time": 1.0}),
+    }
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
+    graph = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), is_lexical=False, components=lambda: [])
+    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
+    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "time"
+    query.is_lexical = True
+    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
+    assert [s.pattern_id for s in found] == ["steady"] and found[0].matched["fallback"] == "semantic"
+
+
 def test_the_drawer_gets_the_curve_of_its_findings_metric_only(timed):
     engine, _ = timed
     graph = engine.graph()
@@ -813,6 +859,25 @@ def test_a_geo_level_checks_the_times_of_its_located_points(tmp_path):
     record = engine.process(level["batch_id"])  # the series would be of the located points: one week, refused before the search
     assert record["status"] == "FAILED" and record["error"]["code"] == "invalid_options" and record["failed_stage"] == "VALIDATING"
     assert "over its located points: 0 week bins measurable" in record["error"]["message"]  # one day of points: no week half covered
+
+
+def test_a_geo_levels_auto_grid_is_the_unit_of_its_located_points(tmp_path):
+    """Six weeks of located points, and rows without a point dated over three years: the file's rows ask for months,
+    the points for days — a geo level's series are of its points, so its ``auto`` unit is theirs; the table level's,
+    of every row, is the file's (coarsened again for its insights, most of whose rows lie in the points' six weeks)."""
+    frame = geo_frame()
+    frame["kind"] = np.random.default_rng(5).choice(["a", "b", "c"], len(frame))
+    frame.loc[(frame["kind"] == "a") & (frame["channel"] == "web"), "load"] += 3  # a shift the table level finds
+    frame["when"] = (EPOCH + (np.arange(len(frame)) % 42).astype("timedelta64[D]")).astype(str)
+    unlocated = frame.sample(300, random_state=2).assign(latitude=np.nan, longitude=np.nan)
+    unlocated["when"] = pd.date_range("2018-03-04", periods=300, freq="4D").strftime("%Y-%m-%d")
+    path = tmp_path / "points.csv"
+    pd.concat([frame, unlocated], ignore_index=True).to_csv(path, index=False)
+    assert resolve_grid(read_times(pd.read_csv(path), "when"), "auto") == "month"  # the file's rows: the points fill two
+    engine = make_engine(make_config(tmp_path / "ws"))
+    cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when")
+    assert (cells["status"], cells["grid"]) == ("READY", "auto") and cells["temporal"]["grid"] in ("day", "week")
+    assert table["status"] == "READY" and table["temporal"]["grid"] in ("month", "quarter")
 
 
 def test_a_geo_pattern_without_a_series_has_no_time_line(tmp_path):

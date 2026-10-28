@@ -22,7 +22,7 @@ RULE_TERMS = (  # the words rules 10, 11 and 13 take from wording: as the consol
     *("cell", "segment", "located", "region", "zone", "scale_regional", "scale_scale-dependent", "scale_not_found_coarser"),
     *("credibility_1", "credibility_5", "credibility_6"),
     *("trend_rising", "trend_falling", "trend_flat", "trend_spike", "time_unmeasured", "time_faded", "PEAKED_AT", "DROPPED_AT"),
-    "time_carrier",
+    *("time_carrier", "time_echo"),
 )
 
 SYSTEM_PROMPT = f"""You are a careful data analyst answering questions about a tabular dataset.
@@ -78,7 +78,8 @@ Rules:
    spike "{W("trend_spike")}", not measured "{W("time_unmeasured")}" —, its current level as the line gives it
    ("{W("time_faded")}" when it says below the threshold), and an event as a peak "{W("PEAKED_AT")}" or a dip
    "{W("DROPPED_AT")}" in its named period. An event "in <column> = <value>" sits in that part of the finding: name the
-   part ("{W("time_carrier")}"). Events "the same as a broader finding's" are one event with that finding's: tell it once.
+   part ("{W("time_carrier")}"). Events "the same as a broader finding's" ("{W("time_echo")}") are one event with that
+   finding's: tell it once.
    A finding with no event still has a trend and a current level: never call it gone unless its current level is
    below the threshold.
    Name a period only as the time line does. Without a "time:" line this rule does not apply.

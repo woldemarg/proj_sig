@@ -17,7 +17,7 @@ insights = select_insights(
 prompt_context = describe(insights, limit=10)  # numbered ASCII lines, ready for a prompt
 ```
 
-`Insight.to_record()` is a plain dictionary that can be stored or sent anywhere. `structural_edges(insights, config)` adds the subgroup lattice: SPECIALIZES, SIBLING and CONTRASTS between the scopes; `spatial.derive_spatial` derives the spatial plane of geo patterns (regions, IN_REGION, PARENT_OF, CO_LOCATED, compactness) from their cells.
+`Insight.to_record()` is a plain dictionary that can be stored or sent anywhere. `structural_edges(insights, config)` adds the subgroup lattice: SPECIALIZES, SIBLING and CONTRASTS between the scopes; `spatial_plane.derive_spatial` derives the spatial plane of geo patterns (regions, IN_REGION, PARENT_OF, CO_LOCATED, compactness) from their cells.
 
 A table with a time column is mined once like any other (`load_dataset(..., time=, grid=)` reads the column apart); `temporal.calendar_bins` lays the rows on a calendar grid, `temporal.annotate` gives each admitted insight a series per metric it shifts and `temporal.dynamics` smooths it, names its trend and finds its events (docs/02_discovery.md §2.10). `scripts/temporal_benchmark.py` runs the loop.
 

@@ -60,7 +60,8 @@ from subgroup_miner.ingestion import (
     resolve_grid,
 )
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import GeoDataset, TableDataset, derive_spatial, sac_summary
+from subgroup_miner.spatial import sac_summary
+from subgroup_miner.spatial_plane import GeoDataset, TableDataset, derive_spatial
 
 log = logging.getLogger(__name__)
 
@@ -372,7 +373,7 @@ class Engine:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
             if time:
                 times = read_times(read_file(path, shared=True)[0], time, tz)
-                s = self.settings  # the file's rows here, on auto's finest unit; a geo level's located points at VALIDATING
+                s = self.settings  # the file's rows, on the unit their span asks for; a geo level's located points, on theirs, at VALIDATING
                 check_time(times, time, resolve_grid(times, grid), s.temporal_min_bins, s.temporal_max_bins, tz=tz)
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))

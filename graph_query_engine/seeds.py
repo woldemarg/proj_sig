@@ -137,6 +137,12 @@ def resolve_seeds(
             seeds.append(cand)
     pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
     if not seeds and pool:
-        seeds = [max(pool, key=lambda s: s.score if alone else s.matched["semantic"])]
-        seeds[0].matched["fallback"] = "place" if alone else "semantic"
+        timed = [s for s in pool if s.matched.get("time")] if query.when and not query.is_lexical else []  # a period alone
+        if alone:
+            seeds, how = [max(pool, key=lambda s: s.score)], "place"
+        elif timed:  # nothing the catalog knows, a period it does: the pattern with the most of it, as a zone alone
+            seeds, how = [max(timed, key=lambda s: (s.matched["time"], s.matched["semantic"]))], "time"
+        else:
+            seeds, how = [max(pool, key=lambda s: s.matched["semantic"])], "semantic"
+        seeds[0].matched["fallback"] = how
     return seeds

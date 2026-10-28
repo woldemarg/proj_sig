@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import time
 
 from fastapi.testclient import TestClient
 
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets
+from insight_graph_service.core.engine import TERMINAL
 from insight_graph_service.server.app import create_app
 
 
@@ -36,6 +38,10 @@ def test_a_shipped_dataset_uploads_by_its_key_with_the_forms_options(engine):
         assert [d["key"] for d in listed] == [d["key"] for d in demo_datasets()]
         accepted = client.post("/api/upload", data={"demo": "retail_synthetic", "bins": "", "categories": "", "source": "SIG"})
         assert accepted.status_code == 202 and (accepted.json()["filename"], accepted.json()["source"]) == ("retail_synthetic.csv", "SIG")
+        for _ in range(600):  # the batch runs on the app's worker: it ends before the test does, or it runs on through the next tests
+            if client.get(f"/api/batches/{accepted.json()['batch_id']}").json()["status"] in TERMINAL:
+                break
+            time.sleep(0.5)
         with (DEMO_DIR / "retail_synthetic.csv").open("rb") as f:
             both = client.post("/api/upload", files={"file": ("x.csv", f, "text/csv")}, data={"demo": "retail_synthetic"})
         neither, unknown = client.post("/api/upload", data={"bins": ""}), client.post("/api/upload", data={"demo": "../etc"})

@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from insight_contracts import wording
 
@@ -56,16 +57,25 @@ def _months_on(day: date, months: int) -> date:
 
 
 def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> float:
-    """Half the share of the asked interval its metric's measured bins cover, plus a half when one of its events falls in
-    it — an event in the period outranks mere presence through it (``seeds.SEED_TIME_WEIGHT`` weighs the score)."""
+    """Half the share of the asked interval its metric's measured bins cover, plus a half when the bin of one of its
+    events lies inside it — an event in the period outranks mere presence through it, and a coarse event (a month's)
+    is no event of each finer period it spans (``seeds.SEED_TIME_WEIGHT`` weighs the score). The period is read on
+    the dataset's calendar (its ``tz``): the same wall-clock bounds in its zone, as its bins are named."""
+    zone = ZoneInfo(trajectory["tz"]) if trajectory.get("tz") else UTC
+    asked = tuple(t.replace(tzinfo=zone) for t in asked)
+
+    def span(period: str) -> tuple[datetime, datetime] | None:
+        bounds = period_interval(period)
+        return tuple(t.replace(tzinfo=zone) for t in bounds) if bounds else None
 
     def overlap(period: str) -> float:
-        span = period_interval(period)
-        return max((min(span[1], asked[1]) - max(span[0], asked[0])).total_seconds(), 0.0) if span else 0.0
+        s = span(period)
+        return max((min(s[1], asked[1]) - max(s[0], asked[0])).total_seconds(), 0.0) if s else 0.0
 
     measured = [e["period"] for e in trajectory["series"].get(trajectory["metric"], []) if e]
     share = sum(map(overlap, measured)) / (asked[1] - asked[0]).total_seconds()
-    return 0.5 * share + (0.5 if any(overlap(e["period"]) for e in trajectory["events"]) else 0.0)
+    inside = any((s := span(e["period"])) and asked[0] <= s[0] and s[1] <= asked[1] for e in trajectory["events"])
+    return 0.5 * share + (0.5 if inside else 0.0)
 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
