@@ -373,7 +373,7 @@ function init() {
     focusNodes([id]);
   });
   on($("mw-body"), ".mw-th", (b) => { W.fold[b.dataset.id] = !b.parentElement.classList.contains("open"); renderWindow(); });
-  on($("mw-body"), ".mw-i", (b) => GeoMap.pick(b.dataset.pid));
+  on($("mw-body"), ".mw-i", (b) => (b.classList.contains("on") ? GeoMap.unfocus() : GeoMap.pick(b.dataset.pid)));  // the focused one clicked again: off
   on($("mw-body"), ".mw-all", () => { W.all = !W.all; renderWindow(); });
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
