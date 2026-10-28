@@ -842,7 +842,7 @@ def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
 
 
 def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch):
-    """Under the floor with nothing lexical, a question naming a period enters through its hub: what lives or moved in it
+    """Under the floor with nothing lexical, a question naming a period enters through it: what lives or moved in it
     (``DualGraph.members``) first, then the pattern with the highest time score — as a zone without text falls back to
     what lies in it; with words the catalog knows, to the semantic best."""
     fixed = {
@@ -853,20 +853,15 @@ def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch)
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
     held = {"active": [], "peaked": [], "dropped": []}
     graph = SimpleNamespace(
-        insights={k: k for k in fixed},
-        trajectories={},
-        nodes={},
-        tampered=lambda pid: False,
-        incident=lambda pid, kinds: [],
-        members=lambda asked: held,
+        insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
     )
     query = SimpleNamespace(conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), is_lexical=False, components=lambda: [])
     ask = lambda: seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())  # noqa: E731
     found = ask()
-    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period" and "hub" not in found[0].matched
-    held["active"], graph.nodes = ["member"], {"T:week:2031-W13": {}}
-    found = ask()  # the hub's member first, though measured nowhere; the hub named once the graph holds it
-    assert [s.pattern_id for s in found] == ["member"] and found[0].matched["hub"] == "T:week:2031-W13"
+    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period"
+    held["active"] = ["member"]
+    found = ask()  # the period's own pattern first, though measured nowhere
+    assert [s.pattern_id for s in found] == ["member"] and found[0].matched["fallback"] == "period"
     query.is_lexical = True
     found = ask()
     assert [s.pattern_id for s in found] == ["steady"] and found[0].matched["fallback"] == "semantic"

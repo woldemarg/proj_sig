@@ -22,20 +22,6 @@ def period_interval(text: str) -> tuple[datetime, datetime] | None:
     return next((span for m in wording.PERIOD.finditer(text) if (span := _interval(m.group(0)))), None)
 
 
-def period_hub(text: str) -> str | None:
-    """The time hub id (``T:<unit>:<label>``, as the grid names the period) of the first calendar period
-    ``period_interval`` reads in ``text``; None when there is none."""
-    for m in wording.PERIOD.finditer(text):
-        if _interval(m.group(0)):
-            g = m.groups()
-            if g[0]:
-                return f"T:week:{g[0]}-W{g[1]}"
-            if g[2] or g[4]:
-                return f"T:quarter:{g[2] or g[5]}-Q{g[3] or g[4]}"
-            return f"T:day:{g[6]}-{g[7]}-{g[8]}" if g[6] else f"T:month:{g[9]}-{g[10]}"
-    return None
-
-
 def parse_as_of(text: str) -> datetime:
     """A reference date as asked: an ISO date (its midnight) or an ISO date and time, UTC unless it names a zone;
     ``ValueError`` otherwise."""

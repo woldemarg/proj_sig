@@ -16,8 +16,8 @@ from test_temporal import entry, phones_us, restarted, utc
 from graph_query_engine import seeds
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
-from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SeedMatch
-from graph_query_engine.temporal import core_age, parse_as_of, period_hub, period_interval, recency, time_facts, time_line
+from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SEED_TIME_WEIGHT, SeedMatch
+from graph_query_engine.temporal import core_age, parse_as_of, period_interval, recency, time_facts, time_line
 from graph_query_engine.traversal import RECENCY_RANK_WEIGHT, traverse
 from insight_contracts import SNAPSHOT_VERSION
 from insight_graph_service.core.snapshot import metadata_digest
@@ -116,7 +116,7 @@ def test_the_zone_is_signed_in_the_time_record_and_the_calendar_is_read_from_the
 # the answer's reference date (docs/07_question_answering.md §7.2–7.4)
 
 
-def test_freshness_halves_every_half_life_from_the_core_and_a_question_names_its_periods_hub():
+def test_freshness_halves_every_half_life_from_the_core_and_a_reference_date_reads_as_iso():
     traj = {"core": {"t_start": "2031-03-03T00:00:00+00:00", "t_end": "2031-04-07T00:00:00+00:00"}}
     inside, after, before = parse_as_of("2031-03-20"), parse_as_of("2031-07-06"), parse_as_of("2030-12-03")  # 90 days past each end
     assert [core_age(traj["core"], t) for t in (inside, after, before)] == [
@@ -134,18 +134,36 @@ def test_freshness_halves_every_half_life_from_the_core_and_a_question_names_its
         and recency(None, inside, 90) is None
     )
     assert parse_as_of("2031-04-01T12:00+03:00").utcoffset().total_seconds() == 3 * 3600 and parse_as_of(" 2031-04-01 ").tzinfo is not None
-    for bad in ("nope", "31.03.2031", "2031-13-01"):
+    for bad in ("nope", "31.03.2031", "2031-13-01", "2031-02-29"):
         with pytest.raises(ValueError):
             parse_as_of(bad)
-    assert [period_hub(t) for t in ("in 2031-w13?", "Q1 2031", "2031-q2", "on 2031-03-24", "2031-03", "2031-W54", "nothing")] == [
-        "T:week:2031-W13",
-        "T:quarter:2031-Q1",
-        "T:quarter:2031-Q2",
-        "T:day:2031-03-24",
-        "T:month:2031-03",
-        None,
-        None,
-    ]
+
+
+def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_reached(monkeypatch):
+    """A question with a period and nothing the catalog knows is about the period: what lives or moved in it seeds, even
+    over a pattern its other words score above the floor; with nothing in it, the words' seed stands; with a metric or
+    a condition named, the period only reorders (docs/07_question_answering.md §7.2)."""
+    fixed = {
+        "other": SeedMatch("other", 0.43, {"semantic": 0.43, "weight": 0.5}),  # the leftover words' best, over the floor, nothing in the week
+        "event": SeedMatch("event", 0.185 + SEED_TIME_WEIGHT, {"semantic": 0.1, "weight": 0.3, "time": 1.0}),  # under it, a peak in the week
+    }
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
+    held = {"active": [], "peaked": [("event", "2031-W13")], "dropped": []}
+    graph = SimpleNamespace(
+        insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
+    )
+    query = SimpleNamespace(
+        conditions=[], targets=[], text="what happened in 2031-W13?", when=period_interval("2031-W13"), is_lexical=False, components=lambda: []
+    )
+    ask = lambda: [
+        (s.pattern_id, s.matched.get("fallback"))
+        for s in seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())
+    ]  # noqa: E731
+    assert ask() == [("event", "period")]
+    held["peaked"] = []
+    assert ask() == [("other", None)]  # nothing lives or moved in the week: the words' seed stands
+    query.is_lexical, held["peaked"] = True, [("event", "2031-W13")]
+    assert ask() == [("other", None)]  # a metric or a condition named: the period reorders, never lifts one over the floor
 
 
 def test_the_time_line_gives_the_core_its_age_and_an_event_outside_it():
