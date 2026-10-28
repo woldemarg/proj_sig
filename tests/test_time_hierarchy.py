@@ -155,10 +155,11 @@ def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_rea
     query = SimpleNamespace(
         conditions=[], targets=[], text="what happened in 2031-W13?", when=period_interval("2031-W13"), is_lexical=False, components=lambda: []
     )
-    ask = lambda: [
-        (s.pattern_id, s.matched.get("fallback"))
-        for s in seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())
-    ]  # noqa: E731
+
+    def ask() -> list[tuple[str, str | None]]:
+        found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())
+        return [(s.pattern_id, s.matched.get("fallback")) for s in found]
+
     assert ask() == [("event", "period")]
     held["peaked"] = []
     assert ask() == [("other", None)]  # nothing lives or moved in the week: the words' seed stands
