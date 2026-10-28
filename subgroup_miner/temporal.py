@@ -305,21 +305,22 @@ def carriers(
     dimensions: Sequence[str],
 ) -> dict[str, list[dict[str, Any]]]:
     """Per pattern, the condition ``a = v`` of one of the ``dimensions`` (the columns the search groups by) that carries
-    each of its events (``dynamics``'): of the insight's rows, those with a = v (in) moved in the event's bin t against
-    its other rows (out) beyond how the two differ over its other timed rows (¬t) — a difference in differences of their
-    levels (``_level``) — and moved themselves, against the rest of the upload (R, the reference of the series):
+    each of its events (``dynamics``'): of the insight's rows, those with a = v (in) moved in the event's bin t, against
+    the rest of the upload (R, the reference of the series) and beyond their level over the insight's other timed rows
+    (¬t), and its other rows (out) did not:
 
-        d = ((c_in(t) − c_out(t)) − (c_in(¬t) − c_out(¬t))) / s_ref
-        se = sqrt(SE_in(t)² + SE_out(t)² + SE_in(¬t)² + SE_out(¬t)²) / s_ref
-        m = ((c_in(t) − c_R(t)) − (c_in(¬t) − c_R(¬t))) / s_ref
+        m_in  = ((c_in(t)  − c_R(t)) − (c_in(¬t)  − c_R(¬t))) / s_ref       m_out the same of out
+        d     = m_in − m_out = ((c_in(t) − c_out(t)) − (c_in(¬t) − c_out(¬t))) / s_ref
+        se    = sqrt(SE_in(t)² + SE_out(t)² + SE_in(¬t)² + SE_out(¬t)²) / s_ref
 
-    each of the four holding ``temporal_min_rows_bin`` values. Of the conditions whose d and m both clear the least
-    event excess in the event's direction — the part moved, and more than the rest of the insight (out moving the other
-    way alone moves in by d, never by m) — the one with the largest d / se carries it when d / se clears Φ⁻¹(1 − p / N),
-    N every condition tried (Bonferroni: every value of every dimension is). A shift the whole insight shares has none;
-    a cohort the one global search could not mine, alive for a bin inside a broader insight, is named through it
-    (docs/02_discovery.md §2.10). Each ``{metric, bin, attribute, value, rows (its rows in the bin), of (the insight's),
-    shift (d), p}``."""
+    c and SE are a level and its error (``_level``), each of the four of the insight holding ``temporal_min_rows_bin``
+    values. In the event's direction, m_in and d must clear the least event excess and m_out stay under it: the part
+    moved, the rest of the insight did not — a shift the whole insight shares has no carrier, however its parts' gaps
+    vary, and a part that stayed while the others fell is none either. Of those conditions the one with the largest
+    d / se carries the event when d / se clears Φ⁻¹(1 − p / N), N every condition tried (Bonferroni: every value of
+    every dimension is). A cohort the one global search could not mine, alive for a bin inside a broader insight, is
+    named through it (docs/02_discovery.md §2.10). Each ``{metric, bin, attribute, value, rows (its rows in the bin),
+    of (the insight's), shift (d), p}``."""
     dims = {c: pd.factorize(frame[c]) for c in dimensions}
     min_rows, excess = config.temporal_min_rows_bin, config.thresholds.temporal_event_excess
     population: dict[str, tuple[np.ndarray, bool, float]] = {}
@@ -347,8 +348,9 @@ def carriers(
                         continue
                     tried += 1
                     (c1, s1), (c2, s2), (c3, s3), (c4, s4) = (_level(g, tied, fallback) for g in groups)
-                    d = ((c1 - c2) - (c3 - c4)) / s
-                    if sign * d >= excess and sign * ((c1 - ref_t) - (c3 - ref_o)) / s >= excess:
+                    moved, rest_moved = ((c1 - ref_t) - (c3 - ref_o)) / s, ((c2 - ref_t) - (c4 - ref_o)) / s
+                    d = moved - rest_moved
+                    if sign * moved >= excess and sign * d >= excess and sign * rest_moved < excess:
                         kept.append((sign * d * s / math.sqrt(s1**2 + s2**2 + s3**2 + s4**2), d, attribute, uniques[k], len(groups[0])))
             if not kept:
                 continue

@@ -209,6 +209,7 @@ def test_a_carrier_names_the_part_of_an_insight_that_moved_in_its_events_bin():
     assert carried(frame.m - 3 * (part & (week == 3)), DROPPED_AT)["P"][0]["shift"] < -2  # a dip's carrier moved down
     assert carried(frame.m - 3 * (part & (week == 3))) == {}  # a carrier moves the way its event does
     assert carried(frame.m + 3 * ((frame.g == "a") & (week == 3))) == {}
+    assert carried(frame.m + 3 * ((frame.g == "a") & (week == 3)) + 1.5 * (part & (week == 3))) == {}  # the rest moved too: broad
     assert carried(frame.m + 3 * part) == {}
     assert carriers(frame, week, {"P": rows}, {"P": [{"metric": "m", "bin": 3, "kind": PEAKED_AT}]}, reference_scale(frame), CFG, []) == {}
 

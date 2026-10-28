@@ -371,7 +371,12 @@ def load_dataset(
     return LoadedDataset(
         frame=frame,
         dataset_id=dataset_fingerprint(
-            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None
+            digest,
+            present_bins,
+            cats,
+            geo=_geo_text(geo_spec),
+            left_out=left_out,
+            time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None,
         ),
         filename=filename or path.name,
         bins=present_bins,
