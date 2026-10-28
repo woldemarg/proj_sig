@@ -1,4 +1,4 @@
-/* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, chat.js and geo.js hold the surfaces. */
+/* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
 const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
@@ -53,6 +53,8 @@ const MARKS = {
   temporal: 'node[kind="TemporalNode"], edge[type="PEAKED_AT"], edge[type="DROPPED_AT"], edge[type="STARTS_AT"], edge[type="ENDS_AT"], edge[type="WITHIN"]',
 };
 const NO_VECTORS = ["schema", "region", "temporal"];  // legend entries the sphere cannot draw
+const TIME_LEVELS = ["day", "week", "month", "quarter"];  // the calendar's levels, finest first (insight_contracts.TIME_GRIDS)
+const TIME_LEVEL_NAMES = { day: "день", week: "тиждень", month: "місяць", quarter: "квартал" };  // as the upload form names them
 // trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
 // (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
 const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
@@ -62,7 +64,8 @@ const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIA
   latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
   colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
   region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
-  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "стрілка — до періоду піку, пунктирна — спаду"],
+  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "STARTS_AT", "ENDS_AT", "WITHIN",
+    "стрілка — до періоду піку, пунктирна — спаду; тонка лінія — початок ядра, крапки — кінець; коричнева стрілка — до ширшого періоду"],
   seed: ["role_seed"], cross: ["transversal_only"] };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
@@ -370,6 +373,8 @@ function init() {
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
+  on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer
+  on($("time-levels"), ".tl-level", (b) => Timeline.setLevel(b.dataset.level));
   on($("inspector"), ".nb", async (el) => {  // the drawer follows the row; on the map an insight is focused there when drawn, as reveal does
     const id = el.dataset.id, onMap = S.view === "map" && id.startsWith("P-");
     if (S.view === "graph" && id.startsWith("R:") && !layerState().region) {  // a region asked for: the Map regions switch goes on
@@ -387,6 +392,7 @@ function init() {
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
+  $("as-of").addEventListener("input", () => { $("as-of").setCustomValidity(""); if (S.view === "time") Timeline.render(); });  // the axis' as-of line follows the field
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
