@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
@@ -99,17 +100,24 @@ def compute_baselines(graph: DualGraph, seeds: list[SeedMatch], result: Traversa
 
 
 def search(
-    question: str, state: CommittedState, encoder: QueryEncoder, config: QueryConfig, place_scores: dict[str, float] | None = None
+    question: str,
+    state: CommittedState,
+    encoder: QueryEncoder,
+    config: QueryConfig,
+    place_scores: dict[str, float] | None = None,
+    as_of: datetime | None = None,
 ) -> SearchResult:
     """The evidence for ``question`` over one committed state; ``place_scores`` (pattern id -> its overlap with an asked
-    map zone) weigh the seeds, and the question may then be empty."""
+    map zone) weigh the seeds, and the question may then be empty; ``as_of`` is the reference date the findings' freshness
+    counts from — the graph's latest data when not asked."""
     start = time.perf_counter()
     graph = state.graph
     if state.catalog is None and graph.insights:  # a caller that did not prepare one: build it now, kept on the state
         state.catalog = build_catalog(graph, encoder.embedder)
     parsed = parse_query(question, graph, config, state.catalog)
-    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores)
-    result = traverse(graph, seeds, config)
+    clock = as_of or graph.as_of
+    seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores, clock)
+    result = traverse(graph, seeds, config, None if parsed.when else clock)  # an asked period is its own window
     result.baselines = compute_baselines(graph, seeds, result, config)
-    evidence = build_evidence(parsed, result, graph, config, place_scores)
+    evidence = build_evidence(parsed, result, graph, config, place_scores, (clock, "asked" if as_of else "latest data") if clock else None)
     return SearchResult(question, parsed, seeds, result, evidence, time.perf_counter() - start)

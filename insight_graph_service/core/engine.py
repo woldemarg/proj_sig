@@ -24,6 +24,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -234,22 +235,23 @@ class Engine:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
 
     @_healthy
-    def search(self, question: str, **zone: Any) -> SearchResult:
+    def search(self, question: str, as_of: datetime | None = None, **zone: Any) -> SearchResult:
         """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md
-        §7.1–7.4); ``zone``: the ``cells``, ``geometry`` and ``resolution`` of ``place_scores``."""
-        return self._search(question, self.committed(), **zone)
+        §7.1–7.4); ``as_of``: the reference date (the latest data when None); ``zone``: the ``cells``, ``geometry`` and
+        ``resolution`` of ``place_scores``."""
+        return self._search(question, self.committed(), as_of, **zone)
 
     @_healthy
-    def evidence(self, question: str, **zone: Any) -> EvidencePayload:
-        """The evidence for ``question`` (and a map zone, as ``search``) as the narrator receives it (``POST /api/search``);
-        an empty graph is an ordinary answer, not an error."""
+    def evidence(self, question: str, as_of: datetime | None = None, **zone: Any) -> EvidencePayload:
+        """The evidence for ``question`` (and a reference date and a map zone, as ``search``) as the narrator receives it
+        (``POST /api/search``); an empty graph is an ordinary answer, not an error."""
         state = self.committed()
-        return self._search(question, state, **zone).payload() if state.graph.insights else empty_payload(question)
+        return self._search(question, state, as_of, **zone).payload() if state.graph.insights else empty_payload(question)
 
-    def _search(self, question: str, state: CommittedState, **zone: Any) -> SearchResult:
+    def _search(self, question: str, state: CommittedState, as_of: datetime | None = None, **zone: Any) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone))
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of)
         found.seconds = time.perf_counter() - start
         return found
 

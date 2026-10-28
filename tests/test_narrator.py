@@ -81,6 +81,8 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert client.post("/api/chat/query", json={"question": "  "}).status_code == 400
             zone = client.post("/api/chat/query", json={"cells": ["nope"], "resolution": 7})  # a zone alone, passed on as given
             assert zone.status_code == 400 and zone.json() == bad_zone and bodies[-1] == {"question": "", "cells": ["nope"], "resolution": 7}
+            dated = client.post("/api/chat/query", json={"question": "empty?", "as_of": "2031-04-01"})  # a reference date, passed on as given
+            assert dated.status_code == 200 and bodies[-1] == {"question": "empty?", "as_of": "2031-04-01"}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
 

@@ -4,6 +4,7 @@ and the query vector, then the diverse top seeds the transversal walk starts fro
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -12,7 +13,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.temporal import time_score
+from graph_query_engine.temporal import period_hub, recency, time_score
 from insight_contracts import Insight
 from insight_contracts.text import humanize
 
@@ -21,6 +22,7 @@ SEED_MIN_SCORE = 0.25
 SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
 SEED_PLACE_WEIGHT = 0.35  # a map zone: the weight of a pattern's overlap with it (docs/07_question_answering.md §7.2)
 SEED_TIME_WEIGHT = 0.35  # a calendar period in the question: the weight of the pattern's measurement in it (same section)
+SEED_RECENCY_WEIGHT = 0.35  # no period in the question: the weight of the pattern's freshness at the reference date (same section)
 
 
 @dataclass
@@ -38,11 +40,14 @@ def score_pattern(
     config: QueryConfig,
     place: float | None = None,
     time: float | None = None,
+    fresh: float | None = None,
 ) -> SeedMatch:
     """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight, plus
     ``SEED_PLACE_WEIGHT`` × how much it and the asked map zone are one place (``place``; None: no zone); a zone without
     text: weight + place, 0 outside the zone. ``time``: how much the asked period it was measured in (``temporal.time_score``;
-    None: no period asked, or a pattern without a series) adds ``SEED_TIME_WEIGHT`` × it — a bonus, never a penalty."""
+    None: no period asked, or a pattern without a series) adds ``SEED_TIME_WEIGHT`` × it; ``fresh``: its freshness at the
+    reference date when no period is asked (``temporal.recency``; None: a period asked, or no core) adds
+    ``SEED_RECENCY_WEIGHT`` × it — bonuses, never a penalty."""
     pair = set(ins.covariance.get("pair", []))
     wanted_targets = set(query.targets)
     material = [s.robust_z for t in query.targets for s in ins.shifts if s.metric == t and config.thresholds.material(s)]
@@ -78,6 +83,8 @@ def score_pattern(
         score = ins.weight + place if place else 0.0
     if time is not None:
         score += SEED_TIME_WEIGHT * time
+    if fresh is not None:
+        score += SEED_RECENCY_WEIGHT * fresh
     return SeedMatch(
         ins.id,
         float(score),
@@ -90,7 +97,8 @@ def score_pattern(
             "scope_conflicts": conflicts,
         }
         | ({"place": place} if place is not None else {})
-        | ({"time": round(time, 3)} if time is not None else {}),
+        | ({"time": round(time, 3)} if time is not None else {})
+        | ({"recency": round(fresh, 3)} if fresh is not None else {}),
     )
 
 
@@ -101,12 +109,19 @@ def resolve_seeds(
     pattern_vectors: dict[str, np.ndarray],
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
+    as_of: datetime | None = None,
 ) -> list[SeedMatch]:
-    """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap) and pick diverse top seeds."""
+    """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap; without a
+    period, its freshness at ``as_of``, the reference date) and pick diverse top seeds."""
     scope_text = "; ".join(f"{a} = {v}" if a != "*" else v for a, v in query.conditions)
     target_text = "; ".join(humanize(t) for t in query.targets)
     alone = place_scores is not None and not query.text.strip()  # a zone without text: nothing to embed
     qvec = None if alone else encoder.encode_query(scope_text, target_text, query.components(), query.text)
+    clock = as_of if query.when is None else None  # an asked period is its own window: no freshness then
+
+    def fresh(pid: str) -> float | None:
+        return recency(graph.trajectories.get(pid), clock, config.temporal_recency_half_life_days) if clock else None
+
     scored = sorted(
         (
             score_pattern(
@@ -117,6 +132,7 @@ def resolve_seeds(
                 config,
                 None if place_scores is None else place_scores.get(pid, 0.0),
                 time_score(graph.trajectories[pid], query.when) if query.when and pid in graph.trajectories else None,
+                fresh(pid),
             )
             for pid, ins in graph.insights.items()
             if not graph.tampered(pid)  # a tampered pattern never starts a walk
@@ -124,7 +140,9 @@ def resolve_seeds(
         key=lambda s: -s.score,
     )
     seeds: list[SeedMatch] = []
-    base = {s.pattern_id: s.score - SEED_TIME_WEIGHT * s.matched.get("time", 0.0) for s in scored}  # a period only reorders
+    base = {  # a period, or freshness, only reorders
+        s.pattern_id: s.score - SEED_TIME_WEIGHT * s.matched.get("time", 0.0) - SEED_RECENCY_WEIGHT * s.matched.get("recency", 0.0) for s in scored
+    }
     floor = max(SEED_MIN_SCORE, SEED_RELATIVE_MIN * max(base.values())) if scored else 1.0
     for cand in scored:  # diverse seeds: skip direct lattice neighbours of chosen seeds, unless more of it lies in the zone
         if len(seeds) >= SEED_TOP_K:
@@ -137,11 +155,28 @@ def resolve_seeds(
             seeds.append(cand)
     pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
     if not seeds and pool:
-        timed = [s for s in pool if s.matched.get("time")] if query.when and not query.is_lexical else []  # a period alone
+        members: set[str] = set()
+        timed: list[SeedMatch] = []
+        if query.when and not query.is_lexical:  # a period alone: its patterns, by the hub index (DualGraph.members)
+            found = graph.members(query.when)
+            members = set(found["active"]) | {pid for pid, _ in found["peaked"] + found["dropped"]}
+            timed = [s for s in pool if s.pattern_id in members or s.matched.get("time")]
         if alone:
             seeds, how = [max(pool, key=lambda s: s.score)], "place"
-        elif timed:  # nothing the catalog knows, a period it does: the pattern with the most of it, as a zone alone
-            seeds, how = [max(timed, key=lambda s: (s.matched["time"], s.matched["semantic"]))], "time"
+        elif timed:  # nothing the catalog knows, a period it does: what lives or moved in it first, then what was measured there
+            h = config.temporal_recency_half_life_days
+
+            def rank(s: SeedMatch) -> tuple[bool, float, float, float]:
+                return (
+                    s.pattern_id in members,
+                    s.matched.get("time", 0.0),
+                    recency(graph.trajectories.get(s.pattern_id), as_of, h) or 0.0,
+                    s.matched.get("weight", 0.0),
+                )
+
+            seeds, how = [max(timed, key=rank)], "period"
+            if (hub := period_hub(query.text)) in graph.nodes:
+                seeds[0].matched["hub"] = hub
         else:
             seeds, how = [max(pool, key=lambda s: s.matched["semantic"])], "semantic"
         seeds[0].matched["fallback"] = how

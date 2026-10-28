@@ -16,6 +16,7 @@ from conftest import EPOCH, geo_frame, make_config, make_engine, upload_levels, 
 from fastapi.testclient import TestClient
 
 from graph_query_engine import seeds
+from graph_query_engine.config import QueryConfig
 from graph_query_engine.question import parse_query
 from graph_query_engine.seeds import SEED_TIME_WEIGHT, SeedMatch, score_pattern
 from graph_query_engine.temporal import period_interval, time_facts, time_line, time_score
@@ -838,19 +839,33 @@ def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
 
 
 def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch):
-    """Under the floor with nothing lexical, a question naming a period falls back to the timed pattern with the highest
-    time score, as a zone without text falls back to what lies in it; with words the catalog knows, to the semantic best."""
+    """Under the floor with nothing lexical, a question naming a period enters through its hub: what lives or moved in it
+    (``DualGraph.members``) first, then the pattern with the highest time score — as a zone without text falls back to
+    what lies in it; with words the catalog knows, to the semantic best."""
     fixed = {
         "steady": SeedMatch("steady", 0.2, {"semantic": 0.2, "time": 0.5}),
         "peaked": SeedMatch("peaked", 0.1 + SEED_TIME_WEIGHT, {"semantic": 0.1, "time": 1.0}),
+        "member": SeedMatch("member", 0.05, {"semantic": 0.05, "weight": 0.4}),  # active in the week, no series measured there
     }
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
-    graph = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
+    held = {"active": [], "peaked": [], "dropped": []}
+    graph = SimpleNamespace(
+        insights={k: k for k in fixed},
+        trajectories={},
+        nodes={},
+        tampered=lambda pid: False,
+        incident=lambda pid, kinds: [],
+        members=lambda asked: held,
+    )
     query = SimpleNamespace(conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), is_lexical=False, components=lambda: [])
-    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
-    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "time"
+    ask = lambda: seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())  # noqa: E731
+    found = ask()
+    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period" and "hub" not in found[0].matched
+    held["active"], graph.nodes = ["member"], {"T:week:2031-W13": {}}
+    found = ask()  # the hub's member first, though measured nowhere; the hub named once the graph holds it
+    assert [s.pattern_id for s in found] == ["member"] and found[0].matched["hub"] == "T:week:2031-W13"
     query.is_lexical = True
-    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
+    found = ask()
     assert [s.pattern_id for s in found] == ["steady"] and found[0].matched["fallback"] == "semantic"
 
 
