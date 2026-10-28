@@ -97,32 +97,29 @@ def _months_on(day: date, months: int) -> date:
     return date(day.year + month // 12, month % 12 + 1, 1)
 
 
+_stamp = functools.lru_cache(maxsize=4096)(datetime.fromisoformat)  # ponytail: a dataset's bins repeat across its patterns
+
+
 def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> float:
     """Half the share of the asked interval its metric's measured bins cover, plus a half when the bin of one of its
     events lies inside it — an event in the period outranks mere presence through it, and a coarse event (a month's)
     is no event of each finer period it spans (``seeds.SEED_TIME_WEIGHT`` weighs the score). The period is read on
-    the dataset's calendar (its ``tz``): the same wall-clock bounds in its zone, as its bins are named."""
+    the dataset's calendar (its ``tz``): the same wall-clock bounds in its zone, against the bounds the trajectory
+    stores for its bins."""
     zone = ZoneInfo(trajectory["tz"]) if trajectory.get("tz") else UTC
-    asked = tuple(t.replace(tzinfo=zone) for t in asked)
-
-    def span(period: str) -> tuple[datetime, datetime] | None:
-        bounds = period_interval(period)
-        return tuple(t.replace(tzinfo=zone) for t in bounds) if bounds else None
-
-    def overlap(period: str) -> float:
-        s = span(period)
-        return max((min(s[1], asked[1]) - max(s[0], asked[0])).total_seconds(), 0.0) if s else 0.0
-
-    measured = [e["period"] for e in trajectory["series"].get(trajectory["metric"], []) if e]
-    share = sum(map(overlap, measured)) / (asked[1] - asked[0]).total_seconds()
-    inside = any((s := span(e["period"])) and asked[0] <= s[0] and s[1] <= asked[1] for e in trajectory["events"])
+    lo, hi = (t.replace(tzinfo=zone) for t in asked)
+    bins = [(_stamp(a), _stamp(b)) for a, b in trajectory["bins"]]
+    measured = [bins[t] for t, e in enumerate(trajectory["series"].get(trajectory["metric"], [])) if e]
+    share = sum(max((min(b, hi) - max(a, lo)).total_seconds(), 0.0) for a, b in measured) / (hi - lo).total_seconds()
+    inside = any(lo <= bins[e["bin"]][0] and bins[e["bin"]][1] <= hi for e in trajectory["events"])
     return 0.5 * share + (0.5 if inside else 0.0)
 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
     """What an insight's time line says (empty for an insight of a dataset without a time column): its grid and span,
     its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its core (the
-    run of bins holding most of its rows; ``age_days`` from the reference date is added by the evidence), its own events —
+    run of bins holding most of its rows, as the trajectory holds it; its age from the reference date is added by the
+    evidence), its own events —
     the strongest first, each with the condition that carries it when one does and ``outside: True`` when its bin is not
     in the core —, the ``echoes`` (the events a broader insight has too, told once, there), the bins measured and all of it
     in words (``wording.time_words``), as the evidence-only answer and the console say it."""
@@ -137,7 +134,7 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
         "trend": trajectory["trend"] if trajectory["bins_measured"] else None,  # a series never measured has no trend
         "current": current,
         "faded": current is not None and abs(current) < fade_z,
-        "core": {k: core[k] for k in ("start", "end", "t_start", "t_end", "share", "bins")} if core else None,
+        "core": core,
         "events": [
             {k: e[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier") if k in e}
             | ({"outside": True} if core and not core["first"] <= e["bin"] <= core["last"] else {})

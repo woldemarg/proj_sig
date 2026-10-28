@@ -437,8 +437,9 @@ def _temporal_plane(
     record that fails its metadata digest, or a file other than the one it signed (a missing one or one that no longer
     reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
     whose metrics has a series (a geo counter or share), gets no trajectory. A trajectory is
-    ``subgroup_miner.temporal.dynamics`` of the pattern's series; its short form is the pattern's ``temporal_summary``,
-    the dataset's ``temporal`` its column, grid, zone and span. An event keeps the condition that carries it (``carrier``,
+    ``subgroup_miner.temporal.dynamics`` of the pattern's series; the pattern's ``temporal_summary`` is its metric, trend,
+    current level, bins measured, events' count and core, the dataset's ``temporal`` its column, grid, zone and span, as
+    the record signs them. An event keeps the condition that carries it (``carrier``,
     signed in the series at the commit, ``subgroup_miner.temporal.carriers``) and, when a broader insight of the dataset
     has it too, ``echo_of`` that insight (``echoes``). A hub exists with an event in it or a core's end — a pattern has
     one PEAKED_AT / DROPPED_AT edge per hub and kind, its most prominent event there, ``metrics`` naming every metric
@@ -452,7 +453,8 @@ def _temporal_plane(
         if digest != signed["series_digest"] or series is None:
             log.warning("%s: its series file is missing or not the one its record signs: no temporal plane", batches[bid]["dataset_id"])
             continue
-        head = {k: signed[k] for k in ("column", "grid", "span")} | {"tz": batches[bid].get("tz")}  # the calendar its bins are named on
+        head = {k: signed[k] for k in ("column", "grid", "span")}  # the calendar its bins are named on, signed with them
+        head["tz"] = signed.get("tz", batches[bid].get("tz"))  # a record signed before the zone was among them keeps its unsigned copy
         nodes[dataset_node_id(batches[bid]["dataset_id"])].props["temporal"] = head
         mine = {}
         for pid, entry in sorted(series.items()):
@@ -465,10 +467,8 @@ def _temporal_plane(
             for e in traj["events"]:
                 if c := carried.get((e["metric"], e["bin"])):
                     e["carrier"] = {k: c[k] for k in ("attribute", "value", "rows", "of", "shift", "p")}
-            core = traj["core"]
-            nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
-                "events": len(traj["events"]),
-                "core": {k: core[k] for k in ("start", "end", "share", "bins")} if core else None,
+            nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of", "core")} | {
+                "events": len(traj["events"])
             }
         echoes(mine, {pid: nodes[pid].props for pid in mine})
         trajectories |= mine

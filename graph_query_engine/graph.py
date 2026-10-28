@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from graph_query_engine.temporal import period_interval
 from insight_contracts import (
     SNAPSHOT_VERSION,
     Insight,
@@ -115,15 +114,15 @@ class DualGraph:
         """The patterns of a period, any period, a hub's or not, no edge walked: ``active`` — those whose core (the bins
         holding most of their rows, ``trajectories``) overlaps it —, ``peaked`` and ``dropped`` — ``(pattern, period)`` of
         the events whose bin lies inside it. The period is read on each pattern's own calendar (its ``tz``), as
-        ``temporal.time_score`` reads one: the same wall-clock bounds in its zone."""
+        ``temporal.time_score`` reads one: the same wall-clock bounds in its zone, against the bounds its trajectory
+        stores for its core and its bins."""
 
-        def build() -> dict[str, tuple[Any, ...]]:  # pattern -> (its zone, its core's bounds, [(an event's bounds, kind, period)])
+        def build() -> dict[str, tuple[Any, ...]]:  # pattern -> (its zone, its core's bounds, [(its event's bin bounds, kind, period)])
             spans = {}
             for pid, t in self.trajectories.items():
-                core = t.get("core")
+                core, bins = t.get("core"), [(datetime.fromisoformat(a), datetime.fromisoformat(b)) for a, b in t["bins"]]
                 bounds = (datetime.fromisoformat(core["t_start"]), datetime.fromisoformat(core["t_end"])) if core else None
-                events = [(period_interval(e["period"]), e["kind"], e["period"]) for e in t["events"]]
-                spans[pid] = (ZoneInfo(t["tz"]) if t.get("tz") else UTC, bounds, events)
+                spans[pid] = (ZoneInfo(t["tz"]) if t.get("tz") else UTC, bounds, [(bins[e["bin"]], e["kind"], e["period"]) for e in t["events"]])
             return spans
 
         out: dict[str, list[Any]] = {"active": [], "peaked": [], "dropped": []}
@@ -131,8 +130,8 @@ class DualGraph:
             lo, hi = (t.replace(tzinfo=zone) for t in asked)
             if core and core[0] < hi and lo < core[1]:
                 out["active"].append(pid)
-            for bounds, kind, period in events:
-                if bounds and lo <= bounds[0].replace(tzinfo=zone) and bounds[1].replace(tzinfo=zone) <= hi:
+            for (start, end), kind, period in events:
+                if lo <= start and end <= hi:
                     out["peaked" if kind == "PEAKED_AT" else "dropped"].append((pid, period))
         return out
 
