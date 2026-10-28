@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
-import warnings
 import zoneinfo
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,11 +12,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pandas.tseries.api import guess_datetime_format
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, select_levels
+from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, parse_times, select_levels
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -233,6 +231,8 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
     if grid != "auto":
         return grid
     naive = times.dropna().dt.tz_convert("UTC").dt.tz_localize(None)
+    if naive.empty:  # no time reads (a geo level none of whose points has one): any unit, the check refuses it
+        return "week"
     first, last = naive.quantile(0.01), naive.quantile(0.99)
 
     def balance(unit: str) -> float:
@@ -258,25 +258,15 @@ def parse_tz(tz: str | None) -> str | None:
 
 
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
-    """A time column as UTC times (a time without a zone is taken in ``tz``, UTC by default), read in the one format that reads most of it:
-    ISO 8601, or its first value's with the day before the month, or with the month first (that order on a tie). A
-    value in another format is NaT, never another date. A column the file lacks, a numeric one (no unit to read it in)
-    or one with no value that reads as a time is ``invalid_options``."""
+    """A time column as UTC times, read in the one format that reads most of it (``spatial.parse_times``: the reading
+    a geo level's cells count their days by too); a time without a zone is taken in ``tz``, UTC by default. A column the
+    file lacks, a numeric one (no unit to read it in) or one with no value that reads as a time is ``invalid_options``."""
     if column not in frame.columns:
         raise IngestionError("invalid_options", f"time column '{column}' not in dataset")
     values = frame[column]
     if pd.api.types.is_numeric_dtype(values):
         raise IngestionError("invalid_options", f"time column '{column}' holds numbers: give its times as dates")
-    if pd.api.types.is_datetime64_any_dtype(values):
-        times = pd.to_datetime(values, utc=True)
-    else:
-        times = pd.to_datetime(values, errors="coerce", utc=True, format="ISO8601")
-        if times.isna().sum() > values.isna().sum():  # a value that is no ISO 8601 time: its first value's format may read more
-            with warnings.catch_warnings():  # a guess with the day first warns when that value is ISO 8601
-                warnings.simplefilter("ignore", UserWarning)
-                formats = dict.fromkeys(f for d in (True, False) if (f := guess_datetime_format(str(values.dropna().iloc[0]), dayfirst=d)))
-            readings = [times, *(pd.to_datetime(values, errors="coerce", utc=True, format=f) for f in formats)]
-            times = max(readings, key=lambda r: r.notna().sum())
+    times = parse_times(values)
     if times.isna().all():
         raise IngestionError("invalid_options", f"no value of time column '{column}' reads as a time")
     if tz:  # a time written without a zone is a wall time of tz: shift it from UTC to there; one with a zone keeps it
@@ -310,8 +300,9 @@ def load_dataset(
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
     of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
     (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
-    ``resolve_grid`` of the span here, a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by default, and the zone of a
-    time written without one) — discovery never sees it."""
+    ``resolve_grid`` of the span of the rows the series are of — a geo level's located points, a table's every row —,
+    a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by
+    default, and the zone of a time written without one) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -335,7 +326,6 @@ def load_dataset(
         tz = parse_tz(tz)
         times = read_times(frame, time, tz)
         option = parse_grid(grid)  # auto names the dataset: its unit is fitted after admission (temporal.fit_grid)
-        grid = resolve_grid(times, option)
         if not geo_spec:  # a geo level's cells count its days as they would without a time option: time adds, never removes
             frame = frame.drop(columns=[time])
         if unread := int(times.isna().sum()):
@@ -356,6 +346,8 @@ def load_dataset(
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
+    if time:  # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
+        grid = resolve_grid(times if spatial is None else times[spatial.point_cell >= 0], option)
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)
     bin_cols, missing_bins = select_present(list(bin_spec), frame, explicit=bins is not None, option="Bin", tolerated=tolerated)

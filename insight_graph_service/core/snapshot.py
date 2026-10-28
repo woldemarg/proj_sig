@@ -42,7 +42,8 @@ from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.uploads import declared_glossary
 from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
-from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
+from subgroup_miner.spatial import GEO_REGION_MIN_SHARE
+from subgroup_miner.spatial_plane import SpatialStructure
 from subgroup_miner.temporal import dynamics, echoes
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
@@ -436,7 +437,7 @@ def _temporal_plane(
     reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
     whose metrics has a series (a geo counter or share), gets no trajectory. A trajectory is
     ``subgroup_miner.temporal.dynamics`` of the pattern's series; its short form is the pattern's ``temporal_summary``,
-    the dataset's ``temporal`` its column, grid and span. An event keeps the condition that carries it (``carrier``,
+    the dataset's ``temporal`` its column, grid, zone and span. An event keeps the condition that carries it (``carrier``,
     signed in the series at the commit, ``subgroup_miner.temporal.carriers``) and, when a broader insight of the dataset
     has it too, ``echo_of`` that insight (``echoes``). A hub exists only with an event in it, and a pattern has one
     edge per hub and kind: its most prominent event there, ``metrics`` naming every metric that peaked (or dipped) then."""
@@ -448,7 +449,7 @@ def _temporal_plane(
         if digest != signed["series_digest"] or series is None:
             log.warning("%s: its series file is missing or not the one its record signs: no temporal plane", batches[bid]["dataset_id"])
             continue
-        head = {k: signed[k] for k in ("column", "grid", "span")}
+        head = {k: signed[k] for k in ("column", "grid", "span")} | {"tz": batches[bid].get("tz")}  # the calendar its bins are named on
         nodes[dataset_node_id(batches[bid]["dataset_id"])].props["temporal"] = head
         mine = {}
         for pid, entry in sorted(series.items()):
