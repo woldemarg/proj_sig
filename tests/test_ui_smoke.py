@@ -775,3 +775,93 @@ def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tm
         card = page.evaluate("(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }", turn)
         assert item["time"]["words"] in card  # the evidence card's chip, the server's words
         assert not errors, errors
+
+
+HUB_ROWS = """() => { const by = {}; S.cy.nodes('[kind="TemporalNode"]').forEach((n) => { (by[n.data('granularity')] ||= []).push([n.position('y'), n.position('x'), n.data('t_start')]); }); return by; }"""
+
+
+def _hub_levels(page) -> dict[str, float]:
+    """The y of each level's row of periods; asserts one row a level, in calendar order along it."""
+    rows = page.evaluate(HUB_ROWS)
+    assert all(len({round(y) for y, _, _ in hubs}) == 1 for hubs in rows.values()), rows
+    assert all([r[2] for r in sorted(hubs, key=lambda r: r[1])] == sorted(r[2] for r in hubs) for hubs in rows.values())
+    return {level: hubs[0][0] for level, hubs in rows.items()}
+
+
+@pytest.mark.browser
+def test_the_periods_lie_in_rows_by_level_and_a_periods_drawer_lists_who_lives_and_moved_there(timed):
+    """The time hubs of each calendar level in a row of their own under the insights, the finest nearest them, WITHIN
+    arrows from a row to the next, in both layouts and behind the periods' switch; a period's drawer lists the insights
+    active in it and those that peaked or dipped there, a month's by their week; an insight's drawer its core and where
+    it stands at the latest data (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    latest = record["temporal"]["span"][1][:10]
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        y = _hub_levels(page)
+        lowest = page.evaluate("Math.max(...S.cy.nodes('[kind=\"Pattern\"]').map((n) => n.position('y')))")
+        assert {"week", "month", "quarter"} <= y.keys() and lowest < y["week"] < y["month"] < y["quarter"]
+        within = page.evaluate("S.cy.edges('[type=\"WITHIN\"]').map((e) => [e.source().data('granularity'), e.target().data('granularity')])")
+        assert within and {tuple(w) for w in within} <= {("day", "week"), ("week", "month"), ("month", "quarter")}
+        assert name("WITHIN") in page.get_attribute(".key[data-key='temporal']", "title")
+        page.click("#legend .toggle[data-key='temporal']")  # the periods' layer off: the new edges with it
+        page.wait_for_function("S.cy.$(MARKS.temporal).every((el) => el.hidden() || el.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        page.select_option("#layout", "force")
+        y = _hub_levels(page)
+        assert y["week"] < y["month"] < y["quarter"]
+        page.select_option("#layout", "dual")
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert "тиждень" in text and name("time_active") in text and name("PEAKED_AT (in)") in text
+        assert page.locator('#inspector .nb[data-id^="P-"]').count() > 0
+        page.evaluate("inspect('T:month:2031-03')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-03'", timeout=10000)
+        assert "2031-W13" in page.inner_text("#inspector")  # the month's peak, named by the week it fell in
+        page.click('#inspector .nb[data-id^="P-"]')
+        page.wait_for_selector("#inspector svg.spark rect.core", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert name("time_core") in text and f"{name('as_of')} {latest}" in text
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
+    """The date by the question box goes with the question (the latest data its placeholder); one that does not read as
+    a date sends nothing; the question and the answer both say the date (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    question = "Why is the discount higher for phones in the US?"
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes().length > 0", timeout=30000)
+        assert page.get_attribute("#as-of", "placeholder") == record["temporal"]["span"][1][:10]
+        page.evaluate("document.getElementById('use-llm').checked = false")
+        page.fill("#as-of", "31.03.2031")
+        page.evaluate("(q) => ask(q)", question)
+        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
+        page.fill("#as-of", "2031-03-31")
+        with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
+            page.evaluate("(q) => ask(q)", question)
+        assert json.loads(sent.value.post_data)["as_of"] == "2031-03-31"
+        page.wait_for_selector("#thread .bot-meta", timeout=60000)
+        said = f"{name('as_of')} 2031-03-31"
+        assert said in page.inner_text("#thread .msg-user") and said in page.inner_text("#thread .bot-meta")
+        assert not errors, errors

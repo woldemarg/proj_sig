@@ -53,6 +53,8 @@ const MARKS = {
   temporal: 'node[kind="TemporalNode"], edge[type="PEAKED_AT"], edge[type="DROPPED_AT"], edge[type="STARTS_AT"], edge[type="ENDS_AT"], edge[type="WITHIN"]',
 };
 const NO_VECTORS = ["schema", "region", "temporal"];  // legend entries the sphere cannot draw
+const TIME_LEVELS = ["day", "week", "month", "quarter"];  // the calendar's levels, finest first (insight_contracts.TIME_GRIDS)
+const TIME_LEVEL_NAMES = { day: "день", week: "тиждень", month: "місяць", quarter: "квартал" };  // as the upload form names them
 // trust (docs/06_graph_and_storage.md §6.2) and scale (docs/07_question_answering.md §7.4): their words are TERMS'
 // (reliability_A…, credibility_1…, integrity_ok…, scale_…), their chip classes these
 const CREDIBILITY = { 1: "ok", 2: "warn", 5: "bad", 6: "" };
@@ -62,7 +64,8 @@ const LEGEND_TERMS = { anchor: ["theme"], cov: ["covariance"], lattice: ["SPECIA
   latent: ["RELATED_TO", "CO_OCCURS", "дуга — пов'язані теми, пунктир — спільні"], contrast: ["CONTRASTS", "пунктир"], sibling: ["SIBLING", "крапки"],
   colocated: ["CO_LOCATED", "пунктир"], activates: ["ACTIVATES", "пунктир — слабка належність: лише для охоплення, пошук нею не йде"],
   region: ["region", "IN_REGION", "PARENT_OF", "пунктир — у регіоні, стрілка — до ширшого регіону"], schema: ["HAS_SCOPE", "TARGETS"],
-  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "стрілка — до періоду піку, пунктирна — спаду"],
+  temporal: ["temporal_hub", "PEAKED_AT", "DROPPED_AT", "STARTS_AT", "ENDS_AT", "WITHIN",
+    "стрілка — до періоду піку, пунктирна — спаду; тонка лінія — початок ядра, крапки — кінець; коричнева стрілка — до ширшого періоду"],
   seed: ["role_seed"], cross: ["transversal_only"] };
 // The terms the console names, from insight_contracts/wording.py (tests/test_wording.py keeps the two equal): key ->
 // [name, meaning]; a relation's key is its edge type, "<TYPE> (in)" incoming, its name labelling the other end.
@@ -387,6 +390,7 @@ function init() {
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
+  $("as-of").addEventListener("input", () => $("as-of").setCustomValidity(""));  // a corrected date is sent again
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click

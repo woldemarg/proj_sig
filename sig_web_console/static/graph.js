@@ -5,7 +5,7 @@
 function graphStyle() {
   const ink = cssVar("--graph-ink") || "#3a4050", edge = cssVar("--graph-edge") || "#c8cdd8";
   const up = cssVar("--up"), down = cssVar("--down"), cov = cssVar("--cov"), anchor = cssVar("--anchor"), path = cssVar("--path"), bad = cssVar("--bad");
-  const surface = cssVar("--surface") || "#fff", muted = cssVar("--muted"), region = cssVar("--region");
+  const surface = cssVar("--surface") || "#fff", muted = cssVar("--muted"), region = cssVar("--region"), time = cssVar("--time");
   return [
     { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
@@ -14,7 +14,7 @@ function graphStyle() {
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
     { selector: 'node[kind="Metric"]', style: { shape: "tag", width: 48, height: 18, "background-color": cov, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
-    { selector: 'node[kind="TemporalNode"]', style: { shape: "round-rectangle", width: 30, height: 14, "background-color": cssVar("--time"), "font-size": 9 } },
+    { selector: 'node[kind="TemporalNode"]', style: { shape: "round-rectangle", width: 30, height: 14, "background-color": time, "font-size": 9 } },
     { selector: 'node[kind="Region"]', style: { shape: "diamond", width: "mapData(patterns, 1, 12, 18, 34)", height: "mapData(patterns, 1, 12, 18, 34)", "background-color": region, "font-size": 9 } },
     { selector: 'node[kind="Dataset"], node[kind="Batch"]', style: { display: "none" } },
     { selector: 'node[kind="PlaneLabel"]', style: { label: "data(label)", "background-opacity": 0, "font-size": 13, "font-weight": 700, color: muted, "text-valign": "center", "text-halign": "right", events: "no", "text-outline-width": 0 } },
@@ -24,6 +24,9 @@ function graphStyle() {
     { selector: 'edge[type="CONTRASTS"]', style: { "line-style": "dashed", "line-color": bad, width: 1.5, opacity: 0.7 } },
     { selector: 'edge[type="PEAKED_AT"]', style: { "line-color": up, "target-arrow-shape": "triangle", "target-arrow-color": up, "arrow-scale": 0.7, width: 1.4, opacity: 0.75 } },
     { selector: 'edge[type="DROPPED_AT"]', style: { "line-style": "dashed", "line-color": down, "target-arrow-shape": "triangle", "target-arrow-color": down, "arrow-scale": 0.7, width: 1.4, opacity: 0.75 } },
+    { selector: 'edge[type="STARTS_AT"], edge[type="ENDS_AT"]', style: { "line-color": time, width: 0.8, opacity: 0.45 } },  // a core's ends: thin, no arrow
+    { selector: 'edge[type="ENDS_AT"]', style: { "line-style": "dotted" } },
+    { selector: 'edge[type="WITHIN"]', style: { "line-color": time, "target-arrow-shape": "triangle", "target-arrow-color": time, "arrow-scale": 0.6, opacity: 0.6 } },
     { selector: 'edge[type="CO_LOCATED"]', style: { "line-style": "dashed", "line-color": cssVar("--path"), width: "mapData(weight, 0, 1, 0.6, 2.4)", opacity: 0.6 } },
     { selector: 'edge[type="IN_REGION"]', style: { "line-style": "dashed", "line-color": region, width: "mapData(weight, 0, 1, 0.5, 2)", opacity: 0.55 } },
     { selector: 'edge[type="PARENT_OF"]', style: { "line-color": region, "target-arrow-shape": "triangle", "target-arrow-color": region, "arrow-scale": 0.6, opacity: 0.6 } },
@@ -84,17 +87,17 @@ function dualPlanePositions(cy) {
     });
     x += width + 50;
   }
-  const hubs = cy.nodes('[kind="TemporalNode"]').sort((a, b) => a.data("t_start").localeCompare(b.data("t_start")) || a.id().localeCompare(b.id()));  // a timeline under the insights
-  if (hubs.length) {
-    maxY += 130;
-    hubs.forEach((n, i) => { pos[n.id()] = { x: ((i + 0.5) * Math.max(x - 50, 400)) / hubs.length, y: maxY }; });
+  const span = Math.max(x - 50, 400);
+  const hubs = cy.nodes('[kind="TemporalNode"]');
+  if (hubs.length) {  // the calendar under the insights: a row a level, the finest first
+    const time = hubRows(hubs, maxY + 130, span);
+    Object.assign(pos, time.pos); maxY = time.y - 90;
   }
   const regions = layerState().region ? cy.nodes('[kind="Region"]') : cy.collection();  // rows only while drawn
   const rows = regionRows(regions, (n) => pos[n.id()], maxY + 150);
   Object.assign(pos, rows.pos);
   const y = rows.y;
   const bottom = cy.nodes('[kind="Dimension"], [kind="Metric"]');
-  const span = Math.max(x - 50, 400);
   bottom.forEach((n, i) => { pos[n.id()] = { x: (i + 0.5) * span / Math.max(bottom.length, 1), y: regions.length ? y + 60 : maxY + 170 }; });
   pos.__lbl_latent = { x: -150, y: 0 };
   pos.__lbl_struct = { x: -150, y: top };
@@ -149,6 +152,32 @@ function regionRows(regions, placed, top) {
   return { pos, y };
 }
 
+function hubRows(hubs, top, span) {
+  /* the periods in rows by level from y = top, finest first (the events and the cores' ends land there, WITHIN runs to the
+     coarser rows below, as PARENT_OF does between the regions'), each at its place in calendar time across ``span`` px and
+     kept 70 px from the one before */
+  const pos = {}, t = (n, k) => Date.parse(n.data(k));
+  const t0 = Math.min(...hubs.map((n) => t(n, "t_start"))), t1 = Math.max(...hubs.map((n) => t(n, "t_end")));
+  let y = top;
+  for (const level of TIME_LEVELS.filter((l) => hubs.some((n) => n.data("granularity") === l))) {
+    let last = -Infinity;
+    hubs.filter((n) => n.data("granularity") === level).sort((a, b) => t(a, "t_start") - t(b, "t_start") || a.id().localeCompare(b.id())).forEach((n) => {
+      last = Math.max((span * ((t(n, "t_start") + t(n, "t_end")) / 2 - t0)) / (t1 - t0 || 1), last + 70);
+      pos[n.id()] = { x: last, y };
+    });
+    y += 90;
+  }
+  return { pos, y };
+}
+
+function placeHubs(cy) {
+  /* the periods in rows under the force layout's nodes, which they take no part in */
+  const shown = cy.nodes(":visible").not('[kind="Region"], [kind="TemporalNode"], [kind="PlaneLabel"]'), hubs = cy.nodes('[kind="TemporalNode"]');
+  if (!shown.length || !hubs.length) return;
+  const box = shown.boundingBox(), { pos } = hubRows(hubs, box.y2 + 120, Math.max(box.w, 400));
+  hubs.forEach((n) => n.position({ x: box.x1 + pos[n.id()].x, y: pos[n.id()].y }));
+}
+
 function placeRegions(cy) {
   /* the regions in rows under the force layout's nodes, which they take no part in */
   const shown = cy.nodes(":visible").not('[kind="Region"], [kind="PlaneLabel"]');
@@ -165,10 +194,10 @@ function runLayout() {
     arcLatentEdges(cy, true);
     cy.fit(cy.elements(":visible"), 40);
   } else {
-    const regions = cy.nodes('[kind="Region"]');
+    const apart = cy.nodes('[kind="Region"], [kind="TemporalNode"]');  // in rows of their own under the rest
     cy.layout({ name: "cose", animate: false, idealEdgeLength: 90, nodeRepulsion: 9000, randomize: true, fit: true, padding: 40,
-      eles: cy.elements(":visible").not('[kind="PlaneLabel"]').not(regions).not(regions.connectedEdges()) }).run();
-    placeRegions(cy);
+      eles: cy.elements(":visible").not('[kind="PlaneLabel"]').not(apart).not(apart.connectedEdges()) }).run();
+    placeHubs(cy); placeRegions(cy);
     arcLatentEdges(cy, false);
   }
 }
@@ -300,6 +329,8 @@ async function loadGraph() {
   if (seq !== S.graphSeq) return;  // a later filter or commit asked again
   S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
+  S.asOf = (g.stats || {}).as_of || null;  // the latest data: the date the answers and the drawer count freshness from
+  $("as-of").placeholder = S.asOf ? S.asOf.slice(0, 10) : "РРРР-ММ-ДД";
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
@@ -544,13 +575,33 @@ function timeRows(t) {
   const line = x.map((v, i) => (v === null ? null : `${px(i).toFixed(1)},${py(v).toFixed(1)}`)).filter(Boolean).join(" ");
   const dots = z.map((e, i) => (e ? `<circle cx="${px(i).toFixed(1)}" cy="${py(e.z).toFixed(1)}" r="2"></circle>` : "")).join("");
   const marks = t.events.filter((e) => e.metric === t.metric).map((e) => `<circle class="ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" cx="${px(e.bin).toFixed(1)}" cy="${py(e.z_smoothed).toFixed(1)}" r="4"></circle>`).join("");
-  const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`;
-  return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` +
-    `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}"><line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
+  const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`, c = t.core;
+  const band = c ? `<rect class="core" x="${(px(c.first) - 3).toFixed(1)}" y="0" width="${(px(c.last) - px(c.first) + 6).toFixed(1)}" height="${h}"></rect>` : "";
+  const core = c ? `<div class="tl"><span>${term("time_core")}: <time>${esc(c.start === c.end ? c.start : `${c.start} — ${c.end}`)}</time> <span class="muted">(${esc(c.t_start.slice(0, 10))} — ${esc(c.t_end.slice(0, 10))}, не включно · ${num(c.share * 100, 0)}% рядків)</span></span><span class="muted">${esc(ageWords(c, asOfDate()))}</span></div>` : "";
+  return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` + core +
+    `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}">${band}<line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
     (t.events.length ? `<details class="nb-group"${t.events.length <= SHOWN ? " open" : ""}><summary>Події <span class="muted">(${t.events.length})</span></summary>` +
       t.events.map((e) => `<div class="tl${e.echo_of ? " muted" : ""}"><span>${esc(word(e.kind))} <time>${esc(e.period)}</time></span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd` +
         (e.carrier ? ` · ${term("time_carrier")}: ${esc(human(e.carrier.attribute))} — ${esc(e.carrier.value)}` : "") + (e.echo_of ? ` · ${term("time_echo")}` : "") + `</span></div>`).join("") + `</details>` : "") +
     (t.gaps.length ? `<div class="tl"><span class="muted">${esc(word("time_unmeasured"))}: ${esc(t.gaps.map(([a, b]) => (a === b ? a : `${a}–${b}`)).join(", "))}</span></div>` : "");
+}
+
+function asOfDate() {
+  /* the date freshness counts from: the one by the question box when it reads as a date, else the latest data */
+  const v = $("as-of").value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) ? v : S.asOf;
+}
+
+function ageWords(core, asOf) {
+  /* where an insight's core lies from the reference date, in days, weeks or months */
+  if (!asOf) return "";
+  const at = Date.parse(asOf), start = Date.parse(core.t_start), end = Date.parse(core.t_end), date = asOf.slice(0, 10);
+  const span = (ms) => {
+    const d = Math.max(1, Math.ceil(ms / 86400000));
+    return d < 14 ? plural(d, "день", "дні", "днів") : d < 90 ? plural(Math.round(d / 7), "тиждень", "тижні", "тижнів") : plural(Math.round(d / 30), "місяць", "місяці", "місяців");
+  };
+  if (at < start) return `${word("as_of")} ${date} ще не почалося: за ${span(start - at)}`;
+  return at < end ? `${word("as_of")} ${date} триває` : `${word("as_of")} ${date} закінчилося ${span(at - end)} тому`;
 }
 
 async function inspect(id, note = "") {
@@ -595,9 +646,12 @@ async function inspect(id, note = "") {
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
     ]);
-  } else if (n.kind === "TemporalNode") {
+  } else if (n.kind === "TemporalNode") {  // who lives in the period or moved in it, at any level (views.node_details' members)
     $("drawer-title").textContent = p.period;
-    html += `<p class="lead">${esc(TERMS.temporal_hub[1])}</p>` + kv([["Від", esc(p.t_start.slice(0, 10))], ["До (не включно)", esc(p.t_end.slice(0, 10))]]);
+    const m = d.members || {}, list = (key, items) =>
+      (items.length ? `<h4>${esc(cap(word(key)))} <span class="muted">(${items.length})</span></h4>` + folded(items.map((it) => nbRow(it.id, it.label, it.period && it.period !== p.period ? it.period : ""))) : "");
+    html += `<p class="lead">${esc(TERMS.temporal_hub[1])}</p>` + kv([["Рівень", esc(TIME_LEVEL_NAMES[p.granularity] || p.granularity)], ["Від", esc(p.t_start.slice(0, 10))], ["До (не включно)", esc(p.t_end.slice(0, 10))]]);
+    html += list("time_active", m.active || []) + list("PEAKED_AT (in)", m.peaked || []) + list("DROPPED_AT (in)", m.dropped || []);
   } else if (n.kind === "Region") {
     $("drawer-title").textContent = `рівень ${p.resolution} · ${p.h3}`;
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
