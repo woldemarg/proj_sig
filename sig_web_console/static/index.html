@@ -32,6 +32,9 @@
           <span class="file" id="file-name"></span>
           <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
         </label>
+        <label class="small" for="sample">Або готовий датасет</label>
+        <select class="field" id="sample"><option value="">— не обрано —</option></select>
+        <div class="hint" id="sample-hint"></div>
         <details class="adv">
           <summary>Параметри колонок</summary>
           <label class="small" for="categories">Вважати категоріями</label>
@@ -77,8 +80,6 @@
         </details>
         <div class="rail-actions">
           <button type="submit" class="btn" id="upload-btn" disabled>Аналізувати</button>
-          <button type="button" class="btn ghost" id="demo-btn" title="Синтетична таблиця роздрібних продажів із закладеними явищами">Демо: таблиця</button>
-          <button type="button" class="btn ghost" id="demo-geo-btn" title="Житло Каліфорнії: 20 640 кварталів із координатами, проаналізованих як комірки H3">Демо: мапа</button>
         </div>
       </form>
       <div id="upload-msg" class="msg"></div>
@@ -196,7 +197,7 @@
         <div class="inner">
           <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
           <h3>Інсайтів ще немає</h3>
-          <p>Додайте таблицю ліворуч — або спробуйте демо: таблицю продажів чи мапу записів із координатами, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
+          <p>Додайте таблицю ліворуч — або оберіть там готовий датасет: продажі, житло Каліфорнії, пожежні виклики, ДТП, лісові пожежі, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
         </div>
       </div>
 
