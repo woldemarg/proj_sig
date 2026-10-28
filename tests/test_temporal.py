@@ -37,9 +37,12 @@ from subgroup_miner.temporal import (
     SPIKE,
     annotate,
     calendar_bins,
+    carriers,
     detect_events,
     dynamics,
+    echoes,
     extent_points,
+    fit_grid,
     reference_scale,
     rts_smooth,
 )
@@ -173,6 +176,64 @@ def test_the_grid_balances_the_bins_of_the_span_against_the_rows_a_bin_holds(fir
     assert resolve_grid(stray, "auto") == unit
 
 
+def test_auto_coarsens_the_grid_until_the_median_insight_is_measured():
+    """The span's grid weighs the upload's rows; an insight holds a few of them. Eight months of 22,000 rows make 35
+    weeks of ~630 rows, but an insight of 3 % holds ~19 a week — under the floor — and ~90 a month."""
+    times = pd.Series(pd.date_range("2031-01-01", "2031-08-31 23:00", periods=22_000, tz="UTC"))
+    assert resolve_grid(times, "auto") == "week"
+    small = {f"P{i}": np.arange(i, 22_000, 30) for i in range(5)}
+    assert fit_grid(times, "week", small, 30, 3) == "month"
+    assert fit_grid(times, "week", {**small, "Q": np.arange(0, 22_000, 3), "R": np.arange(1, 22_000, 3)}, 30, 3) == "month"  # the median's
+    assert fit_grid(times, "week", {"P": np.arange(0, 22_000, 3)}, 30, 3) == "week"  # a third: ~210 a week
+    tiny = {"P": np.arange(0, 22_000, 2_000)}  # 11 rows: no unit fits; the coarsest giving the bins the upload needs
+    assert fit_grid(times, "week", tiny, 30, 3) == "quarter" and fit_grid(times, "week", tiny, 30, 4) == "month"
+
+
+def test_a_carrier_names_the_part_of_an_insight_that_moved_in_its_events_bin():
+    """An insight g = a with an event in week 3: rows k = x of it raised then carry it; the whole insight raised, or
+    k = x raised in every week (a gap it always has), has no carrier."""
+    rng = np.random.default_rng(4)
+    week = rng.integers(0, 6, 6_000)
+    frame = pd.DataFrame({"g": rng.choice(["a", "b"], 6_000), "k": rng.choice(["x", "y", "z"], 6_000), "m": rng.normal(0, 1, 6_000)})
+    rows = np.flatnonzero(frame.g == "a")
+    part = (frame.g == "a") & (frame.k == "x")
+
+    def carried(m: pd.Series, kind: str = PEAKED_AT) -> dict:
+        shifted = frame.assign(m=m)
+        return carriers(shifted, week, {"P": rows}, {"P": [{"metric": "m", "bin": 3, "kind": kind}]}, reference_scale(shifted), CFG, ["g", "k"])
+
+    (found,) = carried(frame.m + 3 * (part & (week == 3)))["P"]
+    assert (found["attribute"], found["value"], found["bin"], found["metric"]) == ("k", "x", 3, "m")
+    assert found["rows"] == (part & (week == 3)).sum() and found["of"] == ((frame.g == "a") & (week == 3)).sum()
+    assert found["shift"] > 2 and found["p"] < 1e-6
+    assert carried(frame.m - 3 * (part & (week == 3)), DROPPED_AT)["P"][0]["shift"] < -2  # a dip's carrier moved down
+    assert carried(frame.m - 3 * (part & (week == 3))) == {}  # a carrier moves the way its event does
+    assert carried(frame.m + 3 * ((frame.g == "a") & (week == 3))) == {}
+    assert carried(frame.m + 3 * ((frame.g == "a") & (week == 3)) + 1.5 * (part & (week == 3))) == {}  # the rest moved too: broad
+    assert carried(frame.m + 3 * part) == {}
+    assert carriers(frame, week, {"P": rows}, {"P": [{"metric": "m", "bin": 3, "kind": PEAKED_AT}]}, reference_scale(frame), CFG, []) == {}
+
+
+def test_an_event_a_broader_insight_has_too_is_its_echo():
+    def fired(*bins: int, kind: str = PEAKED_AT) -> dict:
+        return {"events": [{"metric": "m", "bin": b, "kind": kind} for b in bins]}
+
+    def scope(support: int, **conditions: str) -> dict:
+        return {"conditions": [{"attribute": a, "value": v} for a, v in conditions.items()], "support": support}
+
+    trajectories = {"P": fired(3), "Q": fired(3, 5), "R": fired(3), "S": fired(3), "D": fired(3, kind=DROPPED_AT)}
+    patterns = {
+        "P": scope(900, g="a"),
+        "Q": scope(300, g="a", k="x"),
+        "R": scope(1_200, k="x"),  # broader than Q too, and larger than P
+        "S": scope(900, g="b"),
+        "D": scope(100, g="a", k="x", h="1"),  # a dip: no peak echoes it
+    }
+    echoes(trajectories, patterns)
+    assert [e.get("echo_of") for e in trajectories["Q"]["events"]] == ["R", None]  # the broadest; week 5 is its own
+    assert all("echo_of" not in e for pid in "PRSD" for e in trajectories[pid]["events"])
+
+
 def test_a_bin_too_thin_for_the_insight_or_for_the_upload_is_unmeasured():
     frame, times = table()
     codes, bins = calendar_bins(times, "week")
@@ -275,9 +336,8 @@ def test_the_time_column_is_read_apart_and_its_grid_names_another_analysis(tmp_p
     by_span = load_dataset(path, CFG, time="when")  # 600 rows over six weeks: days would hold 14 rows each, weeks 100
     assert "when" not in weekly.frame.columns and weekly.grid == "week" and monthly.grid == "month" and by_span.grid == "week"
     assert weekly.time.isna().sum() == 1 and len(weekly.time) == len(weekly.frame) and str(weekly.time.dt.tz) == "UTC"
-    assert (
-        len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id}) == 3 and by_span.dataset_id == weekly.dataset_id
-    )  # the resolved unit names the dataset
+    # auto's unit is fitted after admission (temporal.fit_grid): auto is another analysis than the unit it starts from
+    assert len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id, by_span.dataset_id}) == 4
     assert any("without a readable time" in w for w in weekly.warnings)
     assert plain.time is None and plain.grid is None
 
@@ -386,6 +446,54 @@ def test_metrics_peaking_in_one_period_are_one_edge_and_a_filtered_view_keeps_it
     assert hubs <= shown[timed["dataset_id"]] and not hubs & shown[plain["dataset_id"]]
     starts = {el["data"]["id"]: el["data"]["t_start"] for el in cytoscape_elements(engine.graph())["nodes"] if el["data"]["kind"] == "TemporalNode"}
     assert starts.keys() == hubs and all(starts[h] == next(n["props"]["t_start"] for n in snap["nodes"] if n["id"] == h) for h in hubs)
+
+
+def test_an_event_inside_a_broader_insight_is_carried_there_and_its_narrower_copy_is_an_echo(tmp_path):
+    """Phones in the US raise their discount in week 13 through the online channel only: the event of phones ∧ US is
+    carried by channel = online (signed in the series at the commit); phones ∧ US ∧ online has it too, as an echo."""
+    engine = make_engine(make_config(tmp_path / "ws"))
+    path = weekly_retail(tmp_path, rows=10_000, channel="online")
+    with path.open("rb") as f:
+        record = engine.process(engine.upload(path.name, f, time="when", grid="week")[0]["batch_id"])
+    snap = engine.ws.load_graph()
+    scopes = {frozenset((c["attribute"], c["value"]) for c in n["props"]["conditions"]): n["id"] for n in snap["nodes"] if n["kind"] == "Pattern"}
+    broad = scopes[frozenset({("category", "phones"), ("region", "US")})]
+    narrow = scopes[frozenset({("category", "phones"), ("region", "US"), ("channel", "online")})]
+
+    def week_13(pid: str) -> dict:
+        (event,) = [e for e in snap["trajectories"][pid]["events"] if (e["metric"], e["period"]) == ("discount", "2031-W13")]
+        return event
+
+    carrier = week_13(broad)["carrier"]
+    assert (carrier["attribute"], carrier["value"]) == ("channel", "online") and carrier["shift"] > 2 and carrier["rows"] < carrier["of"]
+    assert "echo_of" not in week_13(broad) and week_13(narrow)["echo_of"] == broad and "carrier" not in week_13(narrow)
+    edges = {(e["source"], e["target"]): e["props"] for e in snap["edges"] if e["plane"] == "temporal"}
+    assert edges[(broad, "T:week:2031-W13")]["carrier"] == carrier and edges[(narrow, "T:week:2031-W13")]["echo_of"] == broad
+    stored = json.loads((engine.ws.datasets_dir / record["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
+    assert [(c["attribute"], c["value"]) for c in stored[broad]["carriers"]] == [("channel", "online")]  # signed with the series
+    facts = time_facts(snap["trajectories"][narrow], CFG.thresholds.temporal_fade_z)
+    assert not [e for e in facts["events"] if e["period"] == "2031-W13"] and facts["echoes"][0]["echo_of"] == broad
+
+
+def test_an_auto_grid_is_fitted_to_the_insights_and_the_record_keeps_auto(tmp_path):
+    """Eight months of 12,000 orders: the span asks for weeks, the insights' rows for months."""
+    frame = generate_retail_dataset(12_000, seed=7)
+    frame.insert(0, "when", pd.date_range("2031-01-01", "2031-08-31 23:00", periods=len(frame)).strftime("%Y-%m-%d %H:%M:%S"))
+    path = tmp_path / "months.csv"
+    frame.to_csv(path, index=False)
+    engine = make_engine(make_config(tmp_path / "ws"))
+    done = {}
+    for grid in ("auto", "week"):
+        with path.open("rb") as f:
+            done[grid] = engine.process(engine.upload(path.name, f, time="when", grid=grid)[0]["batch_id"])
+    assert [done[g]["status"] for g in done] == ["READY", "READY"] and done["auto"]["dataset_id"] != done["week"]["dataset_id"]
+    assert (done["auto"]["grid"], done["auto"]["temporal"]["grid"], done["week"]["temporal"]["grid"]) == ("auto", "month", "week")
+    snap = engine.ws.load_graph()
+    of = {n["id"]: n["props"]["dataset_id"] for n in snap["nodes"] if n["kind"] == "Pattern"}
+    measured = {g: np.median([t["bins_measured"] / t["of"] for p, t in snap["trajectories"].items() if of[p] == done[g]["dataset_id"]]) for g in done}
+    assert measured["auto"] > 0.5 > measured["week"]
+    one = next(p for p, ds in of.items() if ds == done["auto"]["dataset_id"])
+    assert engine.verify_pattern(one)["status"] == "reproduced"  # re-read with its options as recorded: auto names the dataset
 
 
 def restarted(engine):
@@ -541,7 +649,9 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     assert cells["temporal"]["rows_without_time"] == table["temporal"]["rows_without_time"] == 10
     assert sum(b["rows"] for b in cells["temporal"]["bins"]) == 6000 - 10  # the located points; the table holds the rest too
     assert sum(b["rows"] for b in table["temporal"]["bins"]) == 6300 - 10
-    assert not any(c.startswith("when") for c in cells["profile"]["numerics"] + cells["profile"]["categoricals"])  # time is never mined
+    plain = load_dataset(path, CFG, geo="latitude,longitude@7")  # time adds a layer: the cells are those of the upload without it
+    assert load_dataset(path, CFG, geo="latitude,longitude@7", time="when", grid="week").frame.equals(plain.frame)
+    assert "when" not in table["profile"]["numerics"] + table["profile"]["categoricals"]  # the table never mines the column itself
     stored = engine.ws.load_geo(cells["dataset_id"])
     raw = pd.read_csv(path)
     raw["t"] = pd.to_datetime(raw["when"], errors="coerce", utc=True, format="ISO8601")
@@ -645,6 +755,26 @@ def test_a_series_never_measured_has_no_trend_and_another_metrics_event_is_named
     peak = {"kind": "PEAKED_AT", "period": "2031-W13", "metric": "discount", "z_smoothed": 5.0, "prominence": 4.0}
     other = time_facts(head | {"trend": FLAT, "current": 0.1, "bins_measured": 6, "events": [peak]}, 0.5)
     assert other["words"] == "динаміка: без змін; зараз: нижче порога (+0.10 sd); пік у періоді 2031-W13 (discount)"
+
+
+def test_an_events_carrier_is_named_and_an_echo_told_once_as_the_broader_findings():
+    head = {"grid": "week", "span": ["2031-03-03T00:00:00+00:00", "2031-04-14T00:00:00+00:00"], "metric": "discount", "of": 6, "gaps": []}
+    carrier = {"attribute": "channel", "value": "online", "rows": 78, "of": 153, "shift": 3.1, "p": 1e-9}
+    peak = {"kind": "PEAKED_AT", "period": "2031-W13", "metric": "discount", "z_smoothed": 1.2, "prominence": 1.0, "carrier": carrier}
+    dip = {"kind": "DROPPED_AT", "period": "2031-W11", "metric": "discount", "z_smoothed": -0.9, "prominence": 0.8, "echo_of": "P-broad"}
+    facts = time_facts(head | {"trend": SPIKE, "current": 0.1, "bins_measured": 6, "events": [peak, dip]}, 0.5)
+    assert facts["events"] == [{k: peak[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier")}]
+    assert facts["echoes"] == [{"kind": "DROPPED_AT", "period": "2031-W11", "metric": "discount", "echo_of": "P-broad"}]
+    line = time_line(facts)
+    assert "| events: peak 2031-W13 (discount, +1.20 sd, in channel = online: 78 of its 153 rows, +3.10 sd against the rest)" in line
+    assert "| the same as a broader finding's: dip 2031-W11 (discount) |" in line
+    assert facts["words"].endswith("пік у періоді 2031-W13, зосереджено в: channel — online")
+    echoed = time_facts(head | {"trend": SPIKE, "current": 0.1, "bins_measured": 6, "events": [dip]}, 0.5)
+    assert (
+        echoed["events"] == []
+        and echoed["words"].endswith("спад у періоді 2031-W11 (як у ширшої знахідки)")
+        and "| events: none |" in time_line(echoed)
+    )
 
 
 def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):

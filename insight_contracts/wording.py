@@ -67,6 +67,14 @@ TERMS: dict[str, tuple[str, str]] = {
     "time_current": ("зараз", "рівень знахідки в останньому виміряному періоді, після згладжування"),
     "time_unmeasured": ("не виміряно", "у жодному періоді не було досить рядків знахідки, щоб виміряти її рівень"),
     "time_faded": ("нижче порога", "в останньому виміряному періоді відхилення знахідки слабше за поріг, з якого воно вважається суттєвим"),
+    "time_carrier": (
+        "зосереджено в",
+        "частина знахідки, рядки якої в цьому періоді змістилися найбільше порівняно з рештою знахідки — понад звичну різницю між ними",
+    ),
+    "time_echo": (
+        "як у ширшої знахідки",
+        "ширша знахідка, що охоплює всі рядки цієї, має той самий пік чи спад у тому самому періоді: це одна подія",
+    ),
     "temporal_hub": (
         "період часу",
         "день, тиждень, місяць чи квартал, у якому одна чи кілька знахідок мали пік або спад; той самий для всіх датасетів",
@@ -232,7 +240,8 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
 
 def time_words(facts: Mapping[str, Any]) -> str:
     """A finding's time line in words (the evidence-only answer, the console's chip): its metric's trend (or that it was
-    never measured), its current level and an event — its metric's strongest, else another metric's, named
+    never measured), its current level and an event — its metric's strongest, else another metric's, named, with the
+    condition that carries it; a broader finding's event when it has none of its own
     (``graph_query_engine.temporal.time_facts``)."""
     if facts["trend"] is None:
         return f"{name('trend')}: {name('time_unmeasured')}"
@@ -240,10 +249,12 @@ def time_words(facts: Mapping[str, Any]) -> str:
     if facts["current"] is not None:
         level = name("time_faded") if facts["faded"] else shift_words(facts["current"])
         parts.append(f"{name('time_current')}: {level} ({facts['current']:+.2f} sd)")
-    if facts["events"]:
-        event = next((e for e in facts["events"] if e["metric"] == facts["metric"]), facts["events"][0])
+    if events := facts["events"] or facts.get("echoes", []):
+        event = next((e for e in events if e["metric"] == facts["metric"]), events[0])
         other = "" if event["metric"] == facts["metric"] else f" ({humanize(event['metric'])})"
-        parts.append(f"{name(event['kind'])} {event['period']}{other}")
+        carrier = f", {name('time_carrier')}: {humanize(c['attribute'])} — {c['value']}" if (c := event.get("carrier")) else ""
+        echo = f" ({name('time_echo')})" if "echo_of" in event else ""
+        parts.append(f"{name(event['kind'])} {event['period']}{other}{carrier}{echo}")
     return "; ".join(parts)
 
 

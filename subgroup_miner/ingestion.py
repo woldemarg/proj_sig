@@ -94,7 +94,8 @@ def dataset_fingerprint(
     time: str | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
-    options -> same id. ``time``: ``<column>:<grid>`` — the same file with its time apart is another analysis."""
+    options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
+    file with its time apart is another analysis."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -309,7 +310,7 @@ def load_dataset(
     point rows into a table of H3 cells first (§2.9); bands and categories then apply to that table. ``shared``: a level
     of an upload, reading the parse its levels share (``read_file``). ``time`` names a time column: read apart
     (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
-    ``resolve_grid`` of the span; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by default, and the zone of a
+    ``resolve_grid`` of the span here, a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by default, and the zone of a
     time written without one) — discovery never sees it."""
     path = Path(path)
     if not path.is_file():
@@ -329,11 +330,14 @@ def load_dataset(
     spatial = None
     left_out = []
     times = None
+    option = None
     if time:
         tz = parse_tz(tz)
         times = read_times(frame, time, tz)
-        grid = resolve_grid(times, parse_grid(grid))
-        frame = frame.drop(columns=[time])
+        option = parse_grid(grid)  # auto names the dataset: its unit is fitted after admission (temporal.fit_grid)
+        grid = resolve_grid(times, option)
+        if not geo_spec:  # a geo level's cells count its days as they would without a time option: time adds, never removes
+            frame = frame.drop(columns=[time])
         if unread := int(times.isna().sum()):
             warnings.append(f"{unread} rows without a readable time: mined, outside every time bin")
     if locator and not geo_spec:
@@ -347,7 +351,7 @@ def load_dataset(
     point_values = None
     if geo_spec:
         points = frame
-        key = (digest.hexdigest(), geo_spec[0], time) if shared else None  # the levels of one upload: one point profile
+        key = (digest.hexdigest(), geo_spec[0]) if shared else None  # the levels of one upload: one point profile
         frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
@@ -367,7 +371,12 @@ def load_dataset(
     return LoadedDataset(
         frame=frame,
         dataset_id=dataset_fingerprint(
-            digest, present_bins, cats, geo=_geo_text(geo_spec), left_out=left_out, time=f"{time}:{grid}" + (f":{tz}" if tz else "") if time else None
+            digest,
+            present_bins,
+            cats,
+            geo=_geo_text(geo_spec),
+            left_out=left_out,
+            time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None,
         ),
         filename=filename or path.name,
         bins=present_bins,

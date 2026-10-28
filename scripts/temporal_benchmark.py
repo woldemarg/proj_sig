@@ -194,10 +194,11 @@ def run_seed(seed: int, kind: str, overrides: dict[str, Any], flash: tuple[int, 
 def parity(library: dict[str, dict[str, Any]], served: dict[str, dict[str, Any]]) -> list[str]:
     """The patterns whose trajectory the library pipeline and the graph service tell apart — any field ``dynamics``
     gives, as the snapshot stores it (series, smoothed levels, events, trend, current level, bins, gaps) — or that only
-    one of them has."""
+    one of them has. An event's carrier and echo are the commit's and the compile's, not ``dynamics``': left out."""
 
     def same(p: str) -> bool:
-        return json.loads(json.dumps(library[p], default=float)) == {k: served[p].get(k) for k in library[p]}
+        events = [{k: v for k, v in e.items() if k not in ("carrier", "echo_of")} for e in served[p].get("events", [])]
+        return json.loads(json.dumps(library[p], default=float)) == {k: served[p].get(k) for k in library[p]} | {"events": events}
 
     return sorted(p for p in library.keys() | served.keys() if p not in library or p not in served or not same(p))
 
