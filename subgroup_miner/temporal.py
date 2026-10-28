@@ -321,12 +321,14 @@ def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], metric
     measured bin — a geo pattern's counter or share has no series —, and of it the trend, the current level (x̂ of its
     last measured bin), the measured bins and the gaps (runs of bins without a measurement, by period). Its ``core``
     (``core_span`` of its rows): the first and last period and bound, the share of its timed rows held, the bins
-    spanned and their indices; None without a timed row."""
+    spanned and their indices; None without a timed row. Its ``bins``: each bin's bounds, which the readers of a series
+    or an event index by bin — no reader turns a period's name back into dates."""
     th = config.thresholds
     series, smoothed, events = {}, {}, []
     measured_in = {m: [t for t, e in enumerate(entry["series"][m]) if e] for m in entry["series"]}
     primary = next((m for m in metrics if measured_in.get(m)), metrics[0])
     out: dict[str, Any] = {"metric": primary, "trend": FLAT, "current": None, "bins_measured": 0, "of": len(bins), "gaps": []}
+    out["bins"] = [[b["t_start"], b["t_end"]] for b in bins]
     rows = entry.get("rows", [])
     core = core_span(rows)
     out["core"] = (

@@ -7,7 +7,6 @@ the closer their core to the reference date — rank first (``recency``)."""
 from __future__ import annotations
 
 import functools
-import math
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,20 +22,6 @@ def period_interval(text: str) -> tuple[datetime, datetime] | None:
     return next((span for m in wording.PERIOD.finditer(text) if (span := _interval(m.group(0)))), None)
 
 
-def period_hub(text: str) -> str | None:
-    """The time hub id (``T:<unit>:<label>``, as the grid names the period) of the first calendar period
-    ``period_interval`` reads in ``text``; None when there is none."""
-    for m in wording.PERIOD.finditer(text):
-        if _interval(m.group(0)):
-            g = m.groups()
-            if g[0]:
-                return f"T:week:{g[0]}-W{g[1]}"
-            if g[2] or g[4]:
-                return f"T:quarter:{g[2] or g[5]}-Q{g[3] or g[4]}"
-            return f"T:day:{g[6]}-{g[7]}-{g[8]}" if g[6] else f"T:month:{g[9]}-{g[10]}"
-    return None
-
-
 def parse_as_of(text: str) -> datetime:
     """A reference date as asked: an ISO date (its midnight) or an ISO date and time, UTC unless it names a zone;
     ``ValueError`` otherwise."""
@@ -44,22 +29,24 @@ def parse_as_of(text: str) -> datetime:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
-def age_days(core: dict[str, Any], as_of: datetime) -> float:
-    """Days from a core (``[t_start, t_end)``) to ``as_of``: 0 inside it, positive after its end, negative before its start."""
+def core_age(core: dict[str, Any], as_of: datetime) -> dict[str, Any]:
+    """Where ``as_of`` lies from a core, ``[t_start, t_end)``, and how far: ``{side: before, days: to its start}``,
+    ``{side: inside, days: 0}`` or ``{side: after, days: since its end}`` — at ``t_end``, which the core excludes, it has
+    ended 0 days ago. The one reading of the core against a date: the freshness, the time line and the console agree."""
     start, end = datetime.fromisoformat(core["t_start"]), datetime.fromisoformat(core["t_end"])
     if as_of < start:
-        return (as_of - start).total_seconds() / 86_400
-    return (as_of - end).total_seconds() / 86_400 if as_of >= end else 0.0
+        return {"side": "before", "days": (start - as_of).total_seconds() / 86_400}
+    return {"side": "inside", "days": 0.0} if as_of < end else {"side": "after", "days": (as_of - end).total_seconds() / 86_400}
 
 
 def recency(trajectory: dict[str, Any] | None, as_of: datetime | None, half_life_days: float) -> float | None:
-    """How fresh a finding is at ``as_of``: 2^(−|age| / half-life), its age the days from its core to that date (1 inside
+    """How fresh a finding is at ``as_of``: 2^(−age / half-life), its age the days from its core to that date (1 inside
     the core; the future decays as the past does). None — no bonus, no penalty — without a core, a date or a positive
     half-life (0 switches it off)."""
     core = (trajectory or {}).get("core")
     if not core or as_of is None or half_life_days <= 0:
         return None
-    return 0.5 ** (abs(age_days(core, as_of)) / half_life_days)
+    return 0.5 ** (core_age(core, as_of)["days"] / half_life_days)
 
 
 def strip_periods(text: str) -> str:
@@ -97,32 +84,29 @@ def _months_on(day: date, months: int) -> date:
     return date(day.year + month // 12, month % 12 + 1, 1)
 
 
+_stamp = functools.lru_cache(maxsize=4096)(datetime.fromisoformat)  # ponytail: a dataset's bins repeat across its patterns
+
+
 def time_score(trajectory: dict[str, Any], asked: tuple[datetime, datetime]) -> float:
     """Half the share of the asked interval its metric's measured bins cover, plus a half when the bin of one of its
     events lies inside it — an event in the period outranks mere presence through it, and a coarse event (a month's)
     is no event of each finer period it spans (``seeds.SEED_TIME_WEIGHT`` weighs the score). The period is read on
-    the dataset's calendar (its ``tz``): the same wall-clock bounds in its zone, as its bins are named."""
+    the dataset's calendar (its ``tz``): the same wall-clock bounds in its zone, against the bounds the trajectory
+    stores for its bins."""
     zone = ZoneInfo(trajectory["tz"]) if trajectory.get("tz") else UTC
-    asked = tuple(t.replace(tzinfo=zone) for t in asked)
-
-    def span(period: str) -> tuple[datetime, datetime] | None:
-        bounds = period_interval(period)
-        return tuple(t.replace(tzinfo=zone) for t in bounds) if bounds else None
-
-    def overlap(period: str) -> float:
-        s = span(period)
-        return max((min(s[1], asked[1]) - max(s[0], asked[0])).total_seconds(), 0.0) if s else 0.0
-
-    measured = [e["period"] for e in trajectory["series"].get(trajectory["metric"], []) if e]
-    share = sum(map(overlap, measured)) / (asked[1] - asked[0]).total_seconds()
-    inside = any((s := span(e["period"])) and asked[0] <= s[0] and s[1] <= asked[1] for e in trajectory["events"])
+    lo, hi = (t.replace(tzinfo=zone) for t in asked)
+    bins = [(_stamp(a), _stamp(b)) for a, b in trajectory["bins"]]
+    measured = [bins[t] for t, e in enumerate(trajectory["series"].get(trajectory["metric"], [])) if e]
+    share = sum(max((min(b, hi) - max(a, lo)).total_seconds(), 0.0) for a, b in measured) / (hi - lo).total_seconds()
+    inside = any(lo <= bins[e["bin"]][0] and bins[e["bin"]][1] <= hi for e in trajectory["events"])
     return 0.5 * share + (0.5 if inside else 0.0)
 
 
 def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, Any]:
     """What an insight's time line says (empty for an insight of a dataset without a time column): its grid and span,
     its metric's trend (None when no bin was measured) and current level (``faded`` under ``fade_z``), its core (the
-    run of bins holding most of its rows; ``age_days`` from the reference date is added by the evidence), its own events —
+    run of bins holding most of its rows, as the trajectory holds it; its age from the reference date is added by the
+    evidence), its own events —
     the strongest first, each with the condition that carries it when one does and ``outside: True`` when its bin is not
     in the core —, the ``echoes`` (the events a broader insight has too, told once, there), the bins measured and all of it
     in words (``wording.time_words``), as the evidence-only answer and the console say it."""
@@ -137,7 +121,7 @@ def time_facts(trajectory: dict[str, Any] | None, fade_z: float) -> dict[str, An
         "trend": trajectory["trend"] if trajectory["bins_measured"] else None,  # a series never measured has no trend
         "current": current,
         "faded": current is not None and abs(current) < fade_z,
-        "core": {k: core[k] for k in ("start", "end", "t_start", "t_end", "share", "bins")} if core else None,
+        "core": core,
         "events": [
             {k: e[k] for k in ("kind", "period", "metric", "z_smoothed", "carrier") if k in e}
             | ({"outside": True} if core and not core["first"] <= e["bin"] <= core["last"] else {})
@@ -187,10 +171,14 @@ def _core(facts: dict[str, Any]) -> str:
     periods = core["start"] if core["start"] == core["end"] else f"{core['start']}–{core['end']}"
     bins = f"{core['bins']} bin{'s' if core['bins'] > 1 else ''}"
     line = f" | core {periods} ({bins}, {core['share']:.0%} of its timed rows)"
-    age = facts.get("age_days")
-    if age is None:
+    age = facts.get("age")  # ``core_age`` from the reference date, added by the evidence
+    if not age:
         return line
-    days = math.ceil(abs(age))
-    if age > 0:
-        return f"{line}, ended {days} days before the reference date"
-    return f"{line}, starts {days} days after the reference date" if age < 0 else f"{line}, the reference date inside it"
+    days = round(age["days"])
+    gap = "less than a day" if age["days"] < 1 else f"{days} day{'s' if days > 1 else ''}"
+    said = {
+        "inside": "the reference date inside it",
+        "after": f"ended {gap} before the reference date",
+        "before": f"starts {gap} after the reference date",
+    }
+    return f"{line}, {said[age['side']]}"

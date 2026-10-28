@@ -21,7 +21,7 @@ from typing import Any
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph, band_counts, describe_components, insight_reading
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.temporal import age_days, time_facts, time_line
+from graph_query_engine.temporal import core_age, time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
 from insight_contracts import SpatialProvenance, dataset_node_id, metric_node_id, wording
@@ -818,7 +818,8 @@ def build_evidence(
     ranked = bool(as_of) and query.when is None and config.temporal_recency_half_life_days > 0
     for it in items if as_of else ():
         if it.time.get("core"):
-            it.time["age_days"] = round(age_days(it.time["core"], as_of[0]), 2)
+            age = core_age(it.time["core"], as_of[0])
+            it.time["age"] = age | {"days": round(age["days"], 2)}
     return Evidence(
         query=query.text,
         parsed=query.to_dict(),

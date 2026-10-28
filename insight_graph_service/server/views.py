@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from html import escape
 from typing import Any
 
@@ -12,7 +13,6 @@ from fastapi import HTTPException
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
 from graph_query_engine.graph import insight_reading, primary_anchor, theme_glossary
-from graph_query_engine.temporal import period_interval
 from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, PhenomenonThresholds, attractor_id_of, dataset_node_id, wording
 from insight_contracts.text import humanize
@@ -187,7 +187,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         out["picture"] = picture(graph, node_id)
         out["reading"] = {"what": wording.region_reading(out["picture"])}
     elif node["kind"] == "TemporalNode":  # who is active in it or had an event inside it, at any level (``DualGraph.members``)
-        found = graph.members(period_interval(node["props"]["period"]))
+        found = graph.members((datetime.fromisoformat(node["props"]["t_start"]), datetime.fromisoformat(node["props"]["t_end"])))
         out["members"] = {
             "active": _members(graph, [(pid, None) for pid in found["active"]]),
             "peaked": _members(graph, found["peaked"]),

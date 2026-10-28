@@ -44,6 +44,7 @@ from subgroup_miner.temporal import (
     echoes,
     extent_points,
     fit_grid,
+    period_bounds,
     reference_scale,
     rts_smooth,
 )
@@ -307,9 +308,10 @@ def entry(zs: list[float | None], se: float = 0.1) -> dict:
 
 
 def test_dynamics_names_the_trend_the_current_level_the_events_and_the_gaps():
-    bins = [{"period": f"2031-W{w:02d}"} for w in range(10, 18)]
+    bins = calendar_bins(utc("2031-03-03", "2031-04-27"), "week")[1]  # W10 … W17
     rising = dynamics(entry([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]), bins, ["m"], CFG)
     assert rising["trend"] == RISING and rising["events"] == [] and rising["current"] == pytest.approx(3.5, abs=0.1)
+    assert rising["bins"] == [[b["t_start"], b["t_end"]] for b in bins]  # the bins' bounds, which the readers index by bin
     assert dynamics(entry([3.0, 2.0, 1.0, 0.0, -1.0, -1.5, -2.0, -2.5]), bins, ["m"], CFG)["trend"] == FALLING
     dip = dynamics(entry([2.0, 2.0, 2.0, None, None, 2.0, 2.0, 2.0]), bins, ["m"], CFG)
     assert dip["trend"] == FLAT and dip["gaps"] == [["2031-W13", "2031-W14"]] and dip["bins_measured"] == 6 and dip["of"] == 8
@@ -419,10 +421,10 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
         and set(trajectory["series"]) == {s["metric"] for s in patterns[pid]["shifts"]}
     )
     core = trajectory["core"]  # where the insight lives: the shortest run of weeks holding 80 % of its timed rows
-    assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("metric", "trend", "current", "bins_measured", "of")} | {
-        "events": len(trajectory["events"]),
-        "core": {k: core[k] for k in ("start", "end", "share", "bins")},
+    assert patterns[pid]["temporal_summary"] == {k: trajectory[k] for k in ("metric", "trend", "current", "bins_measured", "of", "core")} | {
+        "events": len(trajectory["events"])
     }
+    assert trajectory["bins"] == [[b["t_start"], b["t_end"]] for b in signed["bins"]]
     rows = stored[pid]["rows"]
     assert core["share"] >= 0.8 and core["bins"] == core["last"] - core["first"] + 1 <= 5 and core["start"] == signed["bins"][core["first"]]["period"]
     assert sum(rows[core["first"] : core["last"] + 1]) / sum(rows) == pytest.approx(core["share"], abs=1e-3)
@@ -781,17 +783,18 @@ def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_l
 
 
 def test_a_coarse_event_is_no_peak_of_each_finer_period_and_a_period_is_read_on_the_datasets_calendar():
-    def trajectory(periods: list[str], event: str | None, tz: str | None = None) -> dict:
+    def trajectory(periods: list[str], grid: str, event: str | None, tz: str | None = None) -> dict:
         series = {"m": [{"period": p, "z": 0.0, "se": 0.1} for p in periods]}
-        return {"metric": "m", "tz": tz, "series": series, "events": [{"period": event, "metric": "m"}] if event else []}
+        bins = [list(period_bounds(p, grid, tz)) for p in periods]  # as the compile stores them: the readers never parse a label
+        return {"metric": "m", "tz": tz, "bins": bins, "series": series, "events": [{"bin": periods.index(event), "metric": "m"}] if event else []}
 
-    monthly = trajectory([f"2031-{m:02d}" for m in range(1, 7)], "2031-03")
+    monthly = trajectory([f"2031-{m:02d}" for m in range(1, 7)], "month", "2031-03")
     assert time_score(monthly, period_interval("2031-W13")) == 0.5  # measured through the week; the event is the month's
     assert time_score(monthly, period_interval("2031-03")) == 1.0 and time_score(monthly, period_interval("2031-Q1")) == 1.0
-    weekly = trajectory([f"2031-W{w:02d}" for w in range(9, 15)], "2031-W13")  # 24 February … 6 April
+    weekly = trajectory([f"2031-W{w:02d}" for w in range(9, 15)], "week", "2031-W13")  # 24 February … 6 April
     assert time_score(weekly, period_interval("2031-03")) == 1.0  # the week's peak lies in the month, measured throughout
     assert time_score(weekly, period_interval("2031-W13")) == 1.0 and time_score(weekly, period_interval("2031-W10")) == 0.5
-    day = trajectory(["2031-03-24"], None, "America/Los_Angeles")
+    day = trajectory(["2031-03-24"], "day", None, "America/Los_Angeles")
     assert time_score(day, period_interval("2031-03-24")) == 0.5  # its day on its own calendar, not 16 of 24 UTC hours
     assert time_score(day, period_interval("2031-03-25")) == 0.0
 
@@ -839,7 +842,7 @@ def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
 
 
 def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch):
-    """Under the floor with nothing lexical, a question naming a period enters through its hub: what lives or moved in it
+    """Under the floor with nothing lexical, a question naming a period enters through it: what lives or moved in it
     (``DualGraph.members``) first, then the pattern with the highest time score — as a zone without text falls back to
     what lies in it; with words the catalog knows, to the semantic best."""
     fixed = {
@@ -850,20 +853,15 @@ def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch)
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
     held = {"active": [], "peaked": [], "dropped": []}
     graph = SimpleNamespace(
-        insights={k: k for k in fixed},
-        trajectories={},
-        nodes={},
-        tampered=lambda pid: False,
-        incident=lambda pid, kinds: [],
-        members=lambda asked: held,
+        insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
     )
     query = SimpleNamespace(conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), is_lexical=False, components=lambda: [])
     ask = lambda: seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())  # noqa: E731
     found = ask()
-    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period" and "hub" not in found[0].matched
-    held["active"], graph.nodes = ["member"], {"T:week:2031-W13": {}}
-    found = ask()  # the hub's member first, though measured nowhere; the hub named once the graph holds it
-    assert [s.pattern_id for s in found] == ["member"] and found[0].matched["hub"] == "T:week:2031-W13"
+    assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period"
+    held["active"] = ["member"]
+    found = ask()  # the period's own pattern first, though measured nowhere
+    assert [s.pattern_id for s in found] == ["member"] and found[0].matched["fallback"] == "period"
     query.is_lexical = True
     found = ask()
     assert [s.pattern_id for s in found] == ["steady"] and found[0].matched["fallback"] == "semantic"

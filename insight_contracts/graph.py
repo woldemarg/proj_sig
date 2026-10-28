@@ -13,7 +13,7 @@ A snapshot is ``{"version": SNAPSHOT_VERSION, "created_at", "representation", "n
 * ``Metric``    ``name``, ``dataset_id``, ``global_median``, ``global_mad``, ``indicator`` / ``unit`` when declared
 * ``Dimension`` ``name``, ``dataset_id``, ``cardinality``, ``entropy``
 * ``Dataset`` / ``Batch``  provenance (file, rows, batch sequence); a dataset with a time column ``temporal``
-                {column, grid, span}
+                {column, grid, tz, span}, as its batch record signs them
 * ``TemporalNode`` ``granularity``, ``period``, ``t_start``, ``t_end``: a calendar period, the same node for every
                 dataset that has an event or a core end in it, and every period above such a one (its week, month,
                 quarter: one chain, ``subgroup_miner.temporal.parent_period``); the bounds are the first dataset's calendar
@@ -36,10 +36,11 @@ its core — the shortest run of bins holding most of its rows, where it lives i
 ``period``, ``share`` (of its timed rows the core holds) and ``bins``; the one hub twice for a core of one bin.
 ``WITHIN`` runs from a TemporalNode to the period above it (a day's week, a week's month, a month's quarter), never
 walked, read by the console and the mirror; who is active in a period is read from the cores, not from an edge.
-``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``tz``, ``span``, ``metric``, ``series`` and
-``smoothed`` (per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of``, ``gaps`` and
-``core`` ({start, end, t_start, t_end, share, bins, first, last} | None); the pattern carries the short form as
-``temporal_summary`` (its ``core`` without the bounds and indices).
+``trajectories`` maps a pattern of a dataset with a time column to its ``column``, ``grid``, ``tz``, ``span``, ``metric``,
+``bins`` ([t_start, t_end] per bin of the grid: what ``series`` and ``events`` index by bin), ``series`` and ``smoothed``
+(per metric, one entry per bin), ``events``, ``trend``, ``current``, ``bins_measured``, ``of``, ``gaps`` and ``core``
+({start, end, t_start, t_end, share, bins, first, last} | None); the pattern carries its ``metric``, ``trend``,
+``current``, ``bins_measured``, ``of``, ``events`` (their count) and the same ``core`` as ``temporal_summary``.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-SNAPSHOT_VERSION = 14  # the snapshot layout (docs/11_reference.md §11.5)
+SNAPSHOT_VERSION = 15  # the snapshot layout (docs/11_reference.md §11.5)
 
 
 class EdgeType(str, Enum):

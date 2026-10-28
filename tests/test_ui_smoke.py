@@ -857,6 +857,11 @@ def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
         page.fill("#as-of", "31.03.2031")
         page.evaluate("(q) => ask(q)", question)
         assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
+        page.fill("#as-of", "2031-02-29")  # a day the calendar does not have (Date.parse would read 1 March): refused the same way
+        page.evaluate("(q) => ask(q)", question)
+        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
+        page.fill("#as-of", "2032-02-29")
+        assert page.evaluate("asOfDate()") == "2032-02-29"  # a leap day is a day
         page.fill("#as-of", "2031-03-31")
         with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
             page.evaluate("(q) => ask(q)", question)
@@ -912,4 +917,6 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         before = page.get_attribute("#time-body .tl-asof", "style")
         page.fill("#as-of", "2031-03-10")
         assert "2031-03-10" in page.inner_text("#time-caption") and page.get_attribute("#time-body .tl-asof", "style") != before
+        page.fill("#as-of", "2031-02-29")  # no such day: the line stays at the latest data, where the empty field put it
+        assert page.get_attribute("#time-body .tl-asof", "style") == before and "2031-02-29" not in page.inner_text("#time-caption")
         assert not errors, errors

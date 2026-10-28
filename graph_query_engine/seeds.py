@@ -13,7 +13,7 @@ from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
-from graph_query_engine.temporal import period_hub, recency, time_score
+from graph_query_engine.temporal import recency, time_score
 from insight_contracts import Insight
 from insight_contracts.text import humanize
 
@@ -112,7 +112,9 @@ def resolve_seeds(
     as_of: datetime | None = None,
 ) -> list[SeedMatch]:
     """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap; without a
-    period, its freshness at ``as_of``, the reference date) and pick diverse top seeds."""
+    period, its freshness at ``as_of``, the reference date) and pick diverse top seeds. A question that names a period
+    and nothing the catalog knows seeds from the period's own patterns (``DualGraph.members``), as a zone without text
+    seeds from what lies in it (docs/07_question_answering.md §7.2)."""
     scope_text = "; ".join(f"{a} = {v}" if a != "*" else v for a, v in query.conditions)
     target_text = "; ".join(humanize(t) for t in query.targets)
     alone = place_scores is not None and not query.text.strip()  # a zone without text: nothing to embed
@@ -154,30 +156,15 @@ def resolve_seeds(
         if cand.pattern_id not in near:
             seeds.append(cand)
     pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
+    if query.when and not query.is_lexical and pool:  # a period and nothing the catalog knows: the question is about the period
+        found = graph.members(query.when)
+        held = {*found["active"], *(pid for pid, _ in found["peaked"] + found["dropped"])}  # what lives or moved in it (the hub index)
+        timed = [s for s in pool if s.pattern_id in held] or ([] if seeds else [s for s in pool if s.matched.get("time")])
+        if timed:  # its own patterns over whatever the leftover words reached; else, with no seed, what was measured in it
+            seeds = [max(timed, key=lambda s: (s.matched.get("time", 0.0), s.matched.get("weight", 0.0)))]
+            seeds[0].matched["fallback"] = "period"
+            return seeds
     if not seeds and pool:
-        members: set[str] = set()
-        timed: list[SeedMatch] = []
-        if query.when and not query.is_lexical:  # a period alone: its patterns, by the hub index (DualGraph.members)
-            found = graph.members(query.when)
-            members = set(found["active"]) | {pid for pid, _ in found["peaked"] + found["dropped"]}
-            timed = [s for s in pool if s.pattern_id in members or s.matched.get("time")]
-        if alone:
-            seeds, how = [max(pool, key=lambda s: s.score)], "place"
-        elif timed:  # nothing the catalog knows, a period it does: what lives or moved in it first, then what was measured there
-            h = config.temporal_recency_half_life_days
-
-            def rank(s: SeedMatch) -> tuple[bool, float, float, float]:
-                return (
-                    s.pattern_id in members,
-                    s.matched.get("time", 0.0),
-                    recency(graph.trajectories.get(s.pattern_id), as_of, h) or 0.0,
-                    s.matched.get("weight", 0.0),
-                )
-
-            seeds, how = [max(timed, key=rank)], "period"
-            if (hub := period_hub(query.text)) in graph.nodes:
-                seeds[0].matched["hub"] = hub
-        else:
-            seeds, how = [max(pool, key=lambda s: s.matched["semantic"])], "semantic"
-        seeds[0].matched["fallback"] = how
+        seeds = [max(pool, key=lambda s: s.score if alone else s.matched["semantic"])]
+        seeds[0].matched["fallback"] = "place" if alone else "semantic"
     return seeds

@@ -590,17 +590,20 @@ function timeRows(t) {
 }
 
 function asOfDate() {
-  /* the date freshness counts from: the one by the question box when it reads as a date, else the latest data */
-  const v = $("as-of").value.trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) ? v : S.asOf;
+  /* the date freshness counts from: the one by the question box when it names a day of the calendar, else the latest data
+     (Date.parse alone reads 2031-02-29 as 1 March: the day has to come back from the calendar as typed) */
+  const v = $("as-of").value.trim(), m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m && new Date(Date.UTC(+m[1], m[2] - 1, +m[3])).toISOString().slice(0, 10) === v ? v : S.asOf;
 }
 
 function ageWords(core, asOf) {
-  /* where an insight's core lies from the reference date, in days, weeks or months */
+  /* where an insight's core lies from the reference date, in days, weeks or months — as the answer's time line reads it:
+     the core's end is not in it, and a gap under a day is no day */
   if (!asOf) return "";
   const at = Date.parse(asOf), start = Date.parse(core.t_start), end = Date.parse(core.t_end), date = asOf.slice(0, 10);
   const span = (ms) => {
-    const d = Math.max(1, Math.ceil(ms / 86400000));
+    if (ms < 86400000) return "менш як день";
+    const d = Math.round(ms / 86400000);
     return d < 14 ? plural(d, "день", "дні", "днів") : d < 90 ? plural(Math.round(d / 7), "тиждень", "тижні", "тижнів") : plural(Math.round(d / 30), "місяць", "місяці", "місяців");
   };
   if (at < start) return `${word("as_of")} ${date} ще не почалося: за ${span(start - at)}`;
