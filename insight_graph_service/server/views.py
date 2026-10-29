@@ -103,7 +103,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         for n in graph.of_kind("Dataset")
         if "temporal" in n["props"] and (not dataset or n["props"]["dataset_id"] == dataset)
     ]
-    span = [min((s[0] for s in spans), key=datetime.fromisoformat), max((s[1] for s in spans), key=datetime.fromisoformat)] if spans else None
+    firsts, lasts = sorted(s[0][:19] for s in spans), sorted(s[1][:19] for s in spans)  # wall clock, as the bar reads it: zones line up by day
+    span = [firsts[0], lasts[-1]] if spans else None
     return {
         "nodes": nodes,
         "edges": edges,

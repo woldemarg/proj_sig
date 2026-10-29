@@ -153,7 +153,13 @@ def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_rea
         insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
     )
     query = SimpleNamespace(
-        conditions=[], targets=[], text="what happened in 2031-W13?", when=period_interval("2031-W13"), is_lexical=False, components=lambda: []
+        conditions=[],
+        targets=[],
+        text="what happened in 2031-W13?",
+        when=period_interval("2031-W13"),
+        when_asked=False,
+        is_lexical=False,
+        components=lambda: [],
     )
 
     def ask() -> list[tuple[str, str | None]]:
@@ -236,12 +242,18 @@ def test_a_period_asked_beside_the_question_reads_as_one_written_in_it_and_yield
     for bad in (("2031-03-30", "2031-03-24"), ("2031-03-24T06:00", "2031-03-24T06:00"), ("2031-03-24T06:00+02:00", "2031-03-25")):
         with pytest.raises(ValueError):
             parse_period(*bad)
+    assert parse_period("20310324", "20310330") == week  # a date in ISO's basic form is a whole day too
     hours = parse_period("2031-03-24T06:00", "2031-03-25T18:00")  # the bar's thumbs step by hours over a short window
     assert (
         hours == (datetime(2031, 3, 24, 6, tzinfo=UTC), datetime(2031, 3, 25, 18, tzinfo=UTC))
         and parse_period("2031-03-24T00:00", "2031-03-31T00:00") == week
     )
     assert "\nPERIOD: 2031-03-24 06:00 to 2031-03-25 18:00, the end not included\n" in engine.search(QUESTION, period=hours).evidence.to_prompt()
+    plain = "Which customers behave unusually?"  # nothing the catalog knows: the bar's period ranks, a written one is the question
+    free, barred = engine.search(plain), engine.search(plain, period=week)
+    assert not barred.parsed.is_lexical and barred.parsed.when_asked and len(barred.seeds) == len(free.seeds) > 1
+    assert not any(s.matched.get("fallback") for s in barred.seeds)
+    assert engine.search(plain.rstrip("?") + " in 2031-W13?").seeds[0].matched.get("fallback") == "period"
     with TestClient(create_app(engine)) as client:
         for bad in (["2031-03-30", "2031-03-24"], ["31.03.2031", "2031-04-01"], ["2031-03-24"]):
             refused = client.post("/api/search", json={"question": QUESTION, "period": bad})
@@ -271,6 +283,6 @@ def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed,
     fixed = {"fresh": SeedMatch("fresh", 0.6 + SEED_RECENCY_WEIGHT, {"recency": 1.0}), "stale": SeedMatch("stale", 0.6, {"recency": 0.0})}
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
     stub = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
-    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, components=lambda: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, when_asked=False, components=lambda: [])
     picked = seeds.resolve_seeds(query, stub, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig(), None, far)
     assert [s.pattern_id for s in picked] == ["fresh", "stale"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95

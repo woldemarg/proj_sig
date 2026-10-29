@@ -33,7 +33,7 @@ class QueryIn(BaseModel):
     geometry: dict[str, Any] | None = None
     resolution: int | None = None
     as_of: str | None = None  # the reference date, passed to POST /api/search as given
-    period: list[str] | None = None  # [start, end], ISO dates, passed as given
+    period: list[str] | None = None  # [start, end), the console's period bar, passed as given
 
 
 def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None = None) -> FastAPI:

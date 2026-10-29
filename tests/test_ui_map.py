@@ -439,15 +439,23 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
 def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
     """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
     rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
-    the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). Every insight here
-    lives over the data's first four weeks: its core ends before the last two days."""
+    the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). The data's calendar is
+    Kyiv's: the bar offers its own first and last days, and a preset counts what the server counts for them. A dataset
+    filter that drops the stretch gives the cells back. Every insight here lives over the data's first four weeks: its
+    core ends before the last two days."""
+    import pandas as pd
+
+    from graph_query_engine.temporal import parse_period
+
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     engine = make_engine(cfg)
-    (level,) = upload_levels(engine, points_csv, geo="auto@8", time="when", grid="week")
+    (level,) = upload_levels(engine, points_csv, geo="auto@8", time="when", grid="week", tz="Europe/Kyiv")
     assert level["status"] == "READY", level.get("error")
+    pd.read_csv(points_csv).drop(columns="when").to_csv(untimed := points_csv.with_name("untimed.csv"), index=False)
+    (other,) = upload_levels(engine, untimed)  # a table without time: the bar has no day of it
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
@@ -456,6 +464,17 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want", timeout=60000)
         page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        assert page.inner_text("#pb-text") == "04.03.2019 — 03.04.2019\nувесь період"  # Kyiv's days, not their UTC instants
+        page.click("#pb-label")
+        page.click("#pb-presets button:has-text('останній тиждень')")
+        assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
+        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
+        page.select_option("#dataset-filter", other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
+        page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
+        page.select_option("#dataset-filter", "")
         page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
         page.evaluate("W.all = true; renderWindow()")
         assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span

@@ -666,7 +666,9 @@ async function inspect(id, note = "") {
   const merged = {};  // an undirected link seen from either end is one group: its two keys share a name
   for (const [type, items] of Object.entries(d.neighbors)) {
     const base = type.replace(/ \(in\)$/, ""), g = (merged[base !== type && word(base) === word(type) ? base : type] ||= { items: [], count: 0 });
+    if (g.items.length) g.both = true;  // its other end's list joins: one list, strongest first
     g.items.push(...items); g.count += (d.neighbor_counts || {})[type] ?? items.length;
+    if (g.both) g.items.sort((a, b) => b.weight - a.weight);
   }
   const groups = Object.entries(merged).filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)", ...shown].includes(t));
   if (groups.length) {

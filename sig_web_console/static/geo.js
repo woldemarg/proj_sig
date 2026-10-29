@@ -503,8 +503,9 @@ function listMetrics() {
 async function paintPeriod() {
   /* the period bar's days on the cells: each one's points in them (GET /counts) as a colour choice, taken when the
      colour showed every point, and given back with the whole span; the statistics stay the whole span's */
-  if (!G.data || G.others.length) return;
   const seq = ++G.periodSeq, ds = G.ds, p = S.period;
+  if (G.others.length) $("map-period").hidden = true;  // «Усі датасети» draws no cell: no period on them either
+  if (!G.data || G.others.length) return;
   if (!p && $("map-period").hidden) return;  // the whole span, nothing of a period on the cells
   const got = p ? await api(`/api/geo/${encodeURIComponent(ds)}/counts?start=${encodeURIComponent(p.start)}&end=${encodeURIComponent(p.end)}`).catch(() => null) : null;
   if (seq !== G.periodSeq || ds !== G.ds) return;  // the days or the dataset changed meanwhile
@@ -518,7 +519,7 @@ async function paintPeriod() {
   note.hidden = !p;
   note.textContent = !p ? "" : counts ? `${cap(word("points"))} за ${Timeline.words()}: ${num(got.points, 0)}. Гарячі точки та інсайти — за весь час.`
     : got && !got.timed ? "У датасеті мапи немає колонки часу: комірки — за весь час."
-    : got ? "Мапа не знає часу подій цього датасету: перезавантажте його, щоб фарбувати комірки за періодом." : "Не вдалося порахувати події за період.";
+    : got ? "Мапа не знає часу подій цього датасету: завантажте той самий файл ще раз із тими самими параметрами, і комірки фарбуватимуться за періодом." : "Не вдалося порахувати події за період.";
 }
 
 function colorBy(metric) {
@@ -661,17 +662,18 @@ function renderWindow() {
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i, off = !Timeline.inPeriod(i.id)) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}${off ? " off" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)}${off ? ` · не діє в періоді ${Timeline.words()}` : ""} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
+  const out = new Set(d.themes.flatMap((t) => t.insights).filter((i) => !Timeline.inPeriod(i.id)).map((i) => i.id));  // set aside by the period bar
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}${out.has(i.id) ? " off" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)}${out.has(i.id) ? ` · не діє в періоді ${Timeline.words()}` : ""} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
     `${G.others.length ? `<i class="mw-ds" title="${esc(fileOf(i.dataset_id))}">${esc(fileOf(i.dataset_id).replace(/\.[^.]+$/, ""))}</i>` : ""}<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc((readingOf(i.id) || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
   const more = d.insights <= ROWS_SHOWN ? "" : `<div class="mw-more">${W.all ? `Показано всі ${d.insights}` : `Показано ${ROWS_SHOWN} з ${d.insights} · наблизьтесь, щоб побачити особливості ділянок`}` +
     `<button type="button" class="mw-all">${W.all ? `лише перші ${ROWS_SHOWN}` : "показати всі"}</button></div>`;
-  const held = (i) => (Timeline.inPeriod(i.id) ? 0 : 1);  // the period's insights first, each part in rank order
-  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN).sort((a, b) => held(a) - held(b)) })).filter((t) => t.rows.length);
+  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN).sort((a, b) => out.has(a.id) - out.has(b.id)) }))  // the period's first, each part in rank order
+    .filter((t) => t.rows.length);
   $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного — віддаліться, щоб побачити ширшу ділянку.</div>` : more + themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.reading || t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.rows.length}</b></button>` +
-      (open ? t.rows.map((i) => row(i)).join("") : "") + `</div>`;
+      (open ? t.rows.map(row).join("") : "") + `</div>`;
   }).join("");
 }

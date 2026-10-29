@@ -896,6 +896,10 @@ def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(ti
         page.wait_for_function("document.querySelectorAll('#thread .bot-meta').length === 2", timeout=60000)
         said = f"{name('period')} 24.03.2031 — 30.03.2031"
         assert said in page.locator("#thread .msg-user").last.inner_text() and said in page.locator("#thread .bot-meta").last.inner_text()
+        page.evaluate("(q) => ask(q)", question.rstrip("?") + " in 2031-W14?")  # a period of its own text wins: the bubble drops the bar's
+        page.wait_for_function("document.querySelectorAll('#thread .bot-meta').length === 3", timeout=60000)
+        assert name("period") not in page.locator("#thread .msg-user").last.inner_text()
+        assert f"{name('period')} 31.03.2031 — 06.04.2031" in page.locator("#thread .bot-meta").last.inner_text()
         page.click("#pb-clear")
         assert page.evaluate("S.period") is None and page.is_hidden("#pb-clear")
         assert not errors, errors

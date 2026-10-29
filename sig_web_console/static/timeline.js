@@ -8,7 +8,7 @@
 const HOUR = 3600000, DAY = 24 * HOUR;
 const isoDay = (t) => new Date(t).toISOString().slice(0, 10);
 const isoMinute = (t) => new Date(t).toISOString().slice(0, 16);  // the calendar's wall clock, as the period goes to the API
-const utc = (s) => Date.parse(s.length === 16 ? `${s}Z` : s);  // a wall-clock time without a zone, read as the console keeps it
+const wall = (s) => Date.parse(s.length > 10 ? `${s.slice(0, 19)}Z` : s);  // a calendar time with its zone dropped: every time the console holds is the data's wall clock
 const shortDay = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;  // 2031-03-24 → 24.03.2031
 const PRESETS = [["останній тиждень", 7], ["останній місяць", 30], ["останні 3 місяці", 91], ["увесь період", 0]];  // days to the latest data
 const STEP_HOURS = [1, 2, 3, 6, 12, 24, 48, 72, 168, 336, 720];  // the thumbs' steps: about BAR_STEPS of them over the window
@@ -23,8 +23,8 @@ function periodWords(lo, hi) {
 const spanWords = (lo, hi) => ((hi - lo) % DAY === 0 ? plural((hi - lo) / DAY, "день", "дні", "днів") : plural(Math.round((hi - lo) / HOUR), "година", "години", "годин"));
 
 const Timeline = (() => {
-  const T = { hubs: [], rows: [], byId: {}, level: null, span: false, lo: 0, hi: 0, wlo: 0, whi: Infinity };  // the bar's span and window
-  const ms = (s) => Date.parse(s);
+  const T = { hubs: [], rows: [], byId: {}, level: null, span: false, lo: 0, hi: 0, wlo: 0, whi: Infinity, plo: 0, phi: 0 };  // the bar's span, window, stretch
+  const ms = wall;
 
   function load(g) {
     /* the graph payload's periods and the insights with a core or an event, each with its events joined through the hub */
@@ -39,15 +39,17 @@ const Timeline = (() => {
       .sort((a, b) => from(a) - from(b) || b.weight - a.weight);  // in calendar order, the strongest first on a tie
     T.byId = Object.fromEntries(T.rows.map((r) => [r.id, r]));
     T.span = Boolean(g.span);  // the timed datasets' days: the bar's, [the first's midnight, the midnight after the last)
-    if (T.span) [T.lo, T.hi] = [ms(isoDay(ms(g.span[0]))), ms(isoDay(ms(g.span[1]))) + DAY];
     $("time-tab").hidden = !hubs.length;
+    const was = JSON.stringify(S.period);
     if (T.span) {  // another filter: the window and the stretch it still holds, else the whole span
-      const [wlo, whi] = [Math.max(T.wlo, T.lo), Math.min(T.whi, T.hi)], fits = wlo < whi;
-      [T.wlo, T.whi] = fits ? [wlo, whi] : [T.lo, T.hi];
-      const [lo, hi] = S.period ? [Math.max(utc(S.period.start), T.wlo), Math.min(utc(S.period.end), T.whi)] : [T.lo, T.hi];
+      const day = (t) => t - (t % DAY);
+      [T.lo, T.hi] = [day(ms(g.span[0])), day(ms(g.span[1])) + DAY];
+      const [wlo, whi] = [Math.max(T.wlo, T.lo), Math.min(T.whi, T.hi)];
+      [T.wlo, T.whi] = wlo < whi ? [wlo, whi] : [T.lo, T.hi];
+      const [lo, hi] = S.period ? [Math.max(T.plo, T.wlo), Math.min(T.phi, T.whi)] : [T.lo, T.hi];
       choose(...(lo < hi ? [lo, hi] : [T.wlo, T.whi]), false);
-    } else S.period = null;
-    drawBar();
+    } else { S.period = null; drawBar(); }
+    if (JSON.stringify(S.period) !== was) GeoMap.onPeriod();  // the map hears of a stretch the filter narrowed or dropped
     if (!hubs.length && S.view === "time") setView("graph");
     else if (S.view === "time") render();
   }
@@ -64,7 +66,7 @@ const Timeline = (() => {
       `<button type="button" class="tl-level${l === T.level ? " active" : ""}" data-level="${l}" aria-pressed="${l === T.level}"${levels.includes(l) ? "" : " disabled"}>${TIME_LEVEL_NAMES[l]}</button>`).join("");
     const ticks = T.hubs.filter((h) => h.granularity === T.level).map((h) =>
       `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(h.period)}</button>`).join("");
-    const [lo, hi] = S.period ? [utc(S.period.start), utc(S.period.end)] : [-Infinity, Infinity];
+    const [lo, hi] = S.period ? [T.plo, T.phi] : [-Infinity, Infinity];
     const cut = (a, b) => {  // a core's part outside the stretch dark: where the stretch starts and ends along the bar
       if (!S.period) return "";
       const f = (t) => (100 * Math.min(Math.max((t - a) / (b - a || 1), 0), 1)).toFixed(1);
@@ -85,25 +87,26 @@ const Timeline = (() => {
   function setLevel(level) { T.level = level; render(); }
 
   function inPeriod(pid) {
-    /* whether an insight acts in the chosen stretch: its core or one of its events meets it; one without either, or not
-       on this graph, is never set aside */
+    /* whether an insight acts in the chosen stretch: its core meets it, or one of its events lies inside it, as a period
+       reads an event (docs/07_question_answering.md §7.2); one without either, or not on this graph, is never set aside */
     const r = T.byId[pid];
     if (!S.period || !r) return true;
-    const lo = utc(S.period.start), hi = utc(S.period.end), meets = (a, b) => ms(a) < hi && lo < ms(b);
-    return Boolean((r.core && meets(r.core.t_start, r.core.t_end)) || r.events.some((e) => meets(e.hub.t_start, e.hub.t_end)));
+    const [lo, hi] = [T.plo, T.phi];
+    return Boolean((r.core && ms(r.core.t_start) < hi && lo < ms(r.core.t_end)) || r.events.some((e) => lo <= ms(e.hub.t_start) && ms(e.hub.t_end) <= hi));
   }
 
-  const words = () => S.period && periodWords(utc(S.period.start), utc(S.period.end));
+  const words = () => S.period && periodWords(T.plo, T.phi);
 
   function choose(lo, hi, window = true) {
     /* [lo, hi) chosen, the bar's window with it unless a thumb moved; the whole span is no period. Redraws the bar only:
        apply() tells the views */
     if (window) { T.wlo = lo; T.whi = hi; }
+    [T.plo, T.phi] = [lo, hi];
     S.period = lo <= T.lo && hi >= T.hi ? null : { start: isoMinute(lo), end: isoMinute(hi) };
     drawBar();
   }
 
-  function setPeriod(start, end) { if (start) choose(utc(start), utc(end)); else choose(T.lo, T.hi); }  // ISO, the end not in it
+  function setPeriod(start, end) { choose(ms(start), ms(end)); }  // ISO wall clock, the end not in it
 
   function apply() {
     if (S.view === "time") render();
@@ -122,7 +125,7 @@ const Timeline = (() => {
     $("period-bar").hidden = !T.span;
     if (!T.span) return;
     const width = T.whi - T.wlo || 1, n = Math.ceil(width / step());
-    const [lo, hi] = S.period ? [utc(S.period.start), utc(S.period.end)] : [T.lo, T.hi];
+    const [lo, hi] = S.period ? [T.plo, T.phi] : [T.lo, T.hi];
     const k = (t) => Math.min(Math.max(Math.round((t - T.wlo) / step()), 0), n), f = (t) => Math.min(Math.max((t - T.wlo) / width, 0), 1);
     for (const [id, t] of [["pb-from", lo], ["pb-to", hi]]) { $(id).max = n; $(id).value = k(t); }
     Object.assign($("pb-fill").style, { left: `calc(7px + (100% - 14px) * ${f(lo)})`, width: `calc((100% - 14px) * ${f(hi) - f(lo)})` });
@@ -132,7 +135,7 @@ const Timeline = (() => {
     const room = $("pb-ticks").clientWidth || 600, levels = TIME_LEVELS.filter((l) => T.hubs.some((h) => h.granularity === l));
     const level = levels.find((l) => T.hubs.filter((h) => h.granularity === l && ms(h.t_end) > T.wlo && ms(h.t_start) < T.whi).length * 64 <= room) || levels[levels.length - 1];
     const days = Array.from({ length: Math.ceil(width / DAY) }, (_, i) => T.wlo + i * DAY);
-    const ticks = width <= 14 * DAY ? days.map((t) => [t, isoDay(t).slice(5).split("-").reverse().join(".")])  // a short window: its days
+    const ticks = width <= 14 * DAY ? days.map((t) => [t, shortDay(isoDay(t)).slice(0, 5)])  // a short window: its days
       : T.hubs.filter((h) => h.granularity === level).map((h) => [ms(h.t_start), h.period]);
     let last = -Infinity;
     $("pb-ticks").innerHTML = ticks.map(([t, label]) => {
@@ -171,13 +174,13 @@ const Timeline = (() => {
     $("pb-label").addEventListener("click", () => openPop($("pb-pop").hidden));
     $("pb-clear").addEventListener("click", () => { choose(T.lo, T.hi); apply(); });
     on($("pb-presets"), "button", (b) => {
-      const end = Math.min(S.asOf ? ms(isoDay(ms(S.asOf))) + DAY : T.hi, T.hi), days = +b.dataset.days;  // back from the latest data's day
-      choose(days ? Math.max(end - days * DAY, T.lo) : T.lo, end); apply(); openPop(false);
+      const days = +b.dataset.days;  // back from the latest data's day, the span's last
+      choose(days ? Math.max(T.hi - days * DAY, T.lo) : T.lo, T.hi); apply(); openPop(false);
     });
     for (const id of ["pb-start", "pb-end"]) $(id).addEventListener("change", () => {
       const [s, e] = [$("pb-start").value, $("pb-end").value];
       if (!s || !e) return;  // a half-typed date: nothing yet
-      const [a, b] = [utc(s), utc(e)].sort((x, y) => x - y);
+      const [a, b] = [ms(s), ms(e)].sort((x, y) => x - y);
       choose(Math.max(a, T.lo), Math.min(b + DAY, T.hi)); apply();
     });
     document.addEventListener("click", (e) => { if (!$("pb-pop").hidden && !e.target.closest(".pb-pill")) openPop(false); });

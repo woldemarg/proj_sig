@@ -194,6 +194,9 @@ function toggleTab(tab) {
   box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
 }
 
+// the bar's stretch the question went with, unless the answer says a period of its own text ranked instead
+const barPeriod = (turn) => turn.period && turn.qa?.view?.evidence?.parsed?.when_asked !== false;
+
 function renderThread() {
   /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
@@ -205,7 +208,7 @@ function renderThread() {
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
-      `${turn.period ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(utc(turn.period.start), utc(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `${barPeriod(turn) ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(wall(turn.period.start), wall(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
   t.scrollTop = t.scrollHeight;

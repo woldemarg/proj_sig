@@ -517,6 +517,7 @@ class Engine:
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
                 if duplicate:
+                    self._add_point_times(loaded)
                     return self._skip(record, duplicate)
                 with self._stage(record, "PROFILING", timings, "discover_s"):
                     result = self._discover(record, loaded)
@@ -671,8 +672,9 @@ class Engine:
     def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
         return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
-    def geo_period_counts(self, dataset_id: str, start: str, end: str) -> dict[str, Any]:
-        return geo_views.geo_period_counts(self.ws, dataset_id, start, end)
+    @_healthy
+    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime]) -> dict[str, Any]:
+        return geo_views.geo_period_counts(self.ws, dataset_id, period)
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
@@ -708,6 +710,13 @@ class Engine:
         record["stage_times"][stage] = utc_now()
         self.ws.save_batch(record)
         log.info("[%s] %s", record["batch_id"], stage)
+
+    def _add_point_times(self, loaded: LoadedDataset) -> None:
+        """A geo dataset stored before ``geo.npz`` kept its points' times gets them from the same upload again: the map's
+        period counts (``geo_views.geo_period_counts``), display data no digest signs."""
+        geo = self.ws.load_geo(loaded.dataset_id, ("point_time",)) if loaded.spatial is not None and loaded.time is not None else None
+        if geo == {}:
+            self.ws.save_geo(loaded.dataset_id, loaded.spatial, geo_views.point_times(loaded.time))
 
     def _skip(self, record: dict[str, Any], duplicate: dict[str, Any]) -> dict[str, Any]:
         """Same content + options already READY: idempotent skip."""

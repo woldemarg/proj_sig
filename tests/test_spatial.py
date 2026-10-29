@@ -12,10 +12,11 @@ import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import HOT, geo_frame, make_config, make_engine, upload_levels
+from conftest import HOT, geo_frame, make_config, make_engine, upload_levels, wait_batch
 from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
+from graph_query_engine.temporal import parse_period
 from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
@@ -214,10 +215,7 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
     with TestClient(create_app(engine)) as client:
         with points_csv.open("rb") as f:
             bid = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data={"geo": "auto"}).json()["batch_id"]
-        for _ in range(600):
-            if (record := client.get(f"/api/batches/{bid}").json())["status"] == "READY":
-                break
-            time.sleep(0.1)
+        record = wait_batch(client, bid)
         ds = record["dataset_id"]
         assert warmed(ds)
         assert client.patch(f"/api/datasets/{ds}", json={"source": "field survey"}).status_code == 200
@@ -452,10 +450,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
             data = {"geo": "auto@8,7", "bins": "points:4", "table": True}
             accepted = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data=data).json()
         assert list(accepted["levels"]) == ["8", "7", "table"] and accepted["batch_id"] == accepted["levels"]["8"]
-        for _ in range(600):  # one worker thread: the table level runs last
-            if client.get(f"/api/batches/{accepted['levels']['table']}").json()["status"] in ("SKIPPED", "READY", "FAILED"):
-                break
-            time.sleep(0.1)
+        wait_batch(client, accepted["levels"]["table"])  # one worker thread: the table level runs last
         again = client.get("/api/batches", params={"upload_id": upload_id}).json()
         assert {b["batch_id"] for b in again} - {r["batch_id"] for r in done} == set(accepted["levels"].values())
         assert all(b["status"] == "SKIPPED" for b in again if b["batch_id"] in accepted["levels"].values())
@@ -930,6 +925,10 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
             "points": 0,
             "timed": True,
         }
+        (again,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")  # the same file again: skipped, its times added
+        assert (
+            again["status"] == "SKIPPED" and client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == week
+        )
     (plain,) = upload_levels(engine, path, geo="auto@7")
     assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
-    assert engine.geo_period_counts(plain["dataset_id"], "2019-03-04", "2019-03-10") == {"counts": None, "points": 0, "timed": False}
+    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {"counts": None, "points": 0, "timed": False}

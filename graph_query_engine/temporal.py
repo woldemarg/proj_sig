@@ -41,11 +41,14 @@ def parse_period(start: str, end: str) -> tuple[datetime, datetime]:
 
 
 def _bound(text: str, end: bool) -> datetime:
-    stamp = datetime.fromisoformat(text.strip())
+    try:  # a date alone, in any form ISO allows (2031-03-30, 20310330): a whole day
+        day = date.fromisoformat(text.strip())
+        return datetime(day.year, day.month, day.day, tzinfo=UTC) + (timedelta(days=1) if end else timedelta())
+    except ValueError:
+        stamp = datetime.fromisoformat(text.strip())
     if stamp.tzinfo:
         raise ValueError(f"a period is read on the data's calendar, without a zone: {text}")
-    whole_day = len(text.strip()) == 10  # a date alone
-    return stamp.replace(tzinfo=UTC) + (timedelta(days=1) if end and whole_day else timedelta())
+    return stamp.replace(tzinfo=UTC)
 
 
 def core_age(core: dict[str, Any], as_of: datetime) -> dict[str, Any]:

@@ -117,7 +117,8 @@ def search(
     if state.catalog is None and graph.insights:  # a caller that did not prepare one: build it now, kept on the state
         state.catalog = build_catalog(graph, encoder.embedder)
     parsed = parse_query(question, graph, config, state.catalog)
-    parsed.when = parsed.when or period
+    if period and not parsed.when:
+        parsed.when, parsed.when_asked = period, True
     clock = as_of or graph.as_of
     seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores, clock)
     result = traverse(graph, seeds, config, None if parsed.when else clock)  # an asked period is its own window

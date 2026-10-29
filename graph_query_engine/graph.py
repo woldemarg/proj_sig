@@ -187,7 +187,7 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
 
 
 def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThresholds) -> dict[str, str]:
-    """The insight in words, ``{"where", "what", "headline"}`` (``wording.reading``), with its dataset's declared glossary
+    """The insight in words, ``{"where", "what", "headline", "gist"}`` (``wording.reading``), with its dataset's declared glossary
     (``user_glossary`` of its Dataset node) and the band count of each quantile-band condition from its Dimension node:
     every surface that describes an insight reads it here."""
     return wording.reading(graph.insight(pattern_id), thresholds, *declared_words(graph, pattern_id))
