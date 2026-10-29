@@ -925,10 +925,14 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
             "points": 0,
             "timed": True,
         }
+        assert not engine.ws.add_point_times(ds, stored["point_time"][:-1])  # not of its stored points: nothing written
         (again,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")  # the same file again: skipped, its times added
         assert (
             again["status"] == "SKIPPED" and client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == week
         )
+        added = engine.ws.load_geo(ds)  # beside the arrays as stored, which the map's cells.geojson was drawn from
+        assert all(np.array_equal(added[k], v) for k, v in stored.items()) and set(added) == {*stored, "point_time"}
+        assert not engine.ws.add_point_times(ds, added["point_time"])  # it has them
     (plain,) = upload_levels(engine, path, geo="auto@7")
     assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
     assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {"counts": None, "points": 0, "timed": False}

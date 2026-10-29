@@ -714,9 +714,8 @@ class Engine:
     def _add_point_times(self, loaded: LoadedDataset) -> None:
         """A geo dataset stored before ``geo.npz`` kept its points' times gets them from the same upload again: the map's
         period counts (``geo_views.geo_period_counts``), display data no digest signs."""
-        geo = self.ws.load_geo(loaded.dataset_id, ("point_time",)) if loaded.spatial is not None and loaded.time is not None else None
-        if geo == {}:
-            self.ws.save_geo(loaded.dataset_id, loaded.spatial, geo_views.point_times(loaded.time))
+        if loaded.spatial is not None and loaded.time is not None:
+            self.ws.add_point_times(loaded.dataset_id, geo_views.point_times(loaded.time))
 
     def _skip(self, record: dict[str, Any], duplicate: dict[str, Any]) -> dict[str, Any]:
         """Same content + options already READY: idempotent skip."""

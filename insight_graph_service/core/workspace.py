@@ -66,6 +66,14 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     replace_file(tmp, path)
 
 
+def _write_npz(path: Path, **arrays: np.ndarray) -> None:
+    """``arrays`` as ``path``, replaced atomically: a reader meanwhile reads the old file or the new one whole."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    with os.fdopen(fd, "wb") as handle:
+        np.savez_compressed(handle, **arrays)
+    replace_file(tmp, path)
+
+
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.is_file():
         return default
@@ -249,7 +257,7 @@ class Workspace:
     def save_geo(self, dataset_id: str, spatial: SpatialContext, point_time: np.ndarray | None = None) -> None:
         """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph; with a time
         column, each point's time (``geo_views.point_times``)."""
-        np.savez_compressed(
+        _write_npz(
             self.dataset_dir(dataset_id) / "geo.npz",
             cells=spatial.cells.astype(str),
             point_cell=spatial.point_cell,
@@ -258,6 +266,15 @@ class Workspace:
             nbr_idx=spatial.nbr_idx,
             **({} if point_time is None else {"point_time": point_time}),
         )
+
+    def add_point_times(self, dataset_id: str, point_time: np.ndarray) -> bool:
+        """The points' times added to a geo dataset's ``geo.npz`` stored without them, its other arrays kept as they are
+        (``cells.geojson`` was drawn from them): False when it has them, or they are not of its stored points."""
+        geo = self.load_geo(dataset_id)
+        if geo is None or "point_time" in geo or len(point_time) != len(geo["point_cell"]):
+            return False
+        _write_npz(self.dataset_dir(dataset_id) / "geo.npz", **geo, point_time=point_time)
+        return True
 
     def save_temporal(self, dataset_id: str, series: dict[str, Any]) -> str:
         """A dataset's series over its time column's grid (``subgroup_miner.temporal.annotate``) as
