@@ -29,6 +29,28 @@ def parse_as_of(text: str) -> datetime:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
+def parse_period(start: str, end: str) -> tuple[datetime, datetime]:
+    """A period asked beside the question, ``start`` to ``end``: ISO dates or dates and times without a zone, the wall
+    clock of the data's calendar, read as ``period_interval`` reads one written in it — [start, end), UTC-tagged, a date
+    its midnight and a date as the end the midnight after it, so a period of dates holds both; ``ValueError`` for
+    anything else or an empty period."""
+    lo, hi = _bound(start, end=False), _bound(end, end=True)
+    if hi <= lo:
+        raise ValueError(f"the period ends before it starts: {start} to {end}")
+    return lo, hi
+
+
+def _bound(text: str, end: bool) -> datetime:
+    try:  # a date alone, in any form ISO allows (2031-03-30, 20310330): a whole day
+        day = date.fromisoformat(text.strip())
+        return datetime(day.year, day.month, day.day, tzinfo=UTC) + (timedelta(days=1) if end else timedelta())
+    except ValueError:
+        stamp = datetime.fromisoformat(text.strip())
+    if stamp.tzinfo:
+        raise ValueError(f"a period is read on the data's calendar, without a zone: {text}")
+    return stamp.replace(tzinfo=UTC)
+
+
 def core_age(core: dict[str, Any], as_of: datetime) -> dict[str, Any]:
     """Where ``as_of`` lies from a core, ``[t_start, t_end)``, and how far: ``{side: before, days: to its start}``,
     ``{side: inside, days: 0}`` or ``{side: after, days: since its end}`` — at ``t_end``, which the core excludes, it has

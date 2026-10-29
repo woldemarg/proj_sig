@@ -1,9 +1,11 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0 };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
+const CELL_LINE = 0.32;  // the cells' outline opacity
+const PERIOD_METRIC = "points_in_period";  // a cell's points in the period bar's days (GET /counts), while it holds some
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
@@ -81,6 +83,8 @@ const GeoMap = {
   },
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
+
+  onPeriod() { if (W.data) renderWindow(); paintPeriod(); },  // the list sets aside the insights the bar's days do not hold
 
   closePopup() {  // whether a cell popup was open
     const open = Boolean(G.popup); if (open) G.popup.remove();
@@ -278,7 +282,7 @@ function ensureMap() {
     layer("border-glow", "line", "base", { "line-color": "#6b7da0", "line-width": 5, "line-blur": 4, "line-opacity": 0.18 }, ["==", ["get", "layer"], "country"]);
     layer("border", "line", "base", { "line-color": "#7d8daa", "line-width": 1.1 }, ["==", ["get", "layer"], "country"]);
     layer("cells-fill", "fill", "cells", { "fill-color": "#3f1670", "fill-opacity": 0.55 });
-    layer("cells-line", "line", "cells", { "line-color": "#a265ff", "line-width": 0.5, "line-opacity": 0.32 });
+    layer("cells-line", "line", "cells", { "line-color": "#a265ff", "line-width": 0.5, "line-opacity": CELL_LINE });
     layer("lisa-hot", "line", "cells", { "line-color": C.hot, "line-width": 2.4, "line-blur": 2.5, "line-opacity": 0.6 }, ["==", ["get", "lisa_points"], "hot spot"]);
     layer("lisa-cold", "line", "cells", { "line-color": C.cold, "line-width": 2.4, "line-blur": 2.5, "line-opacity": 0.6 }, ["==", ["get", "lisa_points"], "cold spot"]);
     layer("hl-fill", "fill", "focus", { "fill-color": C.up, "fill-opacity": 0.6 });  // its colour set by focusPattern
@@ -381,10 +385,11 @@ async function loadDataset(ds) {
     G.map.getSource("pts").setData(empty());
     await Promise.all([loadProjected(ds), loadOverlay(ds)]);
     if (seq !== G.loadSeq) return false;
-    const numeric = Object.keys(data.features[0] ? data.features[0].properties : {}).filter((k) => k !== "row" && data.features.some((f) => typeof f.properties[k] === "number"));
-    if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
-    $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
+    if (G.metric === PERIOD_METRIC) G.metric = "points";  // the old dataset's period counts went with it
+    listMetrics();
     colorBy(G.metric);
+    await paintPeriod();
+    if (seq !== G.loadSeq) return false;
     paintMode();
     G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
     return true;
@@ -488,6 +493,35 @@ function paintZone() {
   $("map-zone-n").textContent = `ЗОНА · ${plural(G.zone.size, "комірка", "комірки", "комірок")}` + (G.data && shown < G.zone.size ? ` · на цій мапі: ${shown}` : "");
 }
 
+function listMetrics() {
+  /* the cells' numeric columns as the colour choices, the one in use kept when the cells still have it */
+  const fs = G.data.features, numeric = Object.keys(fs[0] ? fs[0].properties : {}).filter((k) => k !== "row" && fs.some((f) => typeof f.properties[k] === "number"));
+  if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
+  $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
+}
+
+async function paintPeriod() {
+  /* the period bar's days on the cells: each one's points in them (GET /counts) as a colour choice, taken when the
+     colour showed every point, and given back with the whole span; the statistics stay the whole span's */
+  const seq = ++G.periodSeq, ds = G.ds, p = S.period;
+  if (G.others.length) $("map-period").hidden = true;  // «Усі датасети» draws no cell: no period on them either
+  if (!G.data || G.others.length) return;
+  if (!p && $("map-period").hidden) return;  // the whole span, nothing of a period on the cells
+  const got = p ? await api(`/api/geo/${encodeURIComponent(ds)}/counts?start=${encodeURIComponent(p.start)}&end=${encodeURIComponent(p.end)}`).catch(() => null) : null;
+  if (seq !== G.periodSeq || ds !== G.ds) return;  // the days or the dataset changed meanwhile
+  const counts = got && got.counts, was = G.metric;
+  G.data.features.forEach((f, i) => { if (counts) f.properties[PERIOD_METRIC] = counts[i] || null; else delete f.properties[PERIOD_METRIC]; });  // none: unpainted
+  G.map.getSource("cells").setData(G.data);
+  if (counts && was === "points") G.metric = PERIOD_METRIC;
+  if (!counts && was === PERIOD_METRIC) G.metric = "points";
+  listMetrics(); colorBy(G.metric);
+  const note = $("map-period");
+  note.hidden = !p;
+  note.textContent = !p ? "" : counts ? `${cap(word("points"))} за ${Timeline.words()}: ${num(got.points, 0)}. Гарячі точки та інсайти — за весь час.`
+    : got && !got.timed ? "У датасеті мапи немає колонки часу: комірки — за весь час."
+    : got ? "Мапа не знає часу подій цього датасету: завантажте той самий файл ще раз із тими самими параметрами, і комірки фарбуватимуться за періодом." : "Не вдалося порахувати події за період.";
+}
+
 function colorBy(metric) {
   G.metric = metric;
   const vals = G.data.features.map((f) => f.properties[metric]).filter((v) => typeof v === "number").sort((a, b) => a - b);
@@ -495,7 +529,9 @@ function colorBy(metric) {
   for (let i = 1; i < RAMP.length; i++) { const q = vals[Math.floor((i / RAMP.length) * (vals.length - 1))]; if (q !== undefined && (!stops.length || q > stops[stops.length - 1])) stops.push(q); }
   const step = ["step", ["get", metric], RAMP[0]];
   stops.forEach((q, i) => step.push(q, RAMP[Math.min(i + 1, RAMP.length - 1)]));
-  G.map.setPaintProperty("cells-fill", "fill-color", ["case", ["==", ["typeof", ["get", metric]], "number"], stops.length ? step : RAMP[3], "#141a26"]);
+  const period = metric === PERIOD_METRIC, valued = ["==", ["typeof", ["get", metric]], "number"];
+  G.map.setPaintProperty("cells-fill", "fill-color", ["case", valued, stops.length ? step : RAMP[3], period ? "rgba(0, 0, 0, 0)" : "#141a26"]);
+  G.map.setPaintProperty("cells-line", "line-opacity", period ? ["case", valued, CELL_LINE, 0] : CELL_LINE);  // a cell with no event in the period is not drawn at all
   $("map-ramp").innerHTML = `<div class="ramp">${RAMP.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` +
     `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
 }
@@ -513,6 +549,11 @@ function wireHud() {
   $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
   $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
   $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
+  $("hud-fold").addEventListener("click", () => {  // the HUD starts folded: the map stays in view
+    const open = $("map-hud").classList.toggle("folded") === false;
+    Object.assign($("hud-fold"), { textContent: open ? "–" : "+", ariaLabel: open ? "Згорнути панель мапи" : "Розгорнути панель мапи" });
+    $("hud-fold").setAttribute("aria-expanded", String(open));
+  });
 }
 
 
@@ -626,13 +667,15 @@ function renderWindow() {
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")} · ${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}`;
-  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
+  const out = new Set(d.themes.flatMap((t) => t.insights).filter((i) => !Timeline.inPeriod(i.id)).map((i) => i.id));  // set aside by the period bar
+  const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}${out.has(i.id) ? " off" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)}${out.has(i.id) ? ` · не діє в періоді ${Timeline.words()}` : ""} · ${word("points")} у вікні: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
     `${G.others.length ? `<i class="mw-ds" title="${esc(fileOf(i.dataset_id))}">${esc(fileOf(i.dataset_id).replace(/\.[^.]+$/, ""))}</i>` : ""}<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc((readingOf(i.id) || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
     `<b title="${esc(`${word("window_lift")}: ${i.lift_words}\n${TERMS.window_lift[1]}`)}">×${num(i.lift, 1)}</b></button>`;
   const more = d.insights <= ROWS_SHOWN ? "" : `<div class="mw-more">${W.all ? `Показано всі ${d.insights}` : `Показано ${ROWS_SHOWN} з ${d.insights} · наблизьтесь, щоб побачити особливості ділянок`}` +
     `<button type="button" class="mw-all">${W.all ? `лише перші ${ROWS_SHOWN}` : "показати всі"}</button></div>`;
-  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN) })).filter((t) => t.rows.length);
+  const themes = d.themes.map((t) => ({ ...t, rows: t.insights.filter((i) => W.all || i.rank < ROWS_SHOWN).sort((a, b) => out.has(a.id) - out.has(b.id)) }))  // the period's first, each part in rank order
+    .filter((t) => t.rows.length);
   $("mw-body").innerHTML = !d.themes.length ? `<div class="mw-err">Тут нічого характерного — віддаліться, щоб побачити ширшу ділянку.</div>` : more + themes.map((t, k) => {
     const open = W.fold[t.id ?? ""] ?? k < 3;  // the three leading themes open until folded
     return `<div class="mw-theme${open ? " open" : ""}"><button type="button" class="mw-th" data-id="${esc(t.id)}" title="${esc(t.reading || t.label)}"><span>${open ? "▾" : "▸"}</span><span class="mw-tl">${esc(t.label)}</span><b>${t.rows.length}</b></button>` +

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import EPOCH, geo_frame, make_config, make_engine, upload_levels, weekly_retail
+from conftest import EPOCH, geo_frame, make_config, make_engine, upload_levels, wait_batch, weekly_retail
 from fastapi.testclient import TestClient
 
 from graph_query_engine import seeds
@@ -633,6 +633,7 @@ def test_the_upload_form_takes_a_time_column_and_its_grid(engine, tmp_path):
         accepted = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"time": "when", "grid": "day"})
         assert accepted.status_code == 202 and (accepted.json()["time"], accepted.json()["grid"]) == ("when", "day")
         refused = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"grid": "week"})
+        wait_batch(client, accepted.json()["batch_id"])
     assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
 
 
@@ -836,7 +837,7 @@ def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
     fixed = {"timed": SeedMatch("timed", 0.6 + SEED_TIME_WEIGHT, {"time": 1.0}), "plain": SeedMatch("plain", 0.6, {})}
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
     graph = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
-    query = SimpleNamespace(conditions=[], targets=[], text="margin in 2031-W13", when=None, components=lambda: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="margin in 2031-W13", when=None, when_asked=False, components=lambda: [])
     found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
     assert [s.pattern_id for s in found] == ["timed", "plain"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95
 
@@ -855,7 +856,9 @@ def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch)
     graph = SimpleNamespace(
         insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
     )
-    query = SimpleNamespace(conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), is_lexical=False, components=lambda: [])
+    query = SimpleNamespace(
+        conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), when_asked=False, is_lexical=False, components=lambda: []
+    )
     ask = lambda: seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())  # noqa: E731
     found = ask()
     assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period"

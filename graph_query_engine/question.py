@@ -169,6 +169,7 @@ class ParsedQuery:
         default_factory=list
     )  # spans resolved by the literal catalog (§7.1.1): span, literal, layer, score, symbol
     when: tuple[datetime, datetime] | None = None  # a calendar period the question names (temporal.period_interval), UTC
+    when_asked: bool = False  # the period came beside the question (the console's period bar): it ranks, it is not the question
 
     @property
     def is_lexical(self) -> bool:

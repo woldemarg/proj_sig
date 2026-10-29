@@ -14,6 +14,7 @@ import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -22,7 +23,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
-from graph_query_engine.temporal import parse_as_of
+from graph_query_engine.temporal import parse_as_of, parse_period
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
@@ -74,6 +75,7 @@ class SearchIn(BaseModel):
     geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
+    period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
 
 
 class DatasetMetadataIn(BaseModel):
@@ -101,6 +103,16 @@ def _text(upload: UploadFile | None) -> str | None:
 def _log_failure(future: Future) -> None:
     if future.exception() is not None:  # process() records its own failures; this is what escaped it
         log.error("background job failed", exc_info=future.exception())
+
+
+def asked_period(start: str, end: str) -> tuple[datetime, datetime]:
+    """A period a request asks (``temporal.parse_period``), or ``invalid_options``."""
+    try:
+        return parse_period(start, end)
+    except ValueError as exc:
+        raise PipelineError(
+            "invalid_options", f"period: [start, end) as ISO dates (an end date included) or dates and times, no zone: {start!r}, {end!r}"
+        ) from exc
 
 
 def create_app(engine: Engine) -> FastAPI:
@@ -253,7 +265,8 @@ def create_app(engine: Engine) -> FastAPI:
             as_of = parse_as_of(body.as_of) if body.as_of else None
         except ValueError as exc:
             raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
-        return engine.evidence(body.question, as_of, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        period = asked_period(*body.period) if body.period else None
+        return engine.evidence(body.question, as_of, period, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
@@ -278,6 +291,10 @@ def create_app(engine: Engine) -> FastAPI:
     @app.get("/api/geo/{dataset_id}/overlay")
     def geo_overlay(dataset_id: str, datasets: str = "") -> dict[str, Any]:
         return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
+
+    @app.get("/api/geo/{dataset_id}/counts")
+    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, asked_period(start, end))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:

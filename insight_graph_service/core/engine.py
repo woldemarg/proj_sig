@@ -235,23 +235,25 @@ class Engine:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
 
     @_healthy
-    def search(self, question: str, as_of: datetime | None = None, **zone: Any) -> SearchResult:
+    def search(self, question: str, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any) -> SearchResult:
         """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md
-        §7.1–7.4); ``as_of``: the reference date (the latest data when None); ``zone``: the ``cells``, ``geometry`` and
-        ``resolution`` of ``place_scores``."""
-        return self._search(question, self.committed(), as_of, **zone)
+        §7.1–7.4); ``as_of``: the reference date (the latest data when None); ``period``: a period asked beside the text;
+        ``zone``: the ``cells``, ``geometry`` and ``resolution`` of ``place_scores``."""
+        return self._search(question, self.committed(), as_of, period, **zone)
 
     @_healthy
-    def evidence(self, question: str, as_of: datetime | None = None, **zone: Any) -> EvidencePayload:
-        """The evidence for ``question`` (and a reference date and a map zone, as ``search``) as the narrator receives it
-        (``POST /api/search``); an empty graph is an ordinary answer, not an error."""
+    def evidence(self, question: str, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any) -> EvidencePayload:
+        """The evidence for ``question`` (and a reference date, a period and a map zone, as ``search``) as the narrator
+        receives it (``POST /api/search``); an empty graph is an ordinary answer, not an error."""
         state = self.committed()
-        return self._search(question, state, as_of, **zone).payload() if state.graph.insights else empty_payload(question)
+        return self._search(question, state, as_of, period, **zone).payload() if state.graph.insights else empty_payload(question)
 
-    def _search(self, question: str, state: CommittedState, as_of: datetime | None = None, **zone: Any) -> SearchResult:
+    def _search(
+        self, question: str, state: CommittedState, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any
+    ) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of)
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period)
         found.seconds = time.perf_counter() - start
         return found
 
@@ -515,6 +517,7 @@ class Engine:
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
                 if duplicate:
+                    self._add_point_times(loaded)
                     return self._skip(record, duplicate)
                 with self._stage(record, "PROFILING", timings, "discover_s"):
                     result = self._discover(record, loaded)
@@ -612,7 +615,7 @@ class Engine:
                 blocks = {**{k: mined.enc[k] for k in BLOCKS}, "pattern_ids": np.array([i.id for i in mined.kept])}
                 self.ws.append(patterns, mined.enc["vector"], update.activations, blocks, batch_id)
                 if mined.loaded.spatial:  # the map's files, from the journaled patterns
-                    self.ws.save_geo(ds, mined.loaded.spatial)
+                    self.ws.save_geo(ds, mined.loaded.spatial, geo_views.point_times(mined.loaded.time))
                     self.ws.save_geo_cells(ds, geo_views.geo_cells(self.ws, ds, mined.loaded))
                 if replaced:  # after the new version joined its anchors: those it shares keep their ids
                     record["superseded"] = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed")
@@ -670,6 +673,10 @@ class Engine:
         return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
     @_healthy
+    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime]) -> dict[str, Any]:
+        return geo_views.geo_period_counts(self.ws, dataset_id, period)
+
+    @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
         return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
 
@@ -703,6 +710,12 @@ class Engine:
         record["stage_times"][stage] = utc_now()
         self.ws.save_batch(record)
         log.info("[%s] %s", record["batch_id"], stage)
+
+    def _add_point_times(self, loaded: LoadedDataset) -> None:
+        """A geo dataset stored before ``geo.npz`` kept its points' times gets them from the same upload again: the map's
+        period counts (``geo_views.geo_period_counts``), display data no digest signs."""
+        if loaded.spatial is not None and loaded.time is not None:
+            self.ws.add_point_times(loaded.dataset_id, geo_views.point_times(loaded.time))
 
     def _skip(self, record: dict[str, Any], duplicate: dict[str, Any]) -> dict[str, Any]:
         """Same content + options already READY: idempotent skip."""

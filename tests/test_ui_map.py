@@ -216,6 +216,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.focus("#question")
         page.keyboard.press("Escape")  # a text field keeps its Esc
         assert page.evaluate(layers) == [1, True, True]
+        assert page.is_hidden("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "false"  # the HUD starts folded
+        page.click("#hud-fold")
+        assert page.is_visible("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "true"
         page.focus("#lyr-cells")  # a checkbox does not
         for left in ([0, True, True], [0, False, True], [0, False, False]):
             page.keyboard.press("Escape")
@@ -296,7 +299,9 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.inner_text(f"#map-window .mw-i[data-pid='{chained}'] em") == words["headline"]  # the row's clause, in the reading's words
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)
-        assert page.inner_text("#inspector .lead") == words["what"]
+        assert (
+            page.inner_text("#inspector .lead") == words["gist"] and words["gist"].split("; ")[0] == words["headline"]
+        )  # the words; the numbers are the table's
         theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
         page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()
@@ -430,4 +435,73 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.wait_for_function("G.others.length === 1 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'none'", timeout=20000)
         assert page.inner_text("#map-title") == "Усі датасети"
         browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
+    """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
+    rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
+    the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). The data's calendar is
+    Kyiv's: the bar offers its own first and last days, and a preset counts what the server counts for them. A dataset
+    filter that drops the stretch gives the cells back. Every insight here lives over the data's first four weeks: its
+    core ends before the last two days."""
+    import pandas as pd
+
+    from graph_query_engine.temporal import parse_period
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    (level,) = upload_levels(engine, points_csv, geo="auto@8", time="when", grid="week", tz="Europe/Kyiv")
+    assert level["status"] == "READY", level.get("error")
+    pd.read_csv(points_csv).drop(columns="when").to_csv(untimed := points_csv.with_name("untimed.csv"), index=False)
+    (other,) = upload_levels(engine, untimed)  # a table without time: the bar has no day of it
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want", timeout=60000)
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        assert page.inner_text("#pb-text") == "04.03.2019 — 03.04.2019\nувесь період"  # Kyiv's days, not their UTC instants
+        page.click("#pb-label")
+        page.click("#pb-presets button:has-text('останній тиждень')")
+        assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
+        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
+        page.select_option("#dataset-filter", other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
+        page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
+        page.select_option("#dataset-filter", "")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        page.evaluate("W.all = true; renderWindow()")
+        assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span
+        rows = "[...document.querySelectorAll('#map-window .mw-i')].map((b) => [b.dataset.pid, b.classList.contains('off')])"
+        page.evaluate("Timeline.setPeriod('2019-03-04T00:00', '2019-03-11T00:00'); Timeline.apply()")  # the first week: every core meets it
+        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
+        counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
+        everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
+        assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
+        counted = [a or 0 for a in counted]
+        assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
+        assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')")[-1] == 0  # nor its outline
+        assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
+        assert page.locator("#map-metric option[value='points_in_period']").count() == 1
+        page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
+        listed = page.evaluate(rows)
+        assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
+        assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
+        page.click("#pb-clear")
+        assert page.locator("#map-window .mw-i.off").count() == 0
+        page.wait_for_function("G.metric === 'points'", timeout=10000)
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')") == page.evaluate("CELL_LINE")  # every outline back
+        assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
+        assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
         assert not errors, errors
