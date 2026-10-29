@@ -469,6 +469,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         counted = [a or 0 for a in counted]
         assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
         assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')")[-1] == 0  # nor its outline
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
@@ -478,6 +479,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.click("#pb-clear")
         assert page.locator("#map-window .mw-i.off").count() == 0
         page.wait_for_function("G.metric === 'points'", timeout=10000)
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')") == page.evaluate("CELL_LINE")  # every outline back
         assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
         assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
         assert not errors, errors
