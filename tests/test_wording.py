@@ -75,6 +75,7 @@ def test_a_reading_names_the_target_and_the_next_material_shift():
         "margin: помірно нижче, медіана 14.75 проти 19.45 (-1.10 sd)"
     )
     assert w.reading(ins, PhenomenonThresholds(), {"discount": "знижка"})["headline"] == "знижка: помітно вище"  # a list row's clause
+    assert w.reading(ins, PhenomenonThresholds())["gist"] == "discount: помітно вище; margin: помірно нижче"  # the drawer's lead: no numbers
     declared = {"category": "категорія товару", "region=US": "замовлення у США"}
     assert w.reading(ins, PhenomenonThresholds(), declared)["where"] == "категорія товару = phones і замовлення у США"
 
@@ -129,7 +130,11 @@ def test_a_covariance_insight_reads_as_its_correlation_change():
         covariance={"pair": ["discount", "margin"], "global_corr": -0.54, "local_corr": 0.30},
     )
     assert w.reading(cov, PhenomenonThresholds())["what"] == "зв'язок метрик discount і margin змінює знак: кореляція -0.54 загалом → +0.30 тут"
-    assert w.reading(cov, PhenomenonThresholds())["headline"] == "зв'язок метрик discount і margin змінює знак"
+    assert (
+        w.reading(cov, PhenomenonThresholds())["headline"]
+        == w.reading(cov, PhenomenonThresholds())["gist"]
+        == "зв'язок метрик discount і margin змінює знак"
+    )
 
 
 def test_a_theme_and_a_region_read_in_plain_words():

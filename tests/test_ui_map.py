@@ -296,7 +296,9 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.inner_text(f"#map-window .mw-i[data-pid='{chained}'] em") == words["headline"]  # the row's clause, in the reading's words
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)
-        assert page.inner_text("#inspector .lead") == words["what"]
+        assert (
+            page.inner_text("#inspector .lead") == words["gist"] and words["gist"].split("; ")[0] == words["headline"]
+        )  # the words; the numbers are the table's
         theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
         page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()

@@ -177,7 +177,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
         assert "Відтворено" in page.inner_text("#verify-out")
         assert "підтвердження" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
-        labelled = "[...document.querySelectorAll('#inspector .kv')].slice(0, 2).flatMap((kv) => [...kv.querySelectorAll('dt')])"
+        labelled = (  # every fact but the provenance's plain labels
+            "[...document.querySelectorAll('#inspector .kv')].filter((kv) => !kv.closest('details')?.firstChild.textContent.startsWith('Походження'))"
+            ".flatMap((kv) => [...kv.querySelectorAll('dt')])"
+        )
         assert page.evaluate(f"{labelled}.length >= 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
         assert page.get_attribute(".key[data-key='latent']", "title").startswith("пов'язана тема: ")  # the legend's tooltips: the terms' meanings
         assert page.evaluate("document.querySelectorAll('.ev .ev-trust').length") > 0  # two uploads: every card shows its trust
@@ -244,7 +247,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(f"layerState().region && S.regionsIn && S.cy.getElementById('{rid}').visible()", timeout=10000)
         assert page.evaluate(f"S.cy.getElementById('{rid}').selected()")  # and it is the selected node
         page.click("#legend .toggle[data-key='region']")
-        undrawn = page.evaluate(regional.replace("drawn.has(r.dataset.id)", "!drawn.has(r.dataset.id)"))  # one this view does not draw
+        undrawn = page.evaluate(  # one this view does not draw: a finer region, listed by a drawn region's drawer
+            regional.replace("drawn.has(r.dataset.id)", "!drawn.has(r.dataset.id)").replace(
+                "for (const n of S.nodes) { await inspect(n.id);", "for (const n of drawn) { await inspect(n);"
+            )
+        )
         assert undrawn and not page.evaluate("layerState().region")
         title = page.inner_text("#drawer-title")
         page.click(f"#inspector .nb[data-id='{undrawn}'] >> nth=0")

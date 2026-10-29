@@ -361,17 +361,21 @@ def reading(
 ) -> dict[str, str]:
     """An insight in words: ``where`` its conditions joined by 'і', ``what`` the target's shift and the next material one
     (at most two, as the evidence lists them) or the correlation change, ``headline`` the first clause of ``what`` (the
-    target and its degree, or the correlation change), which a list row shows. ``glossary`` is the dataset's declared
-    one (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already
-    prints ``what`` alone; ``sentence`` joins the two."""
+    target and its degree, or the correlation change), which a list row shows, ``gist`` the clauses of ``what`` without
+    their numbers, which the drawer leads with above its table of shifts. ``glossary`` is the dataset's declared one
+    (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already prints
+    ``what`` alone; ``sentence`` joins the two."""
     glossary, geo = glossary or {}, bool(ins.provenance.get("spatial"))
     if ins.phenomenon_type == "covariance":
         headline, what = _covariance_head(ins.covariance, glossary, geo), covariance_words(ins.covariance, glossary, geo)
+        gist = headline
     else:
         shifts = thresholds.phenomenon_shifts(ins)[:2]
         headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
         what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts))
-    return {"where": " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions), "what": what, "headline": headline}
+        gist = "; ".join(_shift_head(s, glossary, geo) for s in shifts)
+    where = " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions)
+    return {"where": where, "what": what, "headline": headline, "gist": gist}
 
 
 def sentence(words: Mapping[str, str]) -> str:

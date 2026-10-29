@@ -567,7 +567,10 @@ function whereRows(places) {
 
 const NODE_KINDS = { Pattern: "Інсайт", Attractor: "Тема", Dimension: "Колонка групування", Metric: "Метрика", Dataset: "Датасет", Batch: "Обробка", Region: "Регіон мапи", TemporalNode: cap(word("temporal_hub")) };
 
-function timeRows(t) {
+// an insight's links its drawer already shows: its conditions (the title), metrics (Зсуви), core and events (Динаміка), regions (Де, Масштаб)
+const SHOWN_ABOVE = ["HAS_SCOPE", "TARGETS", "STARTS_AT", "ENDS_AT", "PEAKED_AT", "DROPPED_AT", "IN_REGION"];
+
+function timeRows(t, asOf) {
   /* an insight's series over its dataset's calendar periods (docs/02_discovery.md §2.10): its trend and current level,
      the curve of its metric — the measured z as dots, the smoothed level as a line, the gaps left open — and its events,
      each with the part of the insight that carries it; a broader insight's event (an echo) is greyed and named so */
@@ -579,7 +582,7 @@ function timeRows(t) {
   const marks = t.events.filter((e) => e.metric === t.metric).map((e) => `<circle class="ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" cx="${px(e.bin).toFixed(1)}" cy="${py(e.z_smoothed).toFixed(1)}" r="4"></circle>`).join("");
   const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`, c = t.core;
   const band = c ? `<rect class="core" x="${(px(c.first) - 3).toFixed(1)}" y="0" width="${(px(c.last) - px(c.first) + 6).toFixed(1)}" height="${h}"></rect>` : "";
-  const core = c ? `<div class="tl"><span>${term("time_core")}: <time>${esc(c.start === c.end ? c.start : `${c.start} — ${c.end}`)}</time> <span class="muted">(${esc(c.t_start.slice(0, 10))} — ${esc(c.t_end.slice(0, 10))}, не включно · ${num(c.share * 100, 0)}% рядків)</span></span><span class="muted">${esc(ageWords(c, S.asOf))}</span></div>` : "";
+  const core = c ? `<div class="tl"><span>${term("time_core")}: <time>${esc(c.start === c.end ? c.start : `${c.start} — ${c.end}`)}</time> <span class="muted">(${esc(c.t_start.slice(0, 10))} — ${esc(c.t_end.slice(0, 10))}, не включно · ${num(c.share * 100, 0)}% рядків)</span></span><span class="muted">${esc(ageWords(c, asOf))}</span></div>` : "";
   return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` + core +
     `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}">${band}<line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
     (t.events.length ? `<details class="nb-group"${t.events.length <= SHOWN ? " open" : ""}><summary>Події <span class="muted">(${t.events.length})</span></summary>` +
@@ -608,31 +611,32 @@ async function inspect(id, note = "") {
   try { d = await api(`/api/nodes/${encodeURIComponent(id)}`); } catch (e) { return; }
   const n = d.node, p = n.props;
   $("drawer-kind").textContent = NODE_KINDS[n.kind] || n.kind;
-  let html = note ? `<p class="hint drawer-note">${esc(note)}</p>` : "";
+  let html = note ? `<p class="hint drawer-note">${esc(note)}</p>` : "", tail = "";  // tail: an insight's technical detail, after its links
   if (n.kind === "Pattern") {
+    // what it shows, how strong, how far to trust it, when, where; then its links and the technical detail (docs/08 §8.2)
     $("drawer-title").textContent = d.reading.where;  // the insight in words (insight_contracts/wording.py), as every surface reads it
-    const cov = p.covariance && p.covariance.pair ? p.covariance : null;
-    html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += p.phenomenon_type === "covariance" ? `<h4>Різниці медіан (не перевірено)</h4>${shiftRows(p.shifts, (d.dataset || {}).metadata_doc)}` : `<h4>Зсуви</h4>${shiftRows(p.shifts, (d.dataset || {}).metadata_doc)}`;
-    html += `<h4>Свідчення</h4>` + kv([
-      [term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`],
-      [term("weight"), `<b>${num(p.weight)}</b>`],
-      [term("p_adjusted"), esc(d.numbers.p_adjusted)],
-      [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
-      [term("covariance"), cov ? `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}` : ""],
-      [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
-    ]);
-    if ((p.aliases || []).length) html += `<details class="nb-group"><summary>${esc(cap(word("aliases")))} <span class="muted">(${p.aliases.length})</span></summary>${p.aliases.map((a) => `<div class="tl"><span class="mono">${esc(a)}</span></div>`).join("")}</details>`;
-    html += `<h4>Довіра</h4>${trustRows(p, d.dataset || {}, d.labels)}`;
-    if (d.trajectory) html += timeRows(d.trajectory);
+    const cov = p.covariance && p.covariance.pair ? p.covariance : null, ds = d.dataset || {};
+    html += `<p class="lead">${esc(d.reading.gist)}</p>`;  // the words alone: the table below holds the numbers
+    html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>${shiftRows(p.shifts, ds.metadata_doc)}`;
+    if (cov) html += kv([[term("covariance"), `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}`]]);
+    html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
+      `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
+      kv([
+        [term("p_adjusted"), esc(d.numbers.p_adjusted)],
+        [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
+        [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
+      ]);
+    html += `<h4>Довіра</h4>${trustRows(p, ds, d.labels)}`;
+    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
+    if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
-    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
-    html += `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>`;
-    html += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
-    html += `<details class="nb-group"><summary>Походження</summary>` + kv([
+    tail += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
+    tail += `<details class="nb-group"><summary>Походження</summary>` + kv([
       ["Датасет", esc(`${p.provenance.filename}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
-      ["Селектор", `<span class="mono">${esc(p.expression)}</span>`], ["Рушій", esc(p.provenance.engine)], ["Посилання на рядки", `<span class="mono">${esc(p.provenance.rows_ref)}</span>`],
+      ["Селектор", `<span class="mono">${esc(p.expression)}</span>`],
+      ...(p.aliases || []).length ? [[esc(cap(word("aliases"))), p.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>")]] : [],
+      ["Рушій", esc(p.provenance.engine)], ["Посилання на рядки", `<span class="mono">${esc(p.provenance.rows_ref)}</span>`],
       ["Модель опису", esc(`${p.embedding.model_id} · ${p.embedding.dim}d · ${p.embedding.representation_version}`)],
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
@@ -658,13 +662,19 @@ async function inspect(id, note = "") {
     $("drawer-title").textContent = n.label;
     html += kv(Object.entries(p).map(([k, v]) => [esc(human(k)), esc(typeof v === "object" ? JSON.stringify(v) : v)]));
   }
-  const groups = Object.entries(d.neighbors);
+  const shown = n.kind === "Pattern" ? SHOWN_ABOVE : [];  // what the insight's own sections above already give
+  const merged = {};  // an undirected link seen from either end is one group: its two keys share a name
+  for (const [type, items] of Object.entries(d.neighbors)) {
+    const base = type.replace(/ \(in\)$/, ""), g = (merged[base !== type && word(base) === word(type) ? base : type] ||= { items: [], count: 0 });
+    g.items.push(...items); g.count += (d.neighbor_counts || {})[type] ?? items.length;
+  }
+  const groups = Object.entries(merged).filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)", ...shown].includes(t));
   if (groups.length) {
-    html += `<h4>Зв'язки</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${(d.neighbor_counts || {})[type] > items.length ? `${items.length} з ${num(d.neighbor_counts[type], 0)}` : items.length})</span></summary>` +
+    html += `<h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
+      `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${count > items.length ? `${items.length} з ${num(count, 0)}` : items.length})</span></summary>` +
       items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
-  $("inspector").innerHTML = html;
+  $("inspector").innerHTML = html + tail;
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));
   $("drawer").hidden = false;
   if (within) $("drawer-title").focus();
