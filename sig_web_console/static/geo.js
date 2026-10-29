@@ -549,6 +549,11 @@ function wireHud() {
   $("map-zone-ask").addEventListener("click", () => ask($("question").value, { cells: GeoMap.zone() }));
   $("map-zone-clear").addEventListener("click", () => GeoMap.clearZone());
   $("mw-fold").addEventListener("click", () => { W.folded = !W.folded; renderWindow(); });
+  $("hud-fold").addEventListener("click", () => {  // the HUD starts folded: the map stays in view
+    const open = $("map-hud").classList.toggle("folded") === false;
+    Object.assign($("hud-fold"), { textContent: open ? "–" : "+", ariaLabel: open ? "Згорнути панель мапи" : "Розгорнути панель мапи" });
+    $("hud-fold").setAttribute("aria-expanded", String(open));
+  });
 }
 
 

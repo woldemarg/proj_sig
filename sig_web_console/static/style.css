@@ -332,6 +332,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .map-bottom .map-card { min-height: 0; overflow-y: auto; } .map-bottom > * { pointer-events: auto; }
 .map-hud { position: absolute; top: 12px; left: 12px; width: min(300px, calc(50% - 18px)); max-height: calc(100% - 58px - var(--bottom, 0px)); overflow-y: auto; padding: 12px 12px 10px; z-index: 2; background: rgba(8, 12, 19, .86); border: 1px solid #1f2a3c; border-left: 2px solid #ffb000; border-radius: 4px; backdrop-filter: blur(6px); font-size: 11.5px; box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
 .hud-tag { color: #ffb000; letter-spacing: .14em; font-size: 10px; font-weight: 700; }
+.hud-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .map-hud.folded .hud-body { display: none; }  /* folded: the tag and the file alone */
 .hud-title { color: #eef3ff; font-size: 13px; font-weight: 600; margin: 4px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hud-meta { color: #8592ab; line-height: 1.55; margin-bottom: 8px; } .hud-meta b { color: #3ccb92; }
 .hud-lbl { display: block; color: #8592ab; text-transform: uppercase; letter-spacing: .08em; font-size: 9.5px; margin-top: 4px; }

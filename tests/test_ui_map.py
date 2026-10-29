@@ -216,6 +216,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.focus("#question")
         page.keyboard.press("Escape")  # a text field keeps its Esc
         assert page.evaluate(layers) == [1, True, True]
+        assert page.is_hidden("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "false"  # the HUD starts folded
+        page.click("#hud-fold")
+        assert page.is_visible("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "true"
         page.focus("#lyr-cells")  # a checkbox does not
         for left in ([0, True, True], [0, False, True], [0, False, False]):
             page.keyboard.press("Escape")
