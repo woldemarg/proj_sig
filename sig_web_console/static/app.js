@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false };
+const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -115,7 +115,8 @@ const TERMS = {
   "DROPPED_AT (in)": ["спад знахідки", "знахідка, рівень якої в цьому періоді був помітно нижчим, ніж до і після"],
   "time_core": ["ядро", "найкоротший проміжок послідовних періодів, у якому лежить 80 % рядків знахідки з датою: де вона живе в часі"],
   "time_active": ["діє в періоді", "знахідка, ядро якої перетинає цей період"],
-  "as_of": ["станом на", "дата, від якої рахують свіжість знахідок у відповіді; порожньо — остання дата даних"],
+  "as_of": ["станом на", "дата, від якої рахують свіжість знахідок у відповіді: остання дата даних"],
+  "period": ["період", "дні, обрані на смузі періоду: у відповіді вище знахідки, виміряні в них, і найвище — з піком чи спадом у них; решта лишається нижче"],
   "STARTS_AT": ["починається в періоді", "перший період ядра знахідки"],
   "STARTS_AT (in)": ["початок ядра знахідки", "знахідка, ядро якої починається в цьому періоді"],
   "ENDS_AT": ["закінчується в періоді", "останній період ядра знахідки"],
@@ -392,7 +393,7 @@ function init() {
   // chat
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("input", autosize);
-  $("as-of").addEventListener("input", () => { $("as-of").setCustomValidity(""); if (S.view === "time") Timeline.render(); });  // the axis' as-of line follows the field
+  Timeline.init();
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
   $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
@@ -401,6 +402,7 @@ function init() {
   });
   document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
+    if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
     closeDrawer();

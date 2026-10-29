@@ -13,8 +13,10 @@ import json
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -166,6 +168,29 @@ def _zone_scores(
 # cached on its arguments: a dataset id fixes its files (a READY id is never mined again, its duplicate is SKIPPED; one
 # uploaded again after its deletion is mined to the same files), and a commit that changes the datasets changes them
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
+
+
+def point_times(times: Any) -> np.ndarray | None:
+    """Each point's time (``LoadedDataset.time``, UTC) as epoch milliseconds, the int64 minimum (NaT) where it does not read; None
+    without a time column: what ``geo.npz`` keeps for ``geo_period_counts``."""
+    return None if times is None else times.to_numpy(dtype="datetime64[ms]").view(np.int64)
+
+
+def geo_period_counts(ws: Workspace, dataset_id: str, period: tuple[datetime, datetime]) -> dict[str, Any]:
+    """Each cell's points in ``period`` ([start, end), wall clock: ``temporal.parse_period``), read on the dataset's
+    calendar as an asked period is (docs/07_question_answering.md §7.1): ``{counts: [per cell row], points, timed}``;
+    ``counts`` is None for a dataset without a time column (``timed`` false) or whose points were stored without their times."""
+    lo, hi = period
+    temporal = _owner(ws, dataset_id).get("temporal") or {}
+    geo = _geo(ws, dataset_id, ("cells", "point_cell", "point_time"))
+    if "point_time" not in geo:
+        return {"counts": None, "points": 0, "timed": bool(temporal)}
+    zone = ZoneInfo(temporal["tz"]) if temporal.get("tz") else UTC
+    lo_ms, hi_ms = (int(t.replace(tzinfo=zone).timestamp() * 1000) for t in (lo, hi))
+    t, cell = geo["point_time"], geo["point_cell"]
+    inside = (t >= lo_ms) & (t < hi_ms) & (cell >= 0)  # NaT, the int64 minimum, lies before every period
+    counts = np.bincount(cell[inside], minlength=len(geo["cells"]))
+    return {"counts": counts.tolist(), "points": int(inside.sum()), "timed": True}
 
 
 def geo_cells_pack(ws: Workspace, dataset_id: str) -> bytes:

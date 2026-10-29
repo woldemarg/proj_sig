@@ -5,7 +5,7 @@ console is sent of them; and the answer's reference date: the findings' freshnes
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +17,7 @@ from graph_query_engine import seeds
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SEED_TIME_WEIGHT, SeedMatch
-from graph_query_engine.temporal import core_age, parse_as_of, period_interval, recency, time_facts, time_line
+from graph_query_engine.temporal import core_age, parse_as_of, parse_period, period_interval, recency, time_facts, time_line
 from graph_query_engine.traversal import RECENCY_RANK_WEIGHT, traverse
 from insight_contracts import SNAPSHOT_VERSION
 from insight_graph_service.core.snapshot import metadata_digest
@@ -153,7 +153,13 @@ def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_rea
         insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
     )
     query = SimpleNamespace(
-        conditions=[], targets=[], text="what happened in 2031-W13?", when=period_interval("2031-W13"), is_lexical=False, components=lambda: []
+        conditions=[],
+        targets=[],
+        text="what happened in 2031-W13?",
+        when=period_interval("2031-W13"),
+        when_asked=False,
+        is_lexical=False,
+        components=lambda: [],
     )
 
     def ask() -> list[tuple[str, str | None]]:
@@ -224,6 +230,38 @@ def test_the_reference_date_is_the_latest_data_and_a_question_may_set_its_own(ti
         assert asked.status_code == 200 and "AS OF: 2031-03-25 (asked)" in asked.json()["evidence_prompt"]
 
 
+def test_a_period_asked_beside_the_question_reads_as_one_written_in_it_and_yields_to_it(timed):
+    engine, _ = timed
+    week = parse_period("2031-03-24", "2031-03-30")  # the console's bar: whole days, both ends included
+    assert week == period_interval("2031-W13")
+    written = engine.search(QUESTION.rstrip("?") + " in 2031-W13?")
+    asked = engine.search(QUESTION, period=week)
+    assert [s.pattern_id for s in asked.seeds] == [s.pattern_id for s in written.seeds] and asked.parsed.when == week
+    assert asked.evidence.as_of["recency"] is False and "\nPERIOD: 2031-03-24 to 2031-03-30, both days included\n" in asked.evidence.to_prompt()
+    assert engine.search(QUESTION.rstrip("?") + " in 2031-04?", period=week).parsed.when == period_interval("2031-04")  # the text wins
+    for bad in (("2031-03-30", "2031-03-24"), ("2031-03-24T06:00", "2031-03-24T06:00"), ("2031-03-24T06:00+02:00", "2031-03-25")):
+        with pytest.raises(ValueError):
+            parse_period(*bad)
+    assert parse_period("20310324", "20310330") == week  # a date in ISO's basic form is a whole day too
+    hours = parse_period("2031-03-24T06:00", "2031-03-25T18:00")  # the bar's thumbs step by hours over a short window
+    assert (
+        hours == (datetime(2031, 3, 24, 6, tzinfo=UTC), datetime(2031, 3, 25, 18, tzinfo=UTC))
+        and parse_period("2031-03-24T00:00", "2031-03-31T00:00") == week
+    )
+    assert "\nPERIOD: 2031-03-24 06:00 to 2031-03-25 18:00, the end not included\n" in engine.search(QUESTION, period=hours).evidence.to_prompt()
+    plain = "Which customers behave unusually?"  # nothing the catalog knows: the bar's period ranks, a written one is the question
+    free, barred = engine.search(plain), engine.search(plain, period=week)
+    assert not barred.parsed.is_lexical and barred.parsed.when_asked and len(barred.seeds) == len(free.seeds) > 1
+    assert not any(s.matched.get("fallback") for s in barred.seeds)
+    assert engine.search(plain.rstrip("?") + " in 2031-W13?").seeds[0].matched.get("fallback") == "period"
+    with TestClient(create_app(engine)) as client:
+        for bad in (["2031-03-30", "2031-03-24"], ["31.03.2031", "2031-04-01"], ["2031-03-24"]):
+            refused = client.post("/api/search", json={"question": QUESTION, "period": bad})
+            assert refused.status_code in (400, 422) and (refused.status_code == 422 or refused.json()["code"] == "invalid_options")
+        ok = client.post("/api/search", json={"question": QUESTION, "period": ["2031-03-24", "2031-03-30"]})
+        assert ok.status_code == 200 and "PERIOD: 2031-03-24 to 2031-03-30" in ok.json()["evidence_prompt"]
+
+
 def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed, hashed_engine, monkeypatch):
     engine, _ = timed
     assert all("recency" in s.matched for s in engine.search(QUESTION).seeds)
@@ -245,6 +283,6 @@ def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed,
     fixed = {"fresh": SeedMatch("fresh", 0.6 + SEED_RECENCY_WEIGHT, {"recency": 1.0}), "stale": SeedMatch("stale", 0.6, {"recency": 0.0})}
     monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
     stub = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
-    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, components=lambda: [])
+    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, when_asked=False, components=lambda: [])
     picked = seeds.resolve_seeds(query, stub, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig(), None, far)
     assert [s.pattern_id for s in picked] == ["fresh", "stale"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95

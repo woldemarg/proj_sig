@@ -156,7 +156,9 @@ def resolve_seeds(
         if cand.pattern_id not in near:
             seeds.append(cand)
     pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
-    if query.when and not query.is_lexical and pool:  # a period and nothing the catalog knows: the question is about the period
+    if (
+        query.when and not query.when_asked and not query.is_lexical and pool
+    ):  # a period written and nothing the catalog knows: the question is about it
         found = graph.members(query.when)
         held = {*found["active"], *(pid for pid, _ in found["peaked"] + found["dropped"])}  # what lives or moved in it (the hub index)
         timed = [s for s in pool if s.pattern_id in held] or ([] if seeds else [s for s in pool if s.matched.get("time")])

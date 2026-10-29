@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import cached_property
 from typing import Any
 
@@ -83,7 +83,7 @@ class EvidenceItem:
     credibility_basis: dict[str, Any] = field(default_factory=dict)  # rule, sources, patterns, comparability
     trust: str = ""  # its trust: line, once the graph has a declared source or two datasets (docs/07_question_answering.md §7.4)
     reliability: str = ""  # its dataset's A-F code, with the trust line
-    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline"} in Ukrainian (graph.insight_reading)
+    reading: dict[str, str] = field(default_factory=dict)  # {"where", "what", "headline", "gist"} in Ukrainian (graph.insight_reading)
     time: dict[str, Any] = field(default_factory=dict)  # a dataset with a time column: its series in short (temporal.time_facts)
 
 
@@ -148,6 +148,14 @@ class Evidence:
                     else "none of the findings lies in it"
                 )
                 + (f"; outside it: {outside}." if outside else ".")
+            )
+        if p.get("when"):  # written in the question or asked beside it: the evidence ranks by it either way
+            start, stop = (datetime.fromisoformat(str(t)) for t in p["when"])
+            days = start.time() == stop.time() == datetime.min.time()
+            lines.append(
+                f"PERIOD: {start.date()} to {(stop - timedelta(days=1)).date()}, both days included"
+                if days
+                else f"PERIOD: {start:%Y-%m-%d %H:%M} to {stop:%Y-%m-%d %H:%M}, the end not included"
             )
         if self.as_of:  # the date the findings' ages count from
             lines.append(f"AS OF: {self.as_of['date']} ({self.as_of['source']})")

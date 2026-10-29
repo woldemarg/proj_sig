@@ -85,7 +85,11 @@ TERMS: dict[str, tuple[str, str]] = {
     "DROPPED_AT (in)": ("спад знахідки", "знахідка, рівень якої в цьому періоді був помітно нижчим, ніж до і після"),
     "time_core": ("ядро", "найкоротший проміжок послідовних періодів, у якому лежить 80 % рядків знахідки з датою: де вона живе в часі"),
     "time_active": ("діє в періоді", "знахідка, ядро якої перетинає цей період"),
-    "as_of": ("станом на", "дата, від якої рахують свіжість знахідок у відповіді; порожньо — остання дата даних"),
+    "as_of": ("станом на", "дата, від якої рахують свіжість знахідок у відповіді: остання дата даних"),
+    "period": (
+        "період",
+        "дні, обрані на смузі періоду: у відповіді вище знахідки, виміряні в них, і найвище — з піком чи спадом у них; решта лишається нижче",
+    ),
     "STARTS_AT": ("починається в періоді", "перший період ядра знахідки"),
     "STARTS_AT (in)": ("початок ядра знахідки", "знахідка, ядро якої починається в цьому періоді"),
     "ENDS_AT": ("закінчується в періоді", "останній період ядра знахідки"),
@@ -357,17 +361,21 @@ def reading(
 ) -> dict[str, str]:
     """An insight in words: ``where`` its conditions joined by 'і', ``what`` the target's shift and the next material one
     (at most two, as the evidence lists them) or the correlation change, ``headline`` the first clause of ``what`` (the
-    target and its degree, or the correlation change), which a list row shows. ``glossary`` is the dataset's declared
-    one (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already
-    prints ``what`` alone; ``sentence`` joins the two."""
+    target and its degree, or the correlation change), which a list row shows, ``gist`` the clauses of ``what`` without
+    their numbers, which the drawer leads with above its table of shifts. ``glossary`` is the dataset's declared one
+    (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already prints
+    ``what`` alone; ``sentence`` joins the two."""
     glossary, geo = glossary or {}, bool(ins.provenance.get("spatial"))
     if ins.phenomenon_type == "covariance":
         headline, what = _covariance_head(ins.covariance, glossary, geo), covariance_words(ins.covariance, glossary, geo)
+        gist = headline
     else:
         shifts = thresholds.phenomenon_shifts(ins)[:2]
         headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
         what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts))
-    return {"where": " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions), "what": what, "headline": headline}
+        gist = "; ".join(_shift_head(s, glossary, geo) for s in shifts)
+    where = " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions)
+    return {"where": where, "what": what, "headline": headline, "gist": gist}
 
 
 def sentence(words: Mapping[str, str]) -> str:

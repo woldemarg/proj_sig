@@ -10,6 +10,7 @@ import pytest
 from conftest import Crash, make_config, make_engine, upload_levels
 from fastapi.testclient import TestClient
 
+from graph_query_engine.temporal import parse_period
 from insight_graph_service.core import engine as engine_mod
 from insight_graph_service.server.app import create_app
 
@@ -324,7 +325,14 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv)
     atomic_write_json(old.ws.state_dir / "representation.json", {**old.ws.representation(), "canonical_version": "ltir-canon-0"})
     engine = make_engine(cfg)
     assert "ltir-canon-0" in engine.problem and not engine.graph().insights
-    reads = (engine.export_geosparql, engine.geo_datasets, lambda: engine.geo_overlay("x"), lambda: engine.geo_cells_pack("x"))  # the map too
+    period = parse_period("2031-03-24", "2031-03-30")
+    reads = (
+        engine.export_geosparql,
+        engine.geo_datasets,
+        lambda: engine.geo_overlay("x"),
+        lambda: engine.geo_cells_pack("x"),
+        lambda: engine.geo_period_counts("x", period),
+    )  # the map too
     for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()

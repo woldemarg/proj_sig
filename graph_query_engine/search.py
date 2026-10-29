@@ -106,15 +106,19 @@ def search(
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
     as_of: datetime | None = None,
+    period: tuple[datetime, datetime] | None = None,
 ) -> SearchResult:
     """The evidence for ``question`` over one committed state; ``place_scores`` (pattern id -> its overlap with an asked
     map zone) weigh the seeds, and the question may then be empty; ``as_of`` is the reference date the findings' freshness
-    counts from — the graph's latest data when not asked."""
+    counts from — the graph's latest data when not asked; ``period`` is a period asked beside the text (the console's
+    period bar), which a period written in the question overrides."""
     start = time.perf_counter()
     graph = state.graph
     if state.catalog is None and graph.insights:  # a caller that did not prepare one: build it now, kept on the state
         state.catalog = build_catalog(graph, encoder.embedder)
     parsed = parse_query(question, graph, config, state.catalog)
+    if period and not parsed.when:
+        parsed.when, parsed.when_asked = period, True
     clock = as_of or graph.as_of
     seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores, clock)
     result = traverse(graph, seeds, config, None if parsed.when else clock)  # an asked period is its own window

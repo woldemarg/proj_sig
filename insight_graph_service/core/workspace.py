@@ -6,7 +6,7 @@ Layout under ``WORKSPACE_DIR``::
     datasets/<dataset_id>/profile.json     schema / profile summary
     datasets/<dataset_id>/covers.npz       pattern_id -> covered row positions
     datasets/<dataset_id>/rejections.json  pruned candidates with reason codes
-    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, point -> cell, points, neighbour graph
+    datasets/<dataset_id>/geo.npz          a geo dataset: H3 cells, point -> cell, points, neighbour graph, point times
     datasets/<dataset_id>/cells.geojson    a geo dataset: the map's GeoJSON (cells, patterns' extents), written with the batch
     journal/patterns.jsonl                 append-only Pattern records (lac ChunkJournal)
     journal/activations.jsonl              append-only ACTIVATES records
@@ -63,6 +63,14 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")))
+    replace_file(tmp, path)
+
+
+def _write_npz(path: Path, **arrays: np.ndarray) -> None:
+    """``arrays`` as ``path``, replaced atomically: a reader meanwhile reads the old file or the new one whole."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    with os.fdopen(fd, "wb") as handle:
+        np.savez_compressed(handle, **arrays)
     replace_file(tmp, path)
 
 
@@ -246,16 +254,27 @@ class Workspace:
         with np.load(path) as data:
             return {k: data[k] for k in data.files}
 
-    def save_geo(self, dataset_id: str, spatial: SpatialContext) -> None:
-        """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph."""
-        np.savez_compressed(
+    def save_geo(self, dataset_id: str, spatial: SpatialContext, point_time: np.ndarray | None = None) -> None:
+        """A geo dataset's spatial context: its cells, each point's cell, the points and the neighbour graph; with a time
+        column, each point's time (``geo_views.point_times``)."""
+        _write_npz(
             self.dataset_dir(dataset_id) / "geo.npz",
             cells=spatial.cells.astype(str),
             point_cell=spatial.point_cell,
             lonlat=spatial.lonlat,
             nbr_ptr=spatial.nbr_ptr,
             nbr_idx=spatial.nbr_idx,
+            **({} if point_time is None else {"point_time": point_time}),
         )
+
+    def add_point_times(self, dataset_id: str, point_time: np.ndarray) -> bool:
+        """The points' times added to a geo dataset's ``geo.npz`` stored without them, its other arrays kept as they are
+        (``cells.geojson`` was drawn from them): False when it has them, or they are not of its stored points."""
+        geo = self.load_geo(dataset_id)
+        if geo is None or "point_time" in geo or len(point_time) != len(geo["point_cell"]):
+            return False
+        _write_npz(self.dataset_dir(dataset_id) / "geo.npz", **geo, point_time=point_time)
+        return True
 
     def save_temporal(self, dataset_id: str, series: dict[str, Any]) -> str:
         """A dataset's series over its time column's grid (``subgroup_miner.temporal.annotate``) as
@@ -286,12 +305,13 @@ class Workspace:
         return self.datasets_dir / dataset_id / "cells.geojson"
 
     def load_geo(self, dataset_id: str, keys: tuple[str, ...] | None = None) -> dict[str, Any] | None:
-        """The spatial context ``save_geo`` stored for a geo dataset (only ``keys``, if given); None for any other dataset."""
+        """The spatial context ``save_geo`` stored for a geo dataset (only those of ``keys`` it holds, if given); None for any
+        other dataset."""
         path = self.datasets_dir / dataset_id / "geo.npz"
         if not path.is_file():
             return None
         with np.load(path, allow_pickle=False) as data:
-            return {k: data[k] for k in keys or data.files}
+            return {k: data[k] for k in keys or data.files if k in data.files}
 
     def check_representation(self, spec: EmbeddingSpec) -> None:
         """Refuse to mix vectors from a different model/canonicalisation/composition.
