@@ -98,7 +98,20 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]} | _declared(n["props"])
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust and declared language, whatever the filter
-    return {"nodes": nodes, "edges": edges, "regions": len(regions), "stats": graph.snapshot.get("stats", {}), "datasets": trust}
+    spans = [
+        n["props"]["temporal"]["span"]
+        for n in graph.of_kind("Dataset")
+        if "temporal" in n["props"] and (not dataset or n["props"]["dataset_id"] == dataset)
+    ]
+    span = [min((s[0] for s in spans), key=datetime.fromisoformat), max((s[1] for s in spans), key=datetime.fromisoformat)] if spans else None
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "regions": len(regions),
+        "stats": graph.snapshot.get("stats", {}),
+        "datasets": trust,
+        "span": span,
+    }  # span: the days the period bar offers
 
 
 def _hubs_of(graph: DualGraph, pids: set[str]) -> set[str]:

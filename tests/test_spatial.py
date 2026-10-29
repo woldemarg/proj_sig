@@ -902,3 +902,34 @@ def test_nesting_on_codes_is_the_crosstabs():
     table = pd.crosstab(a[both].to_numpy(), b[both].to_numpy()).to_numpy()
     want = max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum()
     assert sp._nesting(profile, "a", "b") == pytest.approx(want)
+
+
+def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(cfg, tmp_path):
+    """``geo.npz`` keeps each point's time; ``GET /api/geo/{ds}/counts`` counts each cell's points in the days asked,
+    both included, the whole span the cells' own counts; a dataset without times gives none (docs/08_interface.md §8.7)."""
+    frame = geo_frame()
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    engine = make_engine(cfg)
+    (timed,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")
+    ds = timed["dataset_id"]
+    geo = engine.ws.load_geo(ds, ("cells", "point_cell", "point_time", "nothing"))
+    assert set(geo) == {"cells", "point_cell", "point_time"} and len(geo["point_time"]) == len(geo["point_cell"])
+    cells = json.loads(engine.ws.geo_cells_path(ds).read_text(encoding="utf-8"))["features"]
+    with TestClient(create_app(engine)) as client:
+        whole = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-04-03"}).json()
+        assert whole["timed"] and whole["counts"] == [f["properties"]["points"] for f in cells] and whole["points"] == sum(whole["counts"])
+        week = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json()
+        days = (frame["when"] - frame["when"].min()).dt.days
+        assert week["points"] == int(((days < 7) & (geo["point_cell"] >= 0)).sum()) and 0 < week["points"] < whole["points"]
+        refused = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-10", "end": "2019-03-04"})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        stored = engine.ws.load_geo(ds)  # a dataset stored before the points' times were kept
+        np.savez_compressed(engine.ws.dataset_dir(ds) / "geo.npz", **{k: v for k, v in stored.items() if k != "point_time"})
+        assert client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == {
+            "counts": None,
+            "points": 0,
+            "timed": True,
+        }
+    (plain,) = upload_levels(engine, path, geo="auto@7")
+    assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
+    assert engine.geo_period_counts(plain["dataset_id"], "2019-03-04", "2019-03-10") == {"counts": None, "points": 0, "timed": False}

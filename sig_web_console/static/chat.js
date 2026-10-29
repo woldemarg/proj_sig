@@ -70,11 +70,13 @@ function botCard(turn) {
   const cross = items.filter((i) => i.transversal_only).length;
   const jargon = Object.entries((qa.metrics || {}).jargon || {}), said = jargon.reduce((a, [, n]) => a + n, 0);  // a plain-language answer's analyst words
   const model = String(llm.model || "").split("/").pop();
+  const when = ev.parsed && ev.parsed.when;  // a period in the question or on the bar: [start, end), ISO
   const meta = [
     qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення"),
     cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат"),
     cross ? chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1]) : "",
-    ev.as_of ? chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1]) : "",  // the date the answer judged freshness from
+    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by
+      : ev.as_of ? chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1]) : "",  // the date the answer judged freshness from
     said ? chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`) : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
@@ -203,7 +205,7 @@ function renderThread() {
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
       `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
-      `${turn.as_of ? `<span class="msg-zone">${esc(word("as_of"))} ${esc(turn.as_of)}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `${turn.period ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(utc(turn.period.start), utc(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
   t.scrollTop = t.scrollHeight;
@@ -213,18 +215,15 @@ async function ask(question, zone = null) {
   question = (question || "").trim();  // with a map zone ({cells}) the text may be empty; false: asked without one
   if (zone === null && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
   if ((!question && !zone) || S.busy) return;
-  const asOf = $("as-of").value.trim();  // the reference date; empty: the latest data (docs/07_question_answering.md §7.2)
-  if (asOf && asOfDate() !== asOf) {  // not a date: the field says so, nothing is sent
-    $("as-of").setCustomValidity("Дата у форматі РРРР-ММ-ДД, напр. 2031-04-13"); $("as-of").reportValidity(); return;
-  }
+  const period = S.period;  // the bar's stretch; none: freshness from the latest data (docs/07_question_answering.md §7.2)
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();
-  const turn = { question, as_of: asOf, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
+  const turn = { question, period, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
   const live = () => S.chat.includes(turn);  // New chat drops the turn: its late answer paints nothing
   const timer = setTimeout(() => turn.ctl.abort("timeout"), CHAT_TIMEOUT_S * 1000);
   S.chat.push(turn); renderThread();
   try {
-    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, ...(asOf ? { as_of: asOf } : {}), use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
+    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, ...(period ? { period: [period.start, period.end] } : {}), use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);

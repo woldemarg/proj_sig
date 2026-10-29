@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -633,6 +634,10 @@ def test_the_upload_form_takes_a_time_column_and_its_grid(engine, tmp_path):
         accepted = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"time": "when", "grid": "day"})
         assert accepted.status_code == 202 and (accepted.json()["time"], accepted.json()["grid"]) == ("when", "day")
         refused = client.post("/api/upload", files={"file": (path.name, f, "text/csv")}, data={"grid": "week"})
+        for _ in range(600):  # the worker's batch ends here: a later test's patches never meet it
+            if client.get(f"/api/batches/{accepted.json()['batch_id']}").json()["status"] in ("READY", "FAILED"):
+                break
+            time.sleep(0.1)
     assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
 
 

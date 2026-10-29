@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
-from graph_query_engine.temporal import parse_as_of
+from graph_query_engine.temporal import parse_as_of, parse_period
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
@@ -74,6 +74,7 @@ class SearchIn(BaseModel):
     geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
+    period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end], ISO dates, inclusive; the question's own period wins
 
 
 class DatasetMetadataIn(BaseModel):
@@ -253,7 +254,11 @@ def create_app(engine: Engine) -> FastAPI:
             as_of = parse_as_of(body.as_of) if body.as_of else None
         except ValueError as exc:
             raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
-        return engine.evidence(body.question, as_of, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        try:
+            period = parse_period(*body.period) if body.period else None
+        except ValueError as exc:
+            raise PipelineError("invalid_options", f"period: not two ISO dates, start to end: {body.period!r}") from exc
+        return engine.evidence(body.question, as_of, period, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
@@ -278,6 +283,10 @@ def create_app(engine: Engine) -> FastAPI:
     @app.get("/api/geo/{dataset_id}/overlay")
     def geo_overlay(dataset_id: str, datasets: str = "") -> dict[str, Any]:
         return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
+
+    @app.get("/api/geo/{dataset_id}/counts")
+    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, start, end)
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:

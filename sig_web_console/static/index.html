@@ -113,6 +113,27 @@
       <button class="btn ghost sm" id="clear-btn" title="Прибрати виділення відповіді" hidden>Прибрати виділення</button>
     </div>
 
+    <!-- the period the answers rank by and the time axis and the map show: the graph's days, a range of them or all -->
+    <div class="period-bar" id="period-bar" hidden>
+      <div class="pb-pill">
+        <button type="button" class="pb-label" id="pb-label" aria-haspopup="dialog" aria-expanded="false" title="Обрати дні або готовий проміжок">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span id="pb-text"></span>
+        </button>
+        <button type="button" class="pb-x" id="pb-clear" aria-label="Увесь період" title="Увесь період" hidden>×</button>
+        <div class="pb-pop" id="pb-pop" role="dialog" aria-label="Період" hidden>
+          <div class="pb-presets" id="pb-presets"></div>
+          <label>Від <input type="date" class="field" id="pb-start"></label>
+          <label>До <input type="date" class="field" id="pb-end"></label>
+        </div>
+      </div>
+      <div class="pb-track">
+        <i class="pb-fill" id="pb-fill"></i>
+        <input type="range" id="pb-from" min="0" step="1" aria-label="Початок періоду">
+        <input type="range" id="pb-to" min="0" step="1" aria-label="Кінець періоду">
+        <div class="pb-ticks" id="pb-ticks"></div>
+      </div>
+    </div>
+
     <div class="canvas-body">
     <!-- one legend for the graph, the sphere and the table; the link entries are the layer toggles of both views -->
     <aside class="legend-col" id="legend" aria-label="Легенда і шари">
@@ -155,6 +176,7 @@
           <div class="hud-tag">МАПА · ПРОСТОРОВІ ІНСАЙТИ</div>
           <div class="hud-title" id="map-title"></div>
           <div class="hud-meta" id="map-meta"></div>
+          <div class="hud-meta" id="map-period" hidden></div>
           <div class="msg err" id="map-overlay-error" hidden></div>
           <div class="msg err" id="map-projected-error" hidden></div>
           <label class="hud-lbl" for="map-metric">Колір комірок за</label>
@@ -237,8 +259,6 @@
       </div>
       <div class="composer-foot">
         <label class="switch"><input type="checkbox" id="use-llm" checked><span class="track"></span><span id="llm-label">пояснення моделлю</span></label>
-        <label class="asof" title="Дата, від якої відповідь рахує свіжість знахідок, РРРР-ММ-ДД; порожньо — остання дата даних">станом на <input class="field" id="as-of" type="text" inputmode="numeric" maxlength="10" placeholder="РРРР-ММ-ДД" autocomplete="off"></label>
-        <span>Enter — надіслати · Shift+Enter — новий рядок</span>
       </div>
     </form>
   </aside>

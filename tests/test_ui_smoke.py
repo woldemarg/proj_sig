@@ -836,9 +836,11 @@ def test_the_periods_lie_in_rows_by_level_and_a_periods_drawer_lists_who_lives_a
 
 
 @pytest.mark.browser
-def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
-    """The date by the question box goes with the question (the latest data its placeholder); one that does not read as
-    a date sends nothing; the question and the answer both say the date (docs/08_interface.md §8.2)."""
+def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(timed):
+    """The period bar offers the timed data's days, the whole span at first, which sends no period; a preset or the dates
+    set its window and pick it, the thumbs a stretch of it by a step that follows the window (6 hours over a week), by
+    the keyboard or a click on the rail, which brings the nearer thumb; the stretch goes with the question, the end not
+    in it, and the question and the answer both say it; the × gives the whole span back (docs/08_interface.md §8.2)."""
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
@@ -852,32 +854,50 @@ def test_a_question_is_asked_as_of_a_date_and_the_answer_says_so(timed):
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes().length > 0", timeout=30000)
-        assert page.get_attribute("#as-of", "placeholder") == record["temporal"]["span"][1][:10]
+        first, latest = (d[:10] for d in record["temporal"]["span"])
+        assert page.is_visible("#period-bar") and page.is_hidden("#pb-clear")
+        assert page.inner_text("#pb-text") == f"Увесь період · {first[8:]}.{first[5:7]}.{first[:4]} — {latest[8:]}.{latest[5:7]}.{latest[:4]}"
         page.evaluate("document.getElementById('use-llm').checked = false")
-        page.fill("#as-of", "31.03.2031")
-        page.evaluate("(q) => ask(q)", question)
-        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
-        page.fill("#as-of", "2031-02-29")  # a day the calendar does not have (Date.parse would read 1 March): refused the same way
-        page.evaluate("(q) => ask(q)", question)
-        assert page.evaluate("document.getElementById('as-of').validity.valid") is False and page.evaluate("S.chat.length") == 0
-        page.fill("#as-of", "2032-02-29")
-        assert page.evaluate("asOfDate()") == "2032-02-29"  # a leap day is a day
-        page.fill("#as-of", "2031-03-31")
         with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
             page.evaluate("(q) => ask(q)", question)
-        assert json.loads(sent.value.post_data)["as_of"] == "2031-03-31"
+        assert "period" not in json.loads(sent.value.post_data) and "as_of" not in json.loads(sent.value.post_data)  # the whole span: nothing
         page.wait_for_selector("#thread .bot-meta", timeout=60000)
-        said = f"{name('as_of')} 2031-03-31"
-        assert said in page.inner_text("#thread .msg-user") and said in page.inner_text("#thread .bot-meta")
+        assert f"{name('as_of')} {latest}" in page.inner_text("#thread .bot-meta")
+        page.click("#pb-label")
+        page.click("#pb-presets button:has-text('останній тиждень')")
+        assert page.is_hidden("#pb-pop") and page.evaluate("S.period") == {"start": "2031-04-07T00:00", "end": "2031-04-14T00:00"}
+        assert page.inner_text("#pb-text") == "07.04.2031 — 13.04.2031 · 7 днів" and page.is_visible("#pb-clear")
+        assert page.get_attribute("#pb-to", "max") == "28"  # a week by 6 hours
+        page.focus("#pb-from")
+        page.keyboard.press("ArrowRight")  # a thumb moved by the keyboard: a step later
+        assert page.evaluate("S.period") == {"start": "2031-04-07T06:00", "end": "2031-04-14T00:00"}
+        assert page.inner_text("#pb-text") == "07.04.2031 06:00 — 14.04.2031 00:00 · 162 години"
+        box = page.locator(".pb-track").bounding_box()
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 10)  # the rail's middle: the nearer thumb, the start, comes to it
+        assert page.evaluate("S.period") == {"start": "2031-04-10T12:00", "end": "2031-04-14T00:00"}
+        page.click("#pb-label")
+        page.fill("#pb-start", "2031-03-24")
+        page.fill("#pb-end", "2031-03-30")
+        page.keyboard.press("Escape")  # the dates kept, the popover closed
+        assert page.is_hidden("#pb-pop") and page.evaluate("S.period") == {"start": "2031-03-24T00:00", "end": "2031-03-31T00:00"}
+        assert page.get_attribute("#pb-to", "max") == "28"  # the dates' week: its own window
+        with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
+            page.evaluate("(q) => ask(q)", question)
+        assert json.loads(sent.value.post_data)["period"] == ["2031-03-24T00:00", "2031-03-31T00:00"]
+        page.wait_for_function("document.querySelectorAll('#thread .bot-meta').length === 2", timeout=60000)
+        said = f"{name('period')} 24.03.2031 — 30.03.2031"
+        assert said in page.locator("#thread .msg-user").last.inner_text() and said in page.locator("#thread .bot-meta").last.inner_text()
+        page.click("#pb-clear")
+        assert page.evaluate("S.period") is None and page.is_hidden("#pb-clear")
         assert not errors, errors
 
 
 @pytest.mark.browser
 def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_date(timed):
     """The «Час» tab: a row an insight placed in time, its core a bar within the span, a mark for each peak, the as-of
-    line, the rows whose core holds that date highlighted; the levels the graph holds enabled, a level's ruler its
-    periods in calendar order; a period or a row opens its drawer, by click or by Enter; the line follows the as-of
-    field (docs/08_interface.md §8.2)."""
+    line, every row bright over the whole span; the levels the graph holds enabled, a level's ruler its
+    periods in calendar order; a period or a row opens its drawer, by click or by Enter; the bar's days draw a band and
+    highlight the rows acting in them (docs/08_interface.md §8.2)."""
     sync_api = pytest.importorskip("playwright.sync_api")
     exe = chromium()
     if exe is None:
@@ -902,8 +922,8 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         )
         assert bars and all(0 <= left and left + width <= 100.01 for left, width in bars)
         assert page.locator("#time-body .tl-asof").count() == 1
-        holding = "S.nodes.filter((d) => d.core && Date.parse(d.core.t_start) <= Date.parse(S.asOf) && Date.parse(S.asOf) < Date.parse(d.core.t_end)).length"
-        assert page.locator("#time-body .tl-row.active").count() == page.evaluate(holding)
+        every = page.locator("#time-body .tl-row").count()
+        assert page.locator("#time-body .tl-row.active").count() == every  # the whole span sets none aside
         assert page.is_disabled('#time-levels [data-level="day"]') and page.is_enabled('#time-levels [data-level="week"]')
         page.click('#time-levels [data-level="month"]')
         ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
@@ -914,9 +934,12 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         page.focus("#time-body .tl-row")
         page.keyboard.press("Enter")
         page.wait_for_function("document.getElementById('drawer-kind').textContent === 'Інсайт'", timeout=10000)
-        before = page.get_attribute("#time-body .tl-asof", "style")
-        page.fill("#as-of", "2031-03-10")
-        assert "2031-03-10" in page.inner_text("#time-caption") and page.get_attribute("#time-body .tl-asof", "style") != before
-        page.fill("#as-of", "2031-02-29")  # no such day: the line stays at the latest data, where the empty field put it
-        assert page.get_attribute("#time-body .tl-asof", "style") == before and "2031-02-29" not in page.inner_text("#time-caption")
+        page.evaluate(
+            "Timeline.setPeriod('2031-04-07T00:00', '2031-04-14T00:00'); Timeline.apply()"
+        )  # the bar's days: a band, the rows acting in them
+        assert page.locator("#time-body .tl-band").count() == 1 and "07.04.2031 — 13.04.2031" in page.inner_text("#time-caption")
+        acting = page.evaluate("S.nodes.filter((d) => Timeline.inPeriod(d.id) && document.querySelector(`.tl-row[data-id='${d.id}']`)).length")
+        assert 0 < page.locator("#time-body .tl-row.active").count() == acting < page.locator("#time-body .tl-row").count()
+        page.click("#pb-clear")
+        assert page.locator("#time-body .tl-band").count() == 0 and page.locator("#time-body .tl-row.active").count() == every
         assert not errors, errors

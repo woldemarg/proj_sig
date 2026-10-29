@@ -13,12 +13,15 @@ import json
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import suppress
+from datetime import UTC
 from pathlib import Path
 from typing import Any, NamedTuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
 from graph_query_engine.graph import DualGraph, declared_words, insight_reading, primary_anchor, theme_glossary
+from graph_query_engine.temporal import parse_period
 from graph_query_engine.vertical import affinity, restating, scale_chain, scale_label
 from insight_contracts import Insight, PhenomenonThresholds, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
@@ -38,6 +41,7 @@ from subgroup_miner.spatial_plane import (
     zone_overlap,
 )
 
+NO_TIME = np.iinfo(np.int64).min  # a point whose time does not read: NaT as epoch milliseconds
 WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region and to their expected count: ranking, not membership (docs/08 §8.7)
 
 
@@ -166,6 +170,32 @@ def _zone_scores(
 # cached on its arguments: a dataset id fixes its files (a READY id is never mined again, its duplicate is SKIPPED; one
 # uploaded again after its deletion is mined to the same files), and a commit that changes the datasets changes them
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
+
+
+def point_times(times: Any) -> np.ndarray | None:
+    """Each point's time (``LoadedDataset.time``, UTC) as epoch milliseconds, ``NO_TIME`` where it does not read; None
+    without a time column: what ``geo.npz`` keeps for ``geo_period_counts``."""
+    return None if times is None else times.to_numpy(dtype="datetime64[ms]").view(np.int64)
+
+
+def geo_period_counts(ws: Workspace, dataset_id: str, start: str, end: str) -> dict[str, Any]:
+    """Each cell's points in the days ``start`` to ``end`` (ISO dates, both included), read on the dataset's calendar as
+    an asked period is (docs/07_question_answering.md §7.1): ``{counts: [per cell row], points, timed}``; ``counts`` is
+    None for a dataset without a time column (``timed`` false) or whose points were stored without their times."""
+    try:
+        lo, hi = parse_period(start, end)
+    except ValueError as exc:
+        raise PipelineError("invalid_options", f"start, end: not two ISO dates, start to end: {start!r}, {end!r}") from exc
+    temporal = _owner(ws, dataset_id).get("temporal") or {}
+    geo = _geo(ws, dataset_id, ("cells", "point_cell", "point_time"))
+    if "point_time" not in geo:
+        return {"counts": None, "points": 0, "timed": bool(temporal)}
+    zone = ZoneInfo(temporal["tz"]) if temporal.get("tz") else UTC
+    lo_ms, hi_ms = (int(t.replace(tzinfo=zone).timestamp() * 1000) for t in (lo, hi))
+    t, cell = geo["point_time"], geo["point_cell"]
+    inside = (t >= lo_ms) & (t < hi_ms) & (cell >= 0)  # NO_TIME lies before every period
+    counts = np.bincount(cell[inside], minlength=len(geo["cells"]))
+    return {"counts": counts.tolist(), "points": int(inside.sum()), "timed": True}
 
 
 def geo_cells_pack(ws: Workspace, dataset_id: str) -> bytes:

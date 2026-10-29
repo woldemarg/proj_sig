@@ -431,3 +431,48 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         assert page.inner_text("#map-title") == "Усі датасети"
         browser.close()
         assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
+    """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
+    rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
+    the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). Every insight here
+    lives over the data's first four weeks: its core ends before the last two days."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    (level,) = upload_levels(engine, points_csv, geo="auto@8", time="when", grid="week")
+    assert level["status"] == "READY", level.get("error")
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want", timeout=60000)
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        page.evaluate("W.all = true; renderWindow()")
+        assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span
+        rows = "[...document.querySelectorAll('#map-window .mw-i')].map((b) => [b.dataset.pid, b.classList.contains('off')])"
+        page.evaluate("Timeline.setPeriod('2019-03-04T00:00', '2019-03-11T00:00'); Timeline.apply()")  # the first week: every core meets it
+        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
+        counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
+        everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
+        assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
+        assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
+        assert page.locator("#map-metric option[value='points_in_period']").count() == 1
+        page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
+        listed = page.evaluate(rows)
+        assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
+        assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
+        page.click("#pb-clear")
+        assert page.locator("#map-window .mw-i.off").count() == 0
+        page.wait_for_function("G.metric === 'points'", timeout=10000)
+        assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
+        assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
+        assert not errors, errors

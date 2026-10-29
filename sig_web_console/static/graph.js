@@ -330,7 +330,6 @@ async function loadGraph() {
   S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
   S.asOf = (g.stats || {}).as_of || null;  // the latest data: the date the answers and the drawer count freshness from
-  $("as-of").placeholder = S.asOf ? S.asOf.slice(0, 10) : "РРРР-ММ-ДД";
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
@@ -580,20 +579,13 @@ function timeRows(t) {
   const marks = t.events.filter((e) => e.metric === t.metric).map((e) => `<circle class="ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" cx="${px(e.bin).toFixed(1)}" cy="${py(e.z_smoothed).toFixed(1)}" r="4"></circle>`).join("");
   const now = t.current === null ? word("time_unmeasured") : `${signed(t.current)} sd`, c = t.core;
   const band = c ? `<rect class="core" x="${(px(c.first) - 3).toFixed(1)}" y="0" width="${(px(c.last) - px(c.first) + 6).toFixed(1)}" height="${h}"></rect>` : "";
-  const core = c ? `<div class="tl"><span>${term("time_core")}: <time>${esc(c.start === c.end ? c.start : `${c.start} — ${c.end}`)}</time> <span class="muted">(${esc(c.t_start.slice(0, 10))} — ${esc(c.t_end.slice(0, 10))}, не включно · ${num(c.share * 100, 0)}% рядків)</span></span><span class="muted">${esc(ageWords(c, asOfDate()))}</span></div>` : "";
+  const core = c ? `<div class="tl"><span>${term("time_core")}: <time>${esc(c.start === c.end ? c.start : `${c.start} — ${c.end}`)}</time> <span class="muted">(${esc(c.t_start.slice(0, 10))} — ${esc(c.t_end.slice(0, 10))}, не включно · ${num(c.share * 100, 0)}% рядків)</span></span><span class="muted">${esc(ageWords(c, S.asOf))}</span></div>` : "";
   return `<h4>${cap(word("trend"))}</h4><p class="lead">${term(t.bins_measured ? `trend_${t.trend}` : "time_unmeasured")} · ${term("time_current")}: ${esc(now)} · виміряно ${num(t.bins_measured, 0)} з ${num(t.of, 0)} періодів (${esc(human(t.metric))})</p>` + core +
     `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(word("trend"))}">${band}<line class="zero" x1="0" x2="${w}" y1="${py(0).toFixed(1)}" y2="${py(0).toFixed(1)}"></line><polyline points="${line}"></polyline>${dots}${marks}</svg>` +
     (t.events.length ? `<details class="nb-group"${t.events.length <= SHOWN ? " open" : ""}><summary>Події <span class="muted">(${t.events.length})</span></summary>` +
       t.events.map((e) => `<div class="tl${e.echo_of ? " muted" : ""}"><span>${esc(word(e.kind))} <time>${esc(e.period)}</time></span><span class="muted">${esc(human(e.metric))} ${signed(e.z_smoothed)} sd` +
         (e.carrier ? ` · ${term("time_carrier")}: ${esc(human(e.carrier.attribute))} — ${esc(e.carrier.value)}` : "") + (e.echo_of ? ` · ${term("time_echo")}` : "") + `</span></div>`).join("") + `</details>` : "") +
     (t.gaps.length ? `<div class="tl"><span class="muted">${esc(word("time_unmeasured"))}: ${esc(t.gaps.map(([a, b]) => (a === b ? a : `${a}–${b}`)).join(", "))}</span></div>` : "");
-}
-
-function asOfDate() {
-  /* the date freshness counts from: the one by the question box when it names a day of the calendar, else the latest data
-     (Date.parse alone reads 2031-02-29 as 1 March: the day has to come back from the calendar as typed) */
-  const v = $("as-of").value.trim(), m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  return m && new Date(Date.UTC(+m[1], m[2] - 1, +m[3])).toISOString().slice(0, 10) === v ? v : S.asOf;
 }
 
 function ageWords(core, asOf) {
