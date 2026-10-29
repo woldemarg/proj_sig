@@ -83,9 +83,13 @@ label.chk { display: flex; align-items: center; gap: 6px; } label.chk:has(input:
 .drop svg { color: var(--accent); margin-bottom: 2px; }
 .drop .file { font-size: 13px; color: var(--accent); font-weight: 600; word-break: break-all; }
 details.adv { margin-top: 10px; font-size: 13px; }
-details.adv > summary { cursor: pointer; color: var(--ink-2); list-style: none; user-select: none; }
+details.adv > summary { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--surface-2); color: var(--ink-2); font-weight: 580; cursor: pointer; list-style: none; user-select: none; }
+details.adv > summary:hover { border-color: var(--accent); color: var(--ink); }
 details.adv > summary::-webkit-details-marker { display: none; }
-details.adv > summary::before { content: "▸ "; color: var(--muted); } details.adv[open] > summary::before { content: "▾ "; }
+details.adv > summary svg { flex: none; color: var(--muted); }
+details.adv > summary small { margin-left: auto; font-weight: 450; color: var(--muted); }
+details.adv > summary::after { content: "▸"; color: var(--muted); transition: transform .15s; } details.adv[open] > summary::after { transform: rotate(90deg); }
+details.adv[open] > summary { margin-bottom: 8px; }
 .rail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; } .rail-actions .btn { flex: 1 1 auto; }
 .msg { font-size: 13px; margin-top: 8px; color: var(--ink-2); } .msg.err { color: var(--bad); } .msg:empty { display: none; }
 .rail-list { flex: 1; min-height: 30%; overflow: auto; padding: 14px 16px 20px; }  /* the datasets stay in sight under an open form */
@@ -134,9 +138,10 @@ details.adv > summary::before { content: "▸ "; color: var(--muted); } details.
 .canvas-body { flex: 1; min-height: 0; display: flex; }
 /* the period bar: a pill with the days and two thumbs over one rail; a thumb's centre runs 7px in from each end */
 .period-bar { flex: none; display: flex; align-items: center; gap: 14px; padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
-.pb-pill { position: relative; flex: none; display: inline-flex; align-items: center; height: 30px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--surface); }
+.pb-pill { position: relative; flex: none; display: inline-flex; align-items: stretch; height: 38px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--surface); }
 .pb-pill:hover, .pb-pill:has([aria-expanded="true"]) { border-color: var(--accent); }
-.pb-label { display: inline-flex; align-items: center; gap: 7px; height: 100%; padding: 0 10px; border: 0; background: none; font-size: 12.5px; font-weight: 580; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.pb-label { display: inline-flex; align-items: center; gap: 8px; width: 305px; padding: 0 10px; border: 0; background: none; color: var(--ink-2); cursor: pointer; white-space: nowrap; text-align: left; font-variant-numeric: tabular-nums; }  /* one width for every stretch */
+#pb-text { display: grid; min-width: 0; line-height: 1.25; } #pb-text b { font-size: 12.5px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; } #pb-text small { font-size: 11px; color: var(--muted); }
 .pb-label svg { color: var(--muted); }
 .pb-x { height: 100%; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; } .pb-x:hover { color: var(--ink); }
 .pb-pop { position: absolute; top: calc(100% + 6px); left: -1px; z-index: 30; display: grid; grid-template-columns: auto auto; gap: 10px; padding: 12px; width: max-content; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); }
@@ -194,12 +199,11 @@ details.adv > summary::before { content: "▸ "; color: var(--muted); } details.
 .tl-track { position: relative; height: 24px; }
 .tl-tick { position: absolute; top: 0; bottom: 0; border: 0; border-left: 1px solid var(--line-2); padding: 0 4px; background: transparent; color: var(--muted); font-size: 11px; text-align: left; overflow: hidden; white-space: nowrap; cursor: pointer; }
 .tl-tick:hover, .tl-row:hover { background: var(--surface-2); color: var(--ink); }
-.tl-row { position: relative; z-index: 1; cursor: pointer; opacity: .6; } .tl-row.active { opacity: 1; }
+.tl-row { cursor: pointer; }
 .tl-core { position: absolute; top: 8px; height: 8px; min-width: 3px; border-radius: 99px; background: var(--time); }
-.tl-row.active .tl-core { box-shadow: 0 0 0 2px var(--accent-soft); }
+.tl-core.cut { background: linear-gradient(to right, var(--line-2) var(--in0), var(--time) var(--in0) var(--in1), var(--line-2) var(--in1)); }  /* outside the period bar's stretch: dark */
 .tl-ev { position: absolute; top: 4px; transform: translateX(-50%); font-size: 11px; line-height: 1; } .tl-ev.up { color: var(--up); } .tl-ev.down { color: var(--down); }
-.tl-asof { position: absolute; z-index: 1; top: 0; bottom: 0; border-left: 2px dashed var(--accent); pointer-events: none; }
-.tl-band { position: absolute; z-index: 0; top: 0; bottom: 0; background: var(--accent-soft); pointer-events: none; }  /* under the rows */
+.tl-asof { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--accent); pointer-events: none; }
 
 /* insights table */
 .table-wrap { position: absolute; inset: 0; overflow: auto; padding: 14px; }

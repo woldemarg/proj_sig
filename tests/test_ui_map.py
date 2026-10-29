@@ -463,7 +463,10 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
         counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
         everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
+        assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
+        counted = [a or 0 for a in counted]
         assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
+        assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it

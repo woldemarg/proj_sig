@@ -856,7 +856,8 @@ def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(ti
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes().length > 0", timeout=30000)
         first, latest = (d[:10] for d in record["temporal"]["span"])
         assert page.is_visible("#period-bar") and page.is_hidden("#pb-clear")
-        assert page.inner_text("#pb-text") == f"Увесь період · {first[8:]}.{first[5:7]}.{first[:4]} — {latest[8:]}.{latest[5:7]}.{latest[:4]}"
+        assert page.inner_text("#pb-text") == f"{first[8:]}.{first[5:7]}.{first[:4]} — {latest[8:]}.{latest[5:7]}.{latest[:4]}\nувесь період"
+        width = page.locator(".pb-pill").bounding_box()["width"]
         page.evaluate("document.getElementById('use-llm').checked = false")
         with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
             page.evaluate("(q) => ask(q)", question)
@@ -866,12 +867,13 @@ def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(ti
         page.click("#pb-label")
         page.click("#pb-presets button:has-text('останній тиждень')")
         assert page.is_hidden("#pb-pop") and page.evaluate("S.period") == {"start": "2031-04-07T00:00", "end": "2031-04-14T00:00"}
-        assert page.inner_text("#pb-text") == "07.04.2031 — 13.04.2031 · 7 днів" and page.is_visible("#pb-clear")
+        assert page.inner_text("#pb-text") == "07.04.2031 — 13.04.2031\n7 днів" and page.is_visible("#pb-clear")
         assert page.get_attribute("#pb-to", "max") == "28"  # a week by 6 hours
         page.focus("#pb-from")
         page.keyboard.press("ArrowRight")  # a thumb moved by the keyboard: a step later
         assert page.evaluate("S.period") == {"start": "2031-04-07T06:00", "end": "2031-04-14T00:00"}
-        assert page.inner_text("#pb-text") == "07.04.2031 06:00 — 14.04.2031 00:00 · 162 години"
+        assert page.inner_text("#pb-text") == "07.04.2031 06:00 — 14.04.2031 00:00\n162 години"
+        assert page.locator(".pb-pill").bounding_box()["width"] == width  # the pill keeps its width whatever it names
         box = page.locator(".pb-track").bounding_box()
         page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 10)  # the rail's middle: the nearer thumb, the start, comes to it
         assert page.evaluate("S.period") == {"start": "2031-04-10T12:00", "end": "2031-04-14T00:00"}
@@ -922,8 +924,7 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         )
         assert bars and all(0 <= left and left + width <= 100.01 for left, width in bars)
         assert page.locator("#time-body .tl-asof").count() == 1
-        every = page.locator("#time-body .tl-row").count()
-        assert page.locator("#time-body .tl-row.active").count() == every  # the whole span sets none aside
+        assert page.locator("#time-body .tl-core.cut").count() == 0  # the whole span darkens no core
         assert page.is_disabled('#time-levels [data-level="day"]') and page.is_enabled('#time-levels [data-level="week"]')
         page.click('#time-levels [data-level="month"]')
         ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
@@ -934,12 +935,16 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         page.focus("#time-body .tl-row")
         page.keyboard.press("Enter")
         page.wait_for_function("document.getElementById('drawer-kind').textContent === 'Інсайт'", timeout=10000)
-        page.evaluate(
-            "Timeline.setPeriod('2031-04-07T00:00', '2031-04-14T00:00'); Timeline.apply()"
-        )  # the bar's days: a band, the rows acting in them
-        assert page.locator("#time-body .tl-band").count() == 1 and "07.04.2031 — 13.04.2031" in page.inner_text("#time-caption")
-        acting = page.evaluate("S.nodes.filter((d) => Timeline.inPeriod(d.id) && document.querySelector(`.tl-row[data-id='${d.id}']`)).length")
-        assert 0 < page.locator("#time-body .tl-row.active").count() == acting < page.locator("#time-body .tl-row").count()
+        page.evaluate("Timeline.setPeriod('2031-04-07T00:00', '2031-04-14T00:00'); Timeline.apply()")  # the bar's last week
+        assert "07.04.2031 — 13.04.2031" in page.inner_text("#time-caption")
+        cores = page.evaluate(
+            "[...document.querySelectorAll('#time-body .tl-core')].map((b) => [b.closest('.tl-row').dataset.id, b.classList.contains('cut'),"
+            " parseFloat(b.style.getPropertyValue('--in0')), parseFloat(b.style.getPropertyValue('--in1'))])"
+        )
+        meets = "(pid) => { const c = S.nodes.find((d) => d.id === pid).core; return Date.parse(c.t_start) < Date.parse('2031-04-14T00:00Z') && Date.parse('2031-04-07T00:00Z') < Date.parse(c.t_end); }"
+        lit = [pid for pid, cut, in0, in1 in cores if cut and in1 > in0]  # a bright part inside the stretch, the rest dark
+        assert cores and all(cut for _, cut, _, _ in cores) and lit == [pid for pid, *_ in cores if page.evaluate(meets, pid)]
+        assert 0 < len(lit) < len(cores)
         page.click("#pb-clear")
-        assert page.locator("#time-body .tl-band").count() == 0 and page.locator("#time-body .tl-row.active").count() == every
+        assert page.locator("#time-body .tl-core.cut").count() == 0
         assert not errors, errors

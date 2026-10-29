@@ -83,6 +83,7 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.evaluate("() => { window.api = __real; __go(); }")
         page.wait_for_function("$('sample').value === '' && $('upload-msg').textContent.startsWith('У черзі')", timeout=10000)
         assert page.evaluate("__sent") == ["retail_synthetic"]  # one request, by the dataset's key
+        assert not page.evaluate("document.querySelector('#upload-form details.adv').open")  # sent: the options fold away
         page.wait_for_function("!S.cy.animated()", timeout=5000)  # the flight to the evidence card ended
         page.emulate_media(reduced_motion="reduce")
         page.evaluate("() => focusNodes([S.nodes[0].id])")

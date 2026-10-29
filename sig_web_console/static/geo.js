@@ -508,7 +508,7 @@ async function paintPeriod() {
   const got = p ? await api(`/api/geo/${encodeURIComponent(ds)}/counts?start=${encodeURIComponent(p.start)}&end=${encodeURIComponent(p.end)}`).catch(() => null) : null;
   if (seq !== G.periodSeq || ds !== G.ds) return;  // the days or the dataset changed meanwhile
   const counts = got && got.counts, was = G.metric;
-  G.data.features.forEach((f, i) => { if (counts) f.properties[PERIOD_METRIC] = counts[i]; else delete f.properties[PERIOD_METRIC]; });
+  G.data.features.forEach((f, i) => { if (counts) f.properties[PERIOD_METRIC] = counts[i] || null; else delete f.properties[PERIOD_METRIC]; });  // none: unpainted
   G.map.getSource("cells").setData(G.data);
   if (counts && was === "points") G.metric = PERIOD_METRIC;
   if (!counts && was === PERIOD_METRIC) G.metric = "points";
@@ -527,7 +527,8 @@ function colorBy(metric) {
   for (let i = 1; i < RAMP.length; i++) { const q = vals[Math.floor((i / RAMP.length) * (vals.length - 1))]; if (q !== undefined && (!stops.length || q > stops[stops.length - 1])) stops.push(q); }
   const step = ["step", ["get", metric], RAMP[0]];
   stops.forEach((q, i) => step.push(q, RAMP[Math.min(i + 1, RAMP.length - 1)]));
-  G.map.setPaintProperty("cells-fill", "fill-color", ["case", ["==", ["typeof", ["get", metric]], "number"], stops.length ? step : RAMP[3], "#141a26"]);
+  const none = metric === PERIOD_METRIC ? "rgba(0, 0, 0, 0)" : "#141a26";  // a cell with no event in the period is not drawn at all
+  G.map.setPaintProperty("cells-fill", "fill-color", ["case", ["==", ["typeof", ["get", metric]], "number"], stops.length ? step : RAMP[3], none]);
   $("map-ramp").innerHTML = `<div class="ramp">${RAMP.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` +
     `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
 }

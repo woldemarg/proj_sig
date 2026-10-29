@@ -60,20 +60,24 @@ const Timeline = (() => {
     const now = S.asOf ? ms(S.asOf) : null;
     const t0 = Math.min(...T.hubs.map((h) => ms(h.t_start)), now ?? Infinity), t1 = Math.max(...T.hubs.map((h) => ms(h.t_end)), now ?? -Infinity);
     const at = (t) => ((100 * (t - t0)) / (t1 - t0 || 1)).toFixed(2), span = (a, b) => `left:${at(a)}%;width:${(at(b) - at(a)).toFixed(2)}%`;
-    const track = (a, b) => `left:calc(var(--tl-gutter) + (100% - var(--tl-gutter)) * ${at(a) / 100});width:calc((100% - var(--tl-gutter)) * ${(at(b) - at(a)) / 100})`;
     $("time-levels").innerHTML = TIME_LEVELS.map((l) =>
       `<button type="button" class="tl-level${l === T.level ? " active" : ""}" data-level="${l}" aria-pressed="${l === T.level}"${levels.includes(l) ? "" : " disabled"}>${TIME_LEVEL_NAMES[l]}</button>`).join("");
     const ticks = T.hubs.filter((h) => h.granularity === T.level).map((h) =>
       `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(h.period)}</button>`).join("");
+    const [lo, hi] = S.period ? [utc(S.period.start), utc(S.period.end)] : [-Infinity, Infinity];
+    const cut = (a, b) => {  // a core's part outside the stretch dark: where the stretch starts and ends along the bar
+      if (!S.period) return "";
+      const f = (t) => (100 * Math.min(Math.max((t - a) / (b - a || 1), 0), 1)).toFixed(1);
+      return `;--in0:${f(lo)}%;--in1:${f(Math.max(hi, lo))}%`;
+    };
     const rows = T.rows.map((r) => {
-      const c = r.core, active = inPeriod(r.id);  // the whole span sets none aside
+      const c = r.core;
       const marks = r.events.map((e) => `<b class="tl-ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" style="left:${at((ms(e.hub.t_start) + ms(e.hub.t_end)) / 2)}%" title="${esc(word(e.kind))} ${esc(e.hub.period)}">${e.kind === "PEAKED_AT" ? "▲" : "▼"}</b>`).join("");
-      return `<div class="tl-row${active ? " active" : ""}" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(r.full_label)}">` +
-        `<span class="tl-name">${esc(r.full_label)}</span><span class="tl-track">${c ? `<i class="tl-core" style="${span(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
+      return `<div class="tl-row" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(r.full_label)}">` +
+        `<span class="tl-name">${esc(r.full_label)}</span><span class="tl-track">${c ? `<i class="tl-core${S.period ? " cut" : ""}" style="${span(ms(c.t_start), ms(c.t_end))}${cut(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
     }).join("");
     const line = now !== null ? `<i class="tl-asof" style="left:calc(var(--tl-gutter) + (100% - var(--tl-gutter)) * ${at(now) / 100})" title="${esc(word("as_of"))} ${esc(S.asOf.slice(0, 10))}"></i>` : "";
-    const band = S.period ? `<i class="tl-band" style="${track(utc(S.period.start), utc(S.period.end))}" title="${esc(word("period"))} ${esc(words())}"></i>` : "";
-    body.innerHTML = `<div class="tl-head"><span class="tl-name muted">${esc(cap(TIME_LEVEL_NAMES[T.level]))}</span><span class="tl-track">${ticks}</span></div>${rows}${band}${line}`;
+    body.innerHTML = `<div class="tl-head"><span class="tl-name muted">${esc(cap(TIME_LEVEL_NAMES[T.level]))}</span><span class="tl-track">${ticks}</span></div>${rows}${line}`;
     $("time-caption").textContent = `${plural(T.rows.length, "інсайт", "інсайти", "інсайтів")} · ${plural(T.hubs.length, "період", "періоди", "періодів")}` +
       (S.period ? ` · ${word("period")} ${words()}` : S.asOf ? ` · ${word("as_of")} ${S.asOf.slice(0, 10)}` : "");
   }
@@ -122,8 +126,8 @@ const Timeline = (() => {
     const k = (t) => Math.min(Math.max(Math.round((t - T.wlo) / step()), 0), n), f = (t) => Math.min(Math.max((t - T.wlo) / width, 0), 1);
     for (const [id, t] of [["pb-from", lo], ["pb-to", hi]]) { $(id).max = n; $(id).value = k(t); }
     Object.assign($("pb-fill").style, { left: `calc(7px + (100% - 14px) * ${f(lo)})`, width: `calc((100% - 14px) * ${f(hi) - f(lo)})` });
-    $("pb-text").textContent = S.period ? `${words()} · ${spanWords(lo, hi)}` : `Увесь період · ${periodWords(T.lo, T.hi)}`;
-    $("pb-clear").hidden = !S.period;
+    $("pb-text").innerHTML = `<b>${esc(S.period ? words() : periodWords(T.lo, T.hi))}</b><small>${esc(S.period ? spanWords(lo, hi) : "увесь період")}</small>`;
+    $("pb-clear").style.visibility = S.period ? "" : "hidden";  // its room kept: the pill never changes width
     for (const [id, v] of [["pb-start", T.wlo], ["pb-end", T.whi - DAY]]) Object.assign($(id), { min: isoDay(T.lo), max: isoDay(T.hi - DAY), value: isoDay(v) });
     const room = $("pb-ticks").clientWidth || 600, levels = TIME_LEVELS.filter((l) => T.hubs.some((h) => h.granularity === l));
     const level = levels.find((l) => T.hubs.filter((h) => h.granularity === l && ms(h.t_end) > T.wlo && ms(h.t_start) < T.whi).length * 64 <= room) || levels[levels.length - 1];

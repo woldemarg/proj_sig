@@ -661,7 +661,7 @@ async function inspect(id, note = "") {
   const groups = Object.entries(d.neighbors);
   if (groups.length) {
     html += `<h4>Зв'язки</h4>` + groups.filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)"].includes(t)).map(([type, items]) =>
-      `<details class="nb-group" ${/ACTIVATES|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${(d.neighbor_counts || {})[type] > items.length ? `${items.length} з ${num(d.neighbor_counts[type], 0)}` : items.length})</span></summary>` +
+      `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${(d.neighbor_counts || {})[type] > items.length ? `${items.length} з ${num(d.neighbor_counts[type], 0)}` : items.length})</span></summary>` +
       items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
   }
   $("inspector").innerHTML = html;
