@@ -21,6 +21,8 @@ class MinerConfig:
     # spatial ingestion, only for an upload with a geo option (docs/02_discovery.md §2.9)
     geo_resolution: int = 7  # H3 resolution when the geo option names none
     min_cell_points: int = 5  # below it a cell keeps its counters but not its medians and shares (NaN)
+    context_ring: int = 1  # a context layer's disk: the cell and its neighbours within this many rings (1: the six around it)
+    context_permutations: int = 199  # draws of the cross-type null (the layer dealt anew within each parent cell); 0 turns the test off
 
     # discovery (docs/02_discovery.md) — EDA defaults preserved
     compute_budget: int = 5000  # step3 compute_budget

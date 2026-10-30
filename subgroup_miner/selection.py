@@ -99,10 +99,15 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
     survivors: list[Insight] = []
     for ins in insights:
         covariance = ins.phenomenon_type == "covariance"  # its shift tests are None
-        significant = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        marginal = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        # a context-layer cohort (docs/02 §2.9): its shift must also beat the layer dealt at random within its parent cells,
+        # and it is never admitted on a correlation change, which that null does not test
+        p_context = ins.provenance.get("spatial", {}).get("p_context")
+        confounded = p_context is not None and p_context > config.max_p_adjusted
+        significant = marginal and not confounded
         stable = not covariance and ins.stability >= config.min_stability
         shift_ok = significant and stable  # R2 + R3: the bootstrap measures the shift score
-        emm_ok = ins.emm_score >= config.thresholds.min_emm_score and bool(ins.covariance)
+        emm_ok = ins.emm_score >= config.thresholds.min_emm_score and bool(ins.covariance) and p_context is None
         if not shift_ok and emm_ok:
             # the shift is absent, insignificant or unstable, but the correlation change holds:
             # the phenomenon is the divergent pair (never cited as a median shift)
@@ -113,6 +118,11 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
         elif not (shift_ok or emm_ok):  # R2 / R3
             if covariance:
                 reason, detail = "weak_effect", f"emm={ins.emm_score:.2f}"
+            elif marginal and confounded:
+                reason, detail = (
+                    "context_confounded",
+                    f"p_context={p_context:.2g}: the shift holds as often when the layer is dealt at random within the parent cells",
+                )
             elif significant:
                 reason, detail = "unstable", f"stability={ins.stability:.2f}"
             elif abs(ins.effect_size) >= config.min_effect_z:

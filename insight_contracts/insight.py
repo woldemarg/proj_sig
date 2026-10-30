@@ -119,18 +119,19 @@ class SpatialProvenance:
     moran_i: float | None = None  # the subgroup's own Moran's I of the primary metric
     n_eff: float | None = None  # effective sample size of the median test
     p_adjusted_iid: float | None = None  # the adjusted p-value without the n_eff correction
+    p_context: float | None = None  # a cohort with a context-layer condition: the within-parent permutation p of its shift (docs/02 §2.9)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> SpatialProvenance | None:
-        """The five fields of a stored ``provenance["spatial"]`` (other keys ignored); None for a non-geo insight."""
+        """The fields of a stored ``provenance["spatial"]`` (other keys ignored, a missing one None); None for a non-geo insight."""
         return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data}) if data else None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {k: v for k, v in asdict(self).items() if v is not None}  # a field not measured is not written (nor digested)
 
 
 # fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
-SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context")
 UNDIGESTED = frozenset({"provenance", "row_id", "record_digest"})  # set after the digest (rows_ref) or rewritten by a deletion (row_id)
 
 

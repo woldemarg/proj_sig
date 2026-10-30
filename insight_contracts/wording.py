@@ -239,6 +239,8 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
     (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``); None when it is none of them."""
     if column in declared:
         return column
+    if column.startswith("context_"):  # a context layer's band: another file's points, no column of this one
+        return None
     if column.endswith("_band"):  # a band of a column or of a cell's derivation
         return source_column(column.removesuffix("_band"), declared)
     if column.startswith("neighbours_"):  # a counter's neighbourhood lag
@@ -274,6 +276,11 @@ def time_words(facts: Mapping[str, Any]) -> str:
     return "; ".join(parts)
 
 
+def _layer(column: str) -> str:
+    """The layer a ``context_<layer>_band`` column counts, in words."""
+    return humanize(column.removeprefix("context_").removesuffix("_band"))
+
+
 def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
     """A column in words: the uploader's glossary first, then (geo cells only) the derived column's reading, else the
     humanized name. ``glossary`` is the declared one, never the derived English ``profile.geo.glossary``."""
@@ -282,6 +289,8 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
     if geo:
         if column == "points":
             return "кількість подій у комірці"
+        if column.startswith("context_") and column.endswith("_band"):
+            return f"кількість {_layer(column)} у комірці та сусідніх"
         if column.startswith("neighbours_") and not column.endswith("_band"):
             return f"{column_words(column.removeprefix('neighbours_'), glossary, geo)} (середнє шести сусідніх комірок)"
         if column.startswith("share_"):
@@ -307,6 +316,11 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
         return phrase
     if geo and attribute == "lisa_points" and value in LISA:
         return LISA[value]
+    if geo and attribute.startswith("context_") and attribute.endswith("_band"):
+        if value == "none nearby":
+            return f"поруч немає {_layer(attribute)}"
+        if value[:1] == "q" and value[1:].isdigit():
+            return f"поруч (комірка й сусідні) {_layer(attribute)} у {_ORDINAL[int(value[1:]) - 1]} чверті (від найменшої кількості)"
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
         counter = attribute.removeprefix("neighbours_").removesuffix("_band")
         return f"сусідні комірки {QUARTERS[value]} ({column_words(counter, glossary, geo)})"  # a cell has one band per counter
