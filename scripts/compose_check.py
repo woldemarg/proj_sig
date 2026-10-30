@@ -94,7 +94,7 @@ def check_start_order(seconds: float) -> None:
     order = [
         init["ExitCode"] == 0 and datetime.fromisoformat(init["FinishedAt"]) <= started["insight-graph"],
         started["neo4j"] <= started["insight-graph"] <= started["evidence-narrator"],
-        started["llm-model-broker"] <= started["evidence-narrator"] <= started["sig-web-console"],
+        started["llm-model-broker"] <= started["evidence-narrator"] <= started["web-console"],
     ]
     record("services started in dependency order", all(order), f"{seconds:.0f} s from up to all healthy")
     logs = compose("logs", "model-init", capture=True).stdout

@@ -4,7 +4,7 @@
 #   llm-model-broker   one OpenAI-compatible endpoint for the upstream model (internal + egress, no host port)
 #   insight-graph      the graph service: analysis, graph building, search (the GPU with compose.gpu.yaml, else the CPU; no egress)
 #   evidence-narrator  the chat: the graph's evidence verbalised and citation-checked (no egress)
-#   sig-web-console    nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
+#   web-console        nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
 #
 #   docker compose up -d --build --wait      then open http://127.0.0.1:8765
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait      the embeddings on an NVIDIA GPU
@@ -68,6 +68,7 @@ services:
   llm-model-broker:
     <<: *hardened
     build: { context: ., dockerfile: llm_model_broker/Dockerfile }
+    image: sig/llm-model-broker
     environment:  # the provider settings and key reach this container only
       GEMMA_BASE_URL: ${GEMMA_BASE_URL:-}
       GEMMA_MODEL_NAME: ${GEMMA_MODEL_NAME:-}
@@ -115,6 +116,7 @@ services:
   evidence-narrator:
     <<: *hardened
     build: { context: ., dockerfile: evidence_narrator_service/Dockerfile }
+    image: sig/evidence-narrator
     environment:  # an allow-list, no env_file: nothing else from .env (no key) reaches the chat; "" keeps the default
       INSIGHT_GRAPH_URL: http://insight-graph:8000
       INSIGHT_GRAPH_TIMEOUT_S: ${INSIGHT_GRAPH_TIMEOUT_S:-}
@@ -127,9 +129,10 @@ services:
       llm-model-broker: { condition: service_healthy }
     networks: [internal]
 
-  sig-web-console:
+  web-console:
     <<: *hardened
     build: { context: ., dockerfile: sig_web_console/Dockerfile }
+    image: sig/web-console
     ports:
       - "127.0.0.1:${SIG_WEB_PORT:-8765}:8080"
     depends_on:

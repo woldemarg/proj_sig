@@ -22,7 +22,7 @@ The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (�
 - Do not silence the gate with `# noqa`, `# type: ignore`, new `ignore` entries in `pyproject.toml`, or skipped tests. Fix the cause.
 - If the gate cannot run (no venv, no model, no Chromium), say so in the summary and name the stages that were skipped. Never imply it passed.
 
-Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`) may skip the gate; any Python, `pyproject.toml`, `pytest.ini` or `requirements*.txt` change may not. A change to a `Dockerfile`, `compose.yaml`, `nginx.conf` or `constraints.txt` also runs `python scripts/compose_check.py` (Docker must be running).
+Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`) may skip the gate; any Python, `pyproject.toml`, `uv.lock` or `pytest.ini` change may not. A change to a `Dockerfile`, `compose.yaml`, `nginx.conf` or `uv.lock` also runs `python scripts/compose_check.py` (Docker must be running).
 
 ---
 
@@ -38,7 +38,8 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `evidence_narrator_service/` | the chat service: `narration`, `llm_client`, `settings`, `app`; imports only `insight_contracts` |
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
 | `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js` the shell with `datasets.js`, `graph.js`, `chat.js`, `geo.js` beside it, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
-| `compose.yaml`, `.dockerignore`, `constraints.txt` | the service suite in start order (`docs/12_architecture.md` §12.5); the exact package versions every image installs with |
+| `compose.yaml`, `.dockerignore` | the service suite in start order (`docs/12_architecture.md` §12.5) |
+| `pyproject.toml`, `uv.lock` | the dependency groups (`miner`, `topology`, `query`, `graph`, `narrator`, `broker`, `cpu`/`cu130` the torch build, `dev`) and the exact versions the host and every image install |
 | `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
 | `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
@@ -56,7 +57,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 - **Only this repository is in scope.** Code outside it is reference material at most: do not edit it, do not import from it, do not add it to `sys.path`. `tests/test_self_contained.py` enforces that every loaded module and `sys.path` entry lies in the repository or the Python environment, that no source holds a machine path or a relative path leading out of the repository, and that every path setting resolves inside the repository.
 - Reuse upstream code by editing the vendored copy and recording the change in its `PROVENANCE.md`. Never re-copy an upstream file over the vendored one (it carries the signed-attractor repair and the numerical fixes).
-- The Python environment that `.venv` may be layered on is not ours to modify; install into `.venv` only and add the dependency to the owning package's `requirements.txt` (each library and service has one; `requirements-dev.txt` collects them plus the test tools).
+- The Python environment that `.venv` may be layered on is not ours to modify; install into `.venv` only, with `uv sync`. A new dependency goes into the owning package's group in `pyproject.toml`, then `uv lock`; `uv lock --upgrade` refreshes the versions (then the gate and `scripts/compose_check.py --tests`).
 - Keep the bounded contexts (`docs/12_architecture.md`): the libraries import only `insight_contracts`; graph construction (`core/snapshot.py`) and retrieval read no files — the engine passes them their data; the workspace layout belongs to `core/workspace.py` (no other module builds a path below the workspace root); the core imports no web or HTTP framework; the narrator reaches the graph service only through `POST /api/search` (the `EvidencePayload`) and its health probe `GET /api/health`. `tests/test_architecture.py` lists who may import whom — extend that table only with a reason.
 - The configured Neo4j database and the LLM provider account belong to the user. Settings classes read only the process environment, so tests never see `.env`; tests run with `neo4j_enabled=False` and the LLM stub.
 - **Real data never enters the repository, in any form.** A real export the user uploads is secret: not its bytes, file name, column names, category values, time span, screenshots or per-row results — in no file, branch (`audit-assets` included), test, golden, docs page, issue, PR or committed measurement. Public texts carry aggregates only (counts, medians, shares). Measurements and screenshots meant for the repository use the shipped data (`data/demo/`, the synthetic demo) or a synthetic set with its own generator and schema that shares no column, category, distribution or structure with any real export.
