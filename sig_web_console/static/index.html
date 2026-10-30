@@ -49,8 +49,13 @@
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
           <label class="small" for="context">Контекстний шар — точки іншого типу</label>
           <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
-          <select class="field" id="context-sample"><option value="">— або готовий шар —</option></select>
-          <div class="hint">До двох файлів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Потрібен просторовий аналіз.</div>
+          <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>
+          <select class="field" id="context-sample" multiple size="3"></select>
+          <label class="small" for="context-geo">Колонки точок шару</label>
+          <input class="field" id="context-geo" placeholder="напр. lat,lon · geometry; порожньо — auto">
+          <label class="small" for="context-ring">Що рахувати поруч</label>
+          <select class="field" id="context-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option></select>
+          <div class="hint">До двох шарів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Зв'язок у самій комірці сусіди розмивають — тоді «лише саму комірку». Шар ставить питання про склад подій біля об'єктів; частоту одного типу подій біля них він не перевіряє. Потрібен просторовий аналіз.</div>
           <label class="small" for="time">Колонка часу</label>
           <input class="field" id="time" placeholder="напр. order_date">
           <label class="small" for="tz">Часовий пояс</label>

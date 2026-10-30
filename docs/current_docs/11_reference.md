@@ -111,7 +111,7 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | Section, group | Parameter (default) | Explained in |
 |---|---|---|
 | `MinerConfig` (`subgroup_miner/config.py`) — ingestion | `MIN_ROWS` 50, `BIN_COLUMNS` "", `CATEGORICAL_COLUMNS` "" | [2.1](02_discovery.md#21-ingestion) |
-| `MinerConfig` — spatial datasets | `GEO_RESOLUTION` 7, `MIN_CELL_POINTS` 5, `CONTEXT_RING` 1 (a context layer's disk: the cell and its neighbours within this many rings), `CONTEXT_PERMUTATIONS` 199 (draws of the context null; 0 turns it off) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
+| `MinerConfig` — spatial datasets | `GEO_RESOLUTION` 7, `MIN_CELL_POINTS` 5, `CONTEXT_PERMUTATIONS` 199 (draws of the context null; 0 turns it off) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
 | `MinerConfig` — discovery | `COMPUTE_BUDGET` 5000, `VALIDATION_BUDGET` 50, `MIN_SEARCH_DIMENSIONS` 3, `EDA_RANDOM_SEED` 42, `REDUNDANCY_JACCARD` 0.88 | [2](02_discovery.md) |
 | `MinerConfig` — validity rules | `MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_STABILITY` 0.5 | [3.2](03_insights.md#32-selection-rules) |
 | `MinerConfig` — weight | `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_EXPONENTS` (0.35, 0.25, 0.10, 0.10), `WEIGHT_FLOOR` 0.05 | [3.3](03_insights.md#33-insight-weight) |
@@ -154,7 +154,7 @@ Every quantity the system computes, where it is explained and which code compute
 | bootstrap stability, confounder drivers | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) | `main_upd.py::step4b_deep_validation` |
 | closed intent, near-duplicate Jaccard, `temp_index` | [2.3](02_discovery.md#23-deduplication-before-validation) | `subgroup_miner/discovery.py`: `closed_intent`, `prune_near_duplicates`, `run_discovery` |
 | signed shift, EMM per pair, covariance pair, median test, Bonferroni | [2.4](02_discovery.md#24-what-the-adapter-adds) | `subgroup_miner/discovery.py`: `run_discovery` (EMM per pair), `_covariance_pair`, `_median_test`, `build_insights` (signed shift, Bonferroni) |
-| a context layer's band (disk sums, quarter edges), the context null `p_context` (sequential, adjusted over `context_family`) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) | `subgroup_miner/context.py`: `context_layer`, `disk_sums`, `band`, `dealt_counts`; `subgroup_miner/discovery.py::_context_evidence` |
+| a context layer's band (disk sums, quarter edges), the context null `p_context` (sequential, adjusted over `context_family`) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) | `subgroup_miner/context.py`: `context_layer`, `disk_sums`, `band`, `deal`, `dealt_band`; `subgroup_miner/discovery.py::_context_evidence` |
 | calendar bins, an insight's series (z, its standard error), RTS smoothing, the event gate, trend | [2.10](02_discovery.md#210-time-the-calendar-grid-and-an-insights-dynamics) | `subgroup_miner/temporal.py`: `calendar_bins`, `annotate`, `rts_smooth`, `detect_events`, `trend`, `dynamics` |
 | selection predicates | [3.2](03_insights.md#32-selection-rules) | `subgroup_miner/selection.py::select_insights` |
 | admission (R4 weight floor, R7 budget) | [3.2](03_insights.md#32-selection-rules) | `insight_graph_service/core/batch.py::admit_insights` |

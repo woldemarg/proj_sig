@@ -27,7 +27,7 @@ from scipy.stats import norm, zscore
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id, stable_hash
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import dealt_band
+from subgroup_miner.context import deal, dealt_band
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
@@ -316,9 +316,6 @@ def run_discovery(
     )
 
 
-CONTEXT_STOP_HITS = 10  # draws as strong as the observed cohort after which the context null stops (sequential p)
-
-
 def _median_z(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
     """The z of the asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the sample to
     its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). 0 where the test is undefined."""
@@ -524,14 +521,17 @@ def _context_evidence(
     family: int = 1,
 ) -> float | None:
     """``p_context`` of a cohort with a condition on a context layer's band (docs/02_discovery.md §2.9): the share of draws
-    — every layer the scope names dealt anew within its parent cells (``context.dealt_band``), its band read with the
+    — the layers the scope names dealt anew within their parent cells by one permutation (``context.deal``: they keep
+    their places to each other), each band read with the
     observed edges, the other conditions fixed — whose cohort's median-test |z| (with that cohort's own n_eff) is at least
     the observed cohort's, (1 + hits) / (draws + 1); a draw below ``MIN_SUPPORT_ROWS`` rows is no draw. |z|, not p: a
     strong cohort's p underflows to 0 and would tie with every strong draw. The gate reads it times ``family``, the
-    upload's context cohorts (Bonferroni, as ``p_adjusted``), so the draws run to at least 2 · family / MAX_P_ADJUSTED —
-    the least adjusted p can pass — and stop once ``CONTEXT_STOP_HITS`` draws match the observed shift (Besag & Clifford
-    1991: p = hits / draws; a cohort the dealt layer explains costs a few dozen draws). None without such a condition or
-    with ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope, so a re-check draws the same."""
+    upload's context cohorts (Bonferroni, as ``p_adjusted``), so the draws planned are at least 2 · family /
+    MAX_P_ADJUSTED — the least adjusted p can pass. The draws stop once none left could bring the adjusted p under the
+    gate (every one a miss: (1 + hits) / (draws + left + 1) · family past MAX_P_ADJUSTED), the p then the share so far:
+    a cohort the gate refuses costs what deciding it takes (the second strong draw of forty cohorts, half the planned
+    draws of a scope the deal rarely fills), and one it admits draws them all, its p as the whole run's. None without
+    such a condition or with ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope, so a re-check draws the same."""
     by_column = {layer.column: layer for layer in spatial.context.values()}
     named = [(by_column[a], v) for a, v in conditions if a in by_column]
     if not named or config.context_permutations <= 0:
@@ -541,18 +541,18 @@ def _context_evidence(
     values = data[primary.metric].to_numpy(dtype=float)
     observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary)
     rng = np.random.default_rng(config.eda_random_seed ^ int(stable_hash(expression), 16))
+    planned = max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))
     hits = draws = 0
-    for _ in range(max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))):
-        mask = fixed.copy()
+    for left in range(planned - 1, -1, -1):
+        perm, mask = deal(named[0][0], rng), fixed.copy()  # one deal for every named layer, its parents' totals kept
         for layer, value in named:
-            mask &= dealt_band(layer, rng) == value  # each named layer dealt on its own, its parents' totals kept
+            mask &= dealt_band(layer, perm) == value
         rows = np.flatnonzero(mask)
-        if len(rows) < config.min_support_rows:
-            continue
-        draws += 1
-        hits += _cohort_z(values, rows, spatial, primary) >= observed
-        if hits >= CONTEXT_STOP_HITS:
-            return hits / draws
+        if len(rows) >= config.min_support_rows:
+            draws += 1
+            hits += _cohort_z(values, rows, spatial, primary) >= observed
+        if (1 + hits) * family > config.max_p_adjusted * (draws + left + 1):  # refused whatever the draws left
+            break
     return (1 + hits) / (draws + 1)
 
 

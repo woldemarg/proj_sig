@@ -7,13 +7,14 @@ null per cohort (its ``context_family`` left out: the gate before the family adj
 the false rates and the found rates with Wilson 95 % intervals.
 
     python scripts/crosstype_benchmark.py                                   # X1–X6b: planted 1-20, null 1-100
-    python scripts/crosstype_benchmark.py --scenarios X2 --override CONTEXT_RING=0 --label ring0
-    python scripts/crosstype_benchmark.py --scenarios X3 --override CONTEXT_RING=2 --label ring2
+    python scripts/crosstype_benchmark.py --scenarios X2 --ring 0 --label ring0
+    python scripts/crosstype_benchmark.py --scenarios X3 --ring 2 --label ring2
 
 Scenarios (X, as ``temporal_benchmark`` names its own S1–S7): X1 the layer uniform, the target on the density, nothing
 planted; X2 the target denser (× 1 + c) and ``load`` higher in the cells holding the layer; X3 the same around them (their
 ring, the cell itself excluded); X4 two layers, planted only where both are in the cell's disk; X6 both types on the
-density, independent given it; X6b the same with ``load`` rising with the density (as injuries downtown).
+density, independent given it; X6b the same with ``load`` rising with the density (as injuries downtown); X6c X6b with a
+second layer in the same places (four schools in five again, as shops), the null of a two-layer scope.
 """
 
 from __future__ import annotations
@@ -49,9 +50,9 @@ N_SPARSE = 120  # X3s, X4s: a layer this small leaves most cells unplanted (600 
 LIFT, BETA = 4.0, 1.0  # load +LIFT where planted; the target's intensity × (1 + BETA · the planted count)
 FOUND = 0.5  # share of the planted cells the plant's finders must cover together (geo_benchmark's rule): a finder raises a
 # planted metric and draws at least FOUND of its own cells from the planted ones
-NULL, PLANTED = ("X1", "X6", "X6b"), ("X2", "X3", "X4", "X3s", "X4s")
+NULL, PLANTED = ("X1", "X6", "X6b", "X6c"), ("X2", "X3", "X4", "X3s", "X4s")
 GATES = ("A", "B0", "B")
-SCENARIOS = ("X1", "X2", "X3", "X4", "X3s", "X4s", "X6", "X6b")
+SCENARIOS = ("X1", "X2", "X3", "X4", "X3s", "X4s", "X6", "X6b", "X6c")
 
 
 def density(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -87,7 +88,9 @@ def generate(name: str, seed: int) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     uniform = lambda lat, lon: np.ones_like(lat)  # noqa: E731
     size = N_SPARSE if name.endswith("s") else N_LAYER
-    layers = {"schools": layer_frame(*sample(rng, size, density if name in ("X6", "X6b") else uniform))}
+    layers = {"schools": layer_frame(*sample(rng, size, density if name.startswith("X6") else uniform))}
+    if name == "X6c":  # the same places again: a two-layer scope's null keeps the layers together
+        layers["shops"] = layers["schools"][rng.random(size) < 0.8].reset_index(drop=True)
     if name.startswith("X4"):
         layers = {"schools": layer_frame(*sample(rng, size // 2, uniform)), "shops": layer_frame(*sample(rng, size // 2, uniform))}
     counts = {k: Counter(cells_of(f["lat"].to_numpy(), f["lon"].to_numpy())) for k, f in layers.items()}
@@ -107,7 +110,7 @@ def generate(name: str, seed: int) -> dict[str, Any]:
     planted = lambda cells: np.array([memo.setdefault(c, plant(c)) for c in cells])  # noqa: E731
     lat, lon = sample(rng, N_TARGET, lambda a, b: density(a, b) * (1 + BETA * planted(cells_of(a, b))))
     lift = planted(cells_of(lat, lon)) > 0
-    base = 8 + 4 * density(lat, lon) / 1.2 if name == "X6b" else 10.0  # 1.2: the density at the centre
+    base = 8 + 4 * density(lat, lon) / 1.2 if name in ("X6b", "X6c") else 10.0  # 1.2: the density at the centre
     frame = pd.DataFrame(
         {
             "lat": lat.round(6),
@@ -150,7 +153,7 @@ def cross_rows(insights: list[Insight], covers: dict[str, np.ndarray], cells: np
     return {"insights": rows, "found": bool(planted) and len(reached) >= FOUND * len(planted)}
 
 
-def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool) -> dict[str, Any]:
+def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool, ring: int = 1) -> dict[str, Any]:
     """One upload through the library: both gates' cross-type insights, the search's size, with the layer and (``family``)
     without it."""
     config: Settings = settings(**overrides)
@@ -164,7 +167,7 @@ def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool) -> d
         frame.to_csv(path := folder / f"{layer}.csv", index=False)
         paths.append((layer, path, "lat,lon"))
     t0 = time.perf_counter()
-    loaded = load_dataset(target, cfg, geo=f"lat,lon@{RES}", context=paths)
+    loaded = load_dataset(target, cfg, geo=f"lat,lon@{RES}", context=paths, context_ring=ring)
     row = {"scenario": name, "seed": seed, "cells": len(loaded.frame), "bands": [c for c in loaded.frame if c.startswith("context_")]}
     try:
         result = run_discovery(loaded.frame, cfg, spatial=loaded.spatial)
@@ -240,7 +243,7 @@ def format_summary(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def run_engine(name: str, seed: int, overrides: dict[str, Any], library: dict[str, Any]) -> dict[str, Any]:
+def run_engine(name: str, seed: int, overrides: dict[str, Any], library: dict[str, Any], ring: int = 1) -> dict[str, Any]:
     """The same upload through the graph service (``Engine.upload`` with its layers as context files): the admitted
     patterns' ``p_context`` must equal the library's gate B."""
     from tests.doubles import HashingEmbedder
@@ -256,7 +259,7 @@ def run_engine(name: str, seed: int, overrides: dict[str, Any], library: dict[st
         with (folder / "target.csv").open("rb") as target:
             (record,) = [
                 engine.process(r["batch_id"])
-                for r in engine.upload("target.csv", target, geo=f"lat,lon@{RES}", context=streams, context_geo="lat,lon")
+                for r in engine.upload("target.csv", target, geo=f"lat,lon@{RES}", context=streams, context_geo="lat,lon", context_ring=ring)
             ]
     finally:
         for _, s in streams:
@@ -276,21 +279,24 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--label", default="current")
     parser.add_argument("--override", action="append", default=[], metavar="NAME=VALUE", help="a settings field by its upper-case name")
+    parser.add_argument("--ring", type=int, default=1, help="the layers' disk, the upload's context_ring (0: the cell alone)")
     args = parser.parse_args()
     overrides = parse_overrides(args.override)
     names = args.scenarios.split(",")
     jobs = [(n, s) for n in names for s in parse_seeds(args.null_seeds if n in NULL else args.seeds)]
     first = {n: min(s for m, s in jobs if m == n) for n in names}
     with ProcessPoolExecutor(args.workers) as pool:
-        rows = list(pool.map(run_seed, *zip(*[(n, s, overrides, s < first[n] + args.family_seeds) for n, s in jobs])))
+        rows = list(pool.map(run_seed, *zip(*[(n, s, overrides, s < first[n] + args.family_seeds, args.ring) for n, s in jobs])))
     summary = analyse(rows)
     if args.engine_seeds:
         by = {(r["scenario"], r["seed"]): r for r in rows}
-        summary["engine"] = [run_engine(n, s, overrides, by[(n, s)]) for n in names for s in parse_seeds(args.engine_seeds) if (n, s) in by]
+        summary["engine"] = [
+            run_engine(n, s, overrides, by[(n, s)], args.ring) for n in names for s in parse_seeds(args.engine_seeds) if (n, s) in by
+        ]
     print(format_summary({k: v for k, v in summary.items() if k != "engine"}))
     for e in summary.get("engine", []):
         print(f"engine {e['scenario']} seed {e['seed']}: {e['status']}, p_context identical to the library: {e['identical']}")
-    print(save_result("crosstype_benchmark", args.label, {"summary": summary, "overrides": overrides, "per_upload": rows}))
+    print(save_result("crosstype_benchmark", args.label, {"summary": summary, "overrides": overrides, "ring": args.ring, "per_upload": rows}))
     return 0
 
 

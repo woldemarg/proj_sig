@@ -4,6 +4,7 @@ of a cross-type cohort (docs/02_discovery.md §2.9; docs/extra_funcs/spatial_ana
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 
 import h3
@@ -18,7 +19,7 @@ from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_contracts.wording import column_words, condition_words, source_column
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import NONE_NEARBY, ContextSource, dealt_counts, disk_sums
+from subgroup_miner.context import NONE_NEARBY, ContextSource, deal, disk_sums
 from subgroup_miner.discovery import build_insights, recompute_statistics, run_discovery
 from subgroup_miner.ingestion import IngestionError, dataset_fingerprint, load_dataset
 from subgroup_miner.selection import select_insights
@@ -67,7 +68,7 @@ def test_a_deal_keeps_every_parents_total():
     rng = np.random.default_rng(0)
     _, ctx, _ = build_cells(points_at(cells, 6, load=1.0), "lat,lon", RES, min_cell_points=5, context=[layer_at("x", list(rng.choice(cells, 20)))])
     layer = ctx.context["x"]
-    drawn = dealt_counts(layer, np.random.default_rng(1))
+    drawn = layer.counts[deal(layer, np.random.default_rng(1))]
     assert drawn.sum() == layer.counts.sum() and not np.array_equal(drawn, layer.counts)
     for parent in np.unique(layer.parents):
         assert drawn[layer.parents == parent].sum() == layer.counts[layer.parents == parent].sum()
@@ -79,6 +80,10 @@ def test_the_fingerprint_names_the_layers_whatever_their_order():
     ab = dataset_fingerprint(digest, {}, geo="lat,lon@7", context=["schools:0123456789ab:auto", "shops:ba9876543210:auto"])
     ba = dataset_fingerprint(digest, {}, geo="lat,lon@7", context=["shops:ba9876543210:auto", "schools:0123456789ab:auto"])
     assert plain != ab == ba
+    layers = ["schools:0123456789ab:auto", "shops:ba9876543210:auto"]
+    ring = dataset_fingerprint(digest, {}, geo="lat,lon@7", context=layers, context_ring=0)
+    assert ring != ab == dataset_fingerprint(digest, {}, geo="lat,lon@7", context=layers, context_ring=1)
+    assert ab == "ds-22ba51b5b5c8"  # the default disk keeps the id an upload had before the option
 
 
 def planted(tmp_path, seed: int = 5):
@@ -126,6 +131,23 @@ def test_load_dataset_reads_a_context_file_and_refuses_one_without_points(tmp_pa
     assert err.value.code == "invalid_options"
     with pytest.raises(IngestionError, match="need the geo option"):
         load_dataset(target, MinerConfig(), context=[("schools", context, "auto")])
+
+
+def test_the_disk_radius_is_the_uploads_own_and_names_the_dataset(tmp_path):
+    target, context = planted(tmp_path)
+    layer = [("schools", context, "auto")]
+    disk = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer)
+    cell = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=0)
+    assert disk.dataset_id == load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=1).dataset_id
+    assert cell.dataset_id != disk.dataset_id  # another reading of the same files: another dataset
+    schools = {h3.latlng_to_cell(lat, lon, RES) for lat, lon in pd.read_csv(context)[["lat", "lon"]].itertuples(index=False)}
+    near = {n for s in schools for n in h3.grid_disk(s, 1)}
+    for loaded, counted in ((cell, schools), (disk, near)):  # the cell alone, or the cell and its six neighbours
+        assert set(loaded.spatial.cells[loaded.frame[BAND] != NONE_NEARBY]) == counted & set(loaded.spatial.cells)
+    for bad in (3, -1, "x"):
+        with pytest.raises(IngestionError, match="context_ring") as err:
+            load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=bad)
+        assert err.value.code == "invalid_options"
 
 
 def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_the_same(tmp_path):
@@ -197,6 +219,46 @@ def test_a_shared_density_passes_the_median_test_and_fails_the_dealt_layer(tmp_p
     assert tested <= 1  # the layer dealt within its parent cells explains it
 
 
+def test_the_layers_a_scope_names_are_dealt_together_so_a_layer_given_twice_asks_once(tmp_path):
+    """Dealt each on its own, two layers in the same places would part in every draw: the two-layer scope's draws shrink
+    and weaken, and a shift the layer's arrangement explains reads as a link (the Chicago 'L' stations and liquor
+    stores, spec §14.6). One permutation within the parents for every layer keeps them where they are to each other."""
+    target, context = confounded(tmp_path, 1)  # a shared density: draws as strong as the cohort, p between the extremes
+    config = MinerConfig(context_permutations=99)
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto"), ("shops", context, "auto")])
+
+    def p_context(conditions):
+        fresh = recompute_statistics(loaded.frame, conditions, "the same seed", ["load_median"], loaded.spatial, 1, config, 1)
+        return fresh["spatial"]["p_context"]
+
+    for value in sorted(set(loaded.frame[BAND])):
+        assert p_context([(BAND, value), ("context_shops_band", value)]) == p_context([(BAND, value)])
+
+
+def test_a_refused_cohort_stops_drawing_once_no_draw_left_could_pass_the_gate(tmp_path, monkeypatch):
+    import subgroup_miner.discovery as discovery
+
+    config = MinerConfig(context_permutations=99)
+    target, context = confounded(tmp_path, 0)
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    insights, result = mined(loaded, config)
+    weak = max(cross(insights), key=lambda i: i.provenance["spatial"]["p_context"])
+    assert weak.provenance["spatial"]["p_context"] >= 0.2  # refused at any family
+    deals, band_of = [], discovery.dealt_band
+    monkeypatch.setattr(discovery, "dealt_band", lambda layer, perm: deals.append(1) or band_of(layer, perm))
+
+    def drawn(family):
+        deals.clear()
+        conditions = [(c.attribute, c.value) for c in weak.conditions]
+        fresh = recompute_statistics(loaded.frame, conditions, weak.expression, [weak.target], loaded.spatial, result.n_tests, config, family)
+        return len(deals), fresh["spatial"]["p_context"]
+
+    planned = 40 * 2 * 20  # forty cohorts to adjust over: the draws at which the least p can still pass
+    dealt, p = drawn(40)
+    assert min(1.0, p * 40) > config.max_p_adjusted  # refused, as the whole run would refuse it
+    assert dealt < planned  # stopped once no draw left could bring it under the gate
+
+
 def context_insight(p_context, family=1, **fields):
     spatial = {"resolution": 7, "cells": 40, "moran_i": 0.1, "n_eff": 36.0, "p_adjusted_iid": 1e-6, "p_context": p_context, "context_family": family}
     values = dict(id="P-x", expression=f"{BAND}=='q4'", support=300, sd_score=1.8, sd_raw_score=2.0, emm_score=0.01, volume_utility=0.3)
@@ -266,8 +328,10 @@ def test_context_files_are_refused_before_any_batch_and_leave_with_their_upload(
             post_upload(client, target, *[("s.csv", context)] * 3),
             post_upload(client, target, ("blank.csv", blank)),
             post_upload(client, target, ("s.csv", context), geo=None),
+            post_upload(client, target, ("s.csv", context), context_ring="3"),
+            post_upload(client, target, context_ring="0"),  # a disk without a layer to count over it
         ]
-        assert [r.status_code for r in refused] == [400, 400, 400] and all(r.json()["code"] == "invalid_options" for r in refused)
+        assert [r.status_code for r in refused] == [400] * 5 and all(r.json()["code"] == "invalid_options" for r in refused)
         assert not engine.ws.list_batches() and not list(engine.ws.uploads_dir.glob("*"))  # nothing kept
         accepted = post_upload(client, target, ("schools.csv", context), ("schools.csv", context), table="true")
         records = [wait_batch(client, b, timeout=300) for b in accepted.json()["levels"].values()]
@@ -277,6 +341,18 @@ def test_context_files_are_refused_before_any_batch_and_leave_with_their_upload(
     assert all(p.is_file() for p in kept)
     engine.delete_upload(geo["upload_id"])
     assert not any(p.exists() for p in kept)
+
+
+def test_an_upload_reads_its_layers_on_its_own_disk(engine, tmp_path):
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        sent = [post_upload(client, target, ("schools.csv", context), **ring) for ring in ({}, {"context_ring": "0"})]
+        records = [wait_batch(client, r.json()["batch_id"], timeout=300) for r in sent]
+    layer = [("schools", Path(records[1]["context"][0]["path"]), "auto")]
+    expected = [load_dataset(target, engine.settings.miner, geo=f"lat,lon@{RES}", context=layer, context_ring=r).dataset_id for r in (1, 0)]
+    assert [r.get("context_ring") for r in records] == [1, 0]
+    # each read on its own disk, as a re-check reads it (the cell alone keeps no insight of this disk-wide plant)
+    assert [r["dataset_id"] for r in records] == expected and [r["status"] for r in records] == ["READY", "FAILED"]
 
 
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
@@ -292,3 +368,43 @@ def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypat
         unknown = post_upload(client, target, context_demo="nowhere")
     assert record["status"] == "READY" and [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon")]
     assert unknown.status_code == 400
+
+
+@pytest.mark.browser
+def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_path, monkeypatch):
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    import insight_graph_service.server.app as app_module
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    target, context = planted(tmp_path)
+    (tmp_path / "shops.csv").write_bytes(context.read_bytes())
+    entries = [{"key": k, "file": f"{k}.csv", "title": k, "context_only": True, "options": {"geo": "lat,lon"}} for k in ("schools", "shops")]
+    monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "demo_datasets", lambda: entries)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("document.querySelectorAll('#context-sample option[value]').length >= 2", timeout=20000)
+        page.set_input_files("#file", str(target))
+        page.evaluate("document.querySelector('#geo').closest('details').open = true")
+        page.fill("#geo", f"lat,lon@{RES}")
+        page.select_option("#context-sample", ["schools", "shops"])
+        page.fill("#context-geo", "lat,lon")
+        page.select_option("#context-ring", "0")
+        page.click("#upload-btn")
+        deadline = time.time() + 300
+        while not (done := [b for b in engine.ws.list_batches() if b.get("context") and b["status"] in {"READY", "FAILED"}]):
+            assert time.time() < deadline, "the upload did not finish"
+            time.sleep(0.5)
+    (record,) = done
+    assert [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon"), ("shops", "lat,lon")] and record["context_ring"] == 0
+    assert not errors, errors
