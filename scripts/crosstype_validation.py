@@ -76,6 +76,9 @@ CASES = {  # name -> the target's and the hold-out's file, the layers, the geo o
         "outcomes": ("share_crime_robbery", "share_crime_assault"),
     },
     "R2": {"target": "crimes_2025", "holdout": "crimes_2024", "layers": ("l_stations",), "geo": "lat,lon@9", "outcomes": ("share_crime_robbery",)},
+    # the second round (§8.2b): the literature states frequencies — violent crimes alone, so points is their count
+    "R1c": {"target": "violent_2025", "holdout": "violent_2024", "layers": ("bars", "liquor_stores"), "geo": "lat,lon@9", "outcomes": ("points",)},
+    "R2c": {"target": "violent_2025", "holdout": "violent_2024", "layers": ("l_stations",), "geo": "lat,lon@9", "outcomes": ("points",)},
     "R3": {"target": "crashes_first", "holdout": "crashes_second", "layers": ("schools",), "geo": "lat,lon@8", "outcomes": ()},
 }
 
@@ -105,18 +108,23 @@ def crimes(raw: Path) -> pd.DataFrame:
     return out
 
 
+def points(frame: pd.DataFrame) -> pd.DataFrame:
+    """The distinct places of a portal table's latitude and longitude."""
+    return frame.assign(lat=pd.to_numeric(frame["latitude"]).round(6), lon=pd.to_numeric(frame["longitude"]).round(6))[
+        ["lat", "lon"]
+    ].drop_duplicates()
+
+
 def layers(offline: bool) -> dict[str, pd.DataFrame]:
     """The context layers by name, one row per place (a business's several licences, a station's platforms: once)."""
     lic = pd.read_csv(fetch("liquor_licenses.csv", offline), dtype=str)
-    points = lambda d: d.assign(lat=pd.to_numeric(d["latitude"]).round(6), lon=pd.to_numeric(d["longitude"]).round(6))[
-        ["lat", "lon"]
-    ].drop_duplicates()  # noqa: E731
     stops = pd.DataFrame(json.loads(fetch("l_stops.json", offline).read_text(encoding="utf-8"))).drop_duplicates("map_id")
-    lonlat = stops["location"].map(lambda p: p["coordinates"])
     return {
         "bars": points(lic[lic["license_description"].isin(ON_PREMISE)]),
         "liquor_stores": points(lic[lic["license_description"] == "Package Goods"]),
-        "l_stations": pd.DataFrame({"lat": lonlat.map(lambda c: round(float(c[1]), 6)), "lon": lonlat.map(lambda c: round(float(c[0]), 6))}),
+        "l_stations": pd.DataFrame({k: stops["location"].map(lambda p, k=k: round(float(p[f"{k}itude"]), 6)) for k in ("lat", "long")}).rename(
+            columns={"long": "lon"}
+        ),  # the portal's point: {latitude, longitude}
         "schools": pd.read_csv(DEMO_DIR / "chicago_schools.csv")[["lat", "lon"]],
     }
 
@@ -126,6 +134,7 @@ def tables(offline: bool) -> dict[str, pd.DataFrame]:
     crashes = pd.read_csv(DEMO_DIR / "chicago_crashes.csv")
     first = pd.to_datetime(crashes["crash_date"]) < pd.Timestamp("2024-04-01")
     out = {f"crimes_{y}": crimes(fetch(f"crimes_{y}.csv", offline)) for y in (2024, 2025)}
+    out |= {f"violent_{y}": out[f"crimes_{y}"].query("crime in ('robbery', 'assault')") for y in (2024, 2025)}
     return out | {"crashes_first": crashes[first].drop(columns="crash_date"), "crashes_second": crashes[~first].drop(columns="crash_date")}
 
 
@@ -209,7 +218,7 @@ def run_case(name: str, case: dict[str, Any], files: dict[str, Path], cfg_all) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--cases", default=",".join(CASES))
+    parser.add_argument("--cases", default="R1,R2,R3")  # the first round; R1c,R2c the second (§8.2b)
     parser.add_argument("--offline", action="store_true", help="read the copies already downloaded")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
