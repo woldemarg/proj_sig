@@ -363,3 +363,27 @@ def test_empty_graph_answer(tmp_path):
 
     qa = ask(make_engine(make_config(tmp_path / "empty")), "anything?")
     assert qa.answer_mode == "empty" and qa.metrics["error"] == "empty_graph"
+
+
+def test_crosstype_benchmark_apparatus():
+    import h3
+    import numpy as np
+    import pandas as pd
+    from crosstype_benchmark import BOX, PLANTED, RES, SCENARIOS, generate
+    from perf_benchmark import CALIFORNIA, EPOCH
+
+    lat0, lon0, dlat, dlon = BOX
+    assert CALIFORNIA[0] <= lat0 and lat0 + dlat <= CALIFORNIA[2] and CALIFORNIA[1] <= lon0 and lon0 + dlon <= CALIFORNIA[3]
+    for name in SCENARIOS:
+        upload = generate(name, 1)
+        assert upload["frame"].equals(generate(name, 1)["frame"]), name  # the same seed writes the same file
+        for frame in (upload["frame"], *upload["layers"].values()):  # one territory, one epoch
+            assert frame["lat"].between(lat0, lat0 + dlat).all() and frame["lon"].between(lon0, lon0 + dlon).all(), name
+        assert (pd.to_datetime(upload["frame"]["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
+        assert bool(upload["planted"]) == (name in PLANTED), name  # a null plants nothing
+    x2 = generate("X2", 1)
+    schools = {h3.latlng_to_cell(a, b, RES) for a, b in zip(x2["layers"]["schools"]["lat"], x2["layers"]["schools"]["lon"])}
+    assert set(x2["planted"]) == schools  # X2 plants in the cells holding the layer
+    frame = x2["frame"]
+    inside = np.array([h3.latlng_to_cell(a, b, RES) in schools for a, b in zip(frame["lat"], frame["lon"])])
+    assert frame.loc[inside, "load"].median() > frame.loc[~inside, "load"].median() + 3  # load +4 there

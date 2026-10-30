@@ -34,7 +34,20 @@ sys.path[:0] = [str(ROOT), str(Path(__file__).parent)]
 from insight_graph_service.core.demo import DEMO_DIR, generate_retail_dataset  # noqa: E402
 
 RAW = ROOT / "data" / "raw"
-MODULES = ("sf_fire_calls", "chicago_crashes", "nyc_collisions", "us_accidents", "uk_road_safety", "us_wildfires")
+MODULES = (
+    "sf_fire_calls",
+    "chicago_crashes",
+    "chicago_schools",
+    "chicago_crimes",
+    "chicago_crimes_2024",
+    "chicago_bars",
+    "chicago_liquor_stores",
+    "chicago_l_stations",
+    "nyc_collisions",
+    "us_accidents",
+    "uk_road_safety",
+    "us_wildfires",
+)
 SF_FIRE = {"calibration": "2017-01 … 2019-06", "holdout_a": "2019-07 … 2020-02", "holdout_b": "2020-03 … 2020-08"}
 PDDL = "Open Data Commons Public Domain Dedication and License (PDDL) 1.0"
 SHIPPED: list[dict[str, Any]] = [  # the list's head, in order; then the modules' (each module's META)
@@ -115,7 +128,7 @@ def build(offline: bool) -> list[dict[str, Any]]:
             if not offline and not (folder / name).is_file():
                 fetch(module.URLS[name], folder, [name])
             if (got := sha256(folder / name)) != digest:
-                raise SystemExit(f"{key}: {name} sha256 {got}, pinned {digest}: the Kaggle copy changed")
+                raise SystemExit(f"{key}: {name} sha256 {got}, pinned {digest}: the source copy changed")
         write(module.prepare(folder), DEMO_DIR / f"{key}.csv")
         entries.append({"key": key, **module.META})
     return entries

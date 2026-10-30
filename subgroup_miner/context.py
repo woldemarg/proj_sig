@@ -61,9 +61,7 @@ def context_layer(source: ContextSource, target_cells: np.ndarray, resolution: i
     codes = np.unique([parent(c) for c in cells], return_inverse=True)[1]
     ptr = np.cumsum([0, *map(len, disks)])
     idx = np.array([pos[c] for disk in disks for c in disk], dtype=np.int64)
-    layer = ContextLayer(source.name, counts, codes, ptr, idx, np.zeros(0))
-    layer.edges = fit_edges(disk_sums(layer))
-    return layer
+    return ContextLayer(source.name, counts, codes, ptr, idx, fit_edges(np.add.reduceat(counts[idx], ptr[:-1])))
 
 
 def disk_sums(layer: ContextLayer, counts: np.ndarray | None = None) -> np.ndarray:
