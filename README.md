@@ -152,6 +152,7 @@ curl -F file=@data\demo\california_housing.csv -F geo=auto@5 -F bins=median_inco
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true http://127.0.0.1:8765/api/upload   # one dataset per level
 curl -F file=@data\demo\california_housing.csv -F geo=auto@7,5 -F table=true -F bins=median_income_median:4,median_income:4 http://127.0.0.1:8765/api/upload   # the same file again adds its table level: the geo levels are SKIPPED
 curl -F file=@<new version>.csv -F geo=auto@7,5 -F supersedes=<upload id of the old> http://127.0.0.1:8765/api/upload   # a new version replaces the old
+curl -F file=@crashes.csv -F geo=lat,lon@auto -F context=@schools.csv http://127.0.0.1:8765/api/upload   # another type of points as a condition of the cells
 curl -F file=@data\orders.csv -F "glossary=<glossary.json" -F metadata=@columns.md http://127.0.0.1:8765/api/upload   # the columns in the uploader's words
 curl -X PATCH -H "Content-Type: application/json" -d "{\"source\": \"Field reports\", \"reliability\": \"B\"}" http://127.0.0.1:8765/api/datasets/<dataset id>   # declare later: also indicators, glossary, metadata
 curl http://127.0.0.1:8765/api/batches                                             # status of every batch

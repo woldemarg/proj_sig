@@ -5,17 +5,20 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Collection
-from typing import Any
+from collections.abc import Collection, Sequence
+from pathlib import Path
+from typing import Any, BinaryIO
 
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
-from insight_graph_service.core.workspace import TERMINAL
+from insight_graph_service.core.workspace import TERMINAL, Workspace
+from subgroup_miner.ingestion import IngestionError, read_context
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 GLOSSARY_VALUE_MAX = 120  # characters of one declared glossary value
 METADATA_DOC_MAX_BYTES = 64 * 1024  # a metadata document as uploaded
+MAX_CONTEXT_LAYERS = 2  # context files of one upload: one forced band each (docs/02_discovery.md §2.9); more would crowd the search
 _FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):\s*(.*)$")  # "Key: value" (a key of at most 41 characters)
 
 
@@ -217,3 +220,41 @@ def targets(record: dict[str, Any], batches: list[dict[str, Any]], own: set[str 
     if any(b["status"] not in TERMINAL for b in theirs):
         raise PipelineError("busy", f"supersedes {target}: a batch of it is still to run")
     return ids, theirs
+
+
+def layer_name(filename: str, taken: Collection[str]) -> str:
+    """A context file's layer name: its stem as an identifier (``[a-z][a-z0-9_]``, at most 40 characters, the column
+    ``context_<name>_band``), unique within the upload (``schools``, ``schools_2``)."""
+    base = re.sub(r"[^0-9a-z]+", "_", Path(filename).stem.lower()).strip("_")[:40] or "layer"
+    base = base if base[0].isalpha() else f"layer_{base}"
+    name, i = base, 2
+    while name in taken:
+        name, i = f"{base}_{i}", i + 1
+    return name
+
+
+def save_context(ws: Workspace, files: Sequence[tuple[str, BinaryIO]], locator: str, max_bytes: int) -> list[dict[str, str]]:
+    """An upload's context files (docs/02_discovery.md §2.9), each stored (``MAX_UPLOAD_MB`` apiece), named
+    (``layer_name``) and its points located once: ``{name, path, geo}`` per layer, as the geo levels' records keep them.
+    More than ``MAX_CONTEXT_LAYERS`` files, or a file without a point, refuses them all and keeps none."""
+    if len(files) > MAX_CONTEXT_LAYERS:
+        raise PipelineError("invalid_options", f"at most {MAX_CONTEXT_LAYERS} context files, got {len(files)}")
+    layers: list[dict[str, str]] = []
+    try:
+        for filename, stream in files:
+            name = layer_name(filename, [layer["name"] for layer in layers])
+            layers.append({"name": name, "path": str(ws.save_upload(filename, stream, max_bytes)), "geo": locator})
+            read_context(name, Path(layers[-1]["path"]), locator)
+    except IngestionError as exc:  # no point, an unreadable file
+        discard_context(layers)
+        raise PipelineError(exc.code, str(exc)) from exc
+    except Exception:  # too large, or the workspace gone meanwhile
+        discard_context(layers)
+        raise
+    return layers
+
+
+def discard_context(layers: Sequence[dict[str, str]]) -> None:
+    """Remove the stored files of an upload's context layers (a refused upload keeps none)."""
+    for layer in layers:
+        Path(layer["path"]).unlink(missing_ok=True)

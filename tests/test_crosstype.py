@@ -4,16 +4,19 @@ of a cross-type cohort (docs/02_discovery.md §2.9; docs/extra_funcs/spatial_ana
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import toy_insight
+from conftest import toy_insight, wait_batch
+from fastapi.testclient import TestClient
 
 from insight_contracts import Condition, Shift, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_contracts.wording import column_words, condition_words, source_column
+from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY, ContextSource, dealt_counts, disk_sums
 from subgroup_miner.discovery import build_insights, recompute_statistics, run_discovery
@@ -224,3 +227,61 @@ def test_context_conditions_read_in_plain_ukrainian_and_hold_no_bare_literal():
     assert "сусідніх" in column_words(BAND, {}, True)
     assert source_column(BAND, {"schools", "lat"}) is None  # a declared column named like the layer is not its source
     assert " " in NONE_NEARBY  # two words: a bare word would ground onto unrelated question words (question._values)
+
+
+def post_upload(client, target, *layers, geo=f"lat,lon@{RES}", **data):
+    """``POST /api/upload`` of ``target`` with ``layers`` as context files (each ``(filename, path)``)."""
+    files = [("file", ("target.csv", target.read_bytes(), "text/csv")), *(("context", (n, p.read_bytes(), "text/csv")) for n, p in layers)]
+    return client.post("/api/upload", files=files, data={**({"geo": geo} if geo else {}), **data})
+
+
+def test_an_upload_with_a_context_file_mines_its_band_and_verifies(engine, tmp_path):
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        accepted = post_upload(client, target, ("Chicago Schools.csv", context))
+        assert accepted.status_code == 202, accepted.text
+        record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
+    assert record["status"] == "READY" and [(c["name"], c["geo"]) for c in record["context"]] == [("chicago_schools", "auto")]
+    column = "context_chicago_schools_band"
+    scoped = [p for p in engine.ws.patterns() if any(c["attribute"] == column for c in p["conditions"])]
+    assert scoped and all("p_context" in p["provenance"]["spatial"] for p in scoped)
+    assert engine.verify_pattern(scoped[0]["id"])["status"] == "reproduced"  # both files read again, p_context drawn the same
+    Path(record["context"][0]["path"]).unlink()
+    assert engine.verify_pattern(scoped[0]["id"])["status"] == "source_missing"
+
+
+def test_context_files_are_refused_before_any_batch_and_leave_with_their_upload(engine, tmp_path):
+    target, context = planted(tmp_path)
+    blank = tmp_path / "blank.csv"
+    pd.DataFrame({"name": ["a", "b"], "size": [1, 2]}).to_csv(blank, index=False)
+    with TestClient(create_app(engine)) as client:
+        refused = [
+            post_upload(client, target, *[("s.csv", context)] * 3),
+            post_upload(client, target, ("blank.csv", blank)),
+            post_upload(client, target, ("s.csv", context), geo=None),
+        ]
+        assert [r.status_code for r in refused] == [400, 400, 400] and all(r.json()["code"] == "invalid_options" for r in refused)
+        assert not engine.ws.list_batches() and not list(engine.ws.uploads_dir.glob("*"))  # nothing kept
+        accepted = post_upload(client, target, ("schools.csv", context), ("schools.csv", context), table="true")
+        records = [wait_batch(client, b, timeout=300) for b in accepted.json()["levels"].values()]
+    geo, table = (next(r for r in records if r["level"] == level) for level in (str(RES), "table"))
+    assert [c["name"] for c in geo["context"]] == ["schools", "schools_2"] and "context" not in table  # a table level has no cells
+    kept = [Path(c["path"]) for c in geo["context"]]
+    assert all(p.is_file() for p in kept)
+    engine.delete_upload(geo["upload_id"])
+    assert not any(p.exists() for p in kept)
+
+
+def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
+    import insight_graph_service.server.app as app_module
+
+    target, context = planted(tmp_path)
+    entry = {"key": "schools", "file": context.name, "context_only": True, "options": {"geo": "lat,lon"}}
+    monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "demo_datasets", lambda: [entry])
+    with TestClient(create_app(engine)) as client:
+        accepted = post_upload(client, target, context_demo="schools", context_geo="lat,lon")
+        record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
+        unknown = post_upload(client, target, context_demo="nowhere")
+    assert record["status"] == "READY" and [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon")]
+    assert unknown.status_code == 400

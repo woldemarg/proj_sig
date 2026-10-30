@@ -13,7 +13,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -209,6 +209,9 @@ def create_app(engine: Engine) -> FastAPI:
         time: str = Form(""),
         grid: str = Form(""),
         tz: str = Form(""),
+        context: list[UploadFile] | None = File(None),
+        context_geo: str = Form(""),
+        context_demo: list[str] | None = Form(None),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -228,12 +231,18 @@ def create_app(engine: Engine) -> FastAPI:
             "time": time.strip() or None,
             "grid": grid.strip() or None,
             "tz": tz.strip() or None,
+            "context_geo": context_geo.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
-        if shipped:
-            with (DEMO_DIR / shipped["file"]).open("rb") as stream:
-                return accept(shipped["file"], stream, *parsed, **options)
-        return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
+        layers = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
+        if unknown := [k for k in context_demo or [] if k not in layers]:
+            raise HTTPException(400, f"no shipped dataset {unknown}")
+        with ExitStack() as files:  # every file read is closed once the upload is stored
+            options["context"] = [(Path(f.filename or "context.csv").name, f.file) for f in context or []]
+            options["context"] += [(layers[k]["file"], files.enter_context((DEMO_DIR / layers[k]["file"]).open("rb"))) for k in context_demo or []]
+            if shipped:
+                return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
+            return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:

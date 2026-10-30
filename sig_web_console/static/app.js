@@ -306,7 +306,9 @@ function init() {
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
-    $("sample").insertAdjacentHTML("beforeend", list.map((d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`).join(""));
+    const item = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
+    $("sample").insertAdjacentHTML("beforeend", list.filter((d) => !d.context_only).map(item).join(""));  // a layer alone mines nothing
+    $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(item).join(""));
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];

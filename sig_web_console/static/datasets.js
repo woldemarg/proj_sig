@@ -149,6 +149,8 @@ async function upload() {
   if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
   fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
   if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
+  for (const c of $("context").files) fd.append("context", c);  // another type of points: one band of the cells each
+  if ($("context-sample").value) fd.append("context_demo", $("context-sample").value);
   if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
@@ -158,7 +160,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").value = ""; $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
