@@ -84,7 +84,8 @@ def main() -> int:
     args = parser.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
     files = {k: DEMO_DIR / f"chicago_{k}.csv" for k in ("bars", "liquor_stores", "l_stations", "schools")}
-    tables = {key: pd.read_csv(DEMO_DIR / f"{key}.csv").drop(columns=when) for key, when, _, _ in TARGETS.values()}
+    # the tables §14.6 measured: the crimes without the district added later for the console's defaults
+    tables = {key: pd.read_csv(DEMO_DIR / f"{key}.csv").drop(columns=[when, "district"], errors="ignore") for key, when, _, _ in TARGETS.values()}
     for key, frame in tables.items():
         files[key.removeprefix("chicago_")] = WORK / f"{key}.csv"
         frame.to_csv(files[key.removeprefix("chicago_")], index=False)

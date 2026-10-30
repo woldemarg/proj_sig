@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import hashlib
 
+import pandas as pd
 from conftest import wait_batch
 from fastapi.testclient import TestClient
 
@@ -42,3 +43,28 @@ def test_a_shipped_dataset_uploads_by_its_key_with_the_forms_options(engine):
             both = client.post("/api/upload", files={"file": ("x.csv", f, "text/csv")}, data={"demo": "retail_synthetic"})
         neither, unknown = client.post("/api/upload", data={"bins": ""}), client.post("/api/upload", data={"demo": "../etc"})
     assert both.status_code == neither.status_code == unknown.status_code == 400
+
+
+def test_a_shipped_point_table_without_a_number_of_its_own_asks_for_no_table_level():
+    """The form ticks the base table level unless the manifest says ``"table": false``; a table of events whose only
+    numbers are its coordinates (the Chicago crimes) has nothing to measure without cells (``no_numeric_targets``)."""
+    for d in demo_datasets():
+        options = d["options"]
+        if d.get("context_only") or not options.get("geo") or options.get("table") is False:
+            continue
+        locator = options["geo"].partition("@")[0].split(",")
+        frame = pd.read_csv(DEMO_DIR / d["file"], nrows=2000)
+        assert [c for c in frame.select_dtypes("number") if c not in locator], d["key"]
+
+
+def test_the_shipped_crimes_mine_with_the_forms_defaults(engine):
+    """Picked from the list and sent as the form fills it — its manifest options, nothing else set — the crimes give a
+    READY level: the police district describes the place, so the cells have a dimension of their own."""
+    entry = next(d for d in demo_datasets() if d["key"] == "chicago_crimes")
+    form = {k: str(v) for k, v in entry["options"].items() if k != "table"} | {"grid": "auto"}
+    with TestClient(create_app(engine)) as client:
+        accepted = client.post("/api/upload", data={"demo": "chicago_crimes", **form})
+        assert accepted.status_code == 202, accepted.text
+        records = [wait_batch(client, b, timeout=600) for b in accepted.json()["levels"].values()]
+    assert [r["level"] for r in records if r["status"] == "READY"]  # at least one level mined
+    assert all(r["level"] != "table" for r in records)  # no table level asked for

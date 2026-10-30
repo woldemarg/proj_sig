@@ -60,15 +60,16 @@ CASES = {  # name -> the target's and the hold-out's table, the layers, the geo 
 
 
 def crimes(year: int, full: bool) -> pd.DataFrame:
-    """A year of crimes without its time column: the shipped sixth, or (``full``) every crime of the pinned export."""
+    """A year of crimes without its time column and its district (the tables the cases were pre-registered on, §8.2a: the
+    district came later, for the console's defaults): the shipped sixth, or (``full``) every crime of the pinned export."""
     key = CRIMES[year]
     if not full:
-        return pd.read_csv(DEMO_DIR / f"{key}.csv").drop(columns="crime_date")
+        return pd.read_csv(DEMO_DIR / f"{key}.csv").drop(columns=["crime_date", "district"])
     module, folder = importlib.import_module(f"demo_data.{key}"), demo_datasets.RAW / key
     for name, url in module.URLS.items():
         if not (folder / name).is_file():
             demo_datasets.fetch(url, folder, [name])
-    return chicago_crimes.prepare(folder, year=year, thin=1).drop(columns="crime_date")
+    return chicago_crimes.prepare(folder, year=year, thin=1).drop(columns=["crime_date", "district"])
 
 
 def tables(full: bool) -> dict[str, pd.DataFrame]:

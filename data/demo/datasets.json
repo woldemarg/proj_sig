@@ -165,7 +165,7 @@
  {
   "key": "chicago_crimes",
   "title": "Злочини в Чикаго, 2025",
-  "description": "Зареєстровані поліцією злочини 2025 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година. Ціль крос-типової перевірки: з контекстним шаром барів, магазинів алкоголю чи станцій 'L'.",
+  "description": "Зареєстровані поліцією злочини 2025 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година, поліцейський округ. Ціль крос-типової перевірки: з контекстним шаром барів, магазинів алкоголю чи станцій 'L'.",
   "license": "City of Chicago Data Portal Terms of Use",
   "source": "City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)",
   "attribution": "City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.",
@@ -173,12 +173,13 @@
   "options": {
    "time": "crime_date",
    "geo": "lat,lon@auto",
+   "table": false,
    "source": "City of Chicago, Crimes"
   },
   "file": "chicago_crimes.csv",
   "rows": 39192,
-  "bytes": 2733341,
-  "sha256": "f688f2242bfb0eb7e11ecc76024fa5a8d607be9792897de6c2ada1dcb9071dad",
+  "bytes": 3185247,
+  "sha256": "6eb397a24529411a752f1d3d1dc61b2e7a64c837c2bae8a582f5bfb956c20ac9",
   "span": [
    "2025-01-01",
    "2025-12-31"
@@ -187,7 +188,7 @@
  {
   "key": "chicago_crimes_2024",
   "title": "Злочини в Чикаго, 2024",
-  "description": "Зареєстровані поліцією злочини 2024 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година. Відкладений рік крос-типової перевірки (знахідки 2025 перевіряються на ньому).",
+  "description": "Зареєстровані поліцією злочини 2024 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година, поліцейський округ. Відкладений рік крос-типової перевірки (знахідки 2025 перевіряються на ньому).",
   "license": "City of Chicago Data Portal Terms of Use",
   "source": "City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)",
   "attribution": "City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.",
@@ -195,12 +196,13 @@
   "options": {
    "time": "crime_date",
    "geo": "lat,lon@auto",
+   "table": false,
    "source": "City of Chicago, Crimes"
   },
   "file": "chicago_crimes_2024.csv",
   "rows": 43038,
-  "bytes": 3003994,
-  "sha256": "8cfe72c634dae53e1f63a79952d01360be77ac95d7e85e240950cf7591f06fe9",
+  "bytes": 3500556,
+  "sha256": "897abf0906010e29ceefe7201f140a0cc360aef0271efe5e1b0a49c995842e14",
   "span": [
    "2024-01-01",
    "2024-12-31"
