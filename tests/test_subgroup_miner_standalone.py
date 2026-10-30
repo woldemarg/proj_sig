@@ -18,7 +18,7 @@ def test_a_table_becomes_insights_and_llm_context(demo_csv):
     assert context.isascii()
     lead = next(i for i in insights if i.p_value is not None)  # recomputed from the table and its rows alone
     conditions = [(c.attribute, c.value) for c in lead.conditions]
-    again = recompute_statistics(table.frame, conditions, lead.expression, [s.metric for s in lead.shifts], None, found.n_tests)
+    again = recompute_statistics(table.frame, conditions, lead.expression, [s.metric for s in lead.shifts], None, found.n_tests, config)
     assert list(again["rows"]) == sorted(covers_of(found)[lead.expression]) and list(again["expression_rows"]) == list(again["rows"])
     assert again["support"] == lead.support and again["p_value"] == lead.p_value and again["p_adjusted"] == lead.p_adjusted
     assert selector_conditions("kind=='Bed AND Breakfast' AND city=='x'") == [("kind", "Bed AND Breakfast"), ("city", "x")]

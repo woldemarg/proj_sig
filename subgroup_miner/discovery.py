@@ -569,14 +569,13 @@ def recompute_statistics(
     metrics: list[str],
     spatial: SpatialContext | None,
     n_tests: int,
-    config: MinerConfig | None = None,
+    config: MinerConfig,
     context_family: int = 1,
 ) -> dict[str, Any]:
     """One insight's rows and numbers again from its table: the rows its ``conditions`` select (and those its EDA
     ``expression`` selects), the support, each of ``metrics``' shift (the first is the primary), the primary's median
     test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance (its
-    ``p_context`` drawn again under ``config``, the defaults when none, over the record's ``context_family``). Not
-    recomputed: ``NOT_RECOMPUTED``."""
+    ``p_context`` drawn again under ``config`` over the record's ``context_family``). Not recomputed: ``NOT_RECOMPUTED``."""
     profile = eda.step1_profile_data(frame)
     data = profile["data_safe"]
     rows = cohort_rows(data, conditions)
@@ -593,7 +592,7 @@ def recompute_statistics(
     p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
     out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
-        p_context = _context_evidence(data, conditions, expression, primary, spatial, config or MinerConfig(), context_family)
+        p_context = _context_evidence(data, conditions, expression, primary, spatial, config, context_family)
         out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context, context_family)
     return out
 
