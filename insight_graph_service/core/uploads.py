@@ -1,18 +1,24 @@
-"""One upload (docs/02_discovery.md §2.9, docs/06_graph_and_storage.md §6.8): the levels it makes and the version it
-replaces. Functions of the options, the batch registry and one record; the engine applies what they decide."""
+"""One upload (docs/02_discovery.md §2.9, docs/06_graph_and_storage.md §6.8): the levels it makes, the version it
+replaces, a layer kept for a cross-type run and the run of two stored uploads. Functions of the options, the batch
+registry and one record; the engine applies what they decide."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Collection, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, BinaryIO
 
+import numpy as np
+
+from insight_contracts import Insight, Rejection
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
-from insight_graph_service.core.workspace import TERMINAL, Workspace
-from subgroup_miner.ingestion import IngestionError, read_context
+from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
+from subgroup_miner.ingestion import IngestionError, parse_ring, read_context
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
@@ -21,6 +27,7 @@ METADATA_DOC_MAX_BYTES = 64 * 1024  # a metadata document as uploaded
 # context files of one upload, one forced band each (docs/02_discovery.md §2.9): a third multiplies the Bonferroni family,
 # fills the validation budget with context cohorts and, on a wide table, empties the 3-conjunctions (spec §14.6)
 MAX_CONTEXT_LAYERS = 2
+TRUST_FIELDS = ("source", "reliability", "indicators", "user_glossary", "metadata_doc")  # what a cross-type run keeps of its target
 _FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):\s*(.*)$")  # "Key: value" (a key of at most 41 characters)
 
 
@@ -235,15 +242,15 @@ def layer_name(filename: str, taken: Collection[str]) -> str:
     return name
 
 
-def save_context(ws: Workspace, files: Sequence[tuple[str, BinaryIO]], locator: str, max_bytes: int) -> list[dict[str, str]]:
-    """An upload's context files (docs/02_discovery.md §2.9), each stored (``MAX_UPLOAD_MB`` apiece), named
-    (``layer_name``) and its points located once: ``{name, path, geo}`` per layer, as the geo levels' records keep them.
-    More than ``MAX_CONTEXT_LAYERS`` files, or a file without a point, refuses them all and keeps none."""
+def save_context(ws: Workspace, files: Sequence[tuple[str, BinaryIO, str]], max_bytes: int) -> list[dict[str, str]]:
+    """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator)`` each —, each stored (``MAX_UPLOAD_MB``
+    apiece), named (``layer_name``) and its points located once: ``{name, path, geo}`` per layer, as the geo levels'
+    records keep them. More than ``MAX_CONTEXT_LAYERS`` files, or a file without a point, refuses them all and keeps none."""
     if len(files) > MAX_CONTEXT_LAYERS:
         raise PipelineError("invalid_options", f"at most {MAX_CONTEXT_LAYERS} context files, got {len(files)}")
     layers: list[dict[str, str]] = []
     try:
-        for filename, stream in files:
+        for filename, stream, locator in files:
             name = layer_name(filename, [layer["name"] for layer in layers])
             layers.append({"name": name, "path": str(ws.save_upload(filename, stream, max_bytes)), "geo": locator})
             read_context(name, Path(layers[-1]["path"]), locator)
@@ -260,3 +267,121 @@ def discard_context(layers: Sequence[dict[str, str]]) -> None:
     """Remove the stored files of an upload's context layers (a refused upload keeps none)."""
     for layer in layers:
         Path(layer["path"]).unlink(missing_ok=True)
+
+
+def upload_id(path: Path) -> str:
+    """An upload's id: ``up-`` and the first twelve hex digits of its stored bytes' SHA-256 (the same bytes, one upload)."""
+    with path.open("rb") as stored:
+        return "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
+
+
+def resolution(record: dict[str, Any]) -> int | None:
+    """The H3 resolution a batch reads its points at (``<locator>@<r>``); None for a table, a plain file or a layer."""
+    res = (record.get("geo") or "").partition("@")[2]
+    return int(res) if res.isdigit() else None
+
+
+def store_layer(ws: Workspace, name: str, stream: BinaryIO, geo: str | None, max_bytes: int, others: Sequence[str] = ()) -> dict[str, Any]:
+    """A file kept as another type's points only (the upload's ``layer`` flag): stored, its points located once, one
+    ``LAYER`` record of its own upload — never mined, never in the graph; a cross-type run reads it as a context layer
+    (``cross_runs``). ``others``: the mining options sent with it, refused. A file without a point is not kept."""
+    locator = (geo or "").partition("@")[0].strip()
+    if not locator:
+        raise PipelineError("invalid_options", "a layer needs the geo option: the columns of its points")
+    if others:
+        raise PipelineError("invalid_options", f"a layer is not mined: {', '.join(others)} do not apply")
+    path = ws.save_upload(name, stream, max_bytes)
+    try:
+        points = read_context(layer_name(name, ()), path, locator)[0]
+    except IngestionError as exc:
+        path.unlink(missing_ok=True)
+        raise PipelineError(exc.code, str(exc)) from exc
+    created = utc_now()
+    record = {
+        "batch_id": new_batch_id(created),
+        "dataset_id": None,
+        "filename": name,
+        "source_path": str(path),
+        "upload_id": upload_id(path),
+        "level": "layer",
+        "geo": locator,
+        "points": int((np.isfinite(points.lat) & np.isfinite(points.lon)).sum()),
+        "status": "LAYER",
+        "stage_times": {"LAYER": created},
+        "created_at": created,
+        "metrics": {},
+        "profile": {},
+        "warnings": [],
+        "error": None,
+    }
+    ws.save_batch(record)
+    return record
+
+
+def cross_runs(
+    ws: Workspace,
+    batches: Sequence[dict[str, Any]],
+    target: str,
+    layers: Sequence[str],
+    levels: Sequence[int | str] | None,
+    ring: int | str | None,
+    max_bytes: int,
+) -> list[dict[str, Any]]:
+    """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
+    file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
+    their stored files, so deleting a layer's own upload leaves the run whole. The levels: ``levels`` when given (each one
+    of the target's), otherwise the target's finest and every level each mined layer was read at too (a layer is counted
+    from its points on the target's grid, so its levels only say where it was looked at). One ``Engine.submit`` keyword
+    set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads."""
+    if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
+        raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
+    try:
+        ring = parse_ring(ring)
+        chosen = {int(x) for x in levels or ()}
+    except (IngestionError, ValueError) as exc:
+        raise PipelineError("invalid_options", f"cross-type run: {exc}") from exc
+    own: dict[int, dict[str, Any]] = {}
+    for b in sorted(batches, key=lambda b: b["created_at"]):  # per level its latest reading, a run's own batches aside
+        if b.get("upload_id") == target and resolution(b) is not None and "cross" not in b:
+            own[resolution(b)] = b
+    if not own:
+        raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
+    sources, read_at = [], []
+    for upload in layers:
+        theirs = [b for b in batches if b.get("upload_id") == upload]
+        stored = max(theirs, key=lambda b: b["created_at"], default=None)
+        if stored is None or not Path(stored["source_path"]).is_file() or not (stored.get("geo") or stored.get("locator")):
+            raise PipelineError("invalid_options", f"{upload}: no stored upload with points")
+        sources.append((stored["filename"], Path(stored["source_path"]), (stored.get("geo") or stored["locator"]).partition("@")[0]))
+        read_at += [{resolution(b) for b in theirs} - {None}] if stored["status"] != "LAYER" else []
+    if missing := sorted(chosen - set(own)):
+        raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
+    if not chosen:  # the target's finest, and the levels every mined layer was read at too
+        chosen = {max(own)}.union(set(own).intersection(*read_at) if read_at else ())
+    with ExitStack() as files:
+        context = save_context(ws, [(name, files.enter_context(path.open("rb")), locator) for name, path, locator in sources], max_bytes)
+    runs = []
+    for b in (own[r] for r in sorted(chosen, reverse=True)):
+        options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz")} | {"strict": b.get("strict", True)}
+        inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
+        runs.append(
+            options
+            | {
+                "path": Path(b["source_path"]),
+                "upload": {"upload_id": target, "level": b["level"]},
+                "context": context,
+                "context_ring": ring,
+                "inherited": inherited,
+            }
+        )
+    return runs
+
+
+def cross_type_only(insights: Sequence[Insight]) -> tuple[list[Insight], list[Rejection]]:
+    """A cross-type run's insights: those on a layer's band; the rest are the target's own (its levels hold them), refused
+    as ``outside_cross_type``."""
+    on = [i for i in insights if any(c.attribute.startswith("context_") for c in i.conditions)]
+    kept = {i.id for i in on}
+    return on, [
+        Rejection(i.expression, "outside_cross_type", "no layer in the scope: the target's own levels hold it") for i in insights if i.id not in kept
+    ]

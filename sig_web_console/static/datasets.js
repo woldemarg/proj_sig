@@ -4,7 +4,8 @@
 function datasetName(b) {
   /* the file and its level: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9) */
   const res = /^\d+$/.test(b.level || "") ? b.level : ((b.profile || {}).geo || {}).resolution;
-  return res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename;
+  const layers = b.context ? ` · + ${b.context.map((c) => c.name).join(", ")}` : "";  // read with another type's points
+  return (b.status === "LAYER" ? `${b.filename} · шар` : res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename) + layers;
 }
 
 function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
@@ -32,8 +33,10 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") + `<div class="why mono" style="margin-top:6px">${esc(b.error.message)}</div></div>`;
   } else if (b.status === "SKIPPED") {
     body = `<div class="ds-note">Уже проаналізовано — нового немає.</div>`;
+  } else if (b.status === "LAYER") {
+    body = `<div class="ds-note">${plural(b.points, "точка", "точки", "точок")} іншого типу — оберіть шар у «Крос-типовий аналіз».</div>`;
   }
-  const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : chip("", "Пропущено");
+  const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? chip("", "Шар") : chip("", "Пропущено");
   const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
   const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
     (busy ? `disabled title="Іде обробка: видалення відхиляється, доки вона не скінчиться">` : `title="Прибрати цей датасет і його інсайти з бази знань">`) +
@@ -134,6 +137,7 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
+  renderCross(batches);
   renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">Датасетів ще немає.<br>Завантажте таблицю або оберіть готовий датасет.</div>`);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
@@ -148,12 +152,15 @@ async function upload() {
   const fd = new FormData();
   if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
   fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
-  if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
-  for (const c of $("context").files) fd.append("context", c);  // another type of points: one band of the cells each
-  const layers = [...$("context-sample").selectedOptions].map((o) => o.value);  // shipped layers: the server reads its own copies
-  for (const key of layers) fd.append("context_demo", key);
-  if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
-  if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
+  if ($("layer-only").checked) fd.append("layer", "true");  // kept as another type's points: none of the mining options
+  else {
+    if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
+    for (const c of $("context").files) fd.append("context", c);  // another type of points: one band of the cells each
+    const layers = [...$("context-sample").selectedOptions].map((o) => o.value);  // shipped layers: the server reads its own copies
+    for (const key of layers) fd.append("context_demo", key);
+    if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
+    if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
+  }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
@@ -162,7 +169,67 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
+}
+
+// the cross-type panel: two stored uploads, the target's levels read again with the other's points as a layer (docs/08_interface.md §8.2)
+function crossUploads(batches) {
+  /* the uploads a run can name: the file, the geo levels it was read at, a layer only or not */
+  const by = new Map();
+  for (const b of batches) {
+    if (!b.upload_id || b.cross) continue;  // a run's own batches add no level
+    const u = by.get(b.upload_id) || { id: b.upload_id, file: b.filename, levels: new Set(), layer: false };
+    if (b.status === "LAYER") u.layer = true; else if (geoLevel(b)) u.levels.add(Number(b.level));
+    by.set(b.upload_id, u);
+  }
+  return [...by.values()].filter((u) => u.layer || u.levels.size);
+}
+
+const crossLabel = (u) => `${u.file} · ${u.levels.size ? `рівні ${[...u.levels].sort((a, b) => b - a).join(", ")}` : "шар"}`;
+
+function renderCross(batches) {
+  /* both lists rewritten only when the uploads change: a choice in progress survives the poll */
+  const ups = crossUploads(batches), key = ups.map(crossLabel).join("|");
+  S.crossUploads = new Map(ups.map((u) => [u.id, u]));
+  if (key === S.crossKey) return;
+  S.crossKey = key;
+  const fill = (sel, list) => {
+    const kept = new Set([...sel.selectedOptions].map((o) => o.value));
+    sel.innerHTML = list.map((u) => `<option value="${esc(u.id)}"${kept.has(u.id) ? " selected" : ""}>${esc(crossLabel(u))}</option>`).join("");
+  };
+  fill($("cross-target"), ups.filter((u) => u.levels.size));
+  fill($("cross-layers"), ups);
+  crossLevels();
+}
+
+function crossPick() {
+  const target = S.crossUploads?.get($("cross-target").value);
+  return { target, layers: [...$("cross-layers").selectedOptions].map((o) => S.crossUploads.get(o.value)).filter((u) => u && u !== target) };
+}
+
+function crossLevels() {
+  /* the target's levels, ticked as the server would choose them: its finest and those every mined layer has too */
+  const { target, layers } = crossPick(), levels = target ? [...target.levels].sort((a, b) => b - a) : [];
+  const mined = layers.filter((u) => u.levels.size), shared = mined.length ? levels.filter((r) => mined.every((u) => u.levels.has(r))) : [];
+  $("cross-levels").innerHTML = levels.map((r) => `<label class="small chk"><input type="checkbox" value="${r}"${r === levels[0] || shared.includes(r) ? " checked" : ""}> H3 r${r}` +
+    `${r === levels[0] ? " — найдрібніший цілі" : shared.includes(r) ? " — спільний із шаром" : ""}</label>`).join("");
+  $("cross-both").disabled = !(layers.length === 1 && layers[0].levels.size);  // the other way needs a layer that was mined
+  $("cross-btn").disabled = !target || !layers.length || layers.length > 2;
+}
+
+function setCrossMsg(text, err = false) { const el = $("cross-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
+
+async function runCross() {
+  const { target, layers } = crossPick(), ring = $("cross-ring").value;
+  const levels = [...$("cross-levels").querySelectorAll("input:checked")].map((i) => i.value);
+  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring }];
+  if ($("cross-both").checked && !$("cross-both").disabled) runs.push({ target: layers[0].id, layers: [target.id], ring });  // its own default levels
+  $("cross-btn").disabled = true;
+  try {
+    for (const run of runs) await api("/api/crosstype", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(run) });
+    setCrossMsg("У черзі — поступ видно нижче.");
+  } catch (err) { setCrossMsg(err.message, true); }
+  crossLevels(); refreshBatches();
 }

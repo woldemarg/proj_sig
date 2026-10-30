@@ -14,12 +14,10 @@ verbalises (``evidence``).
 from __future__ import annotations
 
 import functools
-import hashlib
 import logging
 import threading
 import time
 import traceback
-import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -45,7 +43,7 @@ from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.neo4j_mirror import Mirror
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
-from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
+from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, new_batch_id, utc_now
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import (
     IngestionError,
@@ -353,6 +351,7 @@ class Engine:
         context: Sequence[tuple[str, BinaryIO]] = (),
         context_geo: str | None = None,
         context_ring: int | str | None = None,
+        layer: bool = False,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -363,7 +362,11 @@ class Engine:
         gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. ``context``: (filename, stream) of
         another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
         counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
-        cell alone), kept on the record (docs/02_discovery.md §2.9). Processing is a separate call."""
+        cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
+        (``uploads.store_layer``), one ``LAYER`` record, nothing to process. Processing is a separate call."""
+        if layer:
+            refused = [k for k, v in {"table": table, "time": time, "context": context, "supersedes": supersedes}.items() if v]
+            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused)]
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
@@ -403,14 +406,14 @@ class Engine:
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
             levels = uploads.resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
-        with path.open("rb") as stored:
-            upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
+        upload_id = uploads.upload_id(path)
         if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
             path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
             forget_tables()
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
         try:  # the upload's own file accepted: its context files now, refused together
-            layers = uploads.save_context(self.ws, context, (context_geo or "").strip() or "auto", self.settings.max_upload_bytes)
+            located = [(n, s, (context_geo or "").strip() or "auto") for n, s in context]
+            layers = uploads.save_context(self.ws, located, self.settings.max_upload_bytes)
         except Exception:
             path.unlink(missing_ok=True)
             forget_tables()
@@ -469,6 +472,7 @@ class Engine:
         tz: str | None = None,
         context: list[dict[str, str]] | None = None,
         context_ring: int = 1,
+        inherited: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -482,7 +486,8 @@ class Engine:
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
         ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10);
-        ``context`` the stored context layers and ``context_ring`` their disk (§2.9).
+        ``context`` the stored context layers and ``context_ring`` their disk (§2.9); ``inherited`` what a cross-type run
+        keeps of its target's record (``uploads.cross_runs``).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
@@ -490,7 +495,7 @@ class Engine:
         path = Path(path)
         created = utc_now()
         record = {
-            "batch_id": f"B{created[:19].replace('-', '').replace(':', '')}-{uuid.uuid4().hex[:6]}",
+            "batch_id": new_batch_id(created),
             "dataset_id": None,
             "filename": filename or path.name,
             "source_path": str(path),
@@ -504,6 +509,7 @@ class Engine:
             **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
+            **(inherited or {}),
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
             "created_at": created,
@@ -514,6 +520,14 @@ class Engine:
         }
         self.ws.save_batch(record)
         return record
+
+    @_healthy
+    def cross(
+        self, target: str, layers: Sequence[str], context_ring: int | str | None = None, levels: Sequence[int | str] | None = None
+    ) -> list[dict[str, Any]]:
+        """A cross-type run of two stored uploads (``uploads.cross_runs``): one batch per level. Processing is a separate call."""
+        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes)
+        return [self.submit(**run) for run in runs]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
         """Submit and process one file in the calling thread (tests and scripts)."""
@@ -595,11 +609,12 @@ class Engine:
         ds, covers = record["dataset_id"], covers_of(result)
         insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=record["batch_id"], filename=record["filename"])
         selection = select_insights(insights, self.settings.miner)
-        kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
+        on, outside = uploads.cross_type_only(selection.kept) if record.get("cross") else (selection.kept, [])
+        kept, refused = admit_insights(on, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
         if loaded.spatial:
             record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
             self.ws.save_profile(ds, record["profile"])
-        rejections = [*result.rejections, *selection.rejections, *refused]
+        rejections = [*result.rejections, *selection.rejections, *outside, *refused]
         self.ws.save_rejections(ds, [asdict(r) for r in rejections])
         if not kept:
             raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")

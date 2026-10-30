@@ -8,7 +8,7 @@ const STAGE_TEXT = {
   BUILDING_GRAPH: "Побудова графа", PERSISTING: "Збереження", READY: "Готово",
 };
 const STAGES = Object.keys(STAGE_TEXT);  // in processing order
-const TERMINAL = new Set(["READY", "FAILED", "SKIPPED"]);
+const TERMINAL = new Set(["READY", "FAILED", "SKIPPED", "LAYER"]);  // workspace.TERMINAL
 const DECLARED = "джерело, надійність, показники, глосарій і документ";  // what a dataset's metadata digest signs: every mismatch notice names them
 const ERROR_HELP = {
   no_candidates: ["Немає за чим групувати", "У таблиці немає придатних колонок, щоб групувати рядки (текстових колонок із кількома значеннями).", "Позначте колонки з кодами (ID, прапорці) у «Вважати категоріями» або розбийте числову колонку на смуги."],
@@ -303,6 +303,8 @@ function init() {
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
+  $("cross-target").addEventListener("change", crossLevels); $("cross-layers").addEventListener("change", crossLevels);
+  $("cross-btn").addEventListener("click", runCross);
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));

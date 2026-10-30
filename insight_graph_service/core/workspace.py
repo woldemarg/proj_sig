@@ -135,12 +135,17 @@ def acquire_writer_lock(workspace_dir: Path | str) -> None:
     _HELD_LOCKS[str(path)] = handle
 
 
+def new_batch_id(created: str) -> str:
+    """A batch id: its creation time to the second and six random hex digits."""
+    return f"B{created[:19].replace('-', '').replace(':', '')}-{uuid.uuid4().hex[:6]}"
+
+
 def utc_now() -> str:
     """Timestamps of records and snapshots: ISO 8601, UTC, whole seconds."""
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-TERMINAL = frozenset({"READY", "FAILED", "SKIPPED"})  # final batch states
+TERMINAL = frozenset({"READY", "FAILED", "SKIPPED", "LAYER"})  # final batch states (LAYER: points kept as a layer, never mined)
 
 
 class RepresentationMismatch(RuntimeError):
