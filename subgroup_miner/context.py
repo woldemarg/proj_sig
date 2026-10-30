@@ -84,17 +84,19 @@ def band(sums: np.ndarray, edges: np.ndarray) -> np.ndarray:
     return np.where(sums > 0, labels[np.searchsorted(edges[1:-1], sums, side="left")], NONE_NEARBY)
 
 
-def dealt_counts(layer: ContextLayer, rng: np.random.Generator) -> np.ndarray:
-    """The layer's counts dealt anew among the cells of each parent: every parent keeps its total."""
+def deal(layer: ContextLayer, rng: np.random.Generator) -> np.ndarray:
+    """One draw of the null: the cells permuted within each parent (``counts[deal]`` keeps every parent's total). The
+    layers of one upload share their cells (the target's disks at one radius), so one deal moves every layer a scope
+    names and keeps them where they are to each other: dealt each on its own, layers in the same places would part."""
     order = np.argsort(layer.parents, kind="stable")
-    out = np.empty_like(layer.counts)
-    out[order] = layer.counts[np.lexsort((rng.random(len(order)), layer.parents))]  # both run parent by parent
-    return out
+    perm = np.empty_like(order)
+    perm[order] = np.lexsort((rng.random(len(order)), layer.parents))  # both run parent by parent
+    return perm
 
 
-def dealt_band(layer: ContextLayer, rng: np.random.Generator) -> np.ndarray:
-    """One draw of the null: every target cell's band after a deal, read by the observed edges."""
-    return band(disk_sums(layer, dealt_counts(layer, rng)), layer.edges)
+def dealt_band(layer: ContextLayer, perm: np.ndarray) -> np.ndarray:
+    """Every target cell's band with the layer's counts moved by ``perm`` (``deal``), read by the observed edges."""
+    return band(disk_sums(layer, layer.counts[perm]), layer.edges)
 
 
 def context_bands(

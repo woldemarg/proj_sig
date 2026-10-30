@@ -27,7 +27,7 @@ from scipy.stats import norm, zscore
 import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id, stable_hash
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import dealt_band
+from subgroup_miner.context import deal, dealt_band
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
@@ -521,7 +521,8 @@ def _context_evidence(
     family: int = 1,
 ) -> float | None:
     """``p_context`` of a cohort with a condition on a context layer's band (docs/02_discovery.md §2.9): the share of draws
-    — every layer the scope names dealt anew within its parent cells (``context.dealt_band``), its band read with the
+    — the layers the scope names dealt anew within their parent cells by one permutation (``context.deal``: they keep
+    their places to each other), each band read with the
     observed edges, the other conditions fixed — whose cohort's median-test |z| (with that cohort's own n_eff) is at least
     the observed cohort's, (1 + hits) / (draws + 1); a draw below ``MIN_SUPPORT_ROWS`` rows is no draw. |z|, not p: a
     strong cohort's p underflows to 0 and would tie with every strong draw. The gate reads it times ``family``, the
@@ -543,9 +544,9 @@ def _context_evidence(
     planned = max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))
     hits = draws = 0
     for left in range(planned - 1, -1, -1):
-        mask = fixed.copy()
+        perm, mask = deal(named[0][0], rng), fixed.copy()  # one deal for every named layer, its parents' totals kept
         for layer, value in named:
-            mask &= dealt_band(layer, rng) == value  # each named layer dealt on its own, its parents' totals kept
+            mask &= dealt_band(layer, perm) == value
         rows = np.flatnonzero(mask)
         if len(rows) >= config.min_support_rows:
             draws += 1

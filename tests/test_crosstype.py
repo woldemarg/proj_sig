@@ -19,7 +19,7 @@ from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_contracts.wording import column_words, condition_words, source_column
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import NONE_NEARBY, ContextSource, dealt_counts, disk_sums
+from subgroup_miner.context import NONE_NEARBY, ContextSource, deal, disk_sums
 from subgroup_miner.discovery import build_insights, recompute_statistics, run_discovery
 from subgroup_miner.ingestion import IngestionError, dataset_fingerprint, load_dataset
 from subgroup_miner.selection import select_insights
@@ -68,7 +68,7 @@ def test_a_deal_keeps_every_parents_total():
     rng = np.random.default_rng(0)
     _, ctx, _ = build_cells(points_at(cells, 6, load=1.0), "lat,lon", RES, min_cell_points=5, context=[layer_at("x", list(rng.choice(cells, 20)))])
     layer = ctx.context["x"]
-    drawn = dealt_counts(layer, np.random.default_rng(1))
+    drawn = layer.counts[deal(layer, np.random.default_rng(1))]
     assert drawn.sum() == layer.counts.sum() and not np.array_equal(drawn, layer.counts)
     for parent in np.unique(layer.parents):
         assert drawn[layer.parents == parent].sum() == layer.counts[layer.parents == parent].sum()
@@ -219,6 +219,22 @@ def test_a_shared_density_passes_the_median_test_and_fails_the_dealt_layer(tmp_p
     assert tested <= 1  # the layer dealt within its parent cells explains it
 
 
+def test_the_layers_a_scope_names_are_dealt_together_so_a_layer_given_twice_asks_once(tmp_path):
+    """Dealt each on its own, two layers in the same places would part in every draw: the two-layer scope's draws shrink
+    and weaken, and a shift the layer's arrangement explains reads as a link (the Chicago 'L' stations and liquor
+    stores, spec §14.6). One permutation within the parents for every layer keeps them where they are to each other."""
+    target, context = confounded(tmp_path, 1)  # a shared density: draws as strong as the cohort, p between the extremes
+    config = MinerConfig(context_permutations=99)
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto"), ("shops", context, "auto")])
+
+    def p_context(conditions):
+        fresh = recompute_statistics(loaded.frame, conditions, "the same seed", ["load_median"], loaded.spatial, 1, config, 1)
+        return fresh["spatial"]["p_context"]
+
+    for value in sorted(set(loaded.frame[BAND])):
+        assert p_context([(BAND, value), ("context_shops_band", value)]) == p_context([(BAND, value)])
+
+
 def test_a_refused_cohort_stops_drawing_once_no_draw_left_could_pass_the_gate(tmp_path, monkeypatch):
     import subgroup_miner.discovery as discovery
 
@@ -228,8 +244,8 @@ def test_a_refused_cohort_stops_drawing_once_no_draw_left_could_pass_the_gate(tm
     insights, result = mined(loaded, config)
     weak = max(cross(insights), key=lambda i: i.provenance["spatial"]["p_context"])
     assert weak.provenance["spatial"]["p_context"] >= 0.2  # refused at any family
-    deals, deal = [], discovery.dealt_band
-    monkeypatch.setattr(discovery, "dealt_band", lambda layer, rng: deals.append(1) or deal(layer, rng))
+    deals, band_of = [], discovery.dealt_band
+    monkeypatch.setattr(discovery, "dealt_band", lambda layer, perm: deals.append(1) or band_of(layer, perm))
 
     def drawn(family):
         deals.clear()
