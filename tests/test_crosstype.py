@@ -131,7 +131,9 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
     loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
     insights, result = mined(loaded, config)
     found = [i for i in cross(insights) if i.target in ("points", "load_median") and i.effect_size > 0]
-    assert found and min(i.provenance["spatial"]["p_context"] for i in found) <= 0.05
+    family = sum(any(c.attribute == BAND for c in i.conditions) for i in insights)  # the upload's context cohorts
+    assert {i.provenance["spatial"]["context_family"] for i in cross(insights)} == {family}
+    assert found and min(i.provenance["spatial"]["p_context"] for i in found) * family <= 0.05  # passes the adjusted gate
     lead = min(found, key=lambda i: i.provenance["spatial"]["p_context"])
     fresh = recompute_statistics(
         loaded.frame,
@@ -141,8 +143,10 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
         loaded.spatial,
         result.n_tests,
         config,
+        family,  # as verify reads it from the record
     )
-    assert fresh["spatial"] == {k: lead.provenance["spatial"][k] for k in fresh["spatial"]}  # p_context drawn again, the same
+    assert {"p_context", "context_family"} <= set(fresh["spatial"])
+    assert fresh["spatial"] == {k: lead.provenance["spatial"][k] for k in fresh["spatial"]}  # drawn again, the same
     others = [i for i in insights if not any(c.attribute == BAND for c in i.conditions)]
     assert others and all("p_context" not in i.provenance["spatial"] for i in others)  # no context condition: no test, no key
 
@@ -190,8 +194,8 @@ def test_a_shared_density_passes_the_median_test_and_fails_the_dealt_layer(tmp_p
     assert tested <= 1  # the layer dealt within its parent cells explains it
 
 
-def context_insight(p_context, **fields):
-    spatial = {"resolution": 7, "cells": 40, "moran_i": 0.1, "n_eff": 36.0, "p_adjusted_iid": 1e-6, "p_context": p_context}
+def context_insight(p_context, family=1, **fields):
+    spatial = {"resolution": 7, "cells": 40, "moran_i": 0.1, "n_eff": 36.0, "p_adjusted_iid": 1e-6, "p_context": p_context, "context_family": family}
     values = dict(id="P-x", expression=f"{BAND}=='q4'", support=300, sd_score=1.8, sd_raw_score=2.0, emm_score=0.01, volume_utility=0.3)
     values |= dict(stability=0.9, p_value=1e-8, p_adjusted=1e-6, row_hash="x", provenance={"spatial": spatial})
     return toy_insight([(BAND, "q4")], [Shift("points", 2.0, 12.0, 8.0, 2.0)], **values | fields)
@@ -202,6 +206,8 @@ def test_selection_refuses_a_shift_the_dealt_layer_reproduces_and_any_correlatio
     refused = select_insights([context_insight(0.3)], config)
     assert not refused.kept and [r.reason for r in refused.rejections] == ["context_confounded"] and "0.3" in refused.rejections[0].detail
     assert select_insights([context_insight(0.01)], config).kept and select_insights([context_insight(None)], config).kept
+    many = select_insights([context_insight(0.01, family=10)], config)  # 0.01 × 10 cohorts: adjusted as p_adjusted is
+    assert not many.kept and [r.reason for r in many.rejections] == ["context_confounded"] and "10 cohorts" in many.rejections[0].detail
     pair = {"pair": ["points", "load_median"], "local_corr": 0.6, "global_corr": -0.1, "delta": 0.7}
     unstable = context_insight(0.01, stability=0.2, emm_score=0.3, covariance=pair)  # no shift; a strong correlation change
     assert not select_insights([unstable], config).kept  # never retargeted to a covariance insight
@@ -213,8 +219,9 @@ def test_spatial_provenance_reads_records_without_p_context():
     old = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01}
     spatial = SpatialProvenance.from_dict(old)
     assert spatial.p_context is None and spatial.to_dict() == old  # a record written before M17 reads and writes back the same
-    assert SPATIAL_DIGEST_FIELDS == ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context")
-    assert SpatialProvenance.from_dict(old | {"p_context": 0.02}).to_dict() == old | {"p_context": 0.02}
+    assert SPATIAL_DIGEST_FIELDS == ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family")
+    tested = old | {"p_context": 0.02, "context_family": 12}
+    assert SpatialProvenance.from_dict(tested).to_dict() == tested
 
 
 def test_context_conditions_read_in_plain_ukrainian_and_hold_no_bare_literal():

@@ -102,6 +102,7 @@ def verify_pattern(ws: Workspace, pattern_id: str, load: Callable[[dict[str, Any
         loaded.spatial,
         family,
         config,
+        record["provenance"].get("spatial", {}).get("context_family", 1),  # digested with the record
     )
     try:
         covers = ws.load_covers(ds).get(pattern_id)
