@@ -51,6 +51,14 @@ Built by `scripts/demo_datasets.py`; each file keeps its source's licence.
 - Attribution: City of Chicago / Chicago Police Department (E-Crash), data.cityofchicago.org; Kaggle copy by hientrandai.
 - Prepared: 2023-10 … 2024-09; третина аварій за хешем ідентифікатора; учасники й вік водіїв з таблиці людей; рідкісні рівні — Other
 
+## `chicago_schools.csv` — Школи Чикаго, 2023–24 (контекстний шар)
+
+- Source: City of Chicago Data Portal, Chicago Public Schools - School Locations SY2324 (mv87-m4mi)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 649
+- Attribution: City of Chicago / Chicago Public Schools, data.cityofchicago.org.
+- Prepared: усі 649 шкіл; точка з Lat/Long; тип — ES/HS
+
 ## `nyc_collisions.csv` — ДТП у Нью-Йорку, 2023–2024
 
 - Source: NYC Open Data (NYPD), Motor Vehicle Collisions - Crashes (h9gi-nx95), через Kaggle sahirmaharajj/motor-vehicle-collisions-crashes

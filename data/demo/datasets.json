@@ -145,6 +145,24 @@
   ]
  },
  {
+  "key": "chicago_schools",
+  "title": "Школи Чикаго, 2023–24 (контекстний шар)",
+  "description": "Розташування державних шкіл Чикаго: початкові й старші. Контекстний шар до ДТП Чикаго — комірки аварій читаються за кількістю шкіл поруч.",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, Chicago Public Schools - School Locations SY2324 (mv87-m4mi)",
+  "attribution": "City of Chicago / Chicago Public Schools, data.cityofchicago.org.",
+  "prepared": "усі 649 шкіл; точка з Lat/Long; тип — ES/HS",
+  "context_only": true,
+  "options": {
+   "geo": "lat,lon"
+  },
+  "file": "chicago_schools.csv",
+  "rows": 649,
+  "bytes": 22549,
+  "sha256": "bff9ad8009a57b657156b4e8f6766ac278271a4ba1cec9ff9f7f9ec431293179",
+  "span": null
+ },
+ {
   "key": "nyc_collisions",
   "title": "ДТП у Нью-Йорку, 2023–2024",
   "description": "Зареєстровані поліцією Нью-Йорка аварії: де, коли, через що і з якими транспортними засобами стаються пригоди з травмованими людьми й пішоходами.",
