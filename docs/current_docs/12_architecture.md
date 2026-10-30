@@ -18,7 +18,7 @@
 >
 > Compose starts them in dependency order, and a test enforces every allowed import.
 
-**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `constraints.txt` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md) · **Next** [13. Trust and integrity](13_trust.md)
+**Code** the packages below, `compose.yaml`, the `Dockerfile` of each service, `pyproject.toml` and `uv.lock` · **Tests** `tests/test_architecture.py`, `tests/test_*_standalone.py`, `tests/test_narrator.py`, `tests/test_llm_model_broker.py`, `scripts/compose_check.py` · **Previous** [11. Reference](11_reference.md) · **Next** [13. Trust and integrity](13_trust.md)
 
 ---
 
@@ -60,7 +60,7 @@ llm_model_broker                        -> nothing from the repository
 | vectors and latent anchors for insights from any source | `attractor_topology` | `attractor_topology/README.md`: `canonicalize` → `InsightEncoder.encode` → `LatentOntology.ingest` |
 | evidence for a question over a compiled graph | `graph_query_engine` | `graph_query_engine/README.md`: `search(question, CommittedState(...), encoder, QueryConfig())` → `payload()` |
 
-The libraries are folders, not pip packages. Another project copies a folder, or puts the repository root on its `PYTHONPATH`, together with `insight_contracts/`, and installs the folder's `requirements.txt`. The service's `requirements.txt` includes the three library files, so each dependency is listed once.
+The libraries are folders, not pip packages. Another project copies a folder, or puts the repository root on its `PYTHONPATH`, together with `insight_contracts/`, and installs the folder's dependency group from the root `pyproject.toml` (`miner`, `topology`, `query`). The `graph` group includes the three, so each dependency is listed once.
 
 ## 12.4 Services and contracts
 
@@ -130,7 +130,7 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 | 1 | `llm-model-broker` | `llm_model_broker/Dockerfile` | — | `GET /health` | internal, edge (egress to the provider) | none |
 | 2 | `insight-graph` | `insight_graph_service/Dockerfile` (build arg `TORCH`: `cpu`, or `cu130` and the GPU with `compose.gpu.yaml`) | `model-init` completed, `neo4j` healthy | `GET /api/health` (it listens once the model is checked and warm) | internal | volume `sig-workspace` at `/data`; `sig-models` read-only |
 | 3 | `evidence-narrator` | `evidence_narrator_service/Dockerfile` | `insight-graph` and the broker healthy | `GET /api/chat/health` | internal | none |
-| 4 | `sig-web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`; gzip for responses over 1 KB) | both services healthy | `GET /` | internal, edge (port 8765) | none |
+| 4 | `web-console` | `sig_web_console/Dockerfile` (`nginx-unprivileged`; gzip for responses over 1 KB) | both services healthy | `GET /` | internal, edge (port 8765) | none |
 
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765
@@ -140,6 +140,8 @@ python scripts/compose_check.py --fresh --tests   # clean room: no build cache, 
 ```
 
 **Networks.** `internal` has no egress. `edge` publishes ports and has egress: `model-init`, `neo4j`, the broker and the console sit on it; the graph service and the narrator are on `internal` only, with no egress.
+
+**Health probes.** The SIG images probe every second during their start period and every 10 s after it, so `up --wait` follows readiness rather than the probe interval.
 
 **Hardening.** Every image except Neo4j runs as an unprivileged user with a read-only root filesystem, a tmpfs at `/tmp`, `no-new-privileges` and no capabilities.
 
@@ -159,7 +161,7 @@ Before torch loads, the graph service checks presence and sizes again and refuse
 - **Workers.** It runs one uvicorn worker, because the workspace has one writer.
 - **Health.** `/api/health` runs on the event loop, so it answers while a batch runs.
 
-**Memory and versions.** The graph service needs about 2.5 GB of RAM on CPU. `constraints.txt` holds the exact package versions the images were verified with.
+**Memory and versions.** The graph service needs about 3 GB of RAM on CPU (3.0 GB idle, measured on the demo; Neo4j 0.45–0.6 GB, the other services under 50 MB each). `uv.lock` holds the exact package versions, the same for the host and the images. Each Python image installs its group from it in a build stage (`uv sync --frozen`) and copies only the resulting `/venv` into the runtime stage, so uv and the download cache stay out of the image. matplotlib, which pysubgroup declares for plots SIG never draws, is overridden out of the lock.
 
 **Why these services.** Each one has its own runtime, state and reason to change:
 - **The graph service** holds the embedding model, the workspace and the in-memory graph. Retrieval needs all three, so search lives here, beside the topology it walks.

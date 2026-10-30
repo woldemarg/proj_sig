@@ -8,7 +8,10 @@
 .pytest_tmp
 .pytest_cache
 .ruff_cache
-.scratch
+.scratch*
+.claude
+review-reports
+**/.DS_Store
 workspace
 workspace.*
 *.writer.lock
