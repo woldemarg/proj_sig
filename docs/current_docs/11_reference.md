@@ -111,7 +111,7 @@ The graph service's settings tree (`insight_graph_service/core/settings.py`, loa
 | Section, group | Parameter (default) | Explained in |
 |---|---|---|
 | `MinerConfig` (`subgroup_miner/config.py`) — ingestion | `MIN_ROWS` 50, `BIN_COLUMNS` "", `CATEGORICAL_COLUMNS` "" | [2.1](02_discovery.md#21-ingestion) |
-| `MinerConfig` — spatial datasets | `GEO_RESOLUTION` 7, `MIN_CELL_POINTS` 5, `CONTEXT_RING` 1 (a context layer's disk: the cell and its neighbours within this many rings), `CONTEXT_PERMUTATIONS` 199 (draws of the context null; 0 turns it off) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
+| `MinerConfig` — spatial datasets | `GEO_RESOLUTION` 7, `MIN_CELL_POINTS` 5, `CONTEXT_PERMUTATIONS` 199 (draws of the context null; 0 turns it off) | [2.9](02_discovery.md#29-spatial-datasets-the-geo-option) |
 | `MinerConfig` — discovery | `COMPUTE_BUDGET` 5000, `VALIDATION_BUDGET` 50, `MIN_SEARCH_DIMENSIONS` 3, `EDA_RANDOM_SEED` 42, `REDUNDANCY_JACCARD` 0.88 | [2](02_discovery.md) |
 | `MinerConfig` — validity rules | `MIN_SUPPORT_ROWS` 30, `MIN_EFFECT_Z` 0.5, `MAX_P_ADJUSTED` 0.05, `MIN_STABILITY` 0.5 | [3.2](03_insights.md#32-selection-rules) |
 | `MinerConfig` — weight | `WEIGHT_EFFECT_REF` 1.5, `WEIGHT_EXPONENTS` (0.35, 0.25, 0.10, 0.10), `WEIGHT_FLOOR` 0.05 | [3.3](03_insights.md#33-insight-weight) |

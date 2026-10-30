@@ -212,6 +212,7 @@ def create_app(engine: Engine) -> FastAPI:
         context: list[UploadFile] | None = File(None),
         context_geo: str = Form(""),
         context_demo: list[str] | None = Form(None),
+        context_ring: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -232,6 +233,7 @@ def create_app(engine: Engine) -> FastAPI:
             "grid": grid.strip() or None,
             "tz": tz.strip() or None,
             "context_geo": context_geo.strip() or None,
+            "context_ring": context_ring.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
         layers = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)

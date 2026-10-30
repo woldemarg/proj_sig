@@ -55,6 +55,7 @@ from subgroup_miner.ingestion import (
     load_dataset,
     parse_grid,
     parse_indicators,
+    parse_ring,
     parse_tz,
     read_file,
     read_times,
@@ -351,6 +352,7 @@ class Engine:
         tz: str | None = None,
         context: Sequence[tuple[str, BinaryIO]] = (),
         context_geo: str | None = None,
+        context_ring: int | str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -360,16 +362,20 @@ class Engine:
         measurable, ``fit_grid``; docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
         gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. ``context``: (filename, stream) of
         another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
-        counted into every geo level's cells (docs/02_discovery.md §2.9). Processing is a separate call."""
+        counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
+        cell alone), kept on the record (docs/02_discovery.md §2.9). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
         if context and not geo:
             raise PipelineError("invalid_options", "context files without geo: they are counted into the cells of the geo option")
+        if str(context_ring or "").strip() and not context:
+            raise PipelineError("invalid_options", "context_ring without context files: it is the disk their points are counted over")
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
+            ring = parse_ring(context_ring)
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
@@ -433,6 +439,7 @@ class Engine:
                 geo_levels=selection if g else None,
                 locator=None if g else locator.strip() or None,
                 context=layers if g else None,  # a table level has no cells
+                context_ring=ring,
                 **options,
             )
             for g, level in levels
@@ -461,6 +468,7 @@ class Engine:
         grid: str | None = None,
         tz: str | None = None,
         context: list[dict[str, str]] | None = None,
+        context_ring: int = 1,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -473,7 +481,8 @@ class Engine:
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
-        ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10).
+        ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10);
+        ``context`` the stored context layers and ``context_ring`` their disk (§2.9).
         """
         trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
@@ -492,7 +501,7 @@ class Engine:
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
-            **({"context": context} if context else {}),
+            **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
             "status": "UPLOADED",
@@ -678,6 +687,7 @@ class Engine:
             grid=record.get("grid"),
             tz=record.get("tz"),
             context=[(c["name"], Path(c["path"]), c["geo"]) for c in record.get("context", ())],
+            context_ring=record.get("context_ring", 1),  # a record made before the option: the default disk
         )
 
     @_healthy

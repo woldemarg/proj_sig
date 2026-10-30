@@ -15,6 +15,7 @@ import numpy as np
 
 NONE_NEARBY = "none nearby"  # a cell whose disk holds no point of the layer; two words, as NO_CLUSTER (question._values)
 BANDS = 4  # quarters of the positive disk sums: the labels of apply_bins
+RINGS = (0, 1, 2)  # a layer's disk, the upload's option: the cell alone, with its six neighbours (the default), two rings
 BAND_WORDS = {"q1": "the fewest", "q2": "fewer than the middle", "q3": "more than the middle", "q4": "the most"}
 
 

@@ -16,7 +16,7 @@ import pandas as pd
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import ContextSource
+from subgroup_miner.context import RINGS, ContextSource
 from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, parse_times, select_levels
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
@@ -93,11 +93,13 @@ def dataset_fingerprint(
     left_out: list[str] | None = None,
     time: str | None = None,
     context: list[str] | None = None,
+    context_ring: int = 1,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
     file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
-    order — the same points with another layer beside them are another analysis too."""
+    order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
+    only when it is not the default (an upload made before the option keeps its id)."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -110,6 +112,8 @@ def dataset_fingerprint(
         h.update(f"time={time}".encode())
     if context:
         h.update(f"context={sorted(context)}".encode())
+        if context_ring != 1:
+            h.update(f"ring={context_ring}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -265,6 +269,17 @@ def parse_tz(tz: str | None) -> str | None:
     return name
 
 
+def parse_ring(ring: int | str | None) -> int:
+    """A context layer's disk (``RINGS``): the cell alone (0), with its six neighbours (1, the default: None or empty),
+    two rings (2). Another value is ``invalid_options``."""
+    text = "1" if ring is None or str(ring).strip() == "" else str(ring).strip()
+    if text not in {str(r) for r in RINGS}:
+        raise IngestionError(
+            "invalid_options", f"context_ring {ring!r}: one of {', '.join(map(str, RINGS))} — the rings around a cell its layers are counted over"
+        )
+    return int(text)
+
+
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
     """A time column as UTC times, read in the one format that reads most of it (``spatial.parse_times``: the reading
     a geo level's cells count their days by too); a time without a zone is taken in ``tz``, UTC by default. A column the
@@ -300,6 +315,7 @@ def load_dataset(
     grid: str | None = None,
     tz: str | None = None,
     context: Sequence[tuple[str, Path, str]] = (),
+    context_ring: int | str | None = 1,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -313,7 +329,7 @@ def load_dataset(
     a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by
     default, and the zone of a time written without one) — discovery never sees it. ``context``: ``(layer, path,
     locator)`` per context layer — another type's points, read apart (``read_context``) and counted into the cells as one
-    forced band each (§2.9); it needs ``geo``."""
+    forced band each over the disk of ``context_ring`` rings around a cell (``parse_ring``; §2.9); it needs ``geo``."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -325,6 +341,7 @@ def load_dataset(
         raise IngestionError("invalid_options", str(exc)) from exc
     if context and not geo_spec:
         raise IngestionError("invalid_options", "context layers need the geo option: they are counted into its cells")
+    ring = parse_ring(context_ring)
     layers = [read_context(*layer) for layer in context]
     frame, digest = read_file(path, shared=shared)
     if frame.shape[1] < 2:
@@ -356,7 +373,7 @@ def load_dataset(
     if geo_spec:
         points = frame
         key = (digest.hexdigest(), geo_spec[0]) if shared else None  # the levels of one upload: one point profile
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers])
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
@@ -384,6 +401,7 @@ def load_dataset(
             left_out=left_out,
             time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None,
             context=[fingerprint for _, fingerprint in layers],
+            context_ring=ring,
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -440,10 +458,16 @@ def _context_points(path: str, locator: str, *_stamp: int) -> tuple[np.ndarray, 
 
 
 def _to_cells(
-    frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig, profile_key: object = None, context: Sequence[ContextSource] = ()
+    frame: pd.DataFrame,
+    spec: tuple[str, int],
+    config: MinerConfig,
+    profile_key: object = None,
+    context: Sequence[ContextSource] = (),
+    context_ring: int = 1,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
-    one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells."""
+    one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells,
+    each over the disk of ``context_ring`` rings."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
@@ -451,7 +475,7 @@ def _to_cells(
             min_cell_points=config.min_cell_points,
             profile_key=profile_key,
             context=context,
-            context_ring=config.context_ring,
+            context_ring=context_ring,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc

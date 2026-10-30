@@ -18,7 +18,9 @@ from subgroup_miner.spatial import SpatialError, parse_geo_levels
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 GLOSSARY_VALUE_MAX = 120  # characters of one declared glossary value
 METADATA_DOC_MAX_BYTES = 64 * 1024  # a metadata document as uploaded
-MAX_CONTEXT_LAYERS = 2  # context files of one upload: one forced band each (docs/02_discovery.md §2.9); more would crowd the search
+# context files of one upload, one forced band each (docs/02_discovery.md §2.9): a third multiplies the Bonferroni family,
+# fills the validation budget with context cohorts and, on a wide table, empties the 3-conjunctions (spec §14.6)
+MAX_CONTEXT_LAYERS = 2
 _FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):\s*(.*)$")  # "Key: value" (a key of at most 41 characters)
 
 
