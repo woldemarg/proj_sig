@@ -8,8 +8,8 @@
     python scripts/compose_check.py --keep        leave the stack running afterwards
 
 Everything is reached the way a user reaches it: through the web console's nginx on one host port. The stack runs as
-compose project ``sig-check`` on its own volumes (created for the run and removed after it), its own host ports and its
-own Neo4j password, so it runs beside the user's own stack (project ``sig``) and never touches its data.
+compose project ``sig-check`` on its own volumes (created for the run and removed after it), its own host ports, image
+names and Neo4j password, so it runs beside the user's own stack (project ``sig``) and never touches its data.
 Needs Docker, ./models (the seed of the model volume; downloaded when it does not verify) and ./.env; --gpu also needs
 an NVIDIA GPU (driver 580 or newer).
 """
@@ -40,6 +40,7 @@ ENV = {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")} | {
     "SIG_WEB_PORT": str(WEB_PORT),
     "SIG_NEO4J_HTTP_PORT": "27474",
     "SIG_NEO4J_BOLT_PORT": "27687",
+    "SIG_IMAGE_NAMESPACE": PROJECT,
 }
 FILES = ["-f", str(ROOT / "compose.yaml")]  # --gpu adds compose.gpu.yaml
 results: list[tuple[str, bool, str]] = []
@@ -208,9 +209,9 @@ def check_workflow(live_llm: bool) -> None:
 
 def run_tests(fresh: bool) -> None:
     fresh_stage = ["--no-cache-filter", "test"] if fresh else []  # the runtime stage below it was just rebuilt by compose
-    cmd = ["docker", "build", "-f", "insight_graph_service/Dockerfile", "--target", "test", *fresh_stage, "-t", "sig/insight-graph:test", "."]
+    cmd = ["docker", "build", "-f", "insight_graph_service/Dockerfile", "--target", "test", *fresh_stage, "-t", f"{PROJECT}/insight-graph:test", "."]
     subprocess.run(cmd, cwd=ROOT, check=True)
-    code = subprocess.call(["docker", "run", "--rm", "-v", f"{ROOT / 'models'}:/app/models:ro", "sig/insight-graph:test"], cwd=ROOT)
+    code = subprocess.call(["docker", "run", "--rm", "-v", f"{ROOT / 'models'}:/app/models:ro", f"{PROJECT}/insight-graph:test"], cwd=ROOT)
     record("test suite inside the graph service image", code == 0, f"exit {code}")
 
 

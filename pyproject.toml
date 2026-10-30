@@ -53,6 +53,8 @@ dev = [
 package = false
 default-groups = ["dev"]
 conflicts = [[{ group = "cpu" }, { group = "cu130" }]]
+# the newest torch with a cu130 build: one version for the host, the CPU and the GPU image
+constraint-dependencies = ["torch==2.14.1"]
 # pysubgroup declares matplotlib for its plots, which SIG never draws
 override-dependencies = ["matplotlib; sys_platform == 'never'"]
 

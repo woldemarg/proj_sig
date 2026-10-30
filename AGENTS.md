@@ -39,7 +39,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `llm_model_broker/` | the LLM service: one OpenAI-compatible endpoint in front of the upstream model; imports nothing from the repository |
 | `sig_web_console/` | the static UI (`static/`: `index.html`, `app.js` the shell with `datasets.js`, `graph.js`, `chat.js`, `geo.js` beside it, `style.css`, vendored browser libraries in `vendor/`, `PROVENANCE.md`), `nginx.conf`, its `Dockerfile` |
 | `compose.yaml`, `.dockerignore` | the service suite in start order (`docs/12_architecture.md` §12.5) |
-| `pyproject.toml`, `uv.lock` | the dependency groups (`miner`, `topology`, `query`, `graph`, `narrator`, `broker`, `cpu`/`cu130` the torch build, `dev`) and the exact versions the host and every image install |
+| `pyproject.toml`, `uv.lock`, `.python-version` | the dependency groups (`miner`, `topology`, `query`, `graph`, `narrator`, `broker`, `cpu`/`cu130` the torch build, `dev`), the exact versions and the Python (3.12) the host and every image install |
 | `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
 | `docs/` | the specification: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
