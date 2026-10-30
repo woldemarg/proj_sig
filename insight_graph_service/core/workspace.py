@@ -478,17 +478,18 @@ class Workspace:
     def remove_datasets(self, dataset_ids: set[str], batches: list[dict[str, Any]], trash: Path) -> None:
         """Move the datasets' artefacts — their folders, their batches' blocks, records and uploads — into ``trash`` (inside
         the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them. An upload another
-        batch still points at (another level of the same upload) stays."""
+        batch still points at (another level of the same upload) stays, and so do its context files."""
         root = self.root.resolve()
         for b in batches:
             self._batches.pop(b["batch_id"], None)
-        shared = {b.get("source_path") for b in self._batches.values()}
+        files = lambda b: [b.get("source_path") or "", *(c["path"] for c in b.get("context", ()))]  # noqa: E731
+        shared = {f for b in self._batches.values() for f in files(b)}
         paths = [self.datasets_dir / ds for ds in sorted(dataset_ids)]
         for b in batches:
-            source = Path(b.get("source_path") or "")
             paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
-            if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()) and str(source) not in shared:
-                paths.append(source)
+            for source in map(Path, files(b)):
+                if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()) and str(source) not in shared:
+                    paths.append(source)
         for path in paths:
             if path.exists():
                 dest = trash / path.resolve().relative_to(root)

@@ -21,7 +21,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -349,6 +349,8 @@ class Engine:
         time: str | None = None,
         grid: str | None = None,
         tz: str | None = None,
+        context: Sequence[tuple[str, BinaryIO]] = (),
+        context_geo: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -356,11 +358,15 @@ class Engine:
         READY (``uploads.replaced_by``). ``time`` names a time column, binned by ``grid`` after admission (by default
         ``auto``, kept so on the record: the span's unit, ``resolve_grid``, coarsened until the admitted insights are
         measurable, ``fit_grid``; docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
-        gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. Processing is a separate call."""
+        gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. ``context``: (filename, stream) of
+        another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
+        counted into every geo level's cells (docs/02_discovery.md §2.9). Processing is a separate call."""
         resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
+        if context and not geo:
+            raise PipelineError("invalid_options", "context files without geo: they are counted into the cells of the geo option")
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
@@ -397,6 +403,12 @@ class Engine:
             path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
             forget_tables()
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
+        try:  # the upload's own file accepted: its context files now, refused together
+            layers = uploads.save_context(self.ws, context, (context_geo or "").strip() or "auto", self.settings.max_upload_bytes)
+        except Exception:
+            path.unlink(missing_ok=True)
+            forget_tables()
+            raise
         options = {
             "filename": name,
             "bins": bins,
@@ -420,6 +432,7 @@ class Engine:
                 upload={"upload_id": upload_id, "level": level},
                 geo_levels=selection if g else None,
                 locator=None if g else locator.strip() or None,
+                context=layers if g else None,  # a table level has no cells
                 **options,
             )
             for g, level in levels
@@ -447,6 +460,7 @@ class Engine:
         time: str | None = None,
         grid: str | None = None,
         tz: str | None = None,
+        context: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -478,6 +492,7 @@ class Engine:
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
+            **({"context": context} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
             "status": "UPLOADED",
@@ -662,6 +677,7 @@ class Engine:
             time=record.get("time"),
             grid=record.get("grid"),
             tz=record.get("tz"),
+            context=[(c["name"], Path(c["path"]), c["geo"]) for c in record.get("context", ())],
         )
 
     @_healthy

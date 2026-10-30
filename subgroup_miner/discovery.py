@@ -316,6 +316,9 @@ def run_discovery(
     )
 
 
+CONTEXT_STOP_HITS = 10  # draws as strong as the observed cohort after which the context null stops (sequential p)
+
+
 def _median_z(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
     """The z of the asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the sample to
     its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). 0 where the test is undefined."""
@@ -368,6 +371,8 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
     prof = result.profile
     spatial = result.spatial
     insights: list[Insight] = []
+    layers = {layer.column for layer in spatial.context.values()} if spatial else set()
+    family = sum(any(c.attribute in layers for c in cand.conditions) for cand in validated)  # the upload's context cohorts
     for cand in validated:
         rows = result.data.iloc[cand.row_indices]
         covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics, cand.restated)
@@ -386,8 +391,8 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         provenance_extra = {}
         if spatial:
             scope = [(c.attribute, c.value) for c in cand.conditions]
-            p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config)
-            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context)
+            p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config, family)
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context, family)
             provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
         insights.append(
             Insight(
@@ -488,7 +493,14 @@ def _shift(metric: str, local_median: float, global_median: float, global_mad: f
 
 
 def _spatial_stats(
-    values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int, p_context: float | None = None
+    values: np.ndarray,
+    cells: int,
+    rho: float,
+    factor: float,
+    primary: Shift,
+    n_tests: int,
+    p_context: float | None = None,
+    context_family: int = 1,
 ) -> dict[str, Any]:
     """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
     one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
@@ -498,19 +510,28 @@ def _spatial_stats(
         "moran_i": round(rho, 4),
         "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
         "p_adjusted_iid": min(1.0, p_iid * n_tests),
-        **({"p_context": p_context} if p_context is not None else {}),
+        **({"p_context": p_context, "context_family": context_family} if p_context is not None else {}),
     }
 
 
 def _context_evidence(
-    data: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, primary: Shift, spatial: SpatialContext, config: MinerConfig
+    data: pd.DataFrame,
+    conditions: list[tuple[str, str]],
+    expression: str,
+    primary: Shift,
+    spatial: SpatialContext,
+    config: MinerConfig,
+    family: int = 1,
 ) -> float | None:
     """``p_context`` of a cohort with a condition on a context layer's band (docs/02_discovery.md §2.9): the share of draws
     — every layer the scope names dealt anew within its parent cells (``context.dealt_band``), its band read with the
     observed edges, the other conditions fixed — whose cohort's median-test |z| (with that cohort's own n_eff) is at least
     the observed cohort's, (1 + hits) / (draws + 1); a draw below ``MIN_SUPPORT_ROWS`` rows is no draw. |z|, not p: a
-    strong cohort's p underflows to 0 and would tie with every strong draw. None without such a condition or with
-    ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope, so a re-check draws the same."""
+    strong cohort's p underflows to 0 and would tie with every strong draw. The gate reads it times ``family``, the
+    upload's context cohorts (Bonferroni, as ``p_adjusted``), so the draws run to at least 2 · family / MAX_P_ADJUSTED —
+    the least adjusted p can pass — and stop once ``CONTEXT_STOP_HITS`` draws match the observed shift (Besag & Clifford
+    1991: p = hits / draws; a cohort the dealt layer explains costs a few dozen draws). None without such a condition or
+    with ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope, so a re-check draws the same."""
     by_column = {layer.column: layer for layer in spatial.context.values()}
     named = [(by_column[a], v) for a, v in conditions if a in by_column]
     if not named or config.context_permutations <= 0:
@@ -521,7 +542,7 @@ def _context_evidence(
     observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary)
     rng = np.random.default_rng(config.eda_random_seed ^ int(stable_hash(expression), 16))
     hits = draws = 0
-    for _ in range(config.context_permutations):
+    for _ in range(max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))):
         mask = fixed.copy()
         for layer, value in named:
             mask &= dealt_band(layer, rng) == value  # each named layer dealt on its own, its parents' totals kept
@@ -530,6 +551,8 @@ def _context_evidence(
             continue
         draws += 1
         hits += _cohort_z(values, rows, spatial, primary) >= observed
+        if hits >= CONTEXT_STOP_HITS:
+            return hits / draws
     return (1 + hits) / (draws + 1)
 
 
@@ -547,11 +570,13 @@ def recompute_statistics(
     spatial: SpatialContext | None,
     n_tests: int,
     config: MinerConfig | None = None,
+    context_family: int = 1,
 ) -> dict[str, Any]:
     """One insight's rows and numbers again from its table: the rows its ``conditions`` select (and those its EDA
     ``expression`` selects), the support, each of ``metrics``' shift (the first is the primary), the primary's median
     test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance (its
-    ``p_context`` drawn again under ``config``, the defaults when none). Not recomputed: ``NOT_RECOMPUTED``."""
+    ``p_context`` drawn again under ``config``, the defaults when none, over the record's ``context_family``). Not
+    recomputed: ``NOT_RECOMPUTED``."""
     profile = eda.step1_profile_data(frame)
     data = profile["data_safe"]
     rows = cohort_rows(data, conditions)
@@ -568,8 +593,8 @@ def recompute_statistics(
     p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
     out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
-        p_context = _context_evidence(data, conditions, expression, primary, spatial, config or MinerConfig())
-        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context)
+        p_context = _context_evidence(data, conditions, expression, primary, spatial, config or MinerConfig(), context_family)
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context, context_family)
     return out
 
 
