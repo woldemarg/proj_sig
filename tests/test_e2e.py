@@ -369,7 +369,7 @@ def test_crosstype_benchmark_apparatus():
     import h3
     import numpy as np
     import pandas as pd
-    from crosstype_benchmark import BOX, RES, SCENARIOS, generate
+    from crosstype_benchmark import BOX, PLANTED, RES, SCENARIOS, generate
     from perf_benchmark import CALIFORNIA, EPOCH
 
     lat0, lon0, dlat, dlon = BOX
@@ -380,7 +380,7 @@ def test_crosstype_benchmark_apparatus():
         for frame in (upload["frame"], *upload["layers"].values()):  # one territory, one epoch
             assert frame["lat"].between(lat0, lat0 + dlat).all() and frame["lon"].between(lon0, lon0 + dlon).all(), name
         assert (pd.to_datetime(upload["frame"]["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
-        assert bool(upload["planted"]) == (name in ("X2", "X3", "X4")), name  # a null plants nothing
+        assert bool(upload["planted"]) == (name in PLANTED), name  # a null plants nothing
     x2 = generate("X2", 1)
     schools = {h3.latlng_to_cell(a, b, RES) for a, b in zip(x2["layers"]["schools"]["lat"], x2["layers"]["schools"]["lon"])}
     assert set(x2["planted"]) == schools  # X2 plants in the cells holding the layer

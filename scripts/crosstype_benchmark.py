@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from typing import Any
@@ -44,12 +45,13 @@ RES = 8
 BOX = (CENTRE[0] - 0.15, CENTRE[1] - 0.2, 0.3, 0.4)  # lat0, lon0, dlat, dlon: about 1,600 cells at RES
 SIGMA_KM = 8.0  # the density's bump: λ = 0.2 + exp(−d² / 2σ²) around the box's centre
 N_TARGET, N_LAYER = 20_000, 600
+N_SPARSE = 120  # X3s, X4s: a layer this small leaves most cells unplanted (600 put a layer point in 89 % of the rings)
 LIFT, BETA = 4.0, 1.0  # load +LIFT where planted; the target's intensity × (1 + BETA · the planted count)
 FOUND = 0.5  # share of the planted cells the plant's finders must cover together (geo_benchmark's rule): a finder raises a
 # planted metric and draws at least FOUND of its own cells from the planted ones
-NULL, PLANTED = ("X1", "X6", "X6b"), ("X2", "X3", "X4")
+NULL, PLANTED = ("X1", "X6", "X6b"), ("X2", "X3", "X4", "X3s", "X4s")
 GATES = ("A", "B0", "B")
-SCENARIOS = ("X1", "X2", "X3", "X4", "X6", "X6b")
+SCENARIOS = ("X1", "X2", "X3", "X4", "X3s", "X4s", "X6", "X6b")
 
 
 def density(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -76,11 +78,6 @@ def cells_of(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     return np.array([h3.latlng_to_cell(a, b, RES) for a, b in zip(lat, lon)], dtype=object)
 
 
-def counted(cells: np.ndarray) -> dict[str, int]:
-    keys, n = np.unique(cells, return_counts=True)
-    return dict(zip(keys, n.tolist()))
-
-
 def layer_frame(lat: np.ndarray, lon: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame({"lat": lat.round(6), "lon": lon.round(6)})
 
@@ -89,18 +86,19 @@ def generate(name: str, seed: int) -> dict[str, Any]:
     """One upload of scenario ``name``: the target frame, its layers by name and the planted cells (empty for a null)."""
     rng = np.random.default_rng(seed)
     uniform = lambda lat, lon: np.ones_like(lat)  # noqa: E731
-    layers = {"schools": layer_frame(*sample(rng, N_LAYER, density if name in ("X6", "X6b") else uniform))}
-    if name == "X4":
-        layers = {"schools": layer_frame(*sample(rng, N_LAYER // 2, uniform)), "shops": layer_frame(*sample(rng, N_LAYER // 2, uniform))}
-    counts = {k: counted(cells_of(f["lat"].to_numpy(), f["lon"].to_numpy())) for k, f in layers.items()}
+    size = N_SPARSE if name.endswith("s") else N_LAYER
+    layers = {"schools": layer_frame(*sample(rng, size, density if name in ("X6", "X6b") else uniform))}
+    if name.startswith("X4"):
+        layers = {"schools": layer_frame(*sample(rng, size // 2, uniform)), "shops": layer_frame(*sample(rng, size // 2, uniform))}
+    counts = {k: Counter(cells_of(f["lat"].to_numpy(), f["lon"].to_numpy())) for k, f in layers.items()}
     school = counts["schools"]
 
     def plant(cell: str) -> float:  # the planted count of a target point's cell (0: none)
         if name == "X2":
             return school.get(cell, 0)
-        if name == "X3":
+        if name.startswith("X3"):
             return float(np.mean([school.get(c, 0) for c in h3.grid_ring(cell, 1)]))
-        if name == "X4":
+        if name.startswith("X4"):
             disk = h3.grid_disk(cell, 1)
             return 2.0 * all(any(counts[k].get(c, 0) for c in disk) for k in counts)
         return 0.0
@@ -181,6 +179,7 @@ def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool) -> d
         "B0": cross_rows(admit([without(i, "context_family") for i in insights]), covers, cells, planted),
         "B": cross_rows(admit(insights), covers, cells, planted),
         "p_context": [i.provenance["spatial"]["p_context"] for i in marginal if "p_context" in i.provenance["spatial"]],
+        "admitted_p_context": sorted(i.provenance["spatial"]["p_context"] for i in admit(insights) if "p_context" in i.provenance["spatial"]),
         "selected": [d for d in result.profile.selected_dimensions if d.startswith("context_")],
         "space": result.profile.search_space_size,
         "longest": max((len(c.conditions) for c in result.candidates), default=0),
@@ -263,7 +262,7 @@ def run_engine(name: str, seed: int, overrides: dict[str, Any], library: dict[st
         for _, s in streams:
             s.close()
     served = sorted(p["provenance"]["spatial"].get("p_context") for p in engine.ws.patterns() if "p_context" in p["provenance"].get("spatial", {}))
-    mined = sorted(x["p_context"] for x in library["B"]["insights"] if x["p_context"] is not None)
+    mined = library["admitted_p_context"]  # every admitted pattern with a context condition, "none nearby" ones too
     return {"scenario": name, "seed": seed, "status": record["status"], "served": served, "library": mined, "identical": served == mined}
 
 
