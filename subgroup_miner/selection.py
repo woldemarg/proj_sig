@@ -102,8 +102,9 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
         marginal = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
         # a context-layer cohort (docs/02 §2.9): its shift must also beat the layer dealt at random within its parent cells,
         # and it is never admitted on a correlation change, which that null does not test
-        p_context = ins.provenance.get("spatial", {}).get("p_context")
-        confounded = p_context is not None and p_context > config.max_p_adjusted
+        spatial = ins.provenance.get("spatial", {})
+        p_context = spatial.get("p_context")  # adjusted below over the upload's context cohorts, as p_adjusted is
+        confounded = p_context is not None and min(1.0, p_context * spatial.get("context_family", 1)) > config.max_p_adjusted
         significant = marginal and not confounded
         stable = not covariance and ins.stability >= config.min_stability
         shift_ok = significant and stable  # R2 + R3: the bootstrap measures the shift score
@@ -121,7 +122,7 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
             elif marginal and confounded:
                 reason, detail = (
                     "context_confounded",
-                    f"p_context={p_context:.2g}: the shift holds as often when the layer is dealt at random within the parent cells",
+                    f"p_context={p_context:.2g} × {spatial.get('context_family', 1)} cohorts: the shift holds as often when the layer is dealt at random within the parent cells",
                 )
             elif significant:
                 reason, detail = "unstable", f"stability={ins.stability:.2f}"
