@@ -239,7 +239,7 @@ def test_geo_evidence_speaks_plain_language(engine, points_csv):
     assert scopes and not any("neighbours_points_band" in line or "lisa_points" in line for line in scopes)
 
 
-def test_spatial_provenance_is_the_five_ingest_fields():
+def test_spatial_provenance_is_the_ingest_fields():
     stored = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01, "compactness": 0.5, "colocated": []}
     spatial = SpatialProvenance.from_dict(stored)
     assert spatial.to_dict() == {k: stored[k] for k in ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")}  # derived keys stay out

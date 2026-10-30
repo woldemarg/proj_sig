@@ -25,8 +25,9 @@ import pandas as pd
 from scipy.stats import norm, zscore
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id
+from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id, stable_hash
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.context import dealt_band
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
@@ -315,20 +316,24 @@ def run_discovery(
     )
 
 
-def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
-    """Two-sided asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the
-    sample to its effective size under spatial autocorrelation (docs/02_discovery.md §2.9)."""
+def _median_z(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+    """The z of the asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the sample to
+    its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). 0 where the test is undefined."""
     values = values[~np.isnan(values)]
     n = len(values)
     if n < 2:
-        return 1.0
+        return 0.0
     root_n = math.sqrt(max(n * n_eff_factor, 1.0))
     scale = eda.calculate_mad(values) or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
     se = _MEDIAN_SE_FACTOR * scale / root_n if scale else float(np.std(values, ddof=1)) / root_n
     if not se or not np.isfinite(se):
-        return 1.0
-    z = (float(np.median(values)) - global_median) / se
-    return float(2.0 * norm.sf(abs(z)))
+        return 0.0
+    return (float(np.median(values)) - global_median) / se
+
+
+def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+    """Two-sided p of ``_median_z``."""
+    return float(2.0 * norm.sf(abs(_median_z(values, global_median, global_mad, n_eff_factor))))
 
 
 def _covariance_pair(
@@ -380,7 +385,9 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
         pid = pattern_id(dataset_id, cand.conditions)
         provenance_extra = {}
         if spatial:
-            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests)
+            scope = [(c.attribute, c.value) for c in cand.conditions]
+            p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config)
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context)
             provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
         insights.append(
             Insight(
@@ -480,7 +487,9 @@ def _shift(metric: str, local_median: float, global_median: float, global_mad: f
     return Shift(metric, float(sign * z), local_median, global_median, global_mad, source)
 
 
-def _spatial_stats(values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int) -> dict[str, Any]:
+def _spatial_stats(
+    values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int, p_context: float | None = None
+) -> dict[str, Any]:
     """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
     one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
     p_iid = _median_test(values, primary.global_median, primary.global_mad)
@@ -489,16 +498,60 @@ def _spatial_stats(values: np.ndarray, cells: int, rho: float, factor: float, pr
         "moran_i": round(rho, 4),
         "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
         "p_adjusted_iid": min(1.0, p_iid * n_tests),
+        **({"p_context": p_context} if p_context is not None else {}),
     }
 
 
+def _context_evidence(
+    data: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, primary: Shift, spatial: SpatialContext, config: MinerConfig
+) -> float | None:
+    """``p_context`` of a cohort with a condition on a context layer's band (docs/02_discovery.md §2.9): the share of draws
+    — every layer the scope names dealt anew within its parent cells (``context.dealt_band``), its band read with the
+    observed edges, the other conditions fixed — whose cohort's median-test |z| (with that cohort's own n_eff) is at least
+    the observed cohort's, (1 + hits) / (draws + 1); a draw below ``MIN_SUPPORT_ROWS`` rows is no draw. |z|, not p: a
+    strong cohort's p underflows to 0 and would tie with every strong draw. None without such a condition or with
+    ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope, so a re-check draws the same."""
+    by_column = {layer.column: layer for layer in spatial.context.values()}
+    named = [(by_column[a], v) for a, v in conditions if a in by_column]
+    if not named or config.context_permutations <= 0:
+        return None
+    fixed = np.zeros(len(data), dtype=bool)
+    fixed[cohort_rows(data, [(a, v) for a, v in conditions if a not in by_column])] = True
+    values = data[primary.metric].to_numpy(dtype=float)
+    observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary)
+    rng = np.random.default_rng(config.eda_random_seed ^ int(stable_hash(expression), 16))
+    hits = draws = 0
+    for _ in range(config.context_permutations):
+        mask = fixed.copy()
+        for layer, value in named:
+            mask &= dealt_band(layer, rng) == value  # each named layer dealt on its own, its parents' totals kept
+        rows = np.flatnonzero(mask)
+        if len(rows) < config.min_support_rows:
+            continue
+        draws += 1
+        hits += _cohort_z(values, rows, spatial, primary) >= observed
+    return (1 + hits) / (draws + 1)
+
+
+def _cohort_z(values: np.ndarray, rows: np.ndarray, spatial: SpatialContext, primary: Shift) -> float:
+    """|z| of the median test of the metric ``values`` over the cohort ``rows``, with the cohort's own n_eff."""
+    factor = effective_n_factor(subgroup_moran(values[rows], rows, spatial))
+    return abs(_median_z(values[rows], primary.global_median, primary.global_mad, factor))
+
+
 def recompute_statistics(
-    frame: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, metrics: list[str], spatial: SpatialContext | None, n_tests: int
+    frame: pd.DataFrame,
+    conditions: list[tuple[str, str]],
+    expression: str,
+    metrics: list[str],
+    spatial: SpatialContext | None,
+    n_tests: int,
+    config: MinerConfig | None = None,
 ) -> dict[str, Any]:
     """One insight's rows and numbers again from its table: the rows its ``conditions`` select (and those its EDA
     ``expression`` selects), the support, each of ``metrics``' shift (the first is the primary), the primary's median
-    test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance.
-    Not recomputed: ``NOT_RECOMPUTED``."""
+    test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance (its
+    ``p_context`` drawn again under ``config``, the defaults when none). Not recomputed: ``NOT_RECOMPUTED``."""
     profile = eda.step1_profile_data(frame)
     data = profile["data_safe"]
     rows = cohort_rows(data, conditions)
@@ -515,7 +568,8 @@ def recompute_statistics(
     p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
     out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
-        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests)
+        p_context = _context_evidence(data, conditions, expression, primary, spatial, config or MinerConfig())
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context)
     return out
 
 

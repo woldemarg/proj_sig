@@ -768,7 +768,7 @@ class Engine:
     @_healthy
     def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
         """``pattern_id`` recomputed from its stored upload (``verify.verify_pattern``, docs/06_graph_and_storage.md §6.7)."""
-        return verify.verify_pattern(self.ws, pattern_id, self._load)
+        return verify.verify_pattern(self.ws, pattern_id, self._load, self.settings.miner)
 
     def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
         """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and

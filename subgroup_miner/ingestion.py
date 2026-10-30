@@ -6,6 +6,7 @@ import csv
 import functools
 import hashlib
 import zoneinfo
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ import pandas as pd
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.context import ContextSource
 from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, parse_times, select_levels
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
@@ -90,10 +92,12 @@ def dataset_fingerprint(
     geo: str | None = None,
     left_out: list[str] | None = None,
     time: str | None = None,
+    context: list[str] | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
-    file with its time apart is another analysis."""
+    file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
+    order — the same points with another layer beside them are another analysis too."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -104,6 +108,8 @@ def dataset_fingerprint(
         h.update(f"left_out={sorted(left_out)}".encode())
     if time:
         h.update(f"time={time}".encode())
+    if context:
+        h.update(f"context={sorted(context)}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -161,8 +167,10 @@ _kept = functools.lru_cache(maxsize=1)(_parse)  # ponytail: one file, as the lev
 
 
 def forget_tables() -> None:
-    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``) and its points' profile."""
+    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``), its points' profile and its
+    context layers' points."""
     _kept.cache_clear()
+    _context_points.cache_clear()
     forget_profile()
 
 
@@ -291,6 +299,7 @@ def load_dataset(
     time: str | None = None,
     grid: str | None = None,
     tz: str | None = None,
+    context: Sequence[tuple[str, Path, str]] = (),
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -302,7 +311,9 @@ def load_dataset(
     (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
     ``resolve_grid`` of the span of the rows the series are of — a geo level's located points, a table's every row —,
     a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by
-    default, and the zone of a time written without one) — discovery never sees it."""
+    default, and the zone of a time written without one) — discovery never sees it. ``context``: ``(layer, path,
+    locator)`` per context layer — another type's points, read apart (``read_context``) and counted into the cells as one
+    forced band each (§2.9); it needs ``geo``."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -312,6 +323,9 @@ def load_dataset(
         geo_spec = parse_geo(geo, config.geo_resolution) if geo else None
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
+    if context and not geo_spec:
+        raise IngestionError("invalid_options", "context layers need the geo option: they are counted into its cells")
+    layers = [read_context(*layer) for layer in context]
     frame, digest = read_file(path, shared=shared)
     if frame.shape[1] < 2:
         raise IngestionError("invalid_schema", "Need at least one categorical and one numeric column")
@@ -342,7 +356,7 @@ def load_dataset(
     if geo_spec:
         points = frame
         key = (digest.hexdigest(), geo_spec[0]) if shared else None  # the levels of one upload: one point profile
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key)
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers])
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
@@ -369,6 +383,7 @@ def load_dataset(
             geo=_geo_text(geo_spec),
             left_out=left_out,
             time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None,
+            context=[fingerprint for _, fingerprint in layers],
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -399,17 +414,44 @@ def _geo_text(spec: tuple[str, int] | None) -> str | None:
     return f"{spec[0]}@{spec[1]}" if spec else None
 
 
+def read_context(name: str, path: Path, locator: str) -> tuple[ContextSource, str]:
+    """A context layer's points -> (them, its fingerprint part ``<layer>:<sha12>:<locator>``); a file without a point
+    is refused. Read once for the levels of an upload (kept by the file's stamp, as ``read_file`` keeps the target's;
+    a file changed since reads anew), never through the shared parse: that holds the upload's own file."""
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError as exc:  # removed meanwhile: as a missing source
+        raise IngestionError("unsupported_file", f"context layer {name!r}: file not found: {path}") from exc
+    try:
+        lat, lon, sha = _context_points(str(path), locator, st.st_mtime_ns, st.st_size)
+    except SpatialError as exc:
+        raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
+    if not (np.isfinite(lat) & np.isfinite(lon)).any():
+        raise IngestionError("invalid_options", f"context layer {name!r}: No valid point in {path.name}")
+    return ContextSource(name, lat, lon), f"{name}:{sha[:12]}:{locator}"
+
+
+@functools.lru_cache(maxsize=4)  # ponytail: the layers of the upload running now (at most two); keyed by the file's stamp
+def _context_points(path: str, locator: str, *_stamp: int) -> tuple[np.ndarray, np.ndarray, str]:
+    frame, digest = read_file(Path(path))
+    lat, lon, _ = locate_points(frame, locator)
+    return lat, lon, digest.hexdigest()
+
+
 def _to_cells(
-    frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig, profile_key: object = None
+    frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig, profile_key: object = None, context: Sequence[ContextSource] = ()
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
-    one upload profile its point columns once (``spatial.point_profile``)."""
+    one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
             *spec,
             min_cell_points=config.min_cell_points,
             profile_key=profile_key,
+            context=context,
+            context_ring=config.context_ring,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc

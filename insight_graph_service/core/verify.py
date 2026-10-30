@@ -14,6 +14,7 @@ import numpy as np
 from insight_contracts import Condition, pattern_id
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.workspace import Workspace
+from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import NOT_RECOMPUTED, recompute_statistics
 from subgroup_miner.ingestion import IngestionError, LoadedDataset
 
@@ -72,7 +73,7 @@ def verify_diff(record: dict[str, Any], fresh: dict[str, Any], covers: np.ndarra
     return out
 
 
-def verify_pattern(ws: Workspace, pattern_id: str, load: Callable[[dict[str, Any]], LoadedDataset]) -> dict[str, Any]:
+def verify_pattern(ws: Workspace, pattern_id: str, load: Callable[[dict[str, Any]], LoadedDataset], config: MinerConfig) -> dict[str, Any]:
     """``pattern_id`` recomputed from its stored upload (docs/06_graph_and_storage.md §6.7): ``reproduced`` when its rows
     and every recomputed number match the journal, ``differs`` with what does not, ``source_changed`` when the file
     read with its options (under the current miner settings) no longer gives the dataset id, ``source_missing`` when
@@ -100,6 +101,7 @@ def verify_pattern(ws: Workspace, pattern_id: str, load: Callable[[dict[str, Any
         [s["metric"] for s in record["shifts"]],
         loaded.spatial,
         family,
+        config,
     )
     try:
         covers = ws.load_covers(ds).get(pattern_id)

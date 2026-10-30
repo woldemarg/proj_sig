@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,7 @@ from scipy import sparse
 from scipy.stats import false_discovery_control, norm
 
 from insight_contracts import Insight
+from subgroup_miner.context import ContextLayer, ContextSource, context_bands
 
 POINT_PARSE_SHARE = 0.95  # share of non-null values that must parse as points for a column to be the location
 LAT_NAMES = frozenset({"lat", "latitude"})
@@ -85,6 +87,7 @@ class SpatialContext:
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
+    context: dict[str, ContextLayer] = field(default_factory=dict)  # layer name -> its counts and disks (context.py), the null's input; never stored
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -394,8 +397,12 @@ def build_cells(
     *,
     min_cell_points: int,
     profile_key: object = None,
+    context: Sequence[ContextSource] = (),
+    context_ring: int = 1,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
-    """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``."""
+    """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``.
+    Each ``context`` layer (points of another type) becomes one forced band, the layer's points in the cell and its
+    ``context_ring`` rings (``context.py``); a layer with one band only at this resolution is left out with a warning."""
     profile = point_profile(frame, locator, profile_key)
     lat, lon, location = profile.lat, profile.lon, profile.location
     ok = np.isfinite(lat) & np.isfinite(lon)
@@ -471,6 +478,11 @@ def build_cells(
             glossary[f"{band}={q}"] = f"the surrounding cells are {words} ({by})"
         glossary[f"{band}=missing"] = "no surrounding cell has events"
         derived[f"{name}_band"] = counters  # every counter measures the same activity
+    bands, layers, words, notes = context_bands(context, cells, resolution, context_ring)
+    out |= bands
+    derived |= {column: [] for column in bands}  # forced, and restating no metric of the target
+    glossary |= words
+    warnings += notes
     neighbourhood = [*derived, LISA_COLUMN]
     for col, others in nested.items():
         if others:
@@ -496,6 +508,7 @@ def build_cells(
         derived_from=derived,
         moran={m: moran_i(out[m], ptr, idx) for m in metrics},
         glossary={k: v for k, v in glossary.items() if k.split("=", 1)[0] in table.columns or k.split("=", 1)[0] in derived},
+        context=layers,
     )
     return table, ctx, warnings
 
