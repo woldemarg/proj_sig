@@ -1,35 +1,35 @@
 """Cross-type context on real data (docs/extra_funcs/spatial_analytics_multi_type/cross_type_context_architecture.md
-§8.3): three Chicago cases, each a hypothesis the literature states, mined on one period through the library with the
+§8.2a-8.2b): Chicago cases, each a hypothesis the literature states, mined on one period through the library with the
 context null off (A) and on (B), and every cross-type finding re-tested on a held-out period.
 
-    python scripts/crosstype_validation.py                # R1, R2, R3; downloads into data/benchmarks/crosstype/
-    python scripts/crosstype_validation.py --offline      # the copies already downloaded
-    python scripts/crosstype_validation.py --cases R2
+    python scripts/crosstype_validation.py                    # R1, R2, R3 on the shipped tables (data/demo, in git)
+    python scripts/crosstype_validation.py --cases R1c,R2c    # the second round: violent crimes, their count
+    python scripts/crosstype_validation.py --full             # every crime of the year (the pinned portal exports)
 
-R1 robbery and assault around alcohol outlets (two layers: on-premise licences — tavern, consumption on premises, late
-hour — and package-goods stores); R2 street robbery around CTA 'L' stations; both on the city's crimes of 2025, held out
-on those of 2024. R3, the negative control: the shipped crashes around the shipped schools, its first half-year mined
-and its second held out — no school effect beyond the shared density is expected.
+R1 robbery and assault around alcohol outlets (two layers: ``chicago_bars``, ``chicago_liquor_stores``); R2 street
+robbery around CTA 'L' stations (``chicago_l_stations``); both on the city's crimes of 2025 (``chicago_crimes``, a sixth
+by a stable hash), held out on those of 2024 (``chicago_crimes_2024``). R3, the negative control: the crashes around the
+schools, the first half-year mined and the second held out. ``--full`` reads every crime of both years from the exports
+``scripts/demo_datasets.py`` pins (fetched into ``data/raw/`` when missing).
 
-The City of Chicago Data Portal re-publishes its tables; each download's SHA-256 is recorded with the results, not
-pinned. A finding replicates when its scope, read on the held-out period (the bands cut on that period's cells), shifts
-its metric the same way by at least MIN_EFFECT_Z, and passes the median test and the context null, each adjusted over
-the findings re-tested.
+A finding replicates when its scope, read on the held-out period (the bands cut on that period's cells), shifts its
+metric the same way by at least MIN_EFFECT_Z, and passes the median test and the context null, each adjusted over the
+findings re-tested.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
+import importlib
 import time
-import urllib.parse
-import urllib.request
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import demo_datasets
 import pandas as pd
+from demo_data import chicago_crimes
 from scratch import save_result, settings
 
 from insight_contracts import Insight
@@ -40,34 +40,10 @@ from subgroup_miner.discovery import DiscoveryError, build_insights, recompute_s
 from subgroup_miner.ingestion import load_dataset
 from subgroup_miner.selection import select_insights
 
-FOLDER = PROJECT_ROOT / "data" / "benchmarks" / "crosstype"  # git-ignored, as data/ is
-PORTAL = "https://data.cityofchicago.org/resource"
-CRIME_FIELDS = "id,date,primary_type,arrest,domestic,location_description,latitude,longitude"
-SOURCES = {  # file -> (Socrata resource, query)
-    **{
-        f"crimes_{y}.csv": (
-            "ijzp-q8t2.csv",
-            {"$select": CRIME_FIELDS, "$where": f"year={y} AND latitude IS NOT NULL", "$order": "id", "$limit": 500000},
-        )
-        for y in (2024, 2025)
-    },
-    "liquor_licenses.csv": (
-        "nrmj-3kcf.csv",
-        {"$select": "license_id,license_description,latitude,longitude", "$where": "latitude IS NOT NULL", "$limit": 50000},
-    ),
-    "l_stops.json": ("8pix-ypme.json", {"$select": "map_id,station_name,location", "$order": "map_id", "$limit": 5000}),
-}
-CRIME = {  # primary type -> class (at most 8 classes: each becomes a share of the cells' crimes)
-    **dict.fromkeys(["ROBBERY"], "robbery"),
-    **dict.fromkeys(["BATTERY", "ASSAULT", "HOMICIDE", "CRIMINAL SEXUAL ASSAULT"], "assault"),
-    **dict.fromkeys(["THEFT"], "theft"),
-    **dict.fromkeys(["MOTOR VEHICLE THEFT", "BURGLARY", "CRIMINAL DAMAGE", "ARSON"], "property"),
-    **dict.fromkeys(["DECEPTIVE PRACTICE"], "deceptive"),
-    **dict.fromkeys(["NARCOTICS", "WEAPONS VIOLATION", "CONCEALED CARRY LICENSE VIOLATION"], "drugs_weapons"),
-}
-STREET = {"STREET", "SIDEWALK", "ALLEY"}
-ON_PREMISE = {"Tavern", "Consumption on Premises - Incidental Activity", "Late Hour"}
-CASES = {  # name -> the target's and the hold-out's file, the layers, the geo option, the outcomes the hypothesis names
+WORK = PROJECT_ROOT / "data" / "benchmarks" / "crosstype" / "prepared"  # the prepared targets (git-ignored); never beside raw exports
+LAYERS = {"bars": "chicago_bars", "liquor_stores": "chicago_liquor_stores", "l_stations": "chicago_l_stations", "schools": "chicago_schools"}
+CRIMES = {2025: "chicago_crimes", 2024: "chicago_crimes_2024"}
+CASES = {  # name -> the target's and the hold-out's table, the layers, the geo option, the outcomes the hypothesis names
     "R1": {
         "target": "crimes_2025",
         "holdout": "crimes_2024",
@@ -83,58 +59,24 @@ CASES = {  # name -> the target's and the hold-out's file, the layers, the geo o
 }
 
 
-def fetch(name: str, offline: bool) -> Path:
-    """One source table into ``FOLDER`` (kept: an offline run reads the copy)."""
-    path = FOLDER / name
-    if not path.is_file() and not offline:
-        resource, query = SOURCES[name]
-        url = f"{PORTAL}/{resource}?{urllib.parse.urlencode(query)}"
-        request = urllib.request.Request(url, headers={"User-Agent": "sig-crosstype-validation"})
-        with urllib.request.urlopen(request, timeout=1800) as response:
-            FOLDER.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(response.read())
-    return path
+def crimes(year: int, full: bool) -> pd.DataFrame:
+    """A year of crimes without its time column: the shipped sixth, or (``full``) every crime of the pinned export."""
+    key = CRIMES[year]
+    if not full:
+        return pd.read_csv(DEMO_DIR / f"{key}.csv").drop(columns="crime_date")
+    module, folder = importlib.import_module(f"demo_data.{key}"), demo_datasets.RAW / key
+    for name, url in module.URLS.items():
+        if not (folder / name).is_file():
+            demo_datasets.fetch(url, folder, [name])
+    return chicago_crimes.prepare(folder, year=year, thin=1).drop(columns="crime_date")
 
 
-def crimes(raw: Path) -> pd.DataFrame:
-    """A year of crimes: the point, the crime's class, street or not, arrest, domestic, the hour band."""
-    df = pd.read_csv(raw, dtype=str, keep_default_na=False, na_values=[""])
-    when = pd.to_datetime(df["date"], errors="coerce")
-    out = pd.DataFrame({"lat": pd.to_numeric(df["latitude"]).round(6), "lon": pd.to_numeric(df["longitude"]).round(6)})
-    out["crime"] = df["primary_type"].map(CRIME).fillna("other")
-    out["street"] = df["location_description"].isin(STREET).map({True: "yes", False: "no"})
-    out["arrest"], out["domestic"] = df["arrest"].str.lower(), df["domestic"].str.lower()
-    out["hour_band"] = pd.cut(when.dt.hour, [-1, 5, 11, 17, 23], labels=["00-05", "06-11", "12-17", "18-23"]).astype(str)
-    return out
-
-
-def points(frame: pd.DataFrame) -> pd.DataFrame:
-    """The distinct places of a portal table's latitude and longitude."""
-    return frame.assign(lat=pd.to_numeric(frame["latitude"]).round(6), lon=pd.to_numeric(frame["longitude"]).round(6))[
-        ["lat", "lon"]
-    ].drop_duplicates()
-
-
-def layers(offline: bool) -> dict[str, pd.DataFrame]:
-    """The context layers by name, one row per place (a business's several licences, a station's platforms: once)."""
-    lic = pd.read_csv(fetch("liquor_licenses.csv", offline), dtype=str)
-    stops = pd.DataFrame(json.loads(fetch("l_stops.json", offline).read_text(encoding="utf-8"))).drop_duplicates("map_id")
-    return {
-        "bars": points(lic[lic["license_description"].isin(ON_PREMISE)]),
-        "liquor_stores": points(lic[lic["license_description"] == "Package Goods"]),
-        "l_stations": pd.DataFrame({k: stops["location"].map(lambda p, k=k: round(float(p[f"{k}itude"]), 6)) for k in ("lat", "long")}).rename(
-            columns={"long": "lon"}
-        ),  # the portal's point: {latitude, longitude}
-        "schools": pd.read_csv(DEMO_DIR / "chicago_schools.csv")[["lat", "lon"]],
-    }
-
-
-def tables(offline: bool) -> dict[str, pd.DataFrame]:
-    """The targets and hold-outs by name: two years of crimes, the shipped crashes split at its half-year."""
+def tables(full: bool) -> dict[str, pd.DataFrame]:
+    """The targets and hold-outs by name: two years of crimes (all, violent), the shipped crashes split at its half-year."""
     crashes = pd.read_csv(DEMO_DIR / "chicago_crashes.csv")
     first = pd.to_datetime(crashes["crash_date"]) < pd.Timestamp("2024-04-01")
-    out = {f"crimes_{y}": crimes(fetch(f"crimes_{y}.csv", offline)) for y in (2024, 2025)}
-    out |= {f"violent_{y}": out[f"crimes_{y}"].query("crime in ('robbery', 'assault')") for y in (2024, 2025)}
+    out = {f"crimes_{y}": crimes(y, full) for y in CRIMES}
+    out |= {f"violent_{y}": out[f"crimes_{y}"].query("crime in ('robbery', 'assault')") for y in CRIMES}
     return out | {"crashes_first": crashes[first].drop(columns="crash_date"), "crashes_second": crashes[~first].drop(columns="crash_date")}
 
 
@@ -219,16 +161,15 @@ def run_case(name: str, case: dict[str, Any], files: dict[str, Path], cfg_all) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cases", default="R1,R2,R3")  # the first round; R1c,R2c the second (§8.2b)
-    parser.add_argument("--offline", action="store_true", help="read the copies already downloaded")
+    parser.add_argument("--full", action="store_true", help="every crime of both years, not the shipped sixth")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
-    work = FOLDER / "prepared"
-    work.mkdir(parents=True, exist_ok=True)
-    files: dict[str, Path] = {}
-    for name, frame in {**tables(args.offline), **layers(args.offline)}.items():
-        frame.to_csv(path := work / f"{name}.csv", index=False)
+    WORK.mkdir(parents=True, exist_ok=True)
+    files = {name: DEMO_DIR / f"{key}.csv" for name, key in LAYERS.items()}  # the layers as shipped: complete
+    for name, frame in tables(args.full).items():
+        frame.to_csv(path := WORK / f"{name}.csv", index=False)
         files[name] = path
-    digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(FOLDER.glob("*.*"))}
+    digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files.values()))}
     results = [run_case(name, CASES[name], files, settings()) for name in args.cases.split(",")]
     for r in results:
         print(
@@ -239,7 +180,7 @@ def main() -> int:
             print(
                 f"  [{f['gates']:<2}] {f['target']:<26} z={f['z']:+.2f} p_ctx·m={f['p_context_adjusted']} {f['toward']:<7} | hold-out z={h['z']:+.2f} rep={h['replicated']} | {f['scope']}"
             )
-    print(save_result("crosstype_validation", args.label, {"sources": digests, "cases": results}))
+    print(save_result("crosstype_validation", args.label, {"full": args.full, "sources": digests, "cases": results}))
     return 0
 
 

@@ -163,6 +163,104 @@
   "span": null
  },
  {
+  "key": "chicago_crimes",
+  "title": "Злочини в Чикаго, 2025",
+  "description": "Зареєстровані поліцією злочини 2025 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година. Ціль крос-типової перевірки: з контекстним шаром барів, магазинів алкоголю чи станцій 'L'.",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)",
+  "attribution": "City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.",
+  "prepared": "2025; шоста частина за хешем ідентифікатора; типи злочинів — у сім класів; місце — вулиця чи ні",
+  "options": {
+   "time": "crime_date",
+   "geo": "lat,lon@auto",
+   "source": "City of Chicago, Crimes"
+  },
+  "file": "chicago_crimes.csv",
+  "rows": 39192,
+  "bytes": 2733341,
+  "sha256": "f688f2242bfb0eb7e11ecc76024fa5a8d607be9792897de6c2ada1dcb9071dad",
+  "span": [
+   "2025-01-01",
+   "2025-12-31"
+  ]
+ },
+ {
+  "key": "chicago_crimes_2024",
+  "title": "Злочини в Чикаго, 2024",
+  "description": "Зареєстровані поліцією злочини 2024 року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година. Відкладений рік крос-типової перевірки (знахідки 2025 перевіряються на ньому).",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)",
+  "attribution": "City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.",
+  "prepared": "2024; шоста частина за хешем ідентифікатора; типи злочинів — у сім класів; місце — вулиця чи ні",
+  "options": {
+   "time": "crime_date",
+   "geo": "lat,lon@auto",
+   "source": "City of Chicago, Crimes"
+  },
+  "file": "chicago_crimes_2024.csv",
+  "rows": 43038,
+  "bytes": 3003994,
+  "sha256": "8cfe72c634dae53e1f63a79952d01360be77ac95d7e85e240950cf7591f06fe9",
+  "span": [
+   "2024-01-01",
+   "2024-12-31"
+  ]
+ },
+ {
+  "key": "chicago_bars",
+  "title": "Бари й заклади з алкоголем у Чикаго (контекстний шар)",
+  "description": "Місця з ліцензією на продаж алкоголю для споживання на місці. Контекстний шар до злочинів Чикаго.",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, Liquor and Public Places of Amusement Licenses (nrmj-3kcf)",
+  "attribution": "City of Chicago / Department of Business Affairs and Consumer Protection, data.cityofchicago.org.",
+  "prepared": "чинні ліцензії Tavern, Consumption on Premises - Incidental Activity, Late Hour; одне місце — один рядок",
+  "context_only": true,
+  "options": {
+   "geo": "lat,lon"
+  },
+  "file": "chicago_bars.csv",
+  "rows": 3037,
+  "bytes": 63073,
+  "sha256": "4d4ee4abeded9e76ecd6b5e8922bf48e36f0fc687ad45c7ea209f0682601bce2",
+  "span": null
+ },
+ {
+  "key": "chicago_liquor_stores",
+  "title": "Магазини алкоголю в Чикаго (контекстний шар)",
+  "description": "Місця з ліцензією package goods — продаж алкоголю на винос. Контекстний шар до злочинів Чикаго.",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, Liquor and Public Places of Amusement Licenses (nrmj-3kcf)",
+  "attribution": "City of Chicago / Department of Business Affairs and Consumer Protection, data.cityofchicago.org.",
+  "prepared": "чинні ліцензії Package Goods; одне місце — один рядок",
+  "context_only": true,
+  "options": {
+   "geo": "lat,lon"
+  },
+  "file": "chicago_liquor_stores.csv",
+  "rows": 1023,
+  "bytes": 21289,
+  "sha256": "2051a8a74aaea6b6018d0a36c5dadf2950d5ee69fec317295cff7cc39cd6ebe6",
+  "span": null
+ },
+ {
+  "key": "chicago_l_stations",
+  "title": "Станції 'L' у Чикаго (контекстний шар)",
+  "description": "Станції міської залізниці CTA. Контекстний шар до злочинів Чикаго.",
+  "license": "City of Chicago Data Portal Terms of Use",
+  "source": "City of Chicago Data Portal, CTA - System Information - List of 'L' Stops (8pix-ypme)",
+  "attribution": "Chicago Transit Authority, data.cityofchicago.org.",
+  "prepared": "одна станція — один рядок (платформи разом); точка з поля location",
+  "context_only": true,
+  "options": {
+   "geo": "lat,lon"
+  },
+  "file": "chicago_l_stations.csv",
+  "rows": 144,
+  "bytes": 4380,
+  "sha256": "eaf39b4f70d89ff8c1f8a07101caf6db0718b412247015c92f5c74e1aa62697a",
+  "span": null
+ },
+ {
   "key": "nyc_collisions",
   "title": "ДТП у Нью-Йорку, 2023–2024",
   "description": "Зареєстровані поліцією Нью-Йорка аварії: де, коли, через що і з якими транспортними засобами стаються пригоди з травмованими людьми й пішоходами.",
