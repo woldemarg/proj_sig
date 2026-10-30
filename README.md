@@ -13,7 +13,7 @@ The hypothesis it makes testable:
 ## Architecture
 
 ```text
-browser ──> sig-web-console (nginx: the UI; /api/chat/ -> narrator, /api/ -> graph service)
+browser ──> web-console (nginx: the UI; /api/chat/ -> narrator, /api/ -> graph service)
               │
               ├─ /api/chat/ ──> evidence-narrator ── HTTP ──> llm-model-broker ── HTTPS ──> upstream model (OpenRouter, a local server)
               │                      │ POST /api/search                 one model, its key, the provider routing
@@ -63,13 +63,11 @@ docker compose up -d --build --wait       # then http://127.0.0.1:8765
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
-The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 2.5 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
+The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 3 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
 
 **Host development**
 ```powershell
-python -m venv .venv                                                                # from the repository root
-.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu130   # or CPU torch
-.venv\Scripts\pip install -r requirements-dev.txt                                    # every service's runtime + pytest, ruff, playwright
+uv sync --group cu130                                                               # .venv from uv.lock: every service's runtime + pytest, ruff, playwright; torch for CUDA 13.0 (--group cpu: the CPU build; a Mac: plain `uv sync`)
 .venv\Scripts\python.exe -m insight_graph_service.core.model_store                  # once: Qwen3-Embedding-0.6B into models/ (1.19 GB), verified
 .venv\Scripts\python.exe -m llm_model_broker                                         # the broker on :8080 (reads GEMMA_* from .env)
 .venv\Scripts\python.exe scripts\dev.py                                              # console + graph service + narrator on http://127.0.0.1:8765
@@ -264,17 +262,17 @@ The full list, with the reasons, is in [10.6](docs/10_verification.md#106-known-
 ```text
 sig/
   insight_contracts/          the shared kernel (standard library only); wording.py: how an insight reads in Ukrainian
-  subgroup_miner/             table -> insights (vendor/eda, PROVENANCE.md, README.md, requirements.txt)
-  attractor_topology/         insights -> vectors -> latent attractors (vendor/lac, PROVENANCE.md, README.md, requirements.txt)
-  graph_query_engine/         question -> evidence over the dual graph (README.md, requirements.txt)
+  subgroup_miner/             table -> insights (vendor/eda, PROVENANCE.md, README.md)
+  attractor_topology/         insights -> vectors -> latent attractors (vendor/lac, PROVENANCE.md, README.md)
+  graph_query_engine/         question -> evidence over the dual graph (README.md)
   insight_graph_service/      the graph service: core/ (engine, batch, uploads, snapshot, workspace, geo_views, verify,
                               geosparql, neo4j_mirror, demo, model_store, settings), server/ (app, views);
-                              Dockerfile (targets runtime, test), requirements.txt
-  evidence_narrator_service/  the chat service (Dockerfile, requirements.txt)
-  llm_model_broker/           the LLM model broker (Dockerfile, requirements.txt)
+                              Dockerfile (targets runtime, test)
+  evidence_narrator_service/  the chat service (Dockerfile)
+  llm_model_broker/           the LLM model broker (Dockerfile)
   sig_web_console/            the static UI, nginx.conf, Dockerfile, PROVENANCE.md (vendored browser libraries)
-  compose.yaml, constraints.txt, .dockerignore   the service suite in start order; the images' pinned versions
-  requirements-dev.txt        host development: every service's runtime + the test tools
+  compose.yaml, .dockerignore   the service suite in start order
+  pyproject.toml, uv.lock     the dependency groups (one per library and service, dev, the torch build) and their exact versions
   tests/                      contract / integration / E2E / UI tests (doubles.py: the deterministic test embedder)
   docs/                       eleven chapters in pipeline order, the architecture and the trust chapters; init_concepts/ (the theory)
   scripts/                    check.py (the gate), compose_check.py (the Docker check), dev.py (host composite),

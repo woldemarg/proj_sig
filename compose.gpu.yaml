@@ -8,11 +8,11 @@
 
 services:
   model-init:
-    image: sig/insight-graph:gpu  # the same image as the graph service, so one build serves both
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/insight-graph:gpu  # the same image as the graph service, so one build serves both
   insight-graph:
     build:
       args: { TORCH: cu130 }
-    image: sig/insight-graph:gpu
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/insight-graph:gpu
     gpus: all  # the host's NVIDIA driver; the image's torch wheels bring the CUDA runtime
     environment:
       # torch routes a few eager CUDA ops (Qwen3's rotary matmul) to Triton kernels, and Triton needs a C compiler the
