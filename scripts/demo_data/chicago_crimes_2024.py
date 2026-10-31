@@ -6,6 +6,6 @@ from functools import partial
 
 from demo_data import chicago_crimes as crimes
 
-FILES, URLS = crimes.source(2024, "4fd1813b83f520ff44a3c775bfdb3e7227b039870383cabadfc46c3e58bd6141")
+FILES, URLS = crimes.source(2024, "6186b046140b27a823d196d04fd780fb153f2f1431f25317eaaced2f5f20eba6")
 META = crimes.meta(2024, "Відкладений рік крос-типової перевірки (знахідки 2025 перевіряються на ньому).")
 prepare = partial(crimes.prepare, year=2024)

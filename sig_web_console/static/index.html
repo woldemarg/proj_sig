@@ -47,6 +47,7 @@
           <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
           <div class="hint"><span class="mono">auto</span> знайде координати; <span class="mono">@7</span> — рівень H3, <span class="mono">@7,5</span> — кілька, <span class="mono">@auto</span> — за точками.</div>
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
+          <label class="small chk"><input type="checkbox" id="layer-only"> Лише шар — зберегти точки для крос-типового аналізу, не аналізувати</label>
           <label class="small" for="context">Контекстний шар — точки іншого типу</label>
           <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
           <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>
@@ -91,6 +92,21 @@
         </div>
       </form>
       <div id="upload-msg" class="msg"></div>
+      <details class="adv" id="cross-panel">
+        <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg><span>Крос-типовий аналіз</span></summary>
+        <label class="small" for="cross-target">Ціль — датасет, чиї метрики шукаємо</label>
+        <select class="field" id="cross-target"></select>
+        <label class="small" for="cross-layers">Шари — точки іншого типу як умова (до двох; Ctrl — кілька)</label>
+        <select class="field" id="cross-layers" multiple size="3"></select>
+        <div class="small">Рівні H3 цілі</div>
+        <div id="cross-levels"></div>
+        <label class="small" for="cross-ring">Що рахувати поруч</label>
+        <select class="field" id="cross-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option></select>
+        <label class="small chk"><input type="checkbox" id="cross-both"> і навпаки: шар як ціль, ціль як шар</label>
+        <div class="hint">Шар рахується з його точок на сітці цілі. Типово — найдрібніший рівень цілі й рівні, на яких аналізували й шар. Результат — нові датасети цілі з позначкою «+ шар»: лише знахідки з умовою на шар.</div>
+        <div class="rail-actions"><button type="button" class="btn" id="cross-btn" disabled>Порахувати крос-типові ознаки</button></div>
+        <div id="cross-msg" class="msg"></div>
+      </details>
       <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
     </div>
     <div class="rail-list">

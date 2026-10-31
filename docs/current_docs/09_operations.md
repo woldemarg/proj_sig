@@ -35,7 +35,7 @@ Measured without the mirror, on the 300,000-point synthetic upload (`@auto` and 
 
 ```text
 UPLOADED → VALIDATING → PROFILING → DISCOVERING → VALIDATING_INSIGHTS → EMBEDDING
-         → UPDATING_ONTOLOGY → BUILDING_GRAPH → PERSISTING → READY            terminal: READY | FAILED | SKIPPED
+         → UPDATING_ONTOLOGY → BUILDING_GRAPH → PERSISTING → READY            terminal: READY | FAILED | SKIPPED | LAYER
 ```
 
 | Stage | Work | Chapter |
@@ -77,6 +77,7 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | ingest the map demo | `POST /api/demo/geo` | 202 + the `UPLOADED` record (the shipped housing table as H3 cells) |
 | list the shipped datasets | `GET /api/demo/datasets` | each table of `data/demo/` with its title, rows, span, licence and upload options |
 | ingest a shipped dataset | `POST /api/upload`, form `demo=<key>` and the options (`curl -F demo=us_wildfires -F time=discovery_dttm -F geo=lat,lon@auto -F table=true`) | as a file's |
+| keep a layer, cross two uploads | `POST /api/upload` with `layer=true` and `geo` (`curl -F file=@schools.csv -F geo=lat,lon -F layer=true`); `POST /api/crosstype` with `{"target": "up-…", "layers": ["up-…"]}` | a `LAYER` record (never queued); a batch per level of the target's upload, its record's `cross` naming the layers |
 | ingest with a context layer | `POST /api/upload`, multipart `file` and `context` (up to two), `geo` (`curl -F file=@crashes.csv -F geo=lat,lon@auto -F context=@schools.csv`; a shipped layer: `-F demo=chicago_crashes -F context_demo=chicago_schools`; the cell alone: `-F context_ring=0`) | as a file's; every geo level's record carries `context: [{name, path, geo}]` and `context_ring` |
 | ingest a file | `POST /api/upload`, multipart `file`, optional `bins` (`median_income:4,housing_median_age:4`) and `categories` (`Store,Holiday_Flag`) | 202 + the `UPLOADED` record, with `levels`: every level's batch id |
 | status | `GET /api/batches[?upload_id=]`, `GET /api/batches/<id>`; `GET /api/health` (graph statistics, `problem`) | batch records; health |
@@ -85,7 +86,7 @@ Headless operations go through the console's port; `README.md` lists them as `cu
 | delete a dataset | `DELETE /api/datasets/<dataset id>` (or the batch id of an upload that failed before it had one); every level of one upload: `DELETE /api/uploads/<upload id>` | what was removed |
 | reset | `POST /api/reset` | the workspace deleted, the mirror cleared |
 
-A batch is queued and runs on the service's worker thread; poll `GET /api/batches/<id>` until it is READY, FAILED or SKIPPED. The Neo4j mirror follows by itself: after every commit, deletion and reset, and at start ([6.6](06_graph_and_storage.md#66-neo4j-mirror)). The sphere is served as data (`GET /api/sphere`, [8.4](08_interface.md#84-the-latent-sphere)).
+A batch is queued and runs on the service's worker thread; poll `GET /api/batches/<id>` until it is READY, FAILED or SKIPPED (a `LAYER` record, another type's points kept for a cross-type run, is final as it is written). The Neo4j mirror follows by itself: after every commit, deletion and reset, and at start ([6.6](06_graph_and_storage.md#66-neo4j-mirror)). The sphere is served as data (`GET /api/sphere`, [8.4](08_interface.md#84-the-latent-sphere)).
 
 **Writers.** The running service (or `scripts/dev.py`) holds the workspace's writer lock for its whole life. Another writer process on the same workspace — a second server, or a script's `Engine` with `recover=True` — is refused with `WorkspaceBusy`; while the service runs, upload through it. The measurement scripts build their own scratch workspaces under `.scratch/`. Use a separate `WORKSPACE_DIR` for experiments — the default `workspace/` is the knowledge base people work with.
 

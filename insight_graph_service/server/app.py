@@ -78,6 +78,13 @@ class SearchIn(BaseModel):
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
 
 
+class CrossTypeIn(BaseModel):
+    target: str  # an upload id (``up-…``): the dataset whose metrics are mined, every geo level of it
+    layers: list[str]  # the uploads whose points become its context layers
+    ring: int | str | None = None  # their disk: 0, 1 (empty), 2
+    levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest and those a mined layer has too
+
+
 class DatasetMetadataIn(BaseModel):
     source: str | None = None  # None: unchanged; "": undeclared
     reliability: str | None = None
@@ -142,9 +149,12 @@ def create_app(engine: Engine) -> FastAPI:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
     def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
-        records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
+        return queued(engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options))
+
+    def queued(records: list[dict[str, Any]]) -> JSONResponse:
         for record in records:  # one worker thread: the levels run in turn
-            run(engine.process, record["batch_id"])
+            if record["status"] == "UPLOADED":  # a LAYER record: nothing to run
+                run(engine.process, record["batch_id"])
         run(warm)  # after the last level
         levels = {record["level"]: record["batch_id"] for record in records}
         return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
@@ -213,6 +223,7 @@ def create_app(engine: Engine) -> FastAPI:
         context_geo: str = Form(""),
         context_demo: list[str] | None = Form(None),
         context_ring: str = Form(""),
+        layer: bool = Form(False),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -234,6 +245,7 @@ def create_app(engine: Engine) -> FastAPI:
             "tz": tz.strip() or None,
             "context_geo": context_geo.strip() or None,
             "context_ring": context_ring.strip() or None,
+            "layer": layer,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
         layers = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
@@ -245,6 +257,11 @@ def create_app(engine: Engine) -> FastAPI:
             if shipped:
                 return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
             return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
+
+    @app.post("/api/crosstype")
+    def crosstype(body: CrossTypeIn) -> JSONResponse:
+        # two stored uploads: the target's levels read again with the layers as context (docs/02_discovery.md §2.9)
+        return queued(engine.cross(body.target, body.layers, body.ring, body.levels))
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:

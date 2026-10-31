@@ -4,6 +4,7 @@ of a cross-type cohort (docs/02_discovery.md §2.9; docs/extra_funcs/spatial_ana
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from pathlib import Path
 
@@ -355,6 +356,96 @@ def test_an_upload_reads_its_layers_on_its_own_disk(engine, tmp_path):
     assert [r["dataset_id"] for r in records] == expected and [r["status"] for r in records] == ["READY", "FAILED"]
 
 
+def upload_file(client, name: str, path: Path, geo: str, **data) -> dict:
+    """``POST /api/upload`` of one file with its geo option, once every batch it made has finished."""
+    response = client.post("/api/upload", files=[("file", (name, path.read_bytes(), "text/csv"))], data={"geo": geo, **data})
+    assert response.status_code == 202, response.text
+    body = response.json()
+    for batch in body.get("levels", {}).values():
+        wait_batch(client, batch, timeout=300)
+    return body
+
+
+def cross_run(client, target: str, *layers: str, **options):
+    """``POST /api/crosstype`` of ``target`` with ``layers``; the response, its batches finished when accepted."""
+    response = client.post("/api/crosstype", json={"target": target, "layers": list(layers), **options})
+    if response.status_code == 202:
+        for batch in response.json()["levels"].values():
+            wait_batch(client, batch, timeout=300)
+    return response
+
+
+def test_a_layer_only_upload_is_stored_with_its_points_and_never_mined(engine, tmp_path):
+    """Another type's points meant only as a layer (the schools: too few to mine) are stored and located once, one
+    ``LAYER`` record of their own upload, no batch run: no failed cards, nothing in the graph."""
+    _, context = planted(tmp_path)
+    blank = tmp_path / "blank.csv"
+    pd.DataFrame({"name": ["a", "b"], "size": [1, 2]}).to_csv(blank, index=False)
+    with TestClient(create_app(engine)) as client:
+        layer = upload_file(client, "schools.csv", context, "lat,lon", layer="true")
+        refused = [
+            client.post("/api/upload", files=[("file", ("schools.csv", context.read_bytes(), "text/csv"))], data=data)
+            for data in ({"layer": "true"}, {"layer": "true", "geo": "lat,lon", "table": "true"}, {"layer": "true", "geo": "lat,lon", "time": "when"})
+        ]
+        blank_refused = client.post(
+            "/api/upload", files=[("file", ("blank.csv", blank.read_bytes(), "text/csv"))], data={"layer": "true", "geo": "auto"}
+        )
+    assert [r.status_code for r in [*refused, blank_refused]] == [400] * 4 and all(r.json()["code"] == "invalid_options" for r in refused)
+    (record,) = engine.ws.list_batches()
+    assert (record["status"], record["points"], record["dataset_id"], record["upload_id"]) == ("LAYER", 12, None, layer["upload_id"])
+    assert len(list(engine.ws.uploads_dir.glob("*"))) == 1 and not engine.ws.patterns()  # the blank file not kept; nothing mined
+    engine.delete_dataset(record["batch_id"])
+    assert not engine.ws.list_batches() and not list(engine.ws.uploads_dir.glob("*"))
+
+
+def test_two_stored_uploads_cross_at_the_targets_finest_level_and_the_levels_both_were_read_at(engine, tmp_path):
+    """A target read at two levels, a layer-only upload and a mined one: a cross-type run reads the target's finest level
+    and the levels a mined layer has too, as batches of the target's upload with its options and trust, a copy of each
+    layer's stored file as its context, and only the insights on a layer's band (the rest are the target's own)."""
+    target, context = planted(tmp_path)
+    shops = tmp_path / "shops.csv"
+    pd.read_csv(context).head(10).to_csv(shops, index=False)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES + 1},{RES}", source="test source")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        c = upload_file(client, "shops.csv", shops, f"lat,lon@{RES},{RES - 2}")["upload_id"]  # too few points to mine: still levels
+        unknown = "up-000000000000"
+        refused = [
+            cross_run(client, a, unknown),
+            cross_run(client, unknown, b),
+            cross_run(client, b, a),  # a layer-only upload has no level to read the target's metrics on
+            cross_run(client, a, a),
+            cross_run(client, a, c, c),
+            cross_run(client, a, b, c, b),
+            cross_run(client, a),
+            cross_run(client, a, b, ring="3"),
+            cross_run(client, a, b, levels=["9"]),
+            cross_run(client, a, b, levels=["x"]),
+        ]
+        assert [r.status_code for r in refused] == [400] * len(refused), [r.text for r in refused]
+        assert all(r.json()["code"] == "invalid_options" for r in refused)
+        assert list(cross_run(client, a, b).json()["levels"]) == [str(RES + 1)]  # a layer only: the target's finest level
+        assert list(cross_run(client, a, c).json()["levels"]) == [str(RES + 1), str(RES)]  # and the level both were read at
+        crossed = cross_run(client, a, b, levels=[str(RES)], ring="1")
+    record = engine.ws.load_batch(crossed.json()["batch_id"])
+    plain = next(r for r in engine.ws.list_batches() if r["upload_id"] == a and r["level"] == str(RES) and "cross" not in r)
+    stored = next(r for r in engine.ws.list_batches() if r["upload_id"] == b)
+    assert record["status"] == "READY" and (record["upload_id"], record["level"], record["source"], record["cross"]) == (
+        a,
+        str(RES),
+        "test source",
+        [b],
+    )
+    assert [c["name"] for c in record["context"]] == ["schools"] and record["context"][0]["path"] != stored["source_path"]
+    assert record["source_path"] == plain["source_path"] and record["dataset_id"] != plain["dataset_id"]
+    patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == record["dataset_id"]]
+    assert patterns and all(any(c["attribute"] == BAND for c in p["conditions"]) for p in patterns)  # the target's own stay its own
+    rejections = json.loads((engine.ws.dataset_dir(record["dataset_id"]) / "rejections.json").read_text(encoding="utf-8"))
+    assert any(r["reason"] == "outside_cross_type" for r in rejections)
+    engine.delete_upload(b)  # the layer's own upload gone: the run reads its copy
+    assert engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
+
+
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
     import insight_graph_service.server.app as app_module
 
@@ -407,4 +498,46 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
             time.sleep(0.5)
     (record,) = done
     assert [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon"), ("shops", "lat,lon")] and record["context_ring"] == 0
+    assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_levels_it_ticks(cfg, tmp_path):
+    sync_api = pytest.importorskip("playwright.sync_api")
+    import httpx
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    target, context = planted(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("document.querySelectorAll('#cross-target option').length === 1", timeout=20000)
+        page.set_input_files("#file", str(context))  # the schools, kept as a layer through the form
+        page.evaluate("document.querySelector('#geo').closest('details').open = true")
+        page.fill("#geo", "lat,lon")
+        page.check("#layer-only")
+        page.click("#upload-btn")
+        page.wait_for_function("document.querySelectorAll('#cross-layers option').length === 2", timeout=20000)
+        (layer,) = [r for r in engine.ws.list_batches() if r["status"] == "LAYER"]
+        page.evaluate("document.querySelector('#cross-panel').open = true")
+        page.select_option("#cross-target", a)
+        page.select_option("#cross-layers", [layer["upload_id"]])
+        assert page.is_checked(f"#cross-levels input[value='{RES}']") and page.is_disabled("#cross-both")  # a layer is never a target
+        page.click("#cross-btn")
+        page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        deadline = time.time() + 300
+        while not (done := [r for r in engine.ws.list_batches() if r.get("cross") and r["status"] in {"READY", "FAILED"}]):
+            assert time.time() < deadline, "the cross-type run did not finish"
+            time.sleep(0.5)
+    (record,) = done
+    assert (record["status"], record["level"], record["upload_id"], record["cross"]) == ("READY", str(RES), a, [layer["upload_id"]])
     assert not errors, errors

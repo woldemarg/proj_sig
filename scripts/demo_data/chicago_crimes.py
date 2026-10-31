@@ -1,5 +1,5 @@
 """Chicago crimes: one row per reported crime of 2025 — its point, its time, its class (seven), street or not, arrest,
-domestic, the hour band — a sixth of them by a stable hash of the record id. The target of the cross-type validation
+domestic, the hour band, the police district — a sixth of them by a stable hash of the record id. The target of the cross-type validation
 (docs/extra_funcs/spatial_analytics_multi_type/cross_type_context_architecture.md §8.2a), read with the bars, the liquor
 stores or the 'L' stations as its context layer; ``chicago_crimes_2024`` is its held-out year.
 
@@ -17,7 +17,7 @@ import pandas as pd
 
 YEAR = 2025
 THIN = 6  # a crime is kept when int(sha1(id)[:8], 16) % THIN == 0: about a sixth, under 50,000 rows a year
-FIELDS = "id,date,primary_type,arrest,domestic,location_description,latitude,longitude"
+FIELDS = "id,date,primary_type,arrest,domestic,location_description,district,latitude,longitude"
 CLASSES = {  # primary type -> class; the rest "other" (at most eight classes: each becomes a share of a cell's crimes)
     **dict.fromkeys(["ROBBERY"], "robbery"),
     **dict.fromkeys(["BATTERY", "ASSAULT", "HOMICIDE", "CRIMINAL SEXUAL ASSAULT"], "assault"),
@@ -41,7 +41,7 @@ def meta(year: int, role: str) -> dict[str, Any]:
     return {
         "title": f"Злочини в Чикаго, {year}",
         "description": f"Зареєстровані поліцією злочини {year} року: клас (грабіж, напад, крадіжка, майнові, шахрайство, наркотики "
-        f"чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година. {role}",
+        f"чи зброя, інше), вулиця чи ні, арешт, домашнє насильство, година, поліцейський округ. {role}",
         "license": "City of Chicago Data Portal Terms of Use",
         "source": "City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)",
         "attribution": "City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.",
@@ -49,12 +49,13 @@ def meta(year: int, role: str) -> dict[str, Any]:
         "options": {
             "time": "crime_date",
             "geo": "lat,lon@auto",
+            "table": False,  # no table level: without cells no column is a number (the form ticks it unless told)
             "source": "City of Chicago, Crimes",
-        },  # no table level: no numeric column without cells
+        },
     }
 
 
-FILES, URLS = source(YEAR, "eac8c61ee549a5f9e78b4148c949091ad858cf2577bd3e0694dd9632bf88a3f7")
+FILES, URLS = source(YEAR, "8e503b9b878eaa794ab720c4ffda97594a40ede9f30497dac76c0868ecf26f0f")
 META = meta(YEAR, "Ціль крос-типової перевірки: з контекстним шаром барів, магазинів алкоголю чи станцій 'L'.")
 
 
@@ -70,4 +71,7 @@ def prepare(raw_dir: Path, year: int = YEAR, thin: int = THIN) -> pd.DataFrame:
     out["street"] = df["location_description"].isin(STREET).map({True: "yes", False: "no"})
     out["arrest"], out["domestic"] = df["arrest"].str.lower(), df["domestic"].str.lower()
     out["hour_band"] = pd.cut(df["when"].dt.hour, [-1, 5, 11, 17, 23], labels=["00-05", "06-11", "12-17", "18-23"]).astype(str)
+    # the place: a cell lies in one district, so its district is a condition of the cells (a mode), not a share —
+    # without it the crimes' cells have no dimension of their own; "district 6", text, never a number to measure
+    out["district"] = ("district " + pd.to_numeric(df["district"], errors="coerce").astype("Int64").astype(str)).where(df["district"].notna())
     return out.reset_index(drop=True)
