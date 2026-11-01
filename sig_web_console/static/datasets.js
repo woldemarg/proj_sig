@@ -147,6 +147,17 @@ async function refreshBatches() {
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
+const sampleItem = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
+
+function fillSamples() {  // *Або готовий датасет*: a layer alone mines nothing; kept as a layer, any shipped set with points
+  const sel = $("sample"), kept = sel.value, layer = $("layer-only").checked;
+  const list = Object.values(S.samples || {}).filter((d) => (layer ? d.options && d.options.geo : !d.context_only));
+  sel.length = 1;  // the placeholder stays
+  sel.insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));
+  sel.value = list.some((d) => d.key === kept) ? kept : "";
+  if (sel.value !== kept) sel.dispatchEvent(new Event("change"));  // a choice no longer listed: its hint goes, the button waits for another
+}
+
 async function upload() {
   const f = $("file").files[0], sample = $("sample").value; if (!f && !sample) return;
   const fd = new FormData();
@@ -169,7 +180,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; fillSamples(); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
