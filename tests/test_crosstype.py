@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from insight_contracts import Condition, Shift, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_contracts.wording import column_words, condition_words, source_column
+from insight_graph_service.core import uploads
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY, ContextSource, deal, disk_sums
@@ -385,12 +386,17 @@ def test_a_layer_only_upload_is_stored_with_its_points_and_never_mined(engine, t
         layer = upload_file(client, "schools.csv", context, "lat,lon", layer="true")
         refused = [
             client.post("/api/upload", files=[("file", ("schools.csv", context.read_bytes(), "text/csv"))], data=data)
-            for data in ({"layer": "true"}, {"layer": "true", "geo": "lat,lon", "table": "true"}, {"layer": "true", "geo": "lat,lon", "time": "when"})
+            for data in (
+                {"layer": "true"},
+                {"layer": "true", "geo": "lat,lon", "table": "true"},
+                {"layer": "true", "geo": "lat,lon", "grid": "month"},  # a layer may declare its time column; a grid, or a zone without it, not
+                {"layer": "true", "geo": "lat,lon", "tz": "Europe/Kyiv"},
+            )
         ]
         blank_refused = client.post(
             "/api/upload", files=[("file", ("blank.csv", blank.read_bytes(), "text/csv"))], data={"layer": "true", "geo": "auto"}
         )
-    assert [r.status_code for r in [*refused, blank_refused]] == [400] * 4 and all(r.json()["code"] == "invalid_options" for r in refused)
+    assert [r.status_code for r in [*refused, blank_refused]] == [400] * 5 and all(r.json()["code"] == "invalid_options" for r in refused)
     (record,) = engine.ws.list_batches()
     assert (record["status"], record["points"], record["dataset_id"], record["upload_id"]) == ("LAYER", 12, None, layer["upload_id"])
     assert len(list(engine.ws.uploads_dir.glob("*"))) == 1 and not engine.ws.patterns()  # the blank file not kept; nothing mined
@@ -444,6 +450,39 @@ def test_two_stored_uploads_cross_at_the_targets_finest_level_and_the_levels_bot
     assert any(r["reason"] == "outside_cross_type" for r in rejections)
     engine.delete_upload(b)  # the layer's own upload gone: the run reads its copy
     assert engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
+
+
+def test_a_layer_upload_may_declare_its_time_and_a_run_records_each_layers_rule(engine, tmp_path):
+    """A layer-only upload with a time column keeps its span; a cross-type run writes each layer's time rule on its
+    context entry — ``events`` for a layer with a time column, ``static`` without — and warns once per event layer that
+    it is read as static over its whole span, naming both spans and the share of the target's span it covers; a target
+    without a time column is crossed in space only, without one."""
+    target, context = planted(tmp_path)
+    frame, untimed = pd.read_csv(target), tmp_path / "untimed.csv"
+    frame.to_csv(untimed, index=False)
+    frame["when"] = pd.date_range("2025-01-01", "2025-12-31", periods=len(frame)).strftime("%Y-%m-%d")
+    frame.to_csv(target, index=False)
+    timed, schools = tmp_path / "patrols.csv", pd.read_csv(context)
+    schools["when"] = pd.date_range("2025-07-01", "2026-06-30", periods=len(schools)).strftime("%Y-%m-%d")  # half past the target
+    schools.to_csv(timed, index=False)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", time="when")["upload_id"]
+        b = upload_file(client, "patrols.csv", timed, "lat,lon", layer="true", time="when")["upload_id"]
+        c = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        crossed = cross_run(client, a, b, c)
+        assert crossed.status_code == 202, crossed.text
+        spatial = cross_run(client, upload_file(client, "untimed.csv", untimed, f"lat,lon@{RES}")["upload_id"], b)
+    layer = next(r for r in engine.ws.list_batches() if r["upload_id"] == b)
+    assert layer["status"] == "LAYER" and layer["time"] == "when" and [s[:10] for s in layer["span"]] == ["2025-07-01", "2026-06-30"]
+    assert "span" not in next(r for r in engine.ws.list_batches() if r["upload_id"] == c)
+    record = engine.ws.load_batch(crossed.json()["batch_id"])
+    assert [(e["name"], e["time_rule"]) for e in record["context"]] == [("patrols", "events"), ("schools", "static")]
+    assert record["context"][0]["span"] == layer["span"] and "span" not in record["context"][1]
+    (warning,) = [w for w in record["warnings"] if "static" in w]
+    assert not [w for w in engine.ws.load_batch(spatial.json()["batch_id"])["warnings"] if "static" in w]
+    assert warning.startswith("patrols:") and "50%" in warning and layer["span"][0] in warning
+    assert uploads.overlap_share(["2025-01-01T00:00:00+00:00", "2025-12-31T00:00:00+00:00"], layer["span"]) == pytest.approx(0.5, abs=0.01)
+    assert uploads.overlap_share(["2025-03-01T00:00:00+00:00"] * 2, layer["span"]) == 0.0  # a target of one instant: covered or not
 
 
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):

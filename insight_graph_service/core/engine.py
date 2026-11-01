@@ -36,7 +36,6 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from insight_contracts import EvidencePayload, Insight, Rejection
-from insight_contracts.text import RELIABILITY
 from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, annotate_batch, batch_metrics, check_time, pattern_records, series_times
 from insight_graph_service.core.errors import PipelineError
@@ -52,7 +51,6 @@ from subgroup_miner.ingestion import (
     forget_tables,
     load_dataset,
     parse_grid,
-    parse_indicators,
     parse_ring,
     parse_tz,
     read_file,
@@ -68,9 +66,6 @@ log = logging.getLogger(__name__)
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
 
 
-SOURCE_MAX_CHARS = 120
-
-
 @dataclass(frozen=True)
 class _Mined:
     """What a batch brings to its commit: the dataset as read, its discovery, the admitted insights with the rows each
@@ -84,27 +79,6 @@ class _Mined:
     canon: list[CanonicalInsight]
     enc: dict[str, np.ndarray]
     spec: EmbeddingSpec
-
-
-def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
-    """The given dataset metadata, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
-    upper-case Admiralty code A-F, ``indicators`` the parsed registry (``parse_indicators``); an empty value is None
-    (undeclared). A value not given (None) is left out."""
-    options: dict[str, Any] = {}
-    if source is not None:
-        options["source"] = " ".join(source.split()) or None
-        if len(options["source"] or "") > SOURCE_MAX_CHARS:
-            raise PipelineError("invalid_options", f"source longer than {SOURCE_MAX_CHARS} characters")
-    if reliability is not None:
-        options["reliability"] = reliability.strip().upper() or None
-        if options["reliability"] not in (None, *RELIABILITY):
-            raise PipelineError("invalid_options", f"reliability '{reliability}' is not one of {', '.join(RELIABILITY)}")
-    if indicators is not None:
-        try:
-            options["indicators"] = parse_indicators(indicators) or None
-        except IngestionError as exc:
-            raise PipelineError(exc.code, str(exc)) from exc
-    return options
 
 
 def _healthy(method):
@@ -363,11 +337,12 @@ class Engine:
         another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
         counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
         cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
-        (``uploads.store_layer``), one ``LAYER`` record, nothing to process. Processing is a separate call."""
+        (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
+        Processing is a separate call."""
         if layer:
-            refused = [k for k, v in {"table": table, "time": time, "context": context, "supersedes": supersedes}.items() if v]
-            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused)]
-        resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
+            refused = [k for k, v in {"table": table, "grid": grid, "context": context, "supersedes": supersedes}.items() if v]
+            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
+        uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
@@ -473,6 +448,7 @@ class Engine:
         context: list[dict[str, str]] | None = None,
         context_ring: int = 1,
         inherited: dict[str, Any] | None = None,
+        warnings: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -487,9 +463,9 @@ class Engine:
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
         ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10);
         ``context`` the stored context layers and ``context_ring`` their disk (§2.9); ``inherited`` what a cross-type run
-        keeps of its target's record (``uploads.cross_runs``).
+        keeps of its target's record and ``warnings`` what it already says of the run (its layers' time rule; ``uploads.cross_runs``).
         """
-        trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
+        trust = {k: v for k, v in uploads.resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         path = Path(path)
@@ -515,7 +491,7 @@ class Engine:
             "created_at": created,
             "metrics": {},
             "profile": {"geo": {"levels": geo_levels}} if geo_levels else {},
-            "warnings": [],
+            "warnings": list(warnings),
             "error": None,
         }
         self.ws.save_batch(record)
@@ -835,7 +811,7 @@ class Engine:
         (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
         refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
         the same transaction (docs/06_graph_and_storage.md §6.8)."""
-        changes = resolve_dataset_metadata(source, reliability, indicators)
+        changes = uploads.resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._writing():
