@@ -21,6 +21,7 @@ from insight_contracts.graph import dataset_node_id
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_contracts.wording import column_words, condition_words, disk_words, short_conditions, source_column, value_words
 from insight_graph_service.core import uploads
+from insight_graph_service.core.workspace import TERMINAL
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY, ContextSource, deal, disk_sums
@@ -693,4 +694,67 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
             time.sleep(0.5)
     (record,) = done
     assert (record["status"], record["level"], record["upload_id"], record["cross"]) == ("READY", str(RES), a, [layer["upload_id"]])
+    assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_verdict(cfg):
+    """The M18 acceptance case (docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md §12)
+    from an empty workspace through the console alone, on the shipped tables: the crimes picked and read with their
+    manifest's options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes from
+    the panel at its pre-ticked level and the default disk. The verdict is the one measured (§12a): the bars' run admits
+    nothing and its card counts the cohorts the bars' arrangement reproduces; the stations' admits one finding, whose
+    drawer reads the layer's verdict."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+
+    def finished(**match) -> dict:
+        deadline = time.time() + 300
+        while not (done := [b for b in engine.ws.list_batches() if all(b.get(k) == v for k, v in match.items()) and b["status"] in TERMINAL]):
+            assert time.time() < deadline, f"no finished batch with {match}"
+            time.sleep(0.5)
+        return done[-1]
+
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("document.querySelector('#sample option[value=chicago_crimes]')", timeout=20000)
+        page.select_option("#sample", "chicago_crimes")  # the options it is meant to be read with fill the form
+        page.click("#upload-btn")
+        crimes = finished(filename="chicago_crimes.csv")
+        assert (crimes["status"], crimes["level"]) == ("READY", "9")
+        for i, key in enumerate(("chicago_bars", "chicago_l_stations")):  # kept as layers from the shipped list
+            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
+            page.check("#layer-only")
+            page.select_option("#sample", key)
+            page.click("#upload-btn")
+            page.wait_for_function(f"document.querySelectorAll('#cross-layers option').length === {i + 2}", timeout=20000)
+        layers = {b["filename"]: b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"}
+        runs = {}
+        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # crossed from the panel as it pre-ticks them
+            page.evaluate("document.querySelector('#cross-panel').open = true")
+            page.select_option("#cross-target", crimes["upload_id"])
+            page.select_option("#cross-layers", [layers[name]])
+            assert page.is_checked("#cross-levels input[value='9']") and page.input_value("#cross-ring") == "1"
+            page.click("#cross-btn")
+            runs[name] = finished(cross=[layers[name]])
+        bars, stations = runs["chicago_bars.csv"], runs["chicago_l_stations.csv"]
+        # the bars: nothing admitted, the cohorts their arrangement within parent cells reproduces counted on the card
+        assert (bars["status"], bars["error"]["code"]) == ("FAILED", "no_viable_insights") and bars["metrics"]["pruned"]["context_confounded"] > 0
+        page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_bars')", timeout=20000)
+        card = page.locator(".ds", has_text="+ chicago_bars").inner_text()
+        assert f"відтворює розклад шару: {bars['metrics']['pruned']['context_confounded']}" in card
+        # the stations: one finding, its drawer reading the layer's verdict
+        (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == stations["dataset_id"]]
+        page.evaluate(f"inspect('{found}')")
+        assert stations["status"] == "READY" and "нуль шару" in page.text_content("#drawer")
     assert not errors, errors
