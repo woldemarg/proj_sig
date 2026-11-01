@@ -564,6 +564,22 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
     assert not errors, errors
 
 
+def test_a_run_that_admits_nothing_still_counts_its_refusals_by_reason(engine, tmp_path):
+    """A layer whose points lie in no target cell's disk leaves one band and is left out, so every finding of the run is
+    the target's own (``outside_cross_type``): the run fails as ``no_viable_insights`` and its record counts the refusals
+    by reason, as a READY record does."""
+    target, context = planted(tmp_path)
+    far = tmp_path / "far.csv"
+    pd.read_csv(context).assign(lat=lambda f: f["lat"] + 5).to_csv(far, index=False)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "far.csv", far, "lat,lon", layer="true")["upload_id"]
+        run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+    assert (run["status"], run["error"]["code"]) == ("FAILED", "no_viable_insights")
+    pruned = run["metrics"]["pruned"]
+    assert pruned["outside_cross_type"] > 0 and run["metrics"]["pruned_total"] == sum(pruned.values())
+
+
 @pytest.mark.browser
 def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_warnings(cfg, tmp_path):
     """A cross-type insight's drawer and map card read the layer's verdict (``p_context`` times its family) and its
@@ -584,6 +600,11 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", indicators="ghost:count")["upload_id"]  # a metric it lacks: a warning
         b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
         run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+        far = tmp_path / "far.csv"
+        pd.read_csv(context).assign(lat=lambda f: f["lat"] + 5).to_csv(far, index=False)
+        empty = engine.ws.load_batch(
+            cross_run(client, a, upload_file(client, "far.csv", far, "lat,lon", layer="true")["upload_id"]).json()["batch_id"]
+        )
         own = next(r for r in engine.ws.list_batches() if r["upload_id"] == a and "cross" not in r)
         crossed = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == run["dataset_id"])
         plain = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == own["dataset_id"] and "p_context" not in x["provenance"]["spatial"])
@@ -597,6 +618,8 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         assert refused.get_attribute("title") and f"без умови шару: {run['metrics']['pruned']['outside_cross_type']}" in card.inner_text()
         warned = page.locator(f".ds[data-ds='{own['dataset_id']}']")  # the target's own level dropped the indicator it lacks
         assert "indicators: no metric named" in warned.inner_text()  # the record's warning on its card
+        nothing = page.locator(".ds", has_text="+ far")  # a run that admitted none: its refusals by reason all the same
+        assert f"без умови шару: {empty['metrics']['pruned']['outside_cross_type']}" in nothing.inner_text()
         page.evaluate(f"inspect('{crossed}')")
         drawer = page.text_content("#drawer")  # its title (the scope) and its folded evidence too
         assert "нуль шару" in drawer and disk_words(1) in drawer and page.locator("#inspector .term", has_text="нуль шару").get_attribute("title")

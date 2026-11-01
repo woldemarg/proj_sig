@@ -19,6 +19,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   const m = b.metrics || {}, p = b.profile || {};
   const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id, name = datasetName(b);
   let body = "";
+  const refused = m.pruned_total ? `<div class="ds-note">відсіяно: ${num(m.pruned_total, 0)}${prunedBy(m.pruned)}</div>` : "";  // a level that admitted none
   if (running) {
     const i = Math.max(0, STAGES.indexOf(b.status));
     body = `<div class="progress"><i style="width:${Math.round(((i + 1) / STAGES.length) * 100)}%"></i></div>` +
@@ -33,11 +34,11 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       (b.warnings || []).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
   } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
-    body = `<div class="ds-note">На цьому рівні стійких знахідок немає.</div><div class="ds-note mono">${esc(b.error.message)}</div>`;
+    body = `<div class="ds-note">На цьому рівні стійких знахідок немає.</div>${refused}<div class="ds-note mono">${esc(b.error.message)}</div>`;
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +
-      (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") + `<div class="why mono" style="margin-top:6px">${esc(b.error.message)}</div></div>`;
+      (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") + `<div class="why mono" style="margin-top:6px">${esc(b.error.message)}</div></div>${refused}`;
   } else if (b.status === "SKIPPED") {
     body = `<div class="ds-note">Уже проаналізовано — нового немає.</div>`;
   } else if (b.status === "LAYER") {
