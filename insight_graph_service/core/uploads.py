@@ -15,15 +15,17 @@ from typing import Any, BinaryIO
 import numpy as np
 
 from insight_contracts import Insight, Rejection
+from insight_contracts.text import RELIABILITY
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
-from subgroup_miner.ingestion import IngestionError, parse_ring, read_context
+from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, read_context
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 GLOSSARY_VALUE_MAX = 120  # characters of one declared glossary value
 METADATA_DOC_MAX_BYTES = 64 * 1024  # a metadata document as uploaded
+SOURCE_MAX_CHARS = 120  # characters of a declared source
 # context files of one upload, one forced band each (docs/02_discovery.md §2.9): a third multiplies the Bonferroni family,
 # fills the validation budget with context cohorts and, on a wide table, empties the 3-conjunctions (spec §14.6)
 MAX_CONTEXT_LAYERS = 2
@@ -61,6 +63,27 @@ def parse_metadata_doc(text: str) -> dict[str, Any]:
     if not columns:
         raise ValueError("no column after 'Columns:'")
     return {"dataset": {k: v for k, v in dataset.items() if v}, "columns": {c: {k: v for k, v in f.items() if v} for c, f in columns.items()}}
+
+
+def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
+    """The given dataset metadata, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
+    upper-case Admiralty code A-F, ``indicators`` the parsed registry (``parse_indicators``); an empty value is None
+    (undeclared). A value not given (None) is left out."""
+    options: dict[str, Any] = {}
+    if source is not None:
+        options["source"] = " ".join(source.split()) or None
+        if len(options["source"] or "") > SOURCE_MAX_CHARS:
+            raise PipelineError("invalid_options", f"source longer than {SOURCE_MAX_CHARS} characters")
+    if reliability is not None:
+        options["reliability"] = reliability.strip().upper() or None
+        if options["reliability"] not in (None, *RELIABILITY):
+            raise PipelineError("invalid_options", f"reliability '{reliability}' is not one of {', '.join(RELIABILITY)}")
+    if indicators is not None:
+        try:
+            options["indicators"] = parse_indicators(indicators) or None
+        except IngestionError as exc:
+            raise PipelineError(exc.code, str(exc)) from exc
+    return options
 
 
 def _parse_glossary(text: str) -> dict[str, str] | None:
