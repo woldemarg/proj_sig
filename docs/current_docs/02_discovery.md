@@ -252,10 +252,11 @@ These conditions are always among the searched dimensions: they are prepended to
 |---|---|---|
 | with a time column | without one (bars, stations) | space only: the layer is a static context |
 | with a time column | with one (a mined dataset, or a layer with a declared column) | read as static over its whole span; one warning on the run's record names both spans and the share of the target's span the layer's covers (`uploads.time_warning`); a layer whose span no record holds is read the same, the warning says the spans were not compared |
+| with a time column (a reading with a time record) | with one, the run's `align=span` | only the layer's events within the target's span are counted — the context entry's `window`, the target's own reading's `temporal.span` (the span its series cover); a time outside it or unread is no event of it —; the span enters the dataset id (`<layer>:<sha12>:<locator>:<time>@<first>..<last>`), so an aligned run is a dataset of its own and an unaligned one keeps its id; a layer without time is counted whole, with a warning; a target without a time record, or no layer with time, is refused (`invalid_options`) |
 | without a time column | any | space only |
 | any | an aggregated table (counts per place and period), objects with validity periods | not a layer: a layer is points, and validity columns are not read |
 
-Counting only the layer's events within the target's span (`align`) and a band per period of the target are not implemented; the M18 specification (`docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md` §7) plans them.
+A band per period of the target is not implemented; the M18 specification (`docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md` §7) plans it.
 
 **The context null.** A layer dense where the target is dense — schools and crashes both downtown — passes the median test with no link between them: the test's H0 is marginal (the cohort's median equals the map's), and `n_eff` and the block bootstrap below discount variance, not this bias. A cohort with a condition on a context band therefore gets `p_context`. Each draw deals the layer's counts anew among the cells of every parent one resolution coarser (the bootstrap's block; the parent's total kept, its cells without target points included), reads the band with the observed edges, keeps the cohort's other conditions, and recomputes the median test's |z| of the primary metric with that cohort's own `n_eff`:
 

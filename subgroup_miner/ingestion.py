@@ -314,7 +314,7 @@ def load_dataset(
     time: str | None = None,
     grid: str | None = None,
     tz: str | None = None,
-    context: Sequence[tuple[str, Path, str]] = (),
+    context: Sequence[tuple[str, Path, str] | tuple[str, Path, str, tuple[str, str | None, str, str] | None]] = (),
     context_ring: int | str | None = 1,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
@@ -328,7 +328,8 @@ def load_dataset(
     ``resolve_grid`` of the span of the rows the series are of — a geo level's located points, a table's every row —,
     a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by
     default, and the zone of a time written without one) — discovery never sees it. ``context``: ``(layer, path,
-    locator)`` per context layer — another type's points, read apart (``read_context``) and counted into the cells as one
+    locator[, window])`` per context layer — another type's points, read apart (``read_context``; ``window`` keeps its
+    events within a span) and counted into the cells as one
     forced band each over the disk of ``context_ring`` rings around a cell (``parse_ring``; §2.9); it needs ``geo``."""
     path = Path(path)
     if not path.is_file():
@@ -432,29 +433,34 @@ def _geo_text(spec: tuple[str, int] | None) -> str | None:
     return f"{spec[0]}@{spec[1]}" if spec else None
 
 
-def read_context(name: str, path: Path, locator: str) -> tuple[ContextSource, str]:
+def read_context(name: str, path: Path, locator: str, window: tuple[str, str | None, str, str] | None = None) -> tuple[ContextSource, str]:
     """A context layer's points -> (them, its fingerprint part ``<layer>:<sha12>:<locator>``); a file without a point
     is refused. Read once for the levels of an upload (kept by the file's stamp, as ``read_file`` keeps the target's;
-    a file changed since reads anew), never through the shared parse: that holds the upload's own file."""
+    a file changed since reads anew), never through the shared parse: that holds the upload's own file. ``window``
+    ``(time column, its zone, first, last)`` keeps the events within the span (``align=span``, a time outside it or
+    unread is no event of it) and names the span in the part: ``…:<time>@<first>..<last>``."""
     path = Path(path)
     try:
         st = path.stat()
     except OSError as exc:  # removed meanwhile: as a missing source
         raise IngestionError("unsupported_file", f"context layer {name!r}: file not found: {path}") from exc
     try:
-        lat, lon, sha = _context_points(str(path), locator, st.st_mtime_ns, st.st_size)
-    except SpatialError as exc:
+        lat, lon, sha, times = _context_points(str(path), locator, *(window or (None, None))[:2], st.st_mtime_ns, st.st_size)
+    except (SpatialError, IngestionError) as exc:
         raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
+    if window:  # the events within the span, the others as points without a place
+        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
+        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
         raise IngestionError("invalid_options", f"context layer {name!r}: No valid point in {path.name}")
-    return ContextSource(name, lat, lon), f"{name}:{sha[:12]}:{locator}"
+    return ContextSource(name, lat, lon), f"{name}:{sha[:12]}:{locator}" + (f":{window[0]}@{window[2]}..{window[3]}" if window else "")
 
 
 @functools.lru_cache(maxsize=4)  # ponytail: the layers of the upload running now (at most two); keyed by the file's stamp
-def _context_points(path: str, locator: str, *_stamp: int) -> tuple[np.ndarray, np.ndarray, str]:
+def _context_points(path: str, locator: str, time: str | None, tz: str | None, *_stamp: int) -> tuple[np.ndarray, np.ndarray, str, pd.Series | None]:
     frame, digest = read_file(Path(path))
     lat, lon, _ = locate_points(frame, locator)
-    return lat, lon, digest.hexdigest()
+    return lat, lon, digest.hexdigest(), read_times(frame, time, tz) if time else None
 
 
 def _to_cells(

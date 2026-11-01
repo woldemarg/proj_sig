@@ -400,6 +400,7 @@ def cross_runs(
     levels: Sequence[int | str] | None,
     ring: int | str | None,
     max_bytes: int,
+    align: str | None = None,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
     file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
@@ -408,9 +409,13 @@ def cross_runs(
     from its points on the target's grid, so its levels only say where it was looked at). One ``Engine.submit`` keyword
     set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads, each
     context entry's time rule (``layer_time``) and, for a target with a time column, one warning per event layer
-    (``time_warning``): every layer is read as static over its whole span."""
+    (``time_warning``): every layer is read as static over its whole span. ``align`` ``span`` counts an event layer's
+    events within the target's span only (its own reading's time record) — the ``window`` of its entry —, a layer
+    without time whole, with a warning."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
+    if (align := (align or "").strip() or None) not in (None, "span"):
+        raise PipelineError("invalid_options", f"align {align!r}: span (the target's) or none")
     try:
         ring = parse_ring(ring)
         chosen = {int(x) for x in levels or ()}
@@ -441,7 +446,15 @@ def cross_runs(
         entry.update(rule)
     latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
     target_span = next((b["temporal"]["span"] for b in latest if b.get("temporal")), None)
-    warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
+    if align:
+        if not target_span or not any(e["time_rule"] == "events" for e in context):
+            discard_context(context)
+            raise PipelineError("invalid_options", "align=span needs a target with a time record and a layer with a time column")
+        for e in context:
+            e |= {"window": list(target_span)} if e["time_rule"] == "events" else {}
+        warnings = [f"{e['name']}: no time column, counted whole under align=span" for e in context if "window" not in e]
+    else:
+        warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
     for b in (own[r] for r in sorted(chosen, reverse=True)):
         options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz")} | {"strict": b.get("strict", True)}
@@ -458,6 +471,14 @@ def cross_runs(
             }
         )
     return runs
+
+
+def context_files(record: dict[str, Any]) -> list[tuple[str, Path, str, tuple[str, str | None, str, str] | None]]:
+    """A record's context layers as ``load_dataset`` reads them: ``(layer, path, locator, window)``, the window an aligned
+    run's ``(time, tz, first, last)`` (``cross_runs``), else None."""
+    return [
+        (c["name"], Path(c["path"]), c["geo"], (c["time"], c.get("tz"), *c["window"]) if "window" in c else None) for c in record.get("context", ())
+    ]
 
 
 def cross_type_only(insights: Sequence[Insight]) -> tuple[list[Insight], list[Rejection]]:

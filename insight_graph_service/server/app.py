@@ -83,6 +83,7 @@ class CrossTypeIn(BaseModel):
     layers: list[str]  # the uploads whose points become its context layers
     ring: int | str | None = None  # their disk: 0, 1 (empty), 2
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest and those a mined layer has too
+    align: str | None = None  # span: an event layer's events within the target's span only
 
 
 class DatasetMetadataIn(BaseModel):
@@ -261,7 +262,7 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/crosstype")
     def crosstype(body: CrossTypeIn) -> JSONResponse:
         # two stored uploads: the target's levels read again with the layers as context (docs/02_discovery.md §2.9)
-        return queued(engine.cross(body.target, body.layers, body.ring, body.levels))
+        return queued(engine.cross(body.target, body.layers, body.ring, body.levels, body.align))
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
