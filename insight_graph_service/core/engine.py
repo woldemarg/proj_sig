@@ -337,10 +337,11 @@ class Engine:
         another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
         counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
         cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
-        (``uploads.store_layer``), one ``LAYER`` record, nothing to process. Processing is a separate call."""
+        (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
+        Processing is a separate call."""
         if layer:
-            refused = [k for k, v in {"table": table, "time": time, "context": context, "supersedes": supersedes}.items() if v]
-            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused)]
+            refused = [k for k, v in {"table": table, "grid": grid, "context": context, "supersedes": supersedes}.items() if v]
+            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
         uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
@@ -447,6 +448,7 @@ class Engine:
         context: list[dict[str, str]] | None = None,
         context_ring: int = 1,
         inherited: dict[str, Any] | None = None,
+        warnings: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -461,7 +463,7 @@ class Engine:
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
         ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10);
         ``context`` the stored context layers and ``context_ring`` their disk (§2.9); ``inherited`` what a cross-type run
-        keeps of its target's record (``uploads.cross_runs``).
+        keeps of its target's record and ``warnings`` what it already says of the run (its layers' time rule; ``uploads.cross_runs``).
         """
         trust = {k: v for k, v in uploads.resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
@@ -489,7 +491,7 @@ class Engine:
             "created_at": created,
             "metrics": {},
             "profile": {"geo": {"levels": geo_levels}} if geo_levels else {},
-            "warnings": [],
+            "warnings": list(warnings),
             "error": None,
         }
         self.ws.save_batch(record)

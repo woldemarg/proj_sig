@@ -9,6 +9,7 @@ import json
 import re
 from collections.abc import Collection, Sequence
 from contextlib import ExitStack
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -19,7 +20,7 @@ from insight_contracts.text import RELIABILITY
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
-from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, read_context
+from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, parse_tz, read_context, read_file, read_times
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
@@ -304,18 +305,33 @@ def resolution(record: dict[str, Any]) -> int | None:
     return int(res) if res.isdigit() else None
 
 
-def store_layer(ws: Workspace, name: str, stream: BinaryIO, geo: str | None, max_bytes: int, others: Sequence[str] = ()) -> dict[str, Any]:
+def store_layer(
+    ws: Workspace,
+    name: str,
+    stream: BinaryIO,
+    geo: str | None,
+    max_bytes: int,
+    others: Sequence[str] = (),
+    time: str | None = None,
+    tz: str | None = None,
+) -> dict[str, Any]:
     """A file kept as another type's points only (the upload's ``layer`` flag): stored, its points located once, one
     ``LAYER`` record of its own upload — never mined, never in the graph; a cross-type run reads it as a context layer
-    (``cross_runs``). ``others``: the mining options sent with it, refused. A file without a point is not kept."""
+    (``cross_runs``). ``others``: the mining options sent with it, refused. ``time`` (and ``tz``) name its time column
+    and zone: the column is read once for the record's ``span``, what a run's time rule compares (``layer_time``). A file
+    without a point is not kept."""
     locator = (geo or "").partition("@")[0].strip()
     if not locator:
         raise PipelineError("invalid_options", "a layer needs the geo option: the columns of its points")
     if others:
         raise PipelineError("invalid_options", f"a layer is not mined: {', '.join(others)} do not apply")
+    if tz and not time:
+        raise PipelineError("invalid_options", "tz without time: name the time column it zones")
     path = ws.save_upload(name, stream, max_bytes)
     try:
         points = read_context(layer_name(name, ()), path, locator)[0]
+        tz = parse_tz(tz)
+        times = read_times(read_file(path)[0], time, tz) if time else None
     except IngestionError as exc:
         path.unlink(missing_ok=True)
         raise PipelineError(exc.code, str(exc)) from exc
@@ -329,6 +345,7 @@ def store_layer(ws: Workspace, name: str, stream: BinaryIO, geo: str | None, max
         "level": "layer",
         "geo": locator,
         "points": int((np.isfinite(points.lat) & np.isfinite(points.lon)).sum()),
+        **({"time": time, "tz": tz, "span": [t.tz_convert(tz or "UTC").isoformat() for t in (times.min(), times.max())]} if time else {}),
         "status": "LAYER",
         "stage_times": {"LAYER": created},
         "created_at": created,
@@ -339,6 +356,40 @@ def store_layer(ws: Workspace, name: str, stream: BinaryIO, geo: str | None, max
     }
     ws.save_batch(record)
     return record
+
+
+def layer_time(stored: dict[str, Any], theirs: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """A layer's time rule for a run's context entry (docs/02_discovery.md §2.9): ``static`` for an upload without a time
+    column; ``events`` with its ``time``, ``tz`` and ``span`` — a ``LAYER`` record's own, else the latest reading of the
+    upload that has a time record (None when none has: the spans are then not compared)."""
+    if not stored.get("time"):
+        return {"time_rule": "static"}
+    timed = max((b for b in theirs if b.get("temporal")), key=lambda b: b["created_at"], default=None)
+    return {
+        "time_rule": "events",
+        "time": stored["time"],
+        "tz": stored.get("tz"),
+        "span": stored.get("span") or (timed["temporal"]["span"] if timed else None),
+    }
+
+
+def overlap_share(target: Sequence[str], layer: Sequence[str]) -> float:
+    """The share of ``target``'s span (two ISO times) that ``layer``'s covers; a target of one instant is covered or not."""
+    (tlo, thi), (lo, hi) = ([datetime.fromisoformat(s) for s in span] for span in (target, layer))
+    covered = max(timedelta(0), min(thi, hi) - max(tlo, lo))
+    return covered / (thi - tlo) if thi > tlo else float(lo <= tlo <= hi)
+
+
+def time_warning(entry: dict[str, Any], target_span: Sequence[str] | None) -> str:
+    """A run's warning for an event layer: it is read as static over its whole span (no window is mined); both spans and
+    the share of the target's the layer's covers, or that a span is unknown and the two were not compared."""
+    if entry.get("span") and target_span:
+        lo, hi = entry["span"]
+        return (
+            f"{entry['name']}: an event layer read as static over its whole span {lo}..{hi}; "
+            f"the target spans {target_span[0]}..{target_span[1]}, {overlap_share(target_span, entry['span']):.0%} of it covered"
+        )
+    return f"{entry['name']}: an event layer read as static; its span or the target's is unknown (no reading with a time record), not compared"
 
 
 def cross_runs(
@@ -355,7 +406,9 @@ def cross_runs(
     their stored files, so deleting a layer's own upload leaves the run whole. The levels: ``levels`` when given (each one
     of the target's), otherwise the target's finest and every level each mined layer was read at too (a layer is counted
     from its points on the target's grid, so its levels only say where it was looked at). One ``Engine.submit`` keyword
-    set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads."""
+    set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads, each
+    context entry's time rule (``layer_time``) and, for a target with a time column, one warning per event layer
+    (``time_warning``): every layer is read as static over its whole span."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
     try:
@@ -369,7 +422,7 @@ def cross_runs(
             own[resolution(b)] = b
     if not own:
         raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
-    sources, read_at = [], []
+    sources, read_at, rules = [], [], []
     for upload in layers:
         theirs = [b for b in batches if b.get("upload_id") == upload]
         stored = max(theirs, key=lambda b: b["created_at"], default=None)
@@ -377,12 +430,18 @@ def cross_runs(
             raise PipelineError("invalid_options", f"{upload}: no stored upload with points")
         sources.append((stored["filename"], Path(stored["source_path"]), (stored.get("geo") or stored["locator"]).partition("@")[0]))
         read_at += [{resolution(b) for b in theirs} - {None}] if stored["status"] != "LAYER" else []
+        rules.append(layer_time(stored, theirs))
     if missing := sorted(chosen - set(own)):
         raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
     if not chosen:  # the target's finest, and the levels every mined layer was read at too
         chosen = {max(own)}.union(set(own).intersection(*read_at) if read_at else ())
     with ExitStack() as files:
         context = save_context(ws, [(name, files.enter_context(path.open("rb")), locator) for name, path, locator in sources], max_bytes)
+    for entry, rule in zip(context, rules):
+        entry.update(rule)
+    latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
+    target_span = next((b["temporal"]["span"] for b in latest if b.get("temporal")), None)
+    warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
     for b in (own[r] for r in sorted(chosen, reverse=True)):
         options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz")} | {"strict": b.get("strict", True)}
@@ -395,6 +454,7 @@ def cross_runs(
                 "context": context,
                 "context_ring": ring,
                 "inherited": inherited,
+                "warnings": list(warnings),
             }
         )
     return runs
