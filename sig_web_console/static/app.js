@@ -305,12 +305,12 @@ function init() {
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
   $("cross-target").addEventListener("change", crossLevels); $("cross-layers").addEventListener("change", crossLevels);
   $("cross-btn").addEventListener("click", runCross);
+  $("layer-only").addEventListener("change", fillSamples);
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
-    const item = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
-    $("sample").insertAdjacentHTML("beforeend", list.filter((d) => !d.context_only).map(item).join(""));  // a layer alone mines nothing
-    $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(item).join(""));
+    fillSamples();
+    $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(sampleItem).join(""));
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];

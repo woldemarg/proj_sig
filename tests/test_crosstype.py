@@ -496,8 +496,11 @@ def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypat
         accepted = post_upload(client, target, context_demo="schools", context_geo="lat,lon")
         record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
         unknown = post_upload(client, target, context_demo="nowhere")
+        kept = client.post("/api/upload", data={"demo": "schools", "layer": "true", "geo": "lat,lon"})  # what the console sends
     assert record["status"] == "READY" and [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon")]
-    assert unknown.status_code == 400
+    assert unknown.status_code == 400 and kept.status_code == 202, kept.text
+    (layer,) = [r for r in engine.ws.list_batches() if r["status"] == "LAYER"]
+    assert (layer["filename"], layer["points"]) == (context.name, 12)  # a shipped layer kept on its own, no file of the user's
 
 
 @pytest.mark.browser
@@ -541,16 +544,28 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
 
 
 @pytest.mark.browser
-def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_levels_it_ticks(cfg, tmp_path):
+def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_levels_it_ticks(cfg, tmp_path, monkeypatch):
+    """A shipped set meant only as a layer is not offered as a dataset; with *Лише шар* ticked every shipped set with
+    points is, and the one chosen is kept as a layer through the form and crossed from the panel."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
     from conftest import make_engine, serve, stack
     from dev import chromium
 
+    import insight_graph_service.server.app as app_module
+
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     target, context = planted(tmp_path)
+    entries = [
+        {"key": "plain", "file": "plain.csv", "title": "plain"},  # no points: never a layer
+        {"key": "target", "file": "target.csv", "title": "target", "options": {"geo": f"lat,lon@{RES}"}},
+        {"key": "schools", "file": "schools.csv", "title": "schools", "context_only": True, "options": {"geo": "lat,lon"}},
+    ]
+    monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "demo_datasets", lambda: entries)
+    offered = "[...document.querySelectorAll('#sample option')].map((o) => o.value).filter(Boolean)"
     engine = make_engine(cfg)
     port, app = stack(engine)
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
@@ -560,13 +575,21 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("document.querySelectorAll('#cross-target option').length === 1", timeout=20000)
-        page.set_input_files("#file", str(context))  # the schools, kept as a layer through the form
-        page.evaluate("document.querySelector('#geo').closest('details').open = true")
-        page.fill("#geo", "lat,lon")
+        page.wait_for_function(f"{offered}.length === 2", timeout=20000)
+        assert page.evaluate(offered) == ["plain", "target"]  # a layer alone mines nothing
+        page.select_option("#sample", "target")
+        page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
         page.check("#layer-only")
+        assert page.evaluate(offered) == ["target", "schools"] and page.input_value("#sample") == "target"  # any set with points; the choice stays
+        page.select_option("#sample", "schools")
+        page.uncheck("#layer-only")
+        assert page.input_value("#sample") == "" and page.is_disabled("#upload-btn")  # a choice no longer listed goes
+        page.check("#layer-only")
+        page.select_option("#sample", "schools")  # the shipped schools, kept as a layer through the form
         page.click("#upload-btn")
         page.wait_for_function("document.querySelectorAll('#cross-layers option').length === 2", timeout=20000)
         (layer,) = [r for r in engine.ws.list_batches() if r["status"] == "LAYER"]
+        assert not page.is_checked("#layer-only") and page.evaluate(offered) == ["plain", "target"]  # the form reset
         page.evaluate("document.querySelector('#cross-panel').open = true")
         page.select_option("#cross-target", a)
         page.select_option("#cross-layers", [layer["upload_id"]])
