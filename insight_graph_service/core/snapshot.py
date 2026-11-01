@@ -98,7 +98,7 @@ def _schema_plane(
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
                 "integrity": integrity[bid],
-                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
+                **{k: b[k] for k in ("upload_id", "level", "supersedes", "context_ring") if k in b},
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),

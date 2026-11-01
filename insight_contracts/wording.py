@@ -30,6 +30,18 @@ TERMS: dict[str, tuple[str, str]] = {
     ),
     "support": ("рядки", "скільки рядків даних охоплює інсайт і яку частку всіх рядків"),
     "p_adjusted": ("скоригована p", "результат тесту медіани з поправкою на кількість перевірок; поріг відбору, а не точна ймовірність"),
+    "p_context": (
+        "нуль шару",
+        "частка перестановок шару в межах батьківських комірок, за яких зсув не слабший за знайдений, помножена на кількість когорт зі смугою шару; інсайт зі смугою шару допущено, лише коли вона не більша за поріг відбору: розклад шару всередині батька зсуву не відтворює",
+    ),
+    "context_confounded": (
+        "відтворює розклад шару",
+        "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар",
+    ),
+    "outside_cross_type": (
+        "без умови шару",
+        "знахідки крос-типового прогону без смуги шару: це знахідки самої цілі, вони лишаються на її власних рівнях",
+    ),
     "stability": (
         "стабільність",
         "1 − min(CV, 0,9), де CV — коефіцієнт варіації суми |z| головних зсувів на 20 бутстреп-вибірках; "
@@ -281,16 +293,22 @@ def _layer(column: str) -> str:
     return humanize(column.removeprefix("context_").removesuffix("_band"))
 
 
-def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
+def disk_words(ring: int) -> str:
+    """The disk a context band counts its layer over (the upload's ``context_ring``: 0, 1 or 2 rings), in the locative."""
+    return ("у самій комірці", "у комірці та шести сусідніх", "у комірці та сусідніх у межах двох кілець")[ring]
+
+
+def column_words(column: str, glossary: Mapping[str, str], geo: bool, ring: int = 1) -> str:
     """A column in words: the uploader's glossary first, then (geo cells only) the derived column's reading, else the
-    humanized name. ``glossary`` is the declared one, never the derived English ``profile.geo.glossary``."""
+    humanized name. ``glossary`` is the declared one, never the derived English ``profile.geo.glossary``; ``ring`` the
+    disk a context band counts over (``disk_words``)."""
     if column in glossary:
         return glossary[column]
     if geo:
         if column == "points":
             return "кількість подій у комірці"
         if column.startswith("context_") and column.endswith("_band"):
-            return f"кількість {_layer(column)} у комірці та сусідніх"
+            return f"кількість {_layer(column)} {disk_words(ring)}"
         if column.startswith("neighbours_") and not column.endswith("_band"):
             return f"{column_words(column.removeprefix('neighbours_'), glossary, geo)} (середнє шести сусідніх комірок)"
         if column.startswith("share_"):
@@ -305,10 +323,10 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool) -> str:
     return humanize(column)
 
 
-def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool, bands: Mapping[str, int]) -> str:
+def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool, bands: Mapping[str, int], ring: int = 1) -> str:
     """One ``attribute = value`` in words: the glossary's phrase for the pair (a cell's mode column reads its source
     column's pair), a cell's neighbourhood class or band (named by its counter), a quantile band 'у i-й з k смуг'
-    (``bands``: band column -> k), a blank ('missing', the ingestion's sentinel) 'не вказано', else
+    (``bands``: band column -> k), a context band over its disk (``ring``), a blank ('missing', the ingestion's sentinel) 'не вказано', else
     ``<column words> = <value>`` with the value as written."""
     attribute, value = condition.attribute, condition.value
     pair = f"{attribute.removesuffix('_mode')}={value}" if geo and attribute.endswith("_mode") else condition.expr
@@ -318,9 +336,9 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
         return LISA[value]
     if geo and attribute.startswith("context_") and attribute.endswith("_band"):
         if value == "none nearby":
-            return f"поруч немає {_layer(attribute)}"
+            return f"немає {_layer(attribute)} {disk_words(ring)}"
         if value[:1] == "q" and value[1:].isdigit():
-            return f"поруч (комірка й сусідні) {_layer(attribute)} у {_ORDINAL[int(value[1:]) - 1]} чверті (від найменшої кількості)"
+            return f"{column_words(attribute, {}, geo, ring)} — у {_ORDINAL[int(value[1:]) - 1]} чверті (від найменшої кількості)"
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
         counter = attribute.removeprefix("neighbours_").removesuffix("_band")
         return f"сусідні комірки {QUARTERS[value]} ({column_words(counter, glossary, geo)})"  # a cell has one band per counter
@@ -333,13 +351,13 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
     return f"{words} не вказано" if value == "missing" else f"{words} = {value}"
 
 
-def short_conditions(ins: Insight, glossary: Mapping[str, str], bands: Mapping[str, int]) -> list[str]:
+def short_conditions(ins: Insight, glossary: Mapping[str, str], bands: Mapping[str, int], ring: int = 1) -> list[str]:
     """Each condition in the fewest words, for a list row: its value where it reads ``<column> = <value>``, else its
     phrase (a cell's class or band, a declared pair, a blank), which a code alone would not say."""
     geo = bool(ins.provenance.get("spatial"))
     out = []
     for c in ins.conditions:
-        words = condition_words(c, glossary, geo, bands)
+        words = condition_words(c, glossary, geo, bands, ring)
         out.append(c.value if words.endswith(f" = {c.value}") else words)
     return out
 
@@ -371,13 +389,17 @@ def covariance_words(cov: Mapping[str, Any], glossary: Mapping[str, str], geo: b
 
 
 def reading(
-    ins: Insight, thresholds: PhenomenonThresholds, glossary: Mapping[str, str] | None = None, bands: Mapping[str, int] | None = None
+    ins: Insight,
+    thresholds: PhenomenonThresholds,
+    glossary: Mapping[str, str] | None = None,
+    bands: Mapping[str, int] | None = None,
+    ring: int = 1,
 ) -> dict[str, str]:
     """An insight in words: ``where`` its conditions joined by 'і', ``what`` the target's shift and the next material one
     (at most two, as the evidence lists them) or the correlation change, ``headline`` the first clause of ``what`` (the
     target and its degree, or the correlation change), which a list row shows, ``gist`` the clauses of ``what`` without
     their numbers, which the drawer leads with above its table of shifts. ``glossary`` is the dataset's declared one
-    (empty without it), ``bands`` the quantile-band columns' band counts. A surface that shows the scope already prints
+    (empty without it), ``bands`` the quantile-band columns' band counts, ``ring`` its context bands' disk. A surface that shows the scope already prints
     ``what`` alone; ``sentence`` joins the two."""
     glossary, geo = glossary or {}, bool(ins.provenance.get("spatial"))
     if ins.phenomenon_type == "covariance":
@@ -388,7 +410,7 @@ def reading(
         headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
         what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts))
         gist = "; ".join(_shift_head(s, glossary, geo) for s in shifts)
-    where = " і ".join(condition_words(c, glossary, geo, bands or {}) for c in ins.conditions)
+    where = " і ".join(condition_words(c, glossary, geo, bands or {}, ring) for c in ins.conditions)
     return {"where": where, "what": what, "headline": headline, "gist": gist}
 
 
@@ -448,7 +470,9 @@ def value_words(ins: Insight) -> dict[str, str]:
     value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ`` Moran's I clipped to [0, 0.99] as
     ``spatial.effective_n_factor`` clips it: a sparse cell holds no value, so ``n_eff`` below the extent's cells says
     nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing. With ``I > 0`` the counted cells come back from
-    the rounded ``n_eff`` and ``I``, so they read as approximate and never exceed the extent's cells."""
+    the rounded ``n_eff`` and ``I``, so they read as approximate and never exceed the extent's cells. A cohort on a
+    context band adds ``p_context``: the layer's verdict, ``p_context`` times its family as the gate reads it, then the
+    two (every insight shown passed it: a cohort it refuses is no insight)."""
     p = ins.p_adjusted
     if p is None:
         out = {"p_adjusted": "не перевірялося (зміна зв'язку)"}
@@ -464,4 +488,8 @@ def value_words(ins: Insight) -> dict[str, str]:
         tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
         cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
         out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"
+    if (p_context := spatial.get("p_context")) is not None:
+        family = spatial.get("context_family") or 1
+        cohorts = plural(family, "когорта", "когорти", "когорт")
+        out["p_context"] = f"{min(1.0, p_context * family):.2g} ({p_context:.2g} × {family} {cohorts} зі смугою шару)"
     return out

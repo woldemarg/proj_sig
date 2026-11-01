@@ -15,9 +15,11 @@ import pytest
 from conftest import toy_insight, wait_batch
 from fastapi.testclient import TestClient
 
+from graph_query_engine.graph import declared_words, insight_reading
 from insight_contracts import Condition, Shift, SpatialProvenance
+from insight_contracts.graph import dataset_node_id
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
-from insight_contracts.wording import column_words, condition_words, source_column
+from insight_contracts.wording import column_words, condition_words, disk_words, short_conditions, source_column, value_words
 from insight_graph_service.core import uploads
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
@@ -291,11 +293,14 @@ def test_spatial_provenance_reads_records_without_p_context():
     assert SpatialProvenance.from_dict(tested).to_dict() == tested
 
 
-def test_context_conditions_read_in_plain_ukrainian_and_hold_no_bare_literal():
+@pytest.mark.parametrize("ring", [0, 1, 2])
+def test_context_conditions_read_the_uploads_disk_in_plain_ukrainian_and_hold_no_bare_literal(ring):
     q4, none = Condition(BAND, "q4"), Condition(BAND, NONE_NEARBY)
-    assert "schools" in condition_words(q4, {}, True, {}) and "четвертій чверті" in condition_words(q4, {}, True, {})
-    assert condition_words(none, {}, True, {}) == "поруч немає schools"
-    assert "сусідніх" in column_words(BAND, {}, True)
+    disk = disk_words(ring)  # the cell alone, with its six neighbours, or within two rings: never one phrase for all
+    assert disk == ["у самій комірці", "у комірці та шести сусідніх", "у комірці та сусідніх у межах двох кілець"][ring]
+    phrase = condition_words(q4, {}, True, {}, ring)
+    assert "schools" in phrase and disk in phrase and "четвертій чверті" in phrase
+    assert condition_words(none, {}, True, {}, ring) == f"немає schools {disk}" and disk in column_words(BAND, {}, True, ring)
     assert source_column(BAND, {"schools", "lat"}) is None  # a declared column named like the layer is not its source
     assert " " in NONE_NEARBY  # two words: a bare word would ground onto unrelated question words (question._values)
 
@@ -312,10 +317,26 @@ def test_an_upload_with_a_context_file_mines_its_band_and_verifies(engine, tmp_p
         accepted = post_upload(client, target, ("Chicago Schools.csv", context))
         assert accepted.status_code == 202, accepted.text
         record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
+        overlay = client.get(f"/api/geo/{record['dataset_id']}/overlay").json()["patterns"]  # what the map card reads
     assert record["status"] == "READY" and [(c["name"], c["geo"]) for c in record["context"]] == [("chicago_schools", "auto")]
     column = "context_chicago_schools_band"
     scoped = [p for p in engine.ws.patterns() if any(c["attribute"] == column for c in p["conditions"])]
     assert scoped and all("p_context" in p["provenance"]["spatial"] for p in scoped)
+    # the verdict reads as the adjusted share and its family; an insight without a layer has none
+    graph, spatial = engine.graph(), scoped[0]["provenance"]["spatial"]
+    verdict = value_words(graph.insight(scoped[0]["id"]))["p_context"]
+    assert (
+        verdict.startswith(f"{min(1.0, spatial['p_context'] * spatial['context_family']):.2g} (")
+        and overlay[scoped[0]["id"]]["numbers"]["p_context"] == verdict
+    )
+    assert all("p_context" not in value_words(graph.insight(p["id"])) for p in engine.ws.patterns() if p not in scoped)
+    # the band's disk is read off the dataset: the record's ring, carried by its node
+    props = graph.nodes[dataset_node_id(record["dataset_id"])]["props"]
+    assert props["context_ring"] == 1 and disk_words(1) in insight_reading(graph, scoped[0]["id"], engine.settings.thresholds)["where"]
+    props["context_ring"] = 0
+    assert disk_words(0) in insight_reading(graph, scoped[0]["id"], engine.settings.thresholds)["where"]
+    assert any(disk_words(0) in w for w in short_conditions(graph.insight(scoped[0]["id"]), *declared_words(graph, scoped[0]["id"])))  # IN VIEW
+    props["context_ring"] = 1
     assert engine.verify_pattern(scoped[0]["id"])["status"] == "reproduced"  # both files read again, p_context drawn the same
     Path(record["context"][0]["path"]).unlink()
     assert engine.verify_pattern(scoped[0]["id"])["status"] == "source_missing"
@@ -540,6 +561,76 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
             time.sleep(0.5)
     (record,) = done
     assert [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon"), ("shops", "lat,lon")] and record["context_ring"] == 0
+    assert not errors, errors
+
+
+def test_a_run_that_admits_nothing_still_counts_its_refusals_by_reason(engine, tmp_path):
+    """A layer whose points lie in no target cell's disk leaves one band and is left out, so every finding of the run is
+    the target's own (``outside_cross_type``): the run fails as ``no_viable_insights`` and its record counts the refusals
+    by reason, as a READY record does."""
+    target, context = planted(tmp_path)
+    far = tmp_path / "far.csv"
+    pd.read_csv(context).assign(lat=lambda f: f["lat"] + 5).to_csv(far, index=False)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "far.csv", far, "lat,lon", layer="true")["upload_id"]
+        run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+    assert (run["status"], run["error"]["code"]) == ("FAILED", "no_viable_insights")
+    pruned = run["metrics"]["pruned"]
+    assert pruned["outside_cross_type"] > 0 and run["metrics"]["pruned_total"] == sum(pruned.values())
+
+
+@pytest.mark.browser
+def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_warnings(cfg, tmp_path):
+    """A cross-type insight's drawer and map card read the layer's verdict (``p_context`` times its family) and its
+    scope the band's disk; an insight without a layer has no such row; the run's card counts its refusals by reason and
+    a card shows its record's warnings."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    import httpx
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    target, context = planted(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", indicators="ghost:count")["upload_id"]  # a metric it lacks: a warning
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+        far = tmp_path / "far.csv"
+        pd.read_csv(context).assign(lat=lambda f: f["lat"] + 5).to_csv(far, index=False)
+        empty = engine.ws.load_batch(
+            cross_run(client, a, upload_file(client, "far.csv", far, "lat,lon", layer="true")["upload_id"]).json()["batch_id"]
+        )
+        own = next(r for r in engine.ws.list_batches() if r["upload_id"] == a and "cross" not in r)
+        crossed = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == run["dataset_id"])
+        plain = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == own["dataset_id"] and "p_context" not in x["provenance"]["spatial"])
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
+        card = page.locator(f".ds[data-ds='{run['dataset_id']}']")
+        refused = card.locator(".term", has_text="без умови шару")
+        assert refused.get_attribute("title") and f"без умови шару: {run['metrics']['pruned']['outside_cross_type']}" in card.inner_text()
+        warned = page.locator(f".ds[data-ds='{own['dataset_id']}']")  # the target's own level dropped the indicator it lacks
+        assert "indicators: no metric named" in warned.inner_text()  # the record's warning on its card
+        nothing = page.locator(".ds", has_text="+ far")  # a run that admitted none: its refusals by reason all the same
+        assert f"без умови шару: {empty['metrics']['pruned']['outside_cross_type']}" in nothing.inner_text()
+        page.evaluate(f"inspect('{crossed}')")
+        drawer = page.text_content("#drawer")  # its title (the scope) and its folded evidence too
+        assert "нуль шару" in drawer and disk_words(1) in drawer and page.locator("#inspector .term", has_text="нуль шару").get_attribute("title")
+        page.evaluate(f"inspect('{plain}')")
+        assert "нуль шару" not in page.text_content("#drawer")  # no layer, no verdict
+        page.select_option("#dataset-filter", run["dataset_id"])
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function(f"G.ds === '{run['dataset_id']}' && G.map.loaded() && G.data", timeout=60000)
+        page.evaluate(f"GeoMap.focusPattern('{crossed}')")
+        page.wait_for_function("!$('map-card').hidden", timeout=10000)
+        assert "нуль шару" in page.inner_text("#map-card")
     assert not errors, errors
 
 

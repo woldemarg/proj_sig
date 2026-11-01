@@ -593,7 +593,9 @@ class Engine:
         rejections = [*result.rejections, *selection.rejections, *outside, *refused]
         self.ws.save_rejections(ds, [asdict(r) for r in rejections])
         if not kept:
-            raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
+            pruned = dict(Counter(r.reason for r in rejections))
+            record["metrics"].update(pruned=pruned, pruned_total=len(rejections))  # a level that admits none still names its refusals
+            raise PipelineError("no_viable_insights", f"No insight passed selection ({pruned})")
         return kept, {i.id: covers[i.expression] for i in kept}, rejections
 
     def _commit(self, record: dict[str, Any], mined: _Mined, timings: dict[str, float], t0: float) -> tuple[dict[str, Any], CommittedState]:

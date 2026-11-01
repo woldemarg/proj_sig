@@ -568,6 +568,7 @@ function renderCard(p, item, pts) {
       : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
       .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
+    (p.numbers && p.numbers.p_context ? `<div class="mc-note">${term("p_context")}: ${esc(p.numbers.p_context)}</div>` : "") +
     (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }

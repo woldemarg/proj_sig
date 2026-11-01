@@ -623,6 +623,7 @@ async function inspect(id, note = "") {
       `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
       kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
+        ...(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : []),  // a cohort on a layer's band: the layer's verdict
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
         [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
       ]);

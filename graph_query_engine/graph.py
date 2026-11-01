@@ -188,17 +188,18 @@ def primary_anchor(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
 
 def insight_reading(graph: DualGraph, pattern_id: str, thresholds: PhenomenonThresholds) -> dict[str, str]:
     """The insight in words, ``{"where", "what", "headline", "gist"}`` (``wording.reading``), with its dataset's declared glossary
-    (``user_glossary`` of its Dataset node) and the band count of each quantile-band condition from its Dimension node:
+    (``user_glossary`` of its Dataset node), the band count of each quantile-band condition from its Dimension node and
+    the disk its context bands count over (``context_ring`` of its Dataset node):
     every surface that describes an insight reads it here."""
     return wording.reading(graph.insight(pattern_id), thresholds, *declared_words(graph, pattern_id))
 
 
-def declared_words(graph: DualGraph, pattern_id: str) -> tuple[dict[str, str], dict[str, int]]:
-    """What an insight's words are read with: its dataset's declared glossary and the band count of each quantile-band
-    condition (``band_counts``)."""
+def declared_words(graph: DualGraph, pattern_id: str) -> tuple[dict[str, str], dict[str, int], int]:
+    """What an insight's words are read with: its dataset's declared glossary, the band count of each quantile-band
+    condition (``band_counts``) and its context bands' disk (the record's ``context_ring``, 1 by default)."""
     ins = graph.insight(pattern_id)
-    declared = graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("user_glossary", {})
-    return declared, band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions))
+    props = graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"]
+    return props.get("user_glossary", {}), band_counts(graph, ins.dataset_id, (c.attribute for c in ins.conditions)), props.get("context_ring", 1)
 
 
 def theme_glossary(graph: DualGraph, attractor_id: str) -> dict[str, str]:
