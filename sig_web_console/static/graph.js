@@ -634,7 +634,7 @@ async function inspect(id, note = "") {
     else if ((d.places || []).length) html += whereRows(d.places);
     tail += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
     tail += `<details class="nb-group"><summary>Походження</summary>` + kv([
-      ["Датасет", esc(`${p.provenance.filename}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
+      ["Датасет", esc(`${p.provenance.filename}${(ds.cross_layers || []).length ? ` · + ${ds.cross_layers.join(", ")}` : ""}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
       ["Селектор", `<span class="mono">${esc(p.expression)}</span>`],
       ...(p.aliases || []).length ? [[esc(cap(word("aliases"))), p.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>")]] : [],
       ["Рушій", esc(p.provenance.engine)], ["Посилання на рядки", `<span class="mono">${esc(p.provenance.rows_ref)}</span>`],
