@@ -499,10 +499,15 @@ class Engine:
 
     @_healthy
     def cross(
-        self, target: str, layers: Sequence[str], context_ring: int | str | None = None, levels: Sequence[int | str] | None = None
+        self,
+        target: str,
+        layers: Sequence[str],
+        context_ring: int | str | None = None,
+        levels: Sequence[int | str] | None = None,
+        align: str | None = None,
     ) -> list[dict[str, Any]]:
         """A cross-type run of two stored uploads (``uploads.cross_runs``): one batch per level. Processing is a separate call."""
-        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes)
+        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes, align)
         return [self.submit(**run) for run in runs]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
@@ -679,7 +684,7 @@ class Engine:
             time=record.get("time"),
             grid=record.get("grid"),
             tz=record.get("tz"),
-            context=[(c["name"], Path(c["path"]), c["geo"]) for c in record.get("context", ())],
+            context=uploads.context_files(record),
             context_ring=record.get("context_ring", 1),  # a record made before the option: the default disk
         )
 

@@ -26,7 +26,7 @@ from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY, ContextSource, deal, disk_sums
 from subgroup_miner.discovery import build_insights, recompute_statistics, run_discovery
-from subgroup_miner.ingestion import IngestionError, dataset_fingerprint, load_dataset
+from subgroup_miner.ingestion import IngestionError, dataset_fingerprint, load_dataset, read_context
 from subgroup_miner.selection import select_insights
 from subgroup_miner.spatial import build_cells
 
@@ -507,6 +507,41 @@ def test_a_layer_upload_may_declare_its_time_and_a_run_records_each_layers_rule(
     assert uploads.overlap_share(["2025-03-01T00:00:00+00:00"] * 2, layer["span"]) == 0.0  # a target of one instant: covered or not
 
 
+def test_align_span_counts_only_the_layers_events_within_the_targets_span(engine, tmp_path):
+    """``align=span``: an event layer counts only its events within the target's span (its own reading's time record):
+    every school twice, once inside the target's year and once after it, counts each school once; the run is its own
+    dataset and ``verify`` reads the same window. A layer without time is counted whole, with a warning; an unknown mode,
+    a target without time and no layer with time are refused."""
+    target, context = planted(tmp_path)
+    frame = pd.read_csv(target)
+    frame.to_csv(untimed := tmp_path / "untimed.csv", index=False)
+    frame["when"] = pd.date_range("2025-01-01", "2025-12-31", periods=len(frame)).strftime("%Y-%m-%d")
+    frame.to_csv(target, index=False)
+    schools = pd.read_csv(context)
+    pd.concat([schools.assign(when="2025-06-15"), schools.assign(when="2026-06-15")]).to_csv(patrols := tmp_path / "patrols.csv", index=False)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", time="when")["upload_id"]
+        b = upload_file(client, "patrols.csv", patrols, "lat,lon", layer="true", time="when")["upload_id"]
+        c = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        d = upload_file(client, "untimed.csv", untimed, f"lat,lon@{RES}")["upload_id"]
+        refused = [cross_run(client, a, b, align="days"), cross_run(client, d, b, align="span"), cross_run(client, a, c, align="span")]
+        assert [r.status_code for r in refused] == [400] * 3 and all(r.json()["code"] == "invalid_options" for r in refused), [
+            r.text for r in refused
+        ]
+        whole, aligned = (engine.ws.load_batch(cross_run(client, a, b, **o).json()["batch_id"]) for o in ({}, {"align": "span"}))
+        both = engine.ws.load_batch(cross_run(client, a, b, c, align="span").json()["batch_id"])
+    span = next(r for r in engine.ws.list_batches() if r["upload_id"] == a and "cross" not in r)["temporal"]["span"]
+    (entry,) = aligned["context"]
+    assert entry["window"] == span and "window" not in whole["context"][0] and aligned["dataset_id"] != whole["dataset_id"]
+    counted = read_context("patrols", Path(entry["path"]), "lat,lon", ("when", None, *span))[0]
+    assert np.isfinite(counted.lat).sum() == len(schools)  # each school once: its later visit lies past the target's span
+    assert np.isfinite(read_context("patrols", Path(entry["path"]), "lat,lon")[0].lat).sum() == 2 * len(schools)
+    assert not [w for w in aligned["warnings"] if w.startswith("patrols:")]  # aligned: not read as static
+    assert [w for w in both["warnings"] if w.startswith("schools:") and "whole" in w] and "window" not in both["context"][1]
+    patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == aligned["dataset_id"]]
+    assert aligned["status"] == "READY" and patterns and engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
+
+
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
     import insight_graph_service.server.app as app_module
 
@@ -686,6 +721,10 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
         page.select_option("#cross-target", a)
         page.select_option("#cross-layers", [layer["upload_id"]])
         assert page.is_checked(f"#cross-levels input[value='{RES}']") and page.is_disabled("#cross-both")  # a layer is never a target
+        page.check("#cross-align")  # the schools have no time: nothing to align on, refused in the panel
+        page.click("#cross-btn")
+        page.wait_for_function("document.getElementById('cross-msg').textContent.includes('align')", timeout=20000)
+        page.uncheck("#cross-align")
         page.click("#cross-btn")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
         deadline = time.time() + 300

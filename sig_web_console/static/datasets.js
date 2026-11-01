@@ -243,7 +243,7 @@ function setCrossMsg(text, err = false) { const el = $("cross-msg"); el.classNam
 async function runCross() {
   const { target, layers } = crossPick(), ring = $("cross-ring").value;
   const levels = [...$("cross-levels").querySelectorAll("input:checked")].map((i) => i.value);
-  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring }];
+  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring, ...($("cross-align").checked ? { align: "span" } : {}) }];
   if ($("cross-both").checked && !$("cross-both").disabled) runs.push({ target: layers[0].id, layers: [target.id], ring });  // its own default levels
   $("cross-btn").disabled = true;
   try {
