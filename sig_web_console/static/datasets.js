@@ -8,6 +8,12 @@ function datasetName(b) {
   return (b.status === "LAYER" ? `${b.filename} · шар` : res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename) + layers;
 }
 
+const PRUNED_SHOWN = ["context_confounded", "outside_cross_type"];  // the layer's verdict; the other reasons stay in the total
+const prunedBy = (pruned = {}) => {
+  const shown = PRUNED_SHOWN.filter((k) => pruned[k]).map((k) => `${term(k)}: ${num(pruned[k], 0)}`);
+  return shown.length ? ` (${shown.join(", ")})` : "";
+};
+
 function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
   const running = !TERMINAL.has(b.status);
   const m = b.metrics || {}, p = b.profile || {};
@@ -23,7 +29,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       `<div class="stat"><b>${num(m.validated_insights, 0)}</b><span>${form(m.validated_insights, "інсайт", "інсайти", "інсайтів")}</span></div>` +
       `<div class="stat" title="Теми, вперше знайдені в цьому датасеті"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>${form(m.attractors_new ?? m.attractors_total, "тема", "теми", "тем")}</span></div>` +
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>${form(m.input_rows, "рядок", "рядки", "рядків")}</span></div></div>` +
-      `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · відсіяно: ${num(m.pruned_total, 0)} · ${num(m.processing_duration_s, 1)} с</div>` +
+      `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · відсіяно: ${num(m.pruned_total, 0)}${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
+      (b.warnings || []).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
   } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
     body = `<div class="ds-note">На цьому рівні стійких знахідок немає.</div><div class="ds-note mono">${esc(b.error.message)}</div>`;
