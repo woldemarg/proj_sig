@@ -20,7 +20,7 @@ from insight_contracts.text import RELIABILITY
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
-from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, parse_tz, read_context, read_file, read_times
+from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, parse_tz, parse_where, read_context, read_file, read_times
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
@@ -266,18 +266,26 @@ def layer_name(filename: str, taken: Collection[str]) -> str:
     return name
 
 
-def save_context(ws: Workspace, files: Sequence[tuple[str, BinaryIO, str]], max_bytes: int) -> list[dict[str, str]]:
-    """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator)`` each —, each stored (``MAX_UPLOAD_MB``
-    apiece), named (``layer_name``) and its points located once: ``{name, path, geo}`` per layer, as the geo levels'
-    records keep them. More than ``MAX_CONTEXT_LAYERS`` files, or a file without a point, refuses them all and keeps none."""
+def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[dict[str, Any]]:
+    """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator[, where])`` each —, each stored
+    (``MAX_UPLOAD_MB`` apiece) or, given as the stored ``Path`` of the target's own file, read in place (``in_place``:
+    no copy, never removed by ``discard_context``), named (``layer_name``; ``<stem>_<value>`` under a filter) and its
+    points located once (``read_context``, ``where``'s rows): ``{name, path, geo[, where, in_place]}`` per layer, as the
+    geo levels' records keep them. More than ``MAX_CONTEXT_LAYERS`` files, or a file without a point, refuses them all
+    and keeps none."""
     if len(files) > MAX_CONTEXT_LAYERS:
         raise PipelineError("invalid_options", f"at most {MAX_CONTEXT_LAYERS} context files, got {len(files)}")
     layers: list[dict[str, str]] = []
     try:
-        for filename, stream, locator in files:
-            name = layer_name(filename, [layer["name"] for layer in layers])
-            layers.append({"name": name, "path": str(ws.save_upload(filename, stream, max_bytes)), "geo": locator})
-            read_context(name, Path(layers[-1]["path"]), locator)
+        for filename, source, locator, *rest in files:
+            where = rest[0] if rest else None
+            named = f"{Path(filename).stem}_{where.partition('=')[2]}{Path(filename).suffix}" if where else filename
+            name, in_place = layer_name(named, [layer["name"] for layer in layers]), isinstance(source, Path)
+            path = source if in_place else ws.save_upload(filename, source, max_bytes)
+            layers.append(
+                {"name": name, "path": str(path), "geo": locator} | ({"where": where} if where else {}) | ({"in_place": True} if in_place else {})
+            )
+            read_context(name, Path(path), locator, where=where)
     except IngestionError as exc:  # no point, an unreadable file
         discard_context(layers)
         raise PipelineError(exc.code, str(exc)) from exc
@@ -288,15 +296,34 @@ def save_context(ws: Workspace, files: Sequence[tuple[str, BinaryIO, str]], max_
 
 
 def discard_context(layers: Sequence[dict[str, str]]) -> None:
-    """Remove the stored files of an upload's context layers (a refused upload keeps none)."""
+    """Remove the stored files of an upload's context layers (a refused upload keeps none); a layer read in place is
+    the target's own file and stays."""
     for layer in layers:
-        Path(layer["path"]).unlink(missing_ok=True)
+        if not layer.get("in_place"):
+            Path(layer["path"]).unlink(missing_ok=True)
 
 
-def upload_id(path: Path) -> str:
-    """An upload's id: ``up-`` and the first twelve hex digits of its stored bytes' SHA-256 (the same bytes, one upload)."""
+def upload_id(path: Path, where: str | None = None) -> str:
+    """An upload's id: ``up-`` and the first twelve hex digits of its stored bytes' SHA-256 (the same bytes, one upload);
+    of the bytes and ``where`` for a filtered reading, an upload of its own over the same file (docs/02_discovery.md §2.9)."""
     with path.open("rb") as stored:
-        return "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
+        digest = hashlib.file_digest(stored, "sha256")
+    if where:
+        digest.update(f"where={where}".encode())
+    return "up-" + digest.hexdigest()[:12]
+
+
+def stored_copy(path: Path, batches: Sequence[dict[str, Any]]) -> Path:
+    """The stored file of ``path``'s bytes: an earlier upload's, ``path`` itself removed — a filtered reading reads the
+    file stored once (docs/02_discovery.md §2.9) —; else ``path``. Called once the upload is accepted, so a refusal
+    never removes another upload's file."""
+    size, digest = path.stat().st_size, upload_id(path)
+    for b in batches:
+        other = Path(b.get("source_path") or "")
+        if other != path and other.is_file() and other.stat().st_size == size and upload_id(other) == digest:
+            path.unlink()
+            return other
+    return path
 
 
 def resolution(record: dict[str, Any]) -> int | None:
@@ -401,6 +428,7 @@ def cross_runs(
     ring: int | str | None,
     max_bytes: int,
     align: str | None = None,
+    layer_where: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
     file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
@@ -411,7 +439,9 @@ def cross_runs(
     context entry's time rule (``layer_time``) and, for a target with a time column, one warning per event layer
     (``time_warning``): every layer is read as static over its whole span. ``align`` ``span`` counts an event layer's
     events within the target's span only (its own reading's time record) — the ``window`` of its entry —, a layer
-    without time whole, with a warning."""
+    without time whole, with a warning. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under
+    a filter, as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read
+    in place, not copied."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
     if (align := (align or "").strip() or None) not in (None, "span"):
@@ -419,6 +449,7 @@ def cross_runs(
     try:
         ring = parse_ring(ring)
         chosen = {int(x) for x in levels or ()}
+        layer_where = {u: w for u, spec in (layer_where or {}).items() if (w := parse_where(spec))}
     except (IngestionError, ValueError) as exc:
         raise PipelineError("invalid_options", f"cross-type run: {exc}") from exc
     own: dict[int, dict[str, Any]] = {}
@@ -427,21 +458,28 @@ def cross_runs(
             own[resolution(b)] = b
     if not own:
         raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
+    if stray := sorted(set(layer_where) - set(layers)):
+        raise PipelineError("invalid_options", f"layer_where names no layer of the run: {stray}")
     sources, read_at, rules = [], [], []
     for upload in layers:
         theirs = [b for b in batches if b.get("upload_id") == upload]
         stored = max(theirs, key=lambda b: b["created_at"], default=None)
         if stored is None or not Path(stored["source_path"]).is_file() or not (stored.get("geo") or stored.get("locator")):
             raise PipelineError("invalid_options", f"{upload}: no stored upload with points")
-        sources.append((stored["filename"], Path(stored["source_path"]), (stored.get("geo") or stored["locator"]).partition("@")[0]))
+        if stored.get("where") and upload in layer_where:
+            raise PipelineError("invalid_options", f"{upload}: a filtered reading already ({stored['where']}); a run filters a layer stored whole")
+        locator = (stored.get("geo") or stored["locator"]).partition("@")[0]
+        sources.append((stored["filename"], Path(stored["source_path"]), locator, stored.get("where") or layer_where.get(upload)))
         read_at += [{resolution(b) for b in theirs} - {None}] if stored["status"] != "LAYER" else []
         rules.append(layer_time(stored, theirs))
     if missing := sorted(chosen - set(own)):
         raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
     if not chosen:  # the target's finest, and the levels every mined layer was read at too
         chosen = {max(own)}.union(set(own).intersection(*read_at) if read_at else ())
+    shared = {Path(b["source_path"]) for b in own.values()}  # the target's own file: a layer of it is read in place
     with ExitStack() as files:
-        context = save_context(ws, [(name, files.enter_context(path.open("rb")), locator) for name, path, locator in sources], max_bytes)
+        opened = [(n, p if p in shared else files.enter_context(p.open("rb")), loc, w) for n, p, loc, w in sources]
+        context = save_context(ws, opened, max_bytes)
     for entry, rule in zip(context, rules):
         entry.update(rule)
     latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
@@ -457,7 +495,7 @@ def cross_runs(
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
     for b in (own[r] for r in sorted(chosen, reverse=True)):
-        options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz")} | {"strict": b.get("strict", True)}
+        options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where")} | {"strict": b.get("strict", True)}
         inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
         runs.append(
             options
@@ -473,11 +511,12 @@ def cross_runs(
     return runs
 
 
-def context_files(record: dict[str, Any]) -> list[tuple[str, Path, str, tuple[str, str | None, str, str] | None]]:
+def context_files(record: dict[str, Any]) -> list[tuple]:
     """A record's context layers as ``load_dataset`` reads them: ``(layer, path, locator, window)``, the window an aligned
-    run's ``(time, tz, first, last)`` (``cross_runs``), else None."""
+    run's ``(time, tz, first, last)`` (``cross_runs``), else None, and ``where``, a layer's row filter."""
     return [
-        (c["name"], Path(c["path"]), c["geo"], (c["time"], c.get("tz"), *c["window"]) if "window" in c else None) for c in record.get("context", ())
+        (c["name"], Path(c["path"]), c["geo"], (c["time"], c.get("tz"), *c["window"]) if "window" in c else None, c.get("where"))
+        for c in record.get("context", ())
     ]
 
 

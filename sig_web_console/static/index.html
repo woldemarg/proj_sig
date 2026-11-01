@@ -37,6 +37,9 @@
         <div class="hint" id="sample-hint"></div>
         <details class="adv">
           <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Параметри колонок</span></summary>
+          <label class="small" for="where">Лише рядки</label>
+          <input class="field" id="where" placeholder="колонка=значення">
+          <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>
           <label class="small" for="categories">Вважати категоріями</label>
           <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
           <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
@@ -103,6 +106,8 @@
         <label class="small" for="cross-ring">Що рахувати поруч</label>
         <select class="field" id="cross-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option></select>
         <label class="small chk"><input type="checkbox" id="cross-align"> події шару — лише за період цілі</label>
+        <label class="small" for="cross-where">Лише рядки шару</label>
+        <input class="field" id="cross-where" placeholder="колонка=значення">
         <label class="small chk"><input type="checkbox" id="cross-both"> і навпаки: шар як ціль, ціль як шар</label>
         <div class="hint">Шар рахується з його точок на сітці цілі. Типово — найдрібніший рівень цілі й рівні, на яких аналізували й шар. Результат — нові датасети цілі з позначкою «+ шар»: лише знахідки з умовою на шар.</div>
         <div class="rail-actions"><button type="button" class="btn" id="cross-btn" disabled>Порахувати крос-типові ознаки</button></div>
