@@ -4,7 +4,7 @@
 function datasetName(b) {
   /* the file and its level: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9) */
   const res = /^\d+$/.test(b.level || "") ? b.level : ((b.profile || {}).geo || {}).resolution;
-  const layers = b.context ? ` · + ${b.context.map((c) => c.name).join(", ")}` : "";  // read with another type's points
+  const layers = (b.where ? ` · ${b.where}` : "") + (b.context ? ` · + ${b.context.map((c) => c.name).join(", ")}` : "");  // its filter, the other types beside it
   return (b.status === "LAYER" ? `${b.filename} · шар` : res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename) + layers;
 }
 
@@ -183,6 +183,7 @@ async function upload() {
     for (const key of layers) fd.append("context_demo", key);
     if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
     if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
+    if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
@@ -192,7 +193,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; fillSamples(); $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("where").value = ""; fillSamples(); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
@@ -247,7 +248,8 @@ function setCrossMsg(text, err = false) { const el = $("cross-msg"); el.classNam
 async function runCross() {
   const { target, layers } = crossPick(), ring = $("cross-ring").value;
   const levels = [...$("cross-levels").querySelectorAll("input:checked")].map((i) => i.value);
-  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring, ...($("cross-align").checked ? { align: "span" } : {}) }];
+  const where = $("cross-where").value.trim();  // the chosen layers read under one filter
+  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring, ...($("cross-align").checked ? { align: "span" } : {}), ...(where ? { layer_where: Object.fromEntries(layers.map((u) => [u.id, where])) } : {}) }];
   if ($("cross-both").checked && !$("cross-both").disabled) runs.push({ target: layers[0].id, layers: [target.id], ring });  // its own default levels
   $("cross-btn").disabled = true;
   try {

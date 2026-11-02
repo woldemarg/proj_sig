@@ -761,6 +761,10 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
         page.wait_for_function(f"{offered}.length === 2", timeout=20000)
         assert page.evaluate(offered) == ["plain", "target"]  # a layer alone mines nothing
         page.select_option("#sample", "target")
+        page.fill("#where", "kind=zzz")  # its own reading under a filter: a value no row holds, refused with the values listed
+        page.click("#upload-btn")
+        page.wait_for_function("document.getElementById('upload-msg').textContent.includes('the values of kind')", timeout=20000)
+        page.fill("#where", "")
         page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
         page.check("#layer-only")
         assert page.evaluate(offered) == ["target", "schools"] and page.input_value("#sample") == "target"  # any set with points; the choice stays
@@ -781,6 +785,10 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
         page.click("#cross-btn")
         page.wait_for_function("document.getElementById('cross-msg').textContent.includes('align')", timeout=20000)
         page.uncheck("#cross-align")
+        page.fill("#cross-where", "kind=a")  # the schools have no such column: the layer's filter refused in the panel
+        page.click("#cross-btn")
+        page.wait_for_function("document.getElementById('cross-msg').textContent.includes('no column')", timeout=20000)
+        page.fill("#cross-where", "")
         page.click("#cross-btn")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
         deadline = time.time() + 300

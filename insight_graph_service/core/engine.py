@@ -53,7 +53,8 @@ from subgroup_miner.ingestion import (
     parse_grid,
     parse_ring,
     parse_tz,
-    read_file,
+    parse_where,
+    read_rows,
     read_times,
     resolve_grid,
 )
@@ -326,6 +327,7 @@ class Engine:
         context_geo: str | None = None,
         context_ring: int | str | None = None,
         layer: bool = False,
+        where: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -338,9 +340,10 @@ class Engine:
         counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
         cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
         (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
+        ``where`` (``column=value``): the rows holding the value, a reading of its own over the file stored once.
         Processing is a separate call."""
         if layer:
-            refused = [k for k, v in {"table": table, "grid": grid, "context": context, "supersedes": supersedes}.items() if v]
+            refused = [k for k, v in {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where}.items() if v]
             return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
         uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
@@ -354,6 +357,7 @@ class Engine:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
             ring = parse_ring(context_ring)
+            where = parse_where(where)
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
@@ -363,10 +367,11 @@ class Engine:
         path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
         try:
+            rows = read_rows(path, where) if where or time else None  # a value no row holds is refused, its column's values listed
             if auto:
-                selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
+                selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels, where)
             if time:
-                times = read_times(read_file(path, shared=True)[0], time, tz)
+                times = read_times(rows, time, tz)
                 s = self.settings  # the file's rows, on the unit their span asks for; a geo level's located points, on theirs, at VALIDATING
                 check_time(times, time, resolve_grid(times, grid), s.temporal_min_bins, s.temporal_max_bins, tz=tz)
         except IngestionError as exc:
@@ -381,7 +386,8 @@ class Engine:
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
             levels = uploads.resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
-        upload_id = uploads.upload_id(path)
+        path = uploads.stored_copy(path, self.ws.list_batches()) if where else path
+        upload_id = uploads.upload_id(path, where)
         if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
             path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
             forget_tables()
@@ -406,6 +412,7 @@ class Engine:
             "time": time,
             "grid": grid,
             "tz": tz,
+            "where": where,
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
@@ -449,6 +456,7 @@ class Engine:
         context_ring: int = 1,
         inherited: dict[str, Any] | None = None,
         warnings: Sequence[str] = (),
+        where: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -481,6 +489,7 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
+            **({"where": where} if where else {}),
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
             **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
@@ -505,9 +514,12 @@ class Engine:
         context_ring: int | str | None = None,
         levels: Sequence[int | str] | None = None,
         align: str | None = None,
+        layer_where: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """A cross-type run of two stored uploads (``uploads.cross_runs``): one batch per level. Processing is a separate call."""
-        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes, align)
+        runs = uploads.cross_runs(
+            self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes, align, layer_where
+        )
         return [self.submit(**run) for run in runs]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
@@ -686,6 +698,7 @@ class Engine:
             tz=record.get("tz"),
             context=uploads.context_files(record),
             context_ring=record.get("context_ring", 1),  # a record made before the option: the default disk
+            where=record.get("where"),
         )
 
     @_healthy

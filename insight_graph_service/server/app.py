@@ -84,6 +84,7 @@ class CrossTypeIn(BaseModel):
     ring: int | str | None = None  # their disk: 0, 1 (empty), 2
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest and those a mined layer has too
     align: str | None = None  # span: an event layer's events within the target's span only
+    layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
 
 
 class DatasetMetadataIn(BaseModel):
@@ -227,6 +228,7 @@ def create_app(engine: Engine) -> FastAPI:
         context_demo: list[str] | None = Form(None),
         context_ring: str = Form(""),
         layer: bool = Form(False),
+        where: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -249,6 +251,7 @@ def create_app(engine: Engine) -> FastAPI:
             "context_geo": context_geo.strip() or None,
             "context_ring": context_ring.strip() or None,
             "layer": layer,
+            "where": where.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
         layers = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
@@ -264,7 +267,7 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/crosstype")
     def crosstype(body: CrossTypeIn) -> JSONResponse:
         # two stored uploads: the target's levels read again with the layers as context (docs/02_discovery.md §2.9)
-        return queued(engine.cross(body.target, body.layers, body.ring, body.levels, body.align))
+        return queued(engine.cross(body.target, body.layers, body.ring, body.levels, body.align, body.layer_where))
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
