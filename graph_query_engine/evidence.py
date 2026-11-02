@@ -170,7 +170,8 @@ class Evidence:
             trust = f" source={json.dumps(d['source'], ensure_ascii=False)}" if d.get("source") else ""  # quoted: free text
             if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
                 trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
-            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
+            layers = f" layers={','.join(d['cross_layers'])}" if d.get("cross_layers") else ""  # a cross-type run: its context layers
+            lines.append(f"- {d['dataset_id']} file={d['filename']}{layers} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
     def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
@@ -715,7 +716,7 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary") if props.get(k)}
+            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary", "cross_layers") if props.get(k)}
         )
         mine = [it for it in items if it.provenance["dataset_id"] == ds]
         if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):

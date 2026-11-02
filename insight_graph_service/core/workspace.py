@@ -35,6 +35,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -244,6 +245,10 @@ class Workspace:
 
     def save_rejections(self, dataset_id: str, rejections: list[dict[str, Any]]) -> None:
         atomic_write_json(self.dataset_dir(dataset_id) / "rejections.json", rejections)
+
+    def load_rejections(self, dataset_id: str) -> list[dict[str, Any]] | None:
+        """What selection refused of a dataset (``save_rejections``), None without it; ``dataset_id`` an id, never a path."""
+        return read_json(self.datasets_dir / dataset_id / "rejections.json") if re.fullmatch(r"[\w-]+", dataset_id) else None
 
     def covers_ref(self, dataset_id: str, pattern_id: str) -> str:
         """Where a pattern's covered row positions are stored (its ``provenance.rows_ref``)."""

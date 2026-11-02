@@ -14,6 +14,10 @@ const prunedBy = (pruned = {}) => {
   return shown.length ? ` (${shown.join(", ")})` : "";
 };
 
+const crossChips = (b) =>  // a run whose layer's upload is gone, a layer's runs (uploads.cross_state, read off the registry)
+  (b.stale ? ` ${chip("bad", b.stale.reason === "superseded" ? "шар замінено" : "шар видалено", "Завантаження шару цього прогону вже немає; прогін тримає копію шару й лишається відтворюваним. Новий шар — новий прогін.")}` : "") +
+  (b.layer_of ? ` ${chip("", `шар у ${plural(b.layer_of, "прогоні", "прогонах", "прогонах")}`, "Скільки крос-типових прогонів читають це завантаження як шар")}` : "");
+
 function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
   const running = !TERMINAL.has(b.status);
   const m = b.metrics || {}, p = b.profile || {};
@@ -30,7 +34,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       `<div class="stat"><b>${num(m.validated_insights, 0)}</b><span>${form(m.validated_insights, "інсайт", "інсайти", "інсайтів")}</span></div>` +
       `<div class="stat" title="Теми, вперше знайдені в цьому датасеті"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>${form(m.attractors_new ?? m.attractors_total, "тема", "теми", "тем")}</span></div>` +
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>${form(m.input_rows, "рядок", "рядки", "рядків")}</span></div></div>` +
-      `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · відсіяно: ${num(m.pruned_total, 0)}${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
+      `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · <a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
       (b.warnings || []).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
   } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
@@ -51,7 +55,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Видалити</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
     `<div class="ds-head">${b.status === "READY" ? `<button type="button" class="ds-name ds-pick" title="${esc(name)}" aria-pressed="${active}">${esc(name)}</button>` : `<span class="ds-name" title="${esc(name)}">${esc(name)}</span>`}${status}</div>` +
-    `<div class="ds-sub">${esc(when)}</div>` +
+    `<div class="ds-sub">${esc(when)}${crossChips(b)}</div>` +
     datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
     `${body}${del}</div>`;
 }

@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import h3
 import numpy as np
@@ -15,6 +16,7 @@ import pytest
 from conftest import toy_insight, wait_batch
 from fastapi.testclient import TestClient
 
+from graph_query_engine.evidence import Evidence, _datasets
 from graph_query_engine.graph import declared_words, insight_reading
 from insight_contracts import Condition, Shift, SpatialProvenance
 from insight_contracts.graph import dataset_node_id
@@ -470,7 +472,23 @@ def test_two_stored_uploads_cross_at_the_targets_finest_level_and_the_levels_bot
     assert patterns and all(any(c["attribute"] == BAND for c in p["conditions"]) for p in patterns)  # the target's own stay its own
     rejections = json.loads((engine.ws.dataset_dir(record["dataset_id"]) / "rejections.json").read_text(encoding="utf-8"))
     assert any(r["reason"] == "outside_cross_type" for r in rejections)
-    engine.delete_upload(b)  # the layer's own upload gone: the run reads its copy
+    node = engine.graph().nodes[dataset_node_id(record["dataset_id"])]["props"]
+    assert (node["cross"], node["cross_layers"]) == ([b], ["schools"])  # the graph names the run with its layer
+    (evidenced,) = _datasets(
+        [SimpleNamespace(provenance={"dataset_id": record["dataset_id"], "batch_id": record["batch_id"]}, scope=[])], engine.graph()
+    )
+    assert evidenced["cross_layers"] == ["schools"]  # what the prompt names the run by
+    with TestClient(create_app(engine)) as client:
+        served = client.get(f"/api/datasets/{record['dataset_id']}/rejections")
+        assert served.status_code == 200 and any(r["reason"] == "outside_cross_type" for r in served.json())
+        (engine.ws.datasets_dir / "ds.x").mkdir()
+        (engine.ws.datasets_dir / "ds.x" / "rejections.json").write_text("[]", encoding="utf-8")  # a file a path would reach
+        assert [client.get(f"/api/datasets/{x}/rejections").status_code for x in ("ds-000000000000", "ds.x")] == [404, 404]  # an id, never a path
+        assert next(x for x in client.get("/api/batches").json() if x["upload_id"] == b)["layer_of"] == 2  # crossed at its default level and at r7
+        engine.delete_upload(b)  # the layer's own upload gone: the run reads its copy, marked stale
+        listed = {x["batch_id"]: x for x in client.get("/api/batches").json()}
+    assert listed[record["batch_id"]]["stale"] == {"layers": [b], "reason": "deleted"} and "stale" not in listed[plain["batch_id"]]
+    assert "stale" not in engine.ws.load_batch(record["batch_id"])  # read off the registry, never written
     assert engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
 
 
@@ -540,6 +558,37 @@ def test_align_span_counts_only_the_layers_events_within_the_targets_span(engine
     assert [w for w in both["warnings"] if w.startswith("schools:") and "whole" in w] and "window" not in both["context"][1]
     patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == aligned["dataset_id"]]
     assert aligned["status"] == "READY" and patterns and engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
+
+
+def test_the_prompt_names_a_runs_layers():
+    """A cross-type run's dataset line in the prompt names its layers; a dataset without them reads as before."""
+    ev = Evidence.__new__(Evidence)  # the dataset lines read only the datasets
+    ev.datasets = [
+        {"dataset_id": "d", "filename": "crimes.csv", "batch_id": "b", "rows": 9, "cross_layers": ["bars", "stations"]},
+        {"dataset_id": "e", "filename": "crimes.csv", "batch_id": "c", "rows": 9},
+    ]
+    assert ev._dataset_lines()[2:] == ["- d file=crimes.csv layers=bars,stations batch=b rows=9", "- e file=crimes.csv batch=c rows=9"]
+
+
+def test_cross_state_marks_a_run_whose_layer_is_gone_and_counts_a_layers_runs():
+    """Read off the registry, never stored: a run naming an upload no record holds is stale — superseded when a stored
+    version names it, else deleted —, and every record of an upload a run reads as a layer counts those runs."""
+    run = lambda bid, *layers: {"batch_id": bid, "upload_id": "up-t", "cross": list(layers)}  # noqa: E731
+    batches = [
+        {"batch_id": "t", "upload_id": "up-t"},
+        {"batch_id": "l", "upload_id": "up-l"},
+        {"batch_id": "v2", "upload_id": "up-m2", "supersedes": "up-m"},
+        run("r1", "up-l"),
+        run("r2", "up-l", "up-gone"),
+        run("r3", "up-m"),
+    ]
+    state = uploads.cross_state(batches)
+    assert state["r2"]["stale"] == {"layers": ["up-gone"], "reason": "deleted"} and state["r3"]["stale"] == {
+        "layers": ["up-m"],
+        "reason": "superseded",
+    }
+    assert "r1" not in state and "t" not in state and state["l"] == {"layer_of": 2}
+    assert uploads.cross_state(batches) == state and "stale" not in batches[3]  # a function of the registry: nothing written
 
 
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
@@ -661,6 +710,13 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         assert "нуль шару" in drawer and disk_words(1) in drawer and page.locator("#inspector .term", has_text="нуль шару").get_attribute("title")
         page.evaluate(f"inspect('{plain}')")
         assert "нуль шару" not in page.text_content("#drawer")  # no layer, no verdict
+        page.evaluate(f"inspect('{crossed}')")
+        assert "target.csv · + schools" in page.text_content("#drawer")  # its provenance names the run with its layer
+        assert "шар у 1 прогоні" in page.locator(".ds", has_text="schools.csv · шар").inner_text()  # a layer's runs
+        assert card.locator("a[href$='/rejections']").count() == 1  # the refusals one click away
+        client.delete(f"/api/datasets/{next(r['batch_id'] for r in engine.ws.list_batches() if r['upload_id'] == b)}")
+        page.evaluate("refreshBatches()")
+        page.wait_for_function(f"document.querySelector(\".ds[data-ds='{run['dataset_id']}']\").textContent.includes('шар видалено')", timeout=20000)
         page.select_option("#dataset-filter", run["dataset_id"])
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{run['dataset_id']}' && G.map.loaded() && G.data", timeout=60000)

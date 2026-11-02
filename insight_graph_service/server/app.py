@@ -28,7 +28,7 @@ from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_re
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import Settings
-from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, cross_state
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
@@ -189,7 +189,9 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/batches")
     def batches(upload_id: str | None = None) -> list[dict[str, Any]]:
-        return [engine.polled(b) for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
+        listed = engine.ws.list_batches()
+        state = cross_state(listed)  # a run whose layer's upload is gone, a layer's runs: read off the registry
+        return [engine.polled(b) | state.get(b["batch_id"], {}) for b in reversed(listed) if upload_id in (None, b.get("upload_id"))]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
@@ -350,6 +352,13 @@ def create_app(engine: Engine) -> FastAPI:
                 supersedes=body.supersedes,
             )
         )
+
+    @app.get("/api/datasets/{dataset_id}/rejections")
+    def rejections(dataset_id: str) -> list[dict[str, Any]]:
+        """What selection refused of a dataset, each with its reason (``rejections.json``, docs/03_insights.md §3.2)."""
+        if (listed := engine.ws.load_rejections(dataset_id)) is None:  # an id, never a path
+            raise HTTPException(404, "no rejections recorded for this dataset")
+        return listed
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:

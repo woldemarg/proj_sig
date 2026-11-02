@@ -481,6 +481,26 @@ def context_files(record: dict[str, Any]) -> list[tuple[str, Path, str, tuple[st
     ]
 
 
+def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """What the registry says of cross-type runs and their layers, by batch id: a run naming an upload no record holds is
+    ``stale`` — ``{layers, reason}``, ``superseded`` when a stored version names that upload, else ``deleted`` —, and
+    every record of an upload a run reads as a layer counts those runs (``layer_of``). Read off the registry, never
+    stored: a deletion rolled back leaves no mark, and the run, which holds copies of its layers, stays whole and
+    reproducible (docs/06_graph_and_storage.md §6.8)."""
+    stored, replaced = {b.get("upload_id") for b in batches}, {b.get("supersedes") for b in batches}
+    runs: dict[str, int] = {}
+    out: dict[str, dict[str, Any]] = {}
+    for b in batches:
+        for upload in b.get("cross", ()):
+            runs[upload] = runs.get(upload, 0) + 1
+        if gone := [u for u in b.get("cross", ()) if u not in stored]:
+            out[b["batch_id"]] = {"stale": {"layers": gone, "reason": "superseded" if all(u in replaced for u in gone) else "deleted"}}
+    for b in batches:
+        if n := runs.get(b.get("upload_id")):
+            out.setdefault(b["batch_id"], {})["layer_of"] = n
+    return out
+
+
 def cross_type_only(insights: Sequence[Insight]) -> tuple[list[Insight], list[Rejection]]:
     """A cross-type run's insights: those on a layer's band; the rest are the target's own (its levels hold them), refused
     as ``outside_cross_type``."""
