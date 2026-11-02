@@ -65,7 +65,7 @@ SHIPPED: list[dict[str, Any]] = [  # the list's head, in order; then the modules
         "description": "20 640 кварталів перепису 1990 року з координатами, проаналізовані як комірки H3: ціна житла, дохід, близькість до океану.",
         "license": "StatLib (Pace & Barry, 1997), вільне використання з посиланням",
         "source": "Pace R. K., Barry R. Sparse spatial autoregressions, 1997 (StatLib)",
-        "options": {"bins": "median_income_median:4", "categories": "", "geo": "auto@5"},
+        "options": {"bins": "median_income_median:4,median_income:4", "categories": "", "geo": "auto@5"},  # the cells' band, the table level's own
     },
     *(
         {

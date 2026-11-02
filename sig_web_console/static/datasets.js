@@ -160,6 +160,15 @@ async function refreshBatches() {
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
+function syncTable() {
+  /* the base level is one of a geo upload's — none for a shipped set whose manifest says it has no number of its own
+     beyond the point ("table": false): without cells it has nothing to measure, so the box cannot be ticked */
+  const d = (S.samples || {})[$("sample").value], none = !!d && (d.options || {}).table === false;
+  $("table").disabled = !$("geo").value.trim() || none;
+  if (none) $("table").checked = false;
+  $("table").title = none ? "У цього набору немає власних чисел поза координатами: без комірок він нічого не виміряє" : "";
+}
+
 const sampleItem = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
 
 function fillSamples() {  // *Або готовий датасет*: a layer alone mines nothing; kept as a layer, any shipped set with points
@@ -195,7 +204,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("where").value = ""; fillSamples(); $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("where").value = ""; fillSamples(); syncTable(); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }
