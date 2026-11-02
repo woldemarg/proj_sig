@@ -368,7 +368,8 @@ def test_empty_graph_answer(tmp_path):
 def test_crosstype_demo_apparatus(engine, tmp_path):
     """The demonstration's measurement on a planted upload (X2: load raised in the cells holding the layer): the target
     read again at the level a setting adds, from the same file, the layer kept as a layer-only upload, one run per
-    setting with its admitted insights' verdicts and its refusals by reason."""
+    setting with its admitted insights' verdicts and its refusals by reason; then the frequency reading — the target
+    under a filter, its own upload at the same level — crossed with the layer over both disks."""
     from crosstype_benchmark import RES, generate
     from crosstype_demo import measure
 
@@ -376,9 +377,18 @@ def test_crosstype_demo_apparatus(engine, tmp_path):
     target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
     upload["frame"].to_csv(target, index=False)
     upload["layers"]["schools"].to_csv(layer, index=False)
-    result = measure(engine, target, {"geo": f"lat,lon@{RES}", "time": "when"}, {"schools": layer}, ((RES, 1), (RES - 1, 0)))
-    assert sorted(t["level"] for t in result["target"]) == [str(RES - 1), str(RES)]  # the level a setting adds, read too
-    assert [(r["layer"], r["level"], r["ring"]) for r in result["runs"]] == [("schools", RES, 1), ("schools", RES - 1, 0)]
+    result = measure(
+        engine, target, {"geo": f"lat,lon@{RES}", "time": "when"}, {"schools": layer}, ((RES, 1), (RES - 1, 0)), ("schools", "road_type=local")
+    )
+    # the level a setting adds, read too; the filtered reading its own upload at the file's level
+    assert [(t["level"], t["where"]) for t in result["target"]] == [(str(RES), None), (str(RES - 1), None), (str(RES), "road_type=local")]
+    assert [(r["layer"], r["level"], r["ring"]) for r in result["runs"]] == [
+        ("schools", RES, 1),
+        ("schools", RES - 1, 0),
+        ("schools · road_type=local", RES, 1),
+        ("schools · road_type=local", RES, 0),
+    ]
+    assert all(r["status"] in {"READY", "FAILED"} and r["seconds"] > 0 for r in result["runs"][2:])  # the reading's verdict, whichever it is
     planted = result["runs"][0]
     assert planted["status"] == "READY" and planted["admitted"] and all(a["p_context_adjusted"] <= 0.05 for a in planted["admitted"])
     assert planted["refused"]["outside_cross_type"] > 0 and planted["seconds"] > 0  # the target's own findings refused by reason
