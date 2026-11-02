@@ -909,6 +909,13 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         page.goto(f"{url}/")
         page.wait_for_function("document.querySelector('#sample option[value=chicago_crimes]')", timeout=20000)
         page.select_option("#sample", "chicago_crimes")  # the options it is meant to be read with fill the form
+        # the crimes have no number of their own beyond the point: no base level to tick, so the defaults cannot fail;
+        # a set that has one gets it back, and a file of one's own frees the box again
+        assert page.is_disabled("#table") and not page.is_checked("#table")
+        page.select_option("#sample", "chicago_crashes")
+        assert page.is_enabled("#table") and page.is_checked("#table")
+        page.select_option("#sample", "chicago_crimes")
+        assert page.is_disabled("#table") and not page.is_checked("#table")
         page.click("#upload-btn")
         crimes = finished(filename="chicago_crimes.csv")
         assert (crimes["status"], crimes["level"]) == ("READY", "9")

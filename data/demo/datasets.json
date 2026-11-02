@@ -22,7 +22,7 @@
   "license": "StatLib (Pace & Barry, 1997), вільне використання з посиланням",
   "source": "Pace R. K., Barry R. Sparse spatial autoregressions, 1997 (StatLib)",
   "options": {
-   "bins": "median_income_median:4",
+   "bins": "median_income_median:4,median_income:4",
    "categories": "",
    "geo": "auto@5"
   },

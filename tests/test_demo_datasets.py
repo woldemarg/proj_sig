@@ -7,6 +7,7 @@ import csv
 import hashlib
 
 import pandas as pd
+import pytest
 from conftest import wait_batch
 from fastapi.testclient import TestClient
 
@@ -57,14 +58,21 @@ def test_a_shipped_point_table_without_a_number_of_its_own_asks_for_no_table_lev
         assert [c for c in frame.select_dtypes("number") if c not in locator], d["key"]
 
 
-def test_the_shipped_crimes_mine_with_the_forms_defaults(engine):
-    """Picked from the list and sent as the form fills it — its manifest options, nothing else set — the crimes give a
-    READY level: the police district describes the place, so the cells have a dimension of their own."""
-    entry = next(d for d in demo_datasets() if d["key"] == "chicago_crimes")
-    form = {k: str(v) for k, v in entry["options"].items() if k != "table"} | {"grid": "auto"}
+@pytest.mark.parametrize("key", ["chicago_crimes", "chicago_crimes_2024", "california_housing"])
+def test_a_shipped_dataset_read_as_the_form_fills_it_leaves_no_level_failed(engine, key):
+    """Picked from the list and sent as the form fills it — its manifest options, the base level ticked unless the
+    manifest says ``"table": false`` — every level of a shipped dataset is READY: the defaults are valid. The sets whose
+    base level needs its manifest's care: the crimes, whose only numbers are their coordinates (no table level; the
+    police district gives the cells a dimension of their own), and the housing, whose cells' band names a cell column
+    (``median_income_median``), so its table level has a band of its own (``median_income``)."""
+    entry = next(d for d in demo_datasets() if d["key"] == key)
+    options = entry["options"]
+    form = {k: str(v) for k, v in options.items() if k != "table"}
+    form |= {"grid": "auto"} if options.get("time") else {}  # a grid only with a time column
+    form |= {"table": "true"} if options.get("geo") and options.get("table") is not False else {}  # the box as the form ticks it
     with TestClient(create_app(engine)) as client:
-        accepted = client.post("/api/upload", data={"demo": "chicago_crimes", **form})
+        accepted = client.post("/api/upload", data={"demo": key, **form})
         assert accepted.status_code == 202, accepted.text
         records = [wait_batch(client, b, timeout=600) for b in accepted.json()["levels"].values()]
-    assert [r["level"] for r in records if r["status"] == "READY"]  # at least one level mined
-    assert all(r["level"] != "table" for r in records)  # no table level asked for
+    assert [(r["level"], r["status"]) for r in records if r["status"] != "READY"] == []
+    assert any(r["level"] == "table" for r in records) == (options.get("table") is not False)  # a table level exactly when asked
