@@ -37,8 +37,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · <a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
       (b.warnings || []).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
-  } else if (neutral) {  // a normal result of a level, not an error: the other levels stand
-    body = `<div class="ds-note">На цьому рівні стійких знахідок немає.</div>${refused}<div class="ds-note mono">${esc(b.error.message)}</div>`;
+  } else if (neutral) {  // a normal result, not an error: the other levels stand, or the pair found nothing
+    body = `<div class="ds-note">${verdict(b) ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${refused}<div class="ds-note mono">${esc(b.error.message)}</div>`;
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +
@@ -63,6 +63,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
 const geoLevel = (b) => /^\d+$/.test(b.level || "");
 const EMPTY_LEVEL = new Set(["invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"]);  // uploads.EMPTY_LEVEL
 const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && geoLevel(b);  // a geo level with nothing to mine
+const verdict = (b) => emptyLevel(b) && !!b.cross;  // a run between stored uploads that found nothing: the pair's result, not an error
 const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
 
 function uploadGroups(cards) {
@@ -73,11 +74,11 @@ function uploadGroups(cards) {
 }
 
 function uploadGroup(cards, busy) {
-  if (cards.length === 1) return datasetCard(cards[0], busy);  // a level alone that finds nothing failed, as its upload did
-  const ready = cards.filter((b) => b.status === "READY").length, empty = ready ? cards.filter(emptyLevel).length : 0;
+  if (cards.length === 1) return datasetCard(cards[0], busy, verdict(cards[0]));  // a level alone that finds nothing failed, as its upload did; a run is a result either way
+  const ready = cards.filter((b) => b.status === "READY").length, neutral = (b) => (ready > 0 && emptyLevel(b)) || verdict(b), empty = cards.filter(neutral).length;
   const failed = cards.filter((b) => b.status === "FAILED").length - empty;
   return `<div class="ds-group" data-upload="${esc(cards[0].upload_id)}"><div class="ds-group-head">${esc(cards[0].filename)} · готово рівнів: ${ready} з ${cards.length}` +
-    (empty ? ` · без знахідок: ${empty}` : "") + (failed ? ` · <b>з помилкою: ${failed}</b>, інші рівні чинні` : "") + `</div>${cards.map((b) => datasetCard(b, busy, ready > 0 && emptyLevel(b))).join("")}</div>`;
+    (empty ? ` · без знахідок: ${empty}` : "") + (failed ? ` · <b>з помилкою: ${failed}</b>, інші рівні чинні` : "") + `</div>${cards.map((b) => datasetCard(b, busy, neutral(b))).join("")}</div>`;
 }
 
 function datasetTrust(t) {
@@ -175,6 +176,7 @@ async function upload() {
   const fd = new FormData();
   if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
   fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
+  if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("tz", $("tz").value); }  // a layer's too: its span, for a run's time rule
   if ($("layer-only").checked) fd.append("layer", "true");  // kept as another type's points: none of the mining options
   else {
     if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
@@ -182,7 +184,7 @@ async function upload() {
     const layers = [...$("context-sample").selectedOptions].map((o) => o.value);  // shipped layers: the server reads its own copies
     for (const key of layers) fd.append("context_demo", key);
     if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
-    if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("grid", $("grid").value); fd.append("tz", $("tz").value); }
+    if ($("time").value.trim()) fd.append("grid", $("grid").value);
     if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
@@ -204,8 +206,9 @@ function crossUploads(batches) {
   const by = new Map();
   for (const b of batches) {
     if (!b.upload_id || b.cross) continue;  // a run's own batches add no level
-    const u = by.get(b.upload_id) || { id: b.upload_id, file: b.filename, levels: new Set(), layer: false };
+    const u = by.get(b.upload_id) || { id: b.upload_id, file: b.filename, levels: new Set(), layer: false, timed: false };
     if (b.status === "LAYER") u.layer = true; else if (geoLevel(b)) u.levels.add(Number(b.level));
+    u.timed ||= !!b.time;  // read with a time column: a span to align on
     by.set(b.upload_id, u);
   }
   return [...by.values()].filter((u) => u.layer || u.levels.size);
@@ -239,18 +242,22 @@ function crossLevels() {
   const mined = layers.filter((u) => u.levels.size), shared = mined.length ? levels.filter((r) => mined.every((u) => u.levels.has(r))) : [];
   $("cross-levels").innerHTML = levels.map((r) => `<label class="small chk"><input type="checkbox" value="${r}"${r === levels[0] || shared.includes(r) ? " checked" : ""}> H3 r${r}` +
     `${r === levels[0] ? " — найдрібніший цілі" : shared.includes(r) ? " — спільний із шаром" : ""}</label>`).join("");
-  $("cross-both").disabled = !(layers.length === 1 && layers[0].levels.size);  // the other way needs a layer that was mined
+  $("cross-align").disabled = !(target && target.timed && layers.some((u) => u.timed));  // a span on both sides, or nothing to align
+  $("cross-where").disabled = layers.length !== 1;  // a filter is one layer's
+  const filtered = !$("cross-where").disabled && $("cross-where").value.trim();
+  $("cross-both").disabled = !(layers.length === 1 && layers[0].levels.size) || !!filtered;  // the other way needs a mined layer and no filter: a filter names the layer's columns
   $("cross-btn").disabled = !target || !layers.length || layers.length > 2;
 }
 
 function setCrossMsg(text, err = false) { const el = $("cross-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
 async function runCross() {
-  const { target, layers } = crossPick(), ring = $("cross-ring").value;
+  const { target, layers } = crossPick(), ring = $("cross-ring").value, on = (id) => $(id).checked && !$(id).disabled;
   const levels = [...$("cross-levels").querySelectorAll("input:checked")].map((i) => i.value);
-  const where = $("cross-where").value.trim();  // the chosen layers read under one filter
-  const runs = [{ target: target.id, layers: layers.map((u) => u.id), levels, ring, ...($("cross-align").checked ? { align: "span" } : {}), ...(where ? { layer_where: Object.fromEntries(layers.map((u) => [u.id, where])) } : {}) }];
-  if ($("cross-both").checked && !$("cross-both").disabled) runs.push({ target: layers[0].id, layers: [target.id], ring });  // its own default levels
+  const where = $("cross-where").disabled ? "" : $("cross-where").value.trim();  // the one chosen layer read under a filter
+  const run = { target: target.id, layers: layers.map((u) => u.id), levels, ring, ...(on("cross-align") ? { align: "span" } : {}), ...(where ? { layer_where: { [layers[0].id]: where } } : {}) };
+  const runs = [run];
+  if (on("cross-both")) runs.push({ ...run, target: layers[0].id, layers: [target.id], levels: undefined });  // the same run the other way, at the other's own default levels: the target's are not its
   $("cross-btn").disabled = true;
   try {
     for (const run of runs) await api("/api/crosstype", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(run) });

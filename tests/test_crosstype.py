@@ -753,13 +753,22 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         page.evaluate(f"GeoMap.focusPattern('{crossed}')")
         page.wait_for_function("!$('map-card').hidden", timeout=10000)
         assert "нуль шару" in page.inner_text("#map-card")
+        # a run with a layer that admitted none is the layer's verdict on its own too, not only beside a READY level of its upload
+        for gone in (own["dataset_id"], run["dataset_id"]):
+            client.delete(f"/api/datasets/{gone}")
+        page.evaluate("refreshBatches()")
+        page.wait_for_function("document.querySelectorAll('#batches .ds').length === 2", timeout=20000)  # the far run and the far layer
+        alone = nothing.inner_text()
+        assert "Без знахідок" in alone and "Знахідок з умовою на шар немає" in alone and "Помилка" not in alone and "Спробуйте" not in alone
     assert not errors, errors
 
 
 @pytest.mark.browser
 def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_levels_it_ticks(cfg, tmp_path, monkeypatch):
     """A shipped set meant only as a layer is not offered as a dataset; with *Лише шар* ticked every shipped set with
-    points is, and the one chosen is kept as a layer through the form and crossed from the panel."""
+    points is, and the one chosen is kept as a layer through the form — its time column sent — and crossed from the panel.
+    The panel offers the alignment only for a timed target and a timed layer, the layer's filter for one layer, and the
+    other way round sends the same body with the two ids swapped, at the other's own levels, never with a layer's filter."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
     from conftest import make_engine, serve, stack
@@ -771,10 +780,18 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     target, context = planted(tmp_path)
+    (tmp_path / "other").mkdir()
+    other, _ = planted(tmp_path / "other", seed=6)  # another mined upload: the other way round
+    for path in (target, other):  # timed: a span to align on
+        frame = pd.read_csv(path)
+        frame["when"] = pd.date_range("2025-01-01", "2025-12-31", periods=len(frame)).strftime("%Y-%m-%d")
+        frame.to_csv(path, index=False)
+    pd.read_csv(context).assign(when="2025-06-15").to_csv(tmp_path / "patrols.csv", index=False)  # a layer with a time column
     entries = [
         {"key": "plain", "file": "plain.csv", "title": "plain"},  # no points: never a layer
         {"key": "target", "file": "target.csv", "title": "target", "options": {"geo": f"lat,lon@{RES}"}},
         {"key": "schools", "file": "schools.csv", "title": "schools", "context_only": True, "options": {"geo": "lat,lon"}},
+        {"key": "patrols", "file": "patrols.csv", "title": "patrols", "context_only": True, "options": {"geo": "lat,lon", "time": "when"}},
     ]
     monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
     monkeypatch.setattr(app_module, "demo_datasets", lambda: entries)
@@ -782,12 +799,13 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
     engine = make_engine(cfg)
     port, app = stack(engine)
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
-        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", time="when")["upload_id"]
+        c = upload_file(client, "other.csv", other, f"lat,lon@{RES}", time="when")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
-        page.wait_for_function("document.querySelectorAll('#cross-target option').length === 1", timeout=20000)
+        page.wait_for_function("document.querySelectorAll('#cross-target option').length === 2", timeout=20000)
         page.wait_for_function(f"{offered}.length === 2", timeout=20000)
         assert page.evaluate(offered) == ["plain", "target"]  # a layer alone mines nothing
         page.select_option("#sample", "target")
@@ -797,36 +815,65 @@ def test_the_console_keeps_a_layer_and_crosses_it_with_a_stored_upload_at_the_le
         page.fill("#where", "")
         page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
         page.check("#layer-only")
-        assert page.evaluate(offered) == ["target", "schools"] and page.input_value("#sample") == "target"  # any set with points; the choice stays
+        assert page.evaluate(offered) == ["target", "schools", "patrols"] and page.input_value("#sample") == "target"  # any set with points
         page.select_option("#sample", "schools")
         page.uncheck("#layer-only")
         assert page.input_value("#sample") == "" and page.is_disabled("#upload-btn")  # a choice no longer listed goes
-        page.check("#layer-only")
-        page.select_option("#sample", "schools")  # the shipped schools, kept as a layer through the form
-        page.click("#upload-btn")
-        page.wait_for_function("document.querySelectorAll('#cross-layers option').length === 2", timeout=20000)
-        (layer,) = [r for r in engine.ws.list_batches() if r["status"] == "LAYER"]
+        for i, key in enumerate(("schools", "patrols")):  # the shipped schools and the timed patrols, kept as layers through the form
+            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")  # a send folds the options
+            page.check("#layer-only")
+            page.select_option("#sample", key)
+            page.click("#upload-btn")
+            page.wait_for_function(f"document.querySelectorAll('#cross-layers option').length === {i + 3}", timeout=20000)
+        layer, patrols = sorted((r for r in engine.ws.list_batches() if r["status"] == "LAYER"), key=lambda r: r["filename"] != "schools.csv")
+        assert (patrols.get("time"), "span" in patrols) == ("when", True)  # the form sent the layer's time column
         assert not page.is_checked("#layer-only") and page.evaluate(offered) == ["plain", "target"]  # the form reset
         page.evaluate("document.querySelector('#cross-panel').open = true")
         page.select_option("#cross-target", a)
         page.select_option("#cross-layers", [layer["upload_id"]])
         assert page.is_checked(f"#cross-levels input[value='{RES}']") and page.is_disabled("#cross-both")  # a layer is never a target
-        page.check("#cross-align")  # the schools have no time: nothing to align on, refused in the panel
-        page.click("#cross-btn")
-        page.wait_for_function("document.getElementById('cross-msg').textContent.includes('align')", timeout=20000)
-        page.uncheck("#cross-align")
+        assert page.is_disabled("#cross-align")  # the schools have no time: nothing to align on
+        page.select_option("#cross-layers", [patrols["upload_id"]])
+        assert not page.is_disabled("#cross-align")  # a timed target and a timed layer: the alignment is offered
+        page.select_option("#cross-layers", [layer["upload_id"], patrols["upload_id"]])
+        assert page.is_disabled("#cross-where")  # a filter is one layer's
+        page.select_option("#cross-layers", [layer["upload_id"]])
         page.fill("#cross-where", "kind=a")  # the schools have no such column: the layer's filter refused in the panel
         page.click("#cross-btn")
         page.wait_for_function("document.getElementById('cross-msg').textContent.includes('no column')", timeout=20000)
         page.fill("#cross-where", "")
         page.click("#cross-btn")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        # the other way round: the same body with the two ids swapped, at the other's own levels (the target's are not its)
+        page.select_option("#cross-layers", [c])
+        assert not page.is_disabled("#cross-both") and not page.is_disabled("#cross-align")
+        page.fill("#cross-where", "kind=a")
+        assert page.is_disabled("#cross-both")  # a filter is the layer's columns': it cannot follow the layer into the target's seat
+        page.fill("#cross-where", "")
+        page.select_option("#cross-ring", "0")
+        page.check("#cross-align")
+        page.check("#cross-both")
+        bodies: list[dict] = []
+        page.route("**/api/crosstype", lambda route: (bodies.append(route.request.post_data_json), route.continue_()))
+        page.click("#cross-btn")
+        page.wait_for_function("document.getElementById('cross-msg').textContent.includes('У черзі')", timeout=20000)
+        for _ in range(100):  # the route's second callback reaches Python a moment after the page has moved on
+            if len(bodies) == 2:
+                break
+            page.wait_for_timeout(100)
+        assert bodies == [
+            {"target": a, "layers": [c], "levels": [str(RES)], "ring": "0", "align": "span"},
+            {"target": c, "layers": [a], "ring": "0", "align": "span"},
+        ]
         deadline = time.time() + 300
-        while not (done := [r for r in engine.ws.list_batches() if r.get("cross") and r["status"] in {"READY", "FAILED"}]):
-            assert time.time() < deadline, "the cross-type run did not finish"
+        while any(r["status"] not in TERMINAL for r in engine.ws.list_batches()):
+            assert time.time() < deadline, "the cross-type runs did not finish"
             time.sleep(0.5)
-    (record,) = done
-    assert (record["status"], record["level"], record["upload_id"], record["cross"]) == ("READY", str(RES), a, [layer["upload_id"]])
+    runs = [r for r in engine.ws.list_batches() if r.get("cross")]
+    (record,) = [r for r in runs if r["cross"] == [layer["upload_id"]]]
+    assert (record["status"], record["level"], record["upload_id"]) == ("READY", str(RES), a)
+    both = {(r["upload_id"], r["cross"][0], r["context_ring"], "window" in r["context"][0]) for r in runs if r is not record}
+    assert both == {(a, c, 0, True), (c, a, 0, True)}  # each way on the disk and the alignment asked
     assert not errors, errors
 
 
@@ -890,4 +937,21 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == stations["dataset_id"]]
         page.evaluate(f"inspect('{found}')")
         assert stations["status"] == "READY" and "нуль шару" in page.text_content("#drawer")
+        # the literature's frequency question as the walkthrough asks it (docs 10 §10.2): one class of the crimes as a
+        # reading of its own, crossed with the bars over the cell alone; the verdict is the data's, never an error
+        page.select_option("#sample", "chicago_crimes")
+        page.evaluate("document.querySelector('#where').closest('details').open = true")
+        page.fill("#where", "crime=robbery")
+        page.click("#upload-btn")
+        robbery = finished(filename="chicago_crimes.csv", where="crime=robbery")
+        page.wait_for_function("document.getElementById('batches').textContent.includes('· crime=robbery')", timeout=20000)
+        page.evaluate("document.querySelector('#cross-panel').open = true")
+        page.select_option("#cross-target", robbery["upload_id"])
+        page.select_option("#cross-layers", [layers["chicago_bars.csv"]])
+        page.select_option("#cross-ring", "0")
+        page.click("#cross-btn")
+        frequency = finished(cross=[layers["chicago_bars.csv"]], upload_id=robbery["upload_id"])
+        page.wait_for_function("document.getElementById('batches').textContent.includes('crime=robbery · + chicago_bars')", timeout=20000)
+        card = page.locator(".ds", has_text="crime=robbery · + chicago_bars").inner_text()
+        assert frequency["status"] in TERMINAL and "Помилка" not in card and "Спробуйте" not in card
     assert not errors, errors

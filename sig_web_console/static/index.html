@@ -58,7 +58,7 @@
           <label class="small" for="context-geo">Колонки точок шару</label>
           <input class="field" id="context-geo" placeholder="напр. lat,lon · geometry; порожньо — auto">
           <label class="small" for="context-ring">Що рахувати поруч</label>
-          <select class="field" id="context-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option></select>
+          <select class="field" id="context-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
           <div class="hint">До двох шарів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Зв'язок у самій комірці сусіди розмивають — тоді «лише саму комірку». Шар ставить питання про склад подій біля об'єктів; частоту одного типу подій біля них він не перевіряє. Потрібен просторовий аналіз.</div>
           <label class="small" for="time">Колонка часу</label>
           <input class="field" id="time" placeholder="напр. order_date">
@@ -104,12 +104,12 @@
         <div class="small">Рівні H3 цілі</div>
         <div id="cross-levels"></div>
         <label class="small" for="cross-ring">Що рахувати поруч</label>
-        <select class="field" id="cross-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option></select>
-        <label class="small chk"><input type="checkbox" id="cross-align"> події шару — лише за період цілі</label>
+        <select class="field" id="cross-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+        <label class="small chk" title="Лише коли і ціль, і шар мають колонку часу"><input type="checkbox" id="cross-align"> події шару — лише за період цілі</label>
         <label class="small" for="cross-where">Лише рядки шару</label>
-        <input class="field" id="cross-where" placeholder="колонка=значення">
-        <label class="small chk"><input type="checkbox" id="cross-both"> і навпаки: шар як ціль, ціль як шар</label>
-        <div class="hint">Шар рахується з його точок на сітці цілі. Типово — найдрібніший рівень цілі й рівні, на яких аналізували й шар. Результат — нові датасети цілі з позначкою «+ шар»: лише знахідки з умовою на шар.</div>
+        <input class="field" id="cross-where" placeholder="колонка=значення" title="Фільтр одного шару: оберіть лише його">
+        <label class="small chk" title="Те саме питання до метрик уже іншого файлу, на його типових рівнях; недоступно з фільтром шару — фільтр називає колонки шару, а він стає ціллю"><input type="checkbox" id="cross-both"> і навпаки: шар як ціль, ціль як шар — метрики вже його</label>
+        <div class="hint">Шар рахується з його точок на сітці цілі. Типово — найдрібніший рівень цілі й рівні, на яких аналізували й шар. Результат — нові датасети цілі з позначкою «+ шар»: лише знахідки з умовою на шар. Прогін перевіряє, чи зсув відтворюється розкладом шару в батьківських комірках (склад подій біля об'єктів); частоту одного типу подій біля них питає окреме читання цілі — «Лише рядки» (один клас подій), а тоді прогін. Той самий шар можна дати й при завантаженні цілі («Контекстний шар»).</div>
         <div class="rail-actions"><button type="button" class="btn" id="cross-btn" disabled>Порахувати крос-типові ознаки</button></div>
         <div id="cross-msg" class="msg"></div>
       </details>

@@ -4,10 +4,12 @@ before this ran). On a scratch workspace with the hashing embedder: the shipped 
 manifest's options (``@auto`` reads H3 r9) and once more at every other level a setting names, the shipped bars and CTA 'L'
 stations kept as layer-only uploads, and one cross-type run of the crimes with each layer per setting — r9 over the cell
 and its six neighbours (the console's default), r9 over the cell alone, r10 over the cell alone — through ``Engine.cross``,
-as ``POST /api/crosstype``. Per run: the cross-type insights admitted (target, z, the layer's verdict ``p_context`` times
-its family), the refusals by reason, the seconds.
+as ``POST /api/crosstype``; then the literature's frequency question as the console asks it — the crimes read again
+under ``where=crime=robbery`` (a reading of its own at the level ``@auto`` gives its rows) and crossed with the bars over
+both disks. Per run: the cross-type insights admitted (target, z, the layer's verdict ``p_context`` times its family), the
+refusals by reason, the seconds.
 
-    python scripts/crosstype_demo.py            # the six runs; the result in .scratch/results
+    python scripts/crosstype_demo.py            # the eight runs; the result in .scratch/results
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from insight_graph_service.core.engine import Engine
 TARGET = "chicago_crimes"
 LAYERS = ("chicago_bars", "chicago_l_stations")
 SETTINGS = ((9, 1), (9, 0), (10, 0))  # (H3 level, disk radius), the console's default first
+FREQUENCY = ("chicago_bars", "crime=robbery")  # the frequency of one class near the layer: the target under a filter, crossed
 
 
 def upload(engine: Engine, path: Path, options: dict[str, Any]) -> list[dict[str, Any]]:
@@ -65,9 +68,13 @@ def summary(engine: Engine, record: dict[str, Any], layer: str, level: int, ring
     }
 
 
-def measure(engine: Engine, target: Path, options: dict[str, Any], layers: dict[str, Path], settings: Sequence[tuple[int, int]]) -> dict[str, Any]:
+def measure(
+    engine: Engine, target: Path, options: dict[str, Any], layers: dict[str, Path], settings: Sequence[tuple[int, int]], frequency: tuple[str, str]
+) -> dict[str, Any]:
     """``target`` uploaded with ``options`` and again at each level of ``settings`` its own reading lacks (the same file:
-    one upload id), each of ``layers`` kept as a layer-only upload, and one cross-type run per layer and setting."""
+    one upload id), each of ``layers`` kept as a layer-only upload, and one cross-type run per layer and setting; then
+    ``target`` read under ``frequency``'s filter (its own upload at the level ``@auto`` gives it) crossed with
+    ``frequency``'s layer over each disk."""
     own = upload(engine, target, options)
     locator = options["geo"].partition("@")[0]
     for level in sorted({str(lv) for lv, _ in settings} - {r["level"] for r in own}):
@@ -79,7 +86,15 @@ def measure(engine: Engine, target: Path, options: dict[str, Any], layers: dict[
             t0 = time.perf_counter()
             for record in engine.cross(own[0]["upload_id"], [layer], ring, [level]):
                 runs.append(summary(engine, engine.process(record["batch_id"]), name, level, ring, time.perf_counter() - t0))
-    return {"target": [{"level": r["level"], "status": r["status"]} for r in own], "runs": runs}
+    layer, where = frequency
+    reading = upload(engine, target, options | {"where": where})
+    for ring in (1, 0):
+        t0 = time.perf_counter()
+        for record in engine.cross(reading[0]["upload_id"], [kept[layer]], ring, None):  # the reading's own finest level
+            runs.append(
+                summary(engine, engine.process(record["batch_id"]), f"{layer} · {where}", int(record["level"]), ring, time.perf_counter() - t0)
+            )
+    return {"target": [{"level": r["level"], "where": r.get("where"), "status": r["status"]} for r in own + reading], "runs": runs}
 
 
 def main() -> int:
@@ -92,11 +107,11 @@ def main() -> int:
     engine = build_engine(scratch_dir("crosstype_demo", fresh=True) / "ws", embedder=HashingEmbedder())
     t0 = time.perf_counter()
     layers = {key: DEMO_DIR / shipped[key]["file"] for key in LAYERS}
-    result = measure(engine, DEMO_DIR / shipped[TARGET]["file"], shipped[TARGET]["options"], layers, SETTINGS)
-    print("target:", ", ".join(f"r{t['level']} {t['status']}" for t in result["target"]))
+    result = measure(engine, DEMO_DIR / shipped[TARGET]["file"], shipped[TARGET]["options"], layers, SETTINGS, FREQUENCY)
+    print("target:", ", ".join(f"r{t['level']}{' ' + t['where'] if t['where'] else ''} {t['status']}" for t in result["target"]))
     for r in result["runs"]:
         print(
-            f"{r['layer']:<20} r{r['level']} disk {r['ring']}: {r['status']:<6} admitted {len(r['admitted'])}, refused {r['refused']}, {r['seconds']} s"
+            f"{r['layer']:<36} r{r['level']} disk {r['ring']}: {r['status']:<6} admitted {len(r['admitted'])}, refused {r['refused']}, {r['seconds']} s"
         )
         for a in r["admitted"]:
             print(f"    {a['target']:<28} z={a['z']:+.2f} p_context·m={a['p_context_adjusted']:.3g} | {a['scope']}")
