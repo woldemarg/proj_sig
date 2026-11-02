@@ -591,6 +591,36 @@ def test_cross_state_marks_a_run_whose_layer_is_gone_and_counts_a_layers_runs():
     assert uploads.cross_state(batches) == state and "stale" not in batches[3]  # a function of the registry: nothing written
 
 
+def test_runs_follow_their_target_and_outlive_their_layer(engine, tmp_path):
+    """The incremental operations around cross-type runs (the M18 specification §13): a third upload leaves the insights
+    already there as they were; deleting one run leaves its target, its layer and the other run whole; a new version of
+    a mined layer leaves the run that read it whole and reads it stale (superseded); a new version of the target takes
+    its runs with it."""
+    target, context = planted(tmp_path)
+    frame = pd.read_csv(target)
+    frame.assign(load=frame["load"] + 1).to_csv(mined := tmp_path / "mined.csv", index=False)  # other bytes, the same points
+    frame.assign(load=frame["load"] + 2).to_csv(mined_v2 := tmp_path / "mined_v2.csv", index=False)
+    frame.assign(load=frame["load"] + 3).to_csv(third := tmp_path / "third.csv", index=False)
+    frame.assign(load=frame["load"] + 4).to_csv(target_v2 := tmp_path / "target_v2.csv", index=False)
+    geo = f"lat,lon@{RES}"
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, geo)["upload_id"]
+        layer = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        m = upload_file(client, "mined.csv", mined, geo)["upload_id"]
+        r1, r2 = (engine.ws.load_batch(cross_run(client, a, x).json()["batch_id"]) for x in (layer, m))
+        own = {p["id"] for p in engine.ws.patterns()}
+        upload_file(client, "third.csv", third, geo)
+        assert own <= {p["id"] for p in engine.ws.patterns()}  # a third upload adds, takes nothing
+        assert client.delete(f"/api/datasets/{r1['dataset_id']}").status_code == 200
+        kept = {b["batch_id"] for b in engine.ws.list_batches()}
+        assert r1["batch_id"] not in kept and r2["batch_id"] in kept and {b["upload_id"] for b in engine.ws.list_batches()} >= {a, layer, m}
+        upload_file(client, "mined_v2.csv", mined_v2, geo, supersedes=m)  # the mined layer's new version
+        listed = {x["batch_id"]: x for x in client.get("/api/batches").json()}
+        assert listed[r2["batch_id"]]["stale"] == {"layers": [m], "reason": "superseded"}
+        upload_file(client, "target_v2.csv", target_v2, geo, supersedes=a)  # the target's new version
+    assert not [b for b in engine.ws.list_batches() if b.get("upload_id") == a]  # its runs went with it
+
+
 def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypatch):
     import insight_graph_service.server.app as app_module
 
