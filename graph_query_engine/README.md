@@ -9,7 +9,7 @@
 
 The result can be the `EvidencePayload` from `insight_contracts`: an LLM-ready evidence prompt, the deterministic cited observation lines (an answer without an LLM, once framed), a citation manifest (`P#` → pattern and provenance) and the data a UI draws.
 
-It depends only on `insight_contracts`, numpy and scikit-learn (`requirements.txt`). It reads a compiled snapshot (`DualGraph`) and the committed vectors (`LatentFrame`). The question is embedded by any object with the `ports.QueryEncoder` shape; `attractor_topology.InsightEncoder` is one.
+It depends only on `insight_contracts`, numpy and scikit-learn (the `query` group of the root `pyproject.toml`). It reads a compiled snapshot (`DualGraph`) and the committed vectors (`LatentFrame`). The question is embedded by any object with the `ports.QueryEncoder` shape; `attractor_topology.InsightEncoder` is one.
 
 ```python
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, search

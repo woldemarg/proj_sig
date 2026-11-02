@@ -1,5 +1,5 @@
 """The console's map in a browser (docs/08_interface.md §8.7): the base level's places, the form's geo levels, popups and Esc,
-an insight from the map to the chat and back."""
+an insight from the map to the chat and back, «Усі датасети»."""
 
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
         page.click(".adv summary")
+        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in the rail, not the page
         assert page.is_disabled("#table")
         page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
@@ -86,7 +87,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
-        held = "G.overlay.features.reduce((a, f) => a + f.properties.patterns, 0)"
+        held = "G.overlay.features.reduce((a, f) => a + f.properties.n, 0)"
         before = page.evaluate(held)
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
@@ -99,15 +100,17 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
         assert page.evaluate(held) > before and page.evaluate("window.__samePage")
-        # zoomed onto the busiest cell, the list reads the view anew and leads with the map's own level
-        listing = "[W.data.first, W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()]"
+        # zoomed onto the busiest cell, the list reads its region alone: as many rows as the region's count says
+        listing = "W.data.themes.flatMap((t) => t.insights.map((i) => i.id)).sort()"
         wide = page.evaluate(listing)
-        assert wide[0] == "coarse" and wide[1]
-        page.evaluate(
-            "G.map.jumpTo({ center: centre(G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))), zoom: 13 })"
-        )
-        page.wait_for_function("W.data && W.data.first === 'map'", timeout=10000)
-        assert page.evaluate(listing)[1] != wide[1]
+        assert wide and page.evaluate("W.data.regions") > 1
+        labels = "G.map.getSource('region-labels').serialize().data.features.length"
+        assert page.evaluate(labels) == page.evaluate("G.overlay.features.filter((f) => f.properties.n > 0).length")  # a 0 is not written
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
+        page.evaluate(f"G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
+        page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)
+        region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
+        assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
         assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · готово рівнів: 2 з 2"
@@ -183,6 +186,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
         assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
+        page.wait_for_function("G.overlay", timeout=30000)
+        drawn = "[G.levels, [...new Set(G.overlay.features.map((f) => f.properties.resolution))]]"
+        assert page.evaluate(drawn) == [[5, 3, 1], [1, 3, 5, 7]]  # r7 outlines ~7 of the r8 cells: not drawn over them
         stored = json.loads(engine.ws.geo_cells_path(fine["dataset_id"]).read_text(encoding="utf-8"))["features"]
         rebuilt = page.evaluate("G.data.features")  # the package rebuilds every cell: its ring and the fields its popup shows
         assert [f["properties"] for f in rebuilt] == [{k: v for k, v in f["properties"].items() if not k.endswith("_band")} for f in stored]
@@ -192,11 +198,14 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
             for p, q in zip(f["geometry"]["coordinates"][0], g["geometry"]["coordinates"][0])
             for a, b in zip(p, q)
         )
-        busiest = "G.data.features.reduce((a, f) => (G.byRow[f.properties.row].length > G.byRow[a.properties.row].length ? f : a))"
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         popup = f"cellPopup({busiest}, centre({busiest}))"
-        pid = page.evaluate(f"G.byRow[{busiest}.properties.row][0]")
         page.evaluate(f"{popup}; {popup}")
         assert page.locator(".sig-pop").count() == 1  # one popup at a time
+        page.wait_for_selector(".sig-pop .pp-ins")  # its region's rows with an event in it, as many as the line says
+        here = page.evaluate("document.querySelector('.sig-pop .pp-here').textContent")
+        assert here.endswith(f"з них у цій комірці: {page.locator('.sig-pop .pp-ins').count()}")
+        pid = page.get_attribute(".sig-pop .pp-ins >> nth=0", "data-pid")
         page.click(".sig-pop .pp-ins >> nth=0")  # a focus from the popup closes it: the card shows
         assert page.locator(".sig-pop").count() == 0 and page.is_visible("#map-card")
         page.evaluate(f"inspect('{pid}')")
@@ -207,6 +216,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.focus("#question")
         page.keyboard.press("Escape")  # a text field keeps its Esc
         assert page.evaluate(layers) == [1, True, True]
+        assert page.is_hidden("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "false"  # the HUD starts folded
+        page.click("#hud-fold")
+        assert page.is_visible("#lyr-cells") and page.get_attribute("#hud-fold", "aria-expanded") == "true"
         page.focus("#lyr-cells")  # a checkbox does not
         for left in ([0, True, True], [0, False, True], [0, False, False]):
             page.keyboard.press("Escape")
@@ -255,6 +267,11 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
         page.evaluate("if (W.folded) $('mw-fold').click()")
+        listed = "[...document.querySelectorAll('#map-window .mw-th b')].reduce((a, b) => a + Number(b.textContent), 0)"  # folded themes too
+        assert page.evaluate(listed) == 8 < page.evaluate("W.data.insights")  # the most widespread first
+        assert "наблизьтесь" in page.inner_text("#map-window .mw-more")
+        page.click("#map-window .mw-all")
+        assert page.evaluate(listed) == page.evaluate("W.data.insights")  # every row on request
         # a geo insight with a coarser step: its card names its theme and walks its scale chain
         chained = next(
             i["id"]
@@ -282,13 +299,13 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.inner_text(f"#map-window .mw-i[data-pid='{chained}'] em") == words["headline"]  # the row's clause, in the reading's words
         page.evaluate(f"inspect('{chained}')")
         page.wait_for_function(f"$('drawer-title').textContent === {words['where']!r}", timeout=10000)
-        assert page.inner_text("#inspector .lead") == words["what"]
-        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list, or the group it is in
-        group = page.evaluate(f"W.data.themes.find((t) => t.id === {theme!r} || t.members.includes({theme!r})).id")
-        assert group != theme and len(page.evaluate("W.data.themes")) > 8  # the whole map's themes are grouped: the folded path runs
-        page.evaluate(f"W.fold[{group!r}] = false; renderWindow()")
+        assert (
+            page.inner_text("#inspector .lead") == words["gist"] and words["gist"].split("; ")[0] == words["headline"]
+        )  # the words; the numbers are the table's
+        theme = card.locator(".ic-theme").get_attribute("data-id")  # the card's theme opens in the list
+        page.evaluate(f"W.fold[{theme!r}] = false; renderWindow()")
         card.locator(".ic-theme").click()
-        assert page.evaluate(f"W.fold[{group!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{group}']").count() == 1
+        assert page.evaluate(f"W.fold[{theme!r}]") and page.locator(f".mw-theme.open .mw-th[data-id='{theme}']").count() == 1
         # a neighbour of another upload, which this map does not draw: walked on, the focus goes and its drawer says so
         offmap = "[...document.querySelectorAll('.msg-bot:last-child .insight-card .nb')].map((e) => e.dataset.id).filter((id) => !GeoMap.has(id))"
         for row in [i["id"] for t in page.evaluate("W.data.themes") for i in t["insights"] if graph.facts(i["id"]).resolution == 6]:
@@ -340,4 +357,151 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.wait_for_function(f"$('dataset-filter').value === '' && S.cy.getElementById('{base}').nonempty()", timeout=20000)
         assert table["dataset_id"] == graph.insight(base).dataset_id
         browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
+    """«Усі датасети» over two uploads of one territory at two resolutions (docs/08_interface.md §8.7): the coarser
+    anchors it, so both files are on every level; no cells, the HUD naming the files, the list's rows from both, a hex
+    zoomed onto listing its count, an insight of the other dataset drawn by its own cells and asked with them, a hex's
+    popup splitting its count by dataset; a dataset chosen, the map is its own again, and back."""
+    import pandas as pd
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, housing = make_engine(cfg), PROJECT_ROOT / "data" / "demo" / "california_housing.csv"
+    (full,) = upload_levels(engine, housing, geo="auto@6", bins="median_income_median:4")
+    pd.read_csv(housing).iloc[::2].to_csv(half := tmp_path / "half.csv", index=False)
+    (other,) = upload_levels(engine, half, geo="auto@5", bins="median_income_median:4")
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=exe)
+        page = browser.new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("G.ds && G.map.loaded() && G.overlay && W.data && !W.data.error", timeout=60000)
+        page.evaluate("if (W.folded) $('mw-fold').click()")
+        assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]  # the coarser anchors it
+        two = [dict(dataset_id=f"{u}{r}", upload_id=u, resolution=r, cells=c) for u, r, c in (("a", 8, 9), ("a", 7, 5), ("b", 8, 4), ("b", 7, 3))]
+        assert page.evaluate(
+            f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ const s = spread(''); return [s.anchor.dataset_id, s.others]; }} finally {{ G.datasets = keep; }} }})()"
+        ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
+        finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
+        assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
+        assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")
+        assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
+        rows = "W.data.themes.flatMap((t) => t.insights)"
+        assert {i["dataset_id"] for i in page.evaluate(rows)} == {full["dataset_id"], other["dataset_id"]}
+        theirs = page.evaluate(f"{rows}.find((i) => i.dataset_id === {full['dataset_id']!r}).id")
+        page.evaluate(f"GeoMap.pick({theirs!r})")  # drawn by its own cells, which the map does not hold
+        page.wait_for_function("G.focus.length > 0 && !$('map-card').hidden", timeout=20000)
+        assert page.evaluate("G.map.getSource('focus').serialize().data.features.length") == page.evaluate("G.focus.length")
+        assert page.evaluate(f"GeoMap.placeOf({theirs!r}).length") == page.evaluate("G.focus.length")  # its question carries its cells
+        assert page.evaluate("G.focus.every((h) => /^[0-9a-f]{15}$/.test(h))")  # H3 ids, never the other dataset's row ids
+        said = page.evaluate(f"G.overlay.patterns[{theirs!r}].reading")
+        assert page.evaluate(f"reading({theirs!r})") == f"{said['where']} — {said['what']}"  # the list reads it as the overlay does
+        assert page.evaluate(
+            "[...document.querySelectorAll('#map-window .mw-i')].every((b) => reading(b.dataset.pid) && b.title.startsWith(reading(b.dataset.pid)))"
+        )
+        both = page.evaluate(
+            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.by).filter(Boolean).length === 2)"
+        )
+        page.evaluate(
+            f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
+        )
+        assert all(name in page.inner_text(".sig-pop") for name in ("california_housing.csv", "half.csv"))
+        assert page.evaluate(f"GeoMap.placeOf({theirs!r})") == []  # unfocused, it carries no zone the map does not show
+        busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
+        page.evaluate(f"GeoMap.closePopup(); G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
+        page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)  # a hex alone lists its count, over both uploads
+        region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
+        assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights")
+        page.evaluate(f"loadDataset({full['dataset_id']!r})")  # an answer's other dataset: the map is its own, not «Усі датасети»
+        assert page.evaluate("[G.ds, G.others]") == [full["dataset_id"], []]
+        page.evaluate(f"loadDataset({other['dataset_id']!r})")  # its anchor again: «Усі датасети» for the filter to leave
+        assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
+        page.select_option("#dataset-filter", full["dataset_id"])
+        page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
+        assert page.inner_text("#map-title") == "california_housing.csv"
+        page.select_option("#dataset-filter", other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
+        page.wait_for_function(f"G.ds === {other['dataset_id']!r} && G.others.length === 0 && !G.loading", timeout=20000)
+        page.select_option("#dataset-filter", "")
+        page.wait_for_function("G.others.length === 1 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'none'", timeout=20000)
+        assert page.inner_text("#map-title") == "Усі датасети"
+        browser.close()
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
+    """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
+    rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
+    the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). The data's calendar is
+    Kyiv's: the bar offers its own first and last days, and a preset counts what the server counts for them. A dataset
+    filter that drops the stretch gives the cells back. Every insight here lives over the data's first four weeks: its
+    core ends before the last two days."""
+    import pandas as pd
+
+    from graph_query_engine.temporal import parse_period
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine = make_engine(cfg)
+    (level,) = upload_levels(engine, points_csv, geo="auto@8", time="when", grid="week", tz="Europe/Kyiv")
+    assert level["status"] == "READY", level.get("error")
+    pd.read_csv(points_csv).drop(columns="when").to_csv(untimed := points_csv.with_name("untimed.csv"), index=False)
+    (other,) = upload_levels(engine, untimed)  # a table without time: the bar has no day of it
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want", timeout=60000)
+        page.click("#view-switch button[data-view='map']")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        assert page.inner_text("#pb-text") == "04.03.2019 — 03.04.2019\nувесь період"  # Kyiv's days, not their UTC instants
+        page.click("#pb-label")
+        page.click("#pb-presets button:has-text('останній тиждень')")
+        assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
+        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
+        page.select_option("#dataset-filter", other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
+        page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
+        page.select_option("#dataset-filter", "")
+        page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
+        page.evaluate("W.all = true; renderWindow()")
+        assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span
+        rows = "[...document.querySelectorAll('#map-window .mw-i')].map((b) => [b.dataset.pid, b.classList.contains('off')])"
+        page.evaluate("Timeline.setPeriod('2019-03-04T00:00', '2019-03-11T00:00'); Timeline.apply()")  # the first week: every core meets it
+        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
+        page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
+        counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
+        everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
+        assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
+        counted = [a or 0 for a in counted]
+        assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
+        assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')")[-1] == 0  # nor its outline
+        assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
+        assert page.locator("#map-metric option[value='points_in_period']").count() == 1
+        page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
+        listed = page.evaluate(rows)
+        assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
+        assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
+        page.click("#pb-clear")
+        assert page.locator("#map-window .mw-i.off").count() == 0
+        page.wait_for_function("G.metric === 'points'", timeout=10000)
+        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')") == page.evaluate("CELL_LINE")  # every outline back
+        assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
+        assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
         assert not errors, errors

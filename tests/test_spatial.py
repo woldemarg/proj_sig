@@ -12,10 +12,11 @@ import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import HOT, geo_frame, make_config, make_engine, upload_levels
+from conftest import HOT, geo_frame, make_config, make_engine, upload_levels, wait_batch
 from fastapi.testclient import TestClient
 
 import subgroup_miner.vendor.eda.main_upd as eda
+from graph_query_engine.temporal import parse_period
 from insight_contracts import Condition, SpatialProvenance
 from insight_contracts.insight import SPATIAL_DIGEST_FIELDS
 from insight_graph_service.core.engine import PipelineError
@@ -23,19 +24,17 @@ from insight_graph_service.core.settings import PROJECT_ROOT
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import Candidate, _median_test, _validation_frame, merge_identical_extents
-from subgroup_miner.ingestion import IngestionError, load_dataset
+from subgroup_miner.ingestion import IngestionError, forget_tables, load_dataset
 from subgroup_miner.spatial import (
     SpatialError,
     build_cells,
-    cells_inside,
-    centre_region,
     effective_n_factor,
-    footprint,
     locate_points,
     parse_geo,
     parse_points,
     subgroup_moran,
 )
+from subgroup_miner.spatial_plane import centre_region, footprint
 
 
 def cells_of(frame: pd.DataFrame, **kw):
@@ -216,10 +215,7 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
     with TestClient(create_app(engine)) as client:
         with points_csv.open("rb") as f:
             bid = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data={"geo": "auto"}).json()["batch_id"]
-        for _ in range(600):
-            if (record := client.get(f"/api/batches/{bid}").json())["status"] == "READY":
-                break
-            time.sleep(0.1)
+        record = wait_batch(client, bid)
         ds = record["dataset_id"]
         assert warmed(ds)
         assert client.patch(f"/api/datasets/{ds}", json={"source": "field survey"}).status_code == 200
@@ -254,7 +250,8 @@ def test_spatial_provenance_is_the_five_ingest_fields():
 
 
 def _geo_dataset(name, cells, covers):
-    from subgroup_miner.spatial import GeoDataset, _neighbour_graph
+    from subgroup_miner.spatial import _neighbour_graph
+    from subgroup_miner.spatial_plane import GeoDataset
 
     cells = np.array(sorted(set(cells)), dtype=object)
     ptr, idx, _ = _neighbour_graph(cells)
@@ -263,7 +260,7 @@ def _geo_dataset(name, cells, covers):
 
 
 def test_derive_spatial_relations_regions_and_the_partner_cap():
-    from subgroup_miner.spatial import derive_spatial, region_features
+    from subgroup_miner.spatial_plane import derive_spatial, region_features
 
     c = h3.latlng_to_cell(36.5, -119.2, 8)
     touching = h3.grid_ring(c, 7)[0]  # two radius-3 disks seven cells apart touch without overlapping
@@ -333,7 +330,7 @@ def test_derive_spatial_relations_regions_and_the_partner_cap():
 
 def test_derive_spatial_compares_the_thresholds_before_rounding(monkeypatch):
     """An overlap or a region share of exactly 2/3 stays below a threshold of 0.66667, although it is stored as 0.6667."""
-    import subgroup_miner.spatial as spatial
+    import subgroup_miner.spatial_plane as spatial  # the thresholds it compares are bound there
 
     monkeypatch.setattr(spatial, "GEO_COLOCATION_MIN", 0.66667)
     monkeypatch.setattr(spatial, "GEO_REGION_MIN_SHARE", 0.66667)
@@ -416,27 +413,28 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     members = [e for e in graph.inc[region] if e["type"] == "IN_REGION" and not graph.tampered(e["source"])]
     assert picture(graph, region)["patterns"] == graph.nodes[region]["props"]["patterns"] == len(members)
     assert {e["props"]["basis"] for e in members} >= {"events"}
-    # the map as a window on the graph: every other level's insights on the finest level's cells, a coarser geo one by
-    # every cell inside its own, a base one by the footprint of its events
+    # the map as a window on the graph: every other level's insights on the finest level's cells, each by every cell
+    # holding its events
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
     projected = {p["id"]: p for p in engine.geo_projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
-    assert all(projected[pid]["rows"] and projected[pid]["spatial"]["footprint_share"] >= 0.8 for pid in table_ids)
-    fine_cells, coarse_cells = (engine.ws.load_geo(r["dataset_id"], ("cells",))["cells"] for r in done[:2])
+    assert all(p["rows"] for p in projected.values())
+    point_cell, coarse = (
+        engine.ws.load_geo(fine, ("point_cell",))["point_cell"],
+        engine.ws.load_geo(done[1]["dataset_id"], ("point_cell",))["point_cell"],
+    )
     for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
-        assert projected[pid]["rows"] == np.flatnonzero(cells_inside(fine_cells, coarse_cells[rows].astype(str))).tolist()
-    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every insight at its own share, lift 1
+        assert sorted(projected[pid]["rows"]) == np.unique(point_cell[np.isin(coarse, rows) & (point_cell >= 0)]).tolist()
+    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every region's rows
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
-    assert table_ids & set(listed) and {i["lift"] for i in listed.values()} == {1.0}
+    assert table_ids & set(listed) and all(i["lift"] >= 1 for i in listed.values())
     assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
     overlay = engine.geo_overlay(fine)
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
         assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
-    drawn = engine.geo_pattern(fine, pid)  # drawn by its footprint, counted by all its events
-    assert drawn["n_points"] == projected[pid]["spatial"]["footprint_points"] < listed[pid]["points"] and set(drawn["rows"]) == set(
-        projected[pid]["rows"]
-    )
+    drawn = engine.geo_pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
+    assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
     with pytest.raises(PipelineError, match="west,south"):
         engine.geo_window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
@@ -452,10 +450,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
             data = {"geo": "auto@8,7", "bins": "points:4", "table": True}
             accepted = client.post("/api/upload", files={"file": ("points.csv", f, "text/csv")}, data=data).json()
         assert list(accepted["levels"]) == ["8", "7", "table"] and accepted["batch_id"] == accepted["levels"]["8"]
-        for _ in range(600):  # one worker thread: the table level runs last
-            if client.get(f"/api/batches/{accepted['levels']['table']}").json()["status"] in ("SKIPPED", "READY", "FAILED"):
-                break
-            time.sleep(0.1)
+        wait_batch(client, accepted["levels"]["table"])  # one worker thread: the table level runs last
         again = client.get("/api/batches", params={"upload_id": upload_id}).json()
         assert {b["batch_id"] for b in again} - {r["batch_id"] for r in done} == set(accepted["levels"].values())
         assert all(b["status"] == "SKIPPED" for b in again if b["batch_id"] in accepted["levels"].values())
@@ -519,9 +514,8 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     every = {n["id"] for n in finer.graph().of_kind("Region")}
     assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7 (where the level of 9 lies)
     assert all(n["props"]["patterns"] == len(finer.graph().holders(n["id"])) for n in finer.graph().of_kind("Region"))  # the r7 cells too
-    with mock.patch("insight_graph_service.core.geo_views.shown_regions", return_value=every):  # were they shown
-        drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
-    assert drawn and all(f["properties"]["resolution"] <= 7 for f in drawn)  # none inside one of its cells
+    drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
+    assert drawn and all(f["properties"]["resolution"] < 7 for f in drawn)  # none inside one of its cells, nor its cells
 
 
 def test_a_table_level_is_placed_by_its_events(engine, points_csv):
@@ -530,7 +524,7 @@ def test_a_table_level_is_placed_by_its_events(engine, points_csv):
     places it. On a wide map a random subgroup is placed nowhere where the level places by lift,
     and in one region where it places by share (the coarsest level); a pattern with 30 % of its rows unlocated is
     partial and unplaced."""
-    from subgroup_miner.spatial import TableDataset, place_table
+    from subgroup_miner.spatial_plane import TableDataset, place_table
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", bins="points:4", table=True)
     table = done[2]["dataset_id"]
@@ -665,7 +659,7 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
     """The map's cell package (docs/08_interface.md §8.1) rebuilds every vertex within half its step, which follows the
     resolution: 1e-5° up to 12, 1e-7° finer, where a cell's edge is a metre or less."""
     from insight_graph_service.core.geo_views import _pack
-    from subgroup_miner.spatial import cell_boundary
+    from subgroup_miner.spatial_plane import cell_boundary
 
     for res, step in ((7, 1e-5), (14, 1e-7)):
         cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
@@ -696,7 +690,7 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
     anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
     by its centre, also where the centre lies outside its H3 parent."""
-    from subgroup_miner.spatial import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
+    from subgroup_miner.spatial_plane import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
 
     crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
     assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
@@ -848,3 +842,97 @@ def test_a_centre_on_a_boundary_goes_by_one_rule_on_every_platform():
             assert {c: centre_region(c, 5) for c in cells} == rule
     ties = [c for c in cells if rule[c] == h3.cell_to_parent(c, 5) != h3.latlng_to_cell(*exact(c), 5)]
     assert ties and centre_region("8829aab493fffff", 5) == "8529a86bfffffff" != h3.cell_to_parent("8829aab493fffff", 5)
+
+
+def test_a_date_column_past_2262_reads_its_own_years():
+    """The cell counters of a date column read the points' dates in their own unit: years 2250 and 2300 order as written."""
+    shares = []
+    for early, late in (("2150-06-01", "2200-06-01"), ("2250-06-01", "2300-06-01")):  # the second pair crosses 2262
+        frame = geo_frame()
+        frame["when"] = np.where(frame.index % 2 == 0, early, late)
+        table, _, _ = cells_of(frame)
+        shares.append(table["when_late_share"].to_numpy())
+    assert np.allclose(shares[0], shares[1], equal_nan=True) and np.nanmax(shares[1]) > 0
+
+
+def test_the_point_columns_are_profiled_once_per_upload(monkeypatch, tmp_path):
+    """The levels of one upload read one profile of the point columns (their kinds, codes and dates): the date parse and
+    the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
+    import subgroup_miner.spatial as sp
+
+    parsed = []
+    real = sp._as_datetime
+    monkeypatch.setattr(sp, "_as_datetime", lambda values: parsed.append(values.name) or real(values))
+    sp.forget_profile()
+    frame = geo_frame()
+    six = build_cells(frame, "latitude,longitude", 6, min_cell_points=5, profile_key="upload")
+    five = build_cells(frame, "latitude,longitude", 5, min_cell_points=5, profile_key="upload")
+    columns = len(frame.columns) - 2  # the locator's two are no point column
+    assert len(parsed) == columns and len(six[0]) > len(five[0])  # one profile, two resolutions
+    assert np.array_equal(six[1].lonlat, five[1].lonlat)  # the points located once
+    build_cells(frame, "latitude,longitude", 5, min_cell_points=5)
+    assert len(parsed) == 2 * columns  # no key: profiled again
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    before = len(parsed)
+    for res in (6, 5):  # an upload's levels, as the engine loads them
+        load_dataset(path, MinerConfig(min_rows=5), geo=f"latitude,longitude@{res}", shared=True)
+    once = len(parsed) - before
+    forget_tables()  # the upload done: the next one profiles anew
+    load_dataset(path, MinerConfig(min_rows=5), geo="latitude,longitude@5", shared=True)
+    assert once > 0 and len(parsed) == before + 2 * once
+    forget_tables()
+
+
+def test_nesting_on_codes_is_the_crosstabs():
+    """Two columns' nesting from their codes equals the one a crosstab of their values gives, both directions."""
+    import subgroup_miner.spatial as sp
+
+    rng = np.random.default_rng(3)
+    av = rng.choice(["x", "y", "z"], 4000).astype(object)
+    bv = np.where(av == "x", "p", rng.choice(["p", "q"], 4000)).astype(object)  # x fixes p; y and z do not
+    av[rng.random(4000) < 0.05], bv[rng.random(4000) < 0.05] = None, None
+    a, b = pd.Series(av, dtype="string"), pd.Series(bv, dtype="string")
+    profile = sp.point_profile(pd.DataFrame({"lat": np.full(4000, 50.0), "lon": np.full(4000, 30.0), "a": a, "b": b}), "lat,lon")
+    both = (a.notna() & b.notna()).to_numpy()
+    table = pd.crosstab(a[both].to_numpy(), b[both].to_numpy()).to_numpy()
+    want = max(table.max(axis=1).sum(), table.max(axis=0).sum()) / table.sum()
+    assert sp._nesting(profile, "a", "b") == pytest.approx(want)
+
+
+def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(cfg, tmp_path):
+    """``geo.npz`` keeps each point's time; ``GET /api/geo/{ds}/counts`` counts each cell's points in the days asked,
+    both included, the whole span the cells' own counts; a dataset without times gives none (docs/08_interface.md §8.7)."""
+    frame = geo_frame()
+    frame.to_csv(path := tmp_path / "points.csv", index=False)
+    engine = make_engine(cfg)
+    (timed,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")
+    ds = timed["dataset_id"]
+    geo = engine.ws.load_geo(ds, ("cells", "point_cell", "point_time", "nothing"))
+    assert set(geo) == {"cells", "point_cell", "point_time"} and len(geo["point_time"]) == len(geo["point_cell"])
+    cells = json.loads(engine.ws.geo_cells_path(ds).read_text(encoding="utf-8"))["features"]
+    with TestClient(create_app(engine)) as client:
+        whole = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-04-03"}).json()
+        assert whole["timed"] and whole["counts"] == [f["properties"]["points"] for f in cells] and whole["points"] == sum(whole["counts"])
+        week = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json()
+        days = (frame["when"] - frame["when"].min()).dt.days
+        assert week["points"] == int(((days < 7) & (geo["point_cell"] >= 0)).sum()) and 0 < week["points"] < whole["points"]
+        refused = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-10", "end": "2019-03-04"})
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
+        stored = engine.ws.load_geo(ds)  # a dataset stored before the points' times were kept
+        np.savez_compressed(engine.ws.dataset_dir(ds) / "geo.npz", **{k: v for k, v in stored.items() if k != "point_time"})
+        assert client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == {
+            "counts": None,
+            "points": 0,
+            "timed": True,
+        }
+        assert not engine.ws.add_point_times(ds, stored["point_time"][:-1])  # not of its stored points: nothing written
+        (again,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")  # the same file again: skipped, its times added
+        assert (
+            again["status"] == "SKIPPED" and client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == week
+        )
+        added = engine.ws.load_geo(ds)  # beside the arrays as stored, which the map's cells.geojson was drawn from
+        assert all(np.array_equal(added[k], v) for k, v in stored.items()) and set(added) == {*stored, "point_time"}
+        assert not engine.ws.add_point_times(ds, added["point_time"])  # it has them
+    (plain,) = upload_levels(engine, path, geo="auto@7")
+    assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
+    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {"counts": None, "points": 0, "timed": False}

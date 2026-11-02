@@ -9,6 +9,7 @@ from insight_contracts.graph import (
     LATENT_EDGES,
     SNAPSHOT_VERSION,
     STRUCTURAL_EDGES,
+    TIME_GRIDS,
     UNDIRECTED_EDGES,
     EdgeType,
     GraphEdge,
@@ -20,6 +21,7 @@ from insight_contracts.graph import (
     dimension_node_id,
     metric_node_id,
     region_node_id,
+    temporal_node_id,
 )
 from insight_contracts.insight import (
     Condition,
@@ -38,6 +40,7 @@ __all__ = [
     "LATENT_EDGES",
     "SNAPSHOT_VERSION",
     "STRUCTURAL_EDGES",
+    "TIME_GRIDS",
     "UNDIRECTED_EDGES",
     "Condition",
     "EdgeType",
@@ -56,6 +59,7 @@ __all__ = [
     "dimension_node_id",
     "metric_node_id",
     "region_node_id",
+    "temporal_node_id",
     "pattern_id",
     "record_digest",
     "stable_hash",

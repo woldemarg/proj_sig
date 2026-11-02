@@ -14,8 +14,10 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -34,16 +36,21 @@ from insight_contracts import (
     dimension_node_id,
     metric_node_id,
     record_digest,
+    temporal_node_id,
 )
 from insight_contracts.text import component_label, headline, humanize
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.uploads import declared_glossary
 from insight_graph_service.core.workspace import utc_now
 from subgroup_miner.lattice import structural_edges
-from subgroup_miner.spatial import GEO_REGION_MIN_SHARE, SpatialStructure
+from subgroup_miner.spatial import GEO_REGION_MIN_SHARE
+from subgroup_miner.spatial_plane import SpatialStructure
+from subgroup_miner.temporal import dynamics, echoes, parent_period, period_bounds
 
 if TYPE_CHECKING:  # the ontology is passed in, never constructed here
     from attractor_topology.ontology import LatentOntology
+
+log = logging.getLogger(__name__)
 
 Member = tuple[dict[str, Any], float, float]  # (pattern record, alignment, strength)
 
@@ -418,6 +425,91 @@ def _spatial_plane(spatial: SpatialStructure, nodes: dict[str, GraphNode], struc
     return edges
 
 
+def _temporal_plane(
+    temporal: dict[str, tuple[dict[str, Any] | None, str]],
+    batches: dict[str, dict[str, Any]],
+    integrity: dict[str, str],
+    nodes: dict[str, GraphNode],
+    settings: Settings,
+) -> tuple[list[GraphEdge], dict[str, Any]]:
+    """TemporalNode hubs (added to ``nodes``), the temporal plane's edges and the ``trajectories`` section from each
+    READY dataset's signed time record and its series file (``temporal``: batch id → (series, the file's SHA-256)). A
+    record that fails its metadata digest, or a file other than the one it signed (a missing one or one that no longer
+    reads among them, logged), gives its dataset no temporal plane; a pattern that fails its record digest, or none of
+    whose metrics has a series (a geo counter or share), gets no trajectory. A trajectory is
+    ``subgroup_miner.temporal.dynamics`` of the pattern's series; the pattern's ``temporal_summary`` is its metric, trend,
+    current level, bins measured, events' count and core, the dataset's ``temporal`` its column, grid, zone and span, as
+    the record signs them. An event keeps the condition that carries it (``carrier``,
+    signed in the series at the commit, ``subgroup_miner.temporal.carriers``) and, when a broader insight of the dataset
+    has it too, ``echo_of`` that insight (``echoes``). A hub exists with an event in it or a core's end — a pattern has
+    one PEAKED_AT / DROPPED_AT edge per hub and kind, its most prominent event there, ``metrics`` naming every metric
+    that peaked (or dipped) then, and a STARTS_AT and an ENDS_AT edge to the hubs of its core's first and last bin —
+    and so does every period above a hub, WITHIN edges between them (``_hub``)."""
+    edges, trajectories, chained = [], {}, set()
+    for bid, (series, digest) in sorted(temporal.items()):
+        signed = batches[bid]["temporal"]
+        if integrity.get(bid) == "mismatch":
+            continue
+        if digest != signed["series_digest"] or series is None:
+            log.warning("%s: its series file is missing or not the one its record signs: no temporal plane", batches[bid]["dataset_id"])
+            continue
+        head = {k: signed[k] for k in ("column", "grid", "span")}  # the calendar its bins are named on, signed with them
+        head["tz"] = signed.get("tz", batches[bid].get("tz"))  # a record signed before the zone was among them keeps its unsigned copy
+        nodes[dataset_node_id(batches[bid]["dataset_id"])].props["temporal"] = head
+        mine = {}
+        for pid, entry in sorted(series.items()):
+            if pid not in nodes or nodes[pid].props["integrity"] == "mismatch" or not entry["series"]:
+                continue  # no metric of it has a series (a geo counter or share): it has no time line
+            props = nodes[pid].props
+            metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
+            traj = mine[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
+            carried = {(c["metric"], c["bin"]): c for c in entry.get("carriers", [])}
+            for e in traj["events"]:
+                if c := carried.get((e["metric"], e["bin"])):
+                    e["carrier"] = {k: c[k] for k in ("attribute", "value", "rows", "of", "shift", "p")}
+            nodes[pid].props["temporal_summary"] = {k: traj[k] for k in ("metric", "trend", "current", "bins_measured", "of", "core")} | {
+                "events": len(traj["events"])
+            }
+        echoes(mine, {pid: nodes[pid].props for pid in mine})
+        trajectories |= mine
+        for pid, traj in mine.items():
+            by_period: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (period, kind) -> its events, the most prominent first
+            for e in sorted(traj["events"], key=lambda e: -e["prominence"]):
+                by_period.setdefault((e["period"], e["kind"]), []).append(e)
+            for (_, kind), same in by_period.items():
+                hub = _hub(signed, same[0]["bin"], head["tz"], nodes, edges, chained)
+                first = {k: same[0][k] for k in ("metric", "period", "z_raw", "z_smoothed", "prominence", "p", "carrier", "echo_of") if k in same[0]}
+                edges.append(GraphEdge(pid, hub, EdgeType(kind), 1.0, first | {"metrics": [e["metric"] for e in same]}))
+            if core := traj["core"]:
+                for kind, t in ((EdgeType.STARTS_AT, core["first"]), (EdgeType.ENDS_AT, core["last"])):
+                    props = {"period": signed["bins"][t]["period"], "share": core["share"], "bins": core["bins"]}
+                    edges.append(GraphEdge(pid, _hub(signed, t, head["tz"], nodes, edges, chained), kind, 1.0, props))
+    return edges, trajectories
+
+
+def _hub(signed: dict[str, Any], t: int, tz: str | None, nodes: dict[str, GraphNode], edges: list[GraphEdge], chained: set[str]) -> str:
+    """The TemporalNode of bin ``t`` of a dataset's grid, made when new (``signed``: the dataset's time record), and the
+    periods above it to the quarter — one chain, ``subgroup_miner.temporal.parent_period`` —, each made when new on the
+    dataset's calendar (``tz``) with its WITHIN edge, once (``chained``: the hubs whose chain stands; a period two datasets
+    reach keeps the first one's bounds). Returns the bin's hub id."""
+    cell, grid = signed["bins"][t], signed["grid"]
+    label = cell["period"]
+    hub = temporal_node_id(grid, label)
+    nodes.setdefault(
+        hub, GraphNode(hub, "TemporalNode", label, {"granularity": grid, "period": label, "t_start": cell["t_start"], "t_end": cell["t_end"]})
+    )
+    child = hub
+    while child not in chained and (up := parent_period(label, grid)):
+        chained.add(child)
+        grid, label = up
+        parent, (start, end) = temporal_node_id(grid, label), period_bounds(label, grid, tz)
+        nodes.setdefault(parent, GraphNode(parent, "TemporalNode", label, {"granularity": grid, "period": label, "t_start": start, "t_end": end}))
+        edges.append(GraphEdge(child, parent, EdgeType.WITHIN))
+        child = parent
+    chained.add(child)
+    return hub
+
+
 def _checked(record: dict[str, Any], key: str, digest: Callable[[dict[str, Any]], str]) -> str:
     """``ok`` when ``record[key]`` matches the digest of the record, ``mismatch`` when it does not, ``unverified`` for a
     record stored before digests."""
@@ -443,6 +535,8 @@ BATCH_DIGEST_FIELDS = (
     "metadata_doc",
     "supersedes",
     "profile",
+    "temporal",  # the time column's grid and bins, and the SHA-256 of its series file (docs/02_discovery.md §2.10)
+    "window",  # a chain-model time record's window: no new record has it; kept so such a record stays verifiable (§6.1)
 )
 
 
@@ -478,11 +572,13 @@ def build_snapshot(
     ontology: LatentOntology,
     settings: Settings,
     spatial: SpatialStructure | None = None,
+    temporal: dict[str, tuple[dict[str, Any], str]] | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its
     ``profile``); ``representation``: the recorded vector contract; ``spatial``: the derived spatial plane of the geo
-    patterns (``subgroup_miner.spatial.derive_spatial``)."""
+    patterns (``subgroup_miner.spatial.derive_spatial``); ``temporal``: batch id → (its dataset's series, the series file's
+    SHA-256) of the READY datasets with a time column (``_temporal_plane``)."""
     seq_to_batch = {b.get("batch_seq"): bid for bid, b in batches.items()}
     by_pid = {rec["id"]: rec for rec in records}
     insights = [Insight.from_record(rec) for rec in by_pid.values()]
@@ -497,6 +593,8 @@ def build_snapshot(
     structural = structural_edges(insights, settings.miner)
     spatial = spatial or SpatialStructure()
     edges += structural + _spatial_plane(spatial, nodes, structural)
+    events, trajectories = _temporal_plane(temporal or {}, batches, integrity, nodes, settings)
+    edges += events
     compiled = _co_memberships(activations, by_pid, vectors, ontology, settings)
     activates, members = _activation_edges(activations + compiled, vectors, ontology, by_pid, settings)
     edges += activates + co_occurrence_edges(activates)
@@ -514,6 +612,7 @@ def build_snapshot(
 
     counts = Counter(e.type.value for e in edges)
     n_attr = len(ontology.attractor_ids)
+    spans = [n.props["temporal"]["span"][1] for n in nodes.values() if n.kind == "Dataset" and "temporal" in n.props]
     return {
         "version": SNAPSHOT_VERSION,
         "created_at": utc_now(),
@@ -521,11 +620,13 @@ def build_snapshot(
         "nodes": [{"id": n.id, "kind": n.kind, "label": n.label, "props": n.props} for n in nodes.values()],
         "edges": [e.to_dict() for e in edges],
         "own_cells": {pid: sorted(cells) for pid, cells in spatial.own_cells.items() if pid in nodes},
+        "trajectories": trajectories,
         "stats": {
             "patterns": len(insights),
             "attractors": n_attr,
             "edges": len(edges),
             "edge_counts": dict(counts),
             "avg_attractor_degree": (2 * counts["RELATED_TO"] / n_attr) if n_attr else 0.0,
+            "as_of": max(spans, key=datetime.fromisoformat, default=None),  # the latest data: the reference date of an answer (§7.2)
         },
     }

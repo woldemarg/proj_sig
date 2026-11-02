@@ -20,8 +20,27 @@ Columns payment / weekday / store_size carry no signal; order_id is an identifie
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
+
+from insight_graph_service.core.settings import PROJECT_ROOT
+
+DEMO_DIR = PROJECT_ROOT / "data" / "demo"
+
+
+def demo_datasets(folder: Path = DEMO_DIR) -> list[dict[str, Any]]:
+    """The shipped datasets the console offers (``data/demo/datasets.json``, built by ``scripts/demo_datasets.py``):
+    each ``{key, file, title, description, rows, span, license, source, options}`` whose file is there, ``options`` the
+    upload options it is meant to be read with (docs/10_verification.md §10.2)."""
+    manifest = folder / "datasets.json"
+    if not manifest.is_file():
+        return []
+    return [e for e in json.loads(manifest.read_text(encoding="utf-8")) if (folder / e["file"]).is_file()]
+
 
 GROUND_TRUTH = {
     "local_anomaly": {"scope": {"region": "EU", "category": "laptops"}, "metric": "margin", "direction": 1},

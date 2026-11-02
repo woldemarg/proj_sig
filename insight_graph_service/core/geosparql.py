@@ -8,7 +8,7 @@ from typing import Any
 
 from graph_query_engine import DualGraph
 from insight_contracts import dataset_node_id
-from subgroup_miner.spatial import cells_to_wkt
+from subgroup_miner.spatial_plane import cells_to_wkt
 
 PREFIXES = {
     "geo": "http://www.opengis.net/ont/geosparql#",

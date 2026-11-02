@@ -70,10 +70,13 @@ function botCard(turn) {
   const cross = items.filter((i) => i.transversal_only).length;
   const jargon = Object.entries((qa.metrics || {}).jargon || {}), said = jargon.reduce((a, [, n]) => a + n, 0);  // a plain-language answer's analyst words
   const model = String(llm.model || "").split("/").pop();
+  const when = ev.parsed && ev.parsed.when;  // a period in the question or on the bar: [start, end), ISO
   const meta = [
     qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення"),
     cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат"),
     cross ? chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1]) : "",
+    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by
+      : ev.as_of ? chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1]) : "",  // the date the answer judged freshness from
     said ? chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`) : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
@@ -86,7 +89,8 @@ function botCard(turn) {
       (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") +
       (it.also && it.also.length ? `<span class="role" title="Та сама знахідка на іншому рівні цього завантаження">також ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Її комірки мапи проти зони з питання">${area[it.key] ? "у виділеній зоні" : "поза виділеною зоною"}</span>` : "") +
-      (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") + `</div>` +
+      (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") +
+      (it.time && it.time.words ? `<span class="role" title="${esc(TERMS.trend[1])}">${esc(it.time.words)}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
       `<div class="ev-stats">${term("support")}: ${num(s.support, 0)} · ${term("weight")}: ${num(s.weight)}</div>${itemTrust(it)}${renderChain(it)}${chains[it.pattern_id] ? chainLine(chains[it.pattern_id], items) : ""}</div>`;
   }).join("");
@@ -190,6 +194,9 @@ function toggleTab(tab) {
   box.querySelectorAll(".bot-pane").forEach((pane) => { pane.hidden = !open || pane.dataset.pane !== tab.dataset.pane; });
 }
 
+// the bar's stretch the question went with, unless the answer says a period of its own text ranked instead
+const barPeriod = (turn) => turn.period && turn.qa?.view?.evidence?.parsed?.when_asked !== false;
+
 function renderThread() {
   /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
@@ -200,7 +207,8 @@ function renderThread() {
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
+      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
+      `${barPeriod(turn) ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(wall(turn.period.start), wall(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
   t.scrollTop = t.scrollHeight;
@@ -210,14 +218,15 @@ async function ask(question, zone = null) {
   question = (question || "").trim();  // with a map zone ({cells}) the text may be empty; false: asked without one
   if (zone === null && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
   if ((!question && !zone) || S.busy) return;
+  const period = S.period;  // the bar's stretch; none: freshness from the latest data (docs/07_question_answering.md §7.2)
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();
-  const turn = { question, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
+  const turn = { question, period, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
   const live = () => S.chat.includes(turn);  // New chat drops the turn: its late answer paints nothing
   const timer = setTimeout(() => turn.ctl.abort("timeout"), CHAT_TIMEOUT_S * 1000);
   S.chat.push(turn); renderThread();
   try {
-    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
+    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, ...(period ? { period: [period.start, period.end] } : {}), use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);

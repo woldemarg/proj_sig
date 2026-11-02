@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from experiment import Truth, cosine_rank, label_of, rank_scores
-from scratch import build_engine, ingest_ready, save_result, scratch_dir
+from scratch import build_engine, ingest_ready, parse_overrides, save_result, scratch_dir
 from sklearn.cluster import KMeans
 
 import insight_graph_service.core.snapshot as snapshot_module
@@ -334,10 +334,7 @@ def main() -> int:
         help="a settings field by its upper-case name, e.g. MIN_ASSIGN_THRESHOLD=0.75",
     )
     args = parser.parse_args()
-    overrides = {}
-    for item in args.override:
-        name, value = item.split("=", 1)
-        overrides[name.lower()] = float(value) if "." in value else int(value)
+    overrides = parse_overrides(args.override)
     rows = run_benchmark(
         parse_seeds(args.seeds), per_workspace=args.per_workspace, k=args.k, overrides=overrides, scratch=Path("attractor_benchmark")
     )

@@ -6,7 +6,9 @@ literal fidelity, latency, tokens.
 Asks through ``LLM_BASE_URL`` (by default the LLM model broker, configured in ``.env``; values are never printed), on
 throwaway workspaces of public data only: the five demo questions on the plain demo and on the demo with an invented
 glossary and metadata document, three questions with a California zone and two of the map's suggested questions on
-the California table at resolutions 6 and 5. Fifteen LLM calls per run.
+the California table at resolutions 6 and 5, and three questions on the demo laid over six ISO weeks with its time
+column (``weekly_retail``: phones in the US with a discount spike in 2031-W13) — whether the answer names the dynamics
+in rule 13's words and names only periods the evidence holds. Eighteen LLM calls per run.
 """
 
 from __future__ import annotations
@@ -14,11 +16,12 @@ from __future__ import annotations
 import argparse
 import re
 
-from scratch import build_engine, ingest_ready, save_result, scratch_dir, write_demo_csv
+from scratch import build_engine, ingest_ready, save_result, scratch_dir, weekly_retail, write_demo_csv
 
 from evidence_narrator_service.llm_client import OpenAICompatibleLLM
 from evidence_narrator_service.narration import answer
 from evidence_narrator_service.settings import NarratorSettings
+from insight_contracts import wording
 from insight_graph_service.core.settings import PROJECT_ROOT
 
 QUESTIONS = [
@@ -59,6 +62,12 @@ CALIFORNIA = [
     ("Що особливого в найгарячіших зонах, де подій найбільше?", {}),  # GeoMap.suggestions
     ("Що відбувається там, де подій найменше?", {}),
 ]
+TIMED = [  # the weekly demo: without a date, with the spike's week, about the dynamics
+    "Why is the discount higher for phones in the US?",
+    "What happened to the discount of phones in the US in 2031-W13?",
+    "How has the discount for phones in the US changed over the weeks?",
+]
+TIME_TERMS = ("trend_rising", "trend_falling", "trend_flat", "trend_spike", "time_unmeasured", "time_faded", "PEAKED_AT", "DROPPED_AT")
 TRANSLATED = {  # a demo literal the model may write in Ukrainian, counted as kept (rule 9 asks for it as stored)
     "phones": ("телефон", "фони"),
     "US": ("США",),
@@ -93,6 +102,7 @@ def evaluate(engine, llm, question: str, **zone) -> dict:
     qa = answer(engine.evidence(question, **zone), llm)
     usage = qa.llm.get("usage") or {}
     exact, translated, checked = fidelity(qa)
+    periods = sorted({m.group(0) for m in wording.PERIOD.finditer(qa.answer)})
     return {
         "question": question or "(the zone alone)",
         "mode": qa.answer_mode,
@@ -105,6 +115,10 @@ def evaluate(engine, llm, question: str, **zone) -> dict:
         "literal_translated": translated,
         "literal_checked": checked,
         "words": {w: len(re.findall(rf"(?<![^\W_]){w}", qa.answer, re.IGNORECASE)) for w in ("сегмент", "зон", "комірк", "регіон")},
+        "time_lines": qa.prompt.count("     time: "),
+        "time_terms": {k: qa.answer.lower().count(wording.name(k).lower()) for k in TIME_TERMS if wording.name(k).lower() in qa.answer.lower()},
+        "periods": periods,
+        "periods_unknown": [p for p in periods if p not in qa.prompt],  # a period the evidence does not hold
         "latency_s": qa.llm.get("latency_s"),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
@@ -133,6 +147,10 @@ def summarise(rows: list[dict]) -> dict:
         "literal_fidelity": round(sum(r["literal_ok"] for r in rows) / max(sum(r["literal_checked"] for r in rows), 1), 3),
         "literal_translated": sum(r["literal_translated"] for r in rows),
         "literal_checked": sum(r["literal_checked"] for r in rows),
+        "time_lines": sum(r["time_lines"] for r in rows),
+        "with_time_terms": f"{sum(bool(r['time_terms']) for r in rows if r['time_lines'])}/{sum(bool(r['time_lines']) for r in rows)}",  # timed only
+        "periods_named": sum(len(r["periods"]) for r in rows),
+        "periods_unknown": sum(len(r["periods_unknown"]) for r in rows),
         "prompt_tokens": [min(tokens, default=0), max(tokens, default=0), sum(tokens)],
         "completion_tokens_total": sum(r["completion_tokens"] or 0 for r in rows),
         "mean_latency_s": round(sum(r["latency_s"] or 0 for r in answered) / max(len(answered), 1), 2),
@@ -140,8 +158,8 @@ def summarise(rows: list[dict]) -> dict:
 
 
 def engines() -> dict:
-    """The three workspaces, one embedding model: the demo, the demo with its declared language, California at
-    resolutions 6 and 5 (its scale chains)."""
+    """The four workspaces, one embedding model: the demo, the demo with its declared language, California at
+    resolutions 6 and 5 (its scale chains), the weekly demo with its time column."""
     plain = build_engine(scratch_dir("eval_answers_demo", fresh=True) / "ws")
     ingest_ready(plain, write_demo_csv(scratch_dir("eval_answers_demo")))
     root = scratch_dir("eval_answers_declared", fresh=True)
@@ -155,7 +173,13 @@ def engines() -> dict:
     for level in levels:
         if (record := california.process(level["batch_id"]))["status"] != "READY":
             raise SystemExit(f"california {level['level']}: {record['status']} {record.get('error')}")
-    return {"demo": plain, "demo_declared": declared, "california": california}
+    root = scratch_dir("eval_answers_weekly", fresh=True)
+    weekly = build_engine(root / "ws", embedder=plain.encoder.embedder)
+    with weekly_retail(root).open("rb") as f:
+        (level,) = weekly.upload("weekly.csv", f, time="when", grid="week")
+    if (record := weekly.process(level["batch_id"]))["status"] != "READY":
+        raise SystemExit(f"weekly demo: {record['status']} {record.get('error')}")
+    return {"demo": plain, "demo_declared": declared, "california": california, "weekly": weekly}
 
 
 def main() -> int:
@@ -169,6 +193,7 @@ def main() -> int:
         "demo": [evaluate(built["demo"], llm, q) for q in QUESTIONS],
         "demo_declared": [evaluate(built["demo_declared"], llm, q) for q in QUESTIONS],
         "california": [evaluate(built["california"], llm, q, **zone) for q, zone in CALIFORNIA],
+        "weekly": [evaluate(built["weekly"], llm, q) for q in TIMED],
     }
     cols = [
         "mode",
@@ -187,7 +212,11 @@ def main() -> int:
         print(f"{'#':<3}" + "".join(f"{c:>18}" for c in cols) + "   jargon")
         for i, r in enumerate(rows, 1):
             print(
-                f"{i:<3}" + "".join(f"{str(r[c]):>18}" for c in cols) + f"   {r['jargon'] or ''}" + (f"   error: {r['error']}" if r["error"] else "")
+                f"{i:<3}"
+                + "".join(f"{str(r[c]):>18}" for c in cols)
+                + f"   {r['jargon'] or ''}"
+                + (f"   error: {r['error']}" if r["error"] else "")
+                + (f"   time: {r['time_terms']} periods {r['periods']} unknown {r['periods_unknown']}" if r["time_lines"] else "")
             )
         print("summary:", summarise(rows))
     summary = {name: summarise(rows) for name, rows in runs.items()}

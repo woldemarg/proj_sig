@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -17,12 +18,13 @@ import pytest
 from doubles import HashingEmbedder
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from scratch import serve
+from scratch import serve, weekly_retail
 
 from evidence_narrator_service.llm_client import LLMResponse
 from insight_contracts import Condition, Insight
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.settings import load_settings
+from insight_graph_service.core.workspace import TERMINAL
 
 
 @pytest.fixture
@@ -159,6 +161,19 @@ def demo_csv(tmp_path_factory, demo_df):
     return path
 
 
+@pytest.fixture(scope="session")
+def timed(tmp_path_factory):
+    """The weekly demo uploaded with its time column through the graph service (hashing double): the engine and the
+    batch record — shared, read-only use."""
+    folder = tmp_path_factory.mktemp("timed")
+    engine = make_engine(make_config(folder / "ws"))
+    with weekly_retail(folder).open("rb") as f:
+        (record,) = engine.upload("weekly.csv", f, time="when", grid="week")
+    record = engine.process(record["batch_id"])
+    assert record["status"] == "READY", record.get("error")
+    return engine, record
+
+
 def toy_insight(scope, shifts, **fields) -> Insight:
     """A test Insight: ``scope`` [(column, value)] in order, ``shifts`` Shift records. Target, baseline, local and
     effect follow the first shift; the other statistics are neutral, and any field can be overridden."""
@@ -191,6 +206,16 @@ def toy_insight(scope, shifts, **fields) -> Insight:
 
 class Crash(BaseException):
     """The process dies mid-write: no except-handler runs (the recovery and deletion tests raise it)."""
+
+
+def wait_batch(client, batch_id: str, timeout: float = 60) -> dict:
+    """``GET /api/batches/{id}`` until the batch is terminal; fails after ``timeout`` seconds. A batch the app's worker
+    runs ends inside its test: one running on would meet the next test's patches."""
+    deadline = time.monotonic() + timeout
+    while (record := client.get(f"/api/batches/{batch_id}").json())["status"] not in TERMINAL:
+        assert time.monotonic() < deadline, f"batch {batch_id} still {record['status']}"
+        time.sleep(0.1)
+    return record
 
 
 def stack(engine):

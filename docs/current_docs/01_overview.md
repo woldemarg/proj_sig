@@ -52,7 +52,7 @@ Stages 1–6 run once per uploaded file as one atomic *batch* ([9. Operations](0
 | | Structural plane | Latent phenomenon plane |
 |---|---|---|
 | Nodes | `Pattern` (one validated insight); `Dimension`, `Metric` as schema anchors | `Attractor` = latent anchor = "theme" in the UI: a living unit-norm centroid |
-| Edges | SPECIALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts; for geo patterns the spatial plane (regions, IN_REGION, PARENT_OF, CO_LOCATED), derived from the cells, and IN_REGION for a table level's patterns, derived from their events | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
+| Edges | SPECIALIZES, SIBLING, CONTRASTS — exact, derived only from the scope conditions and signed shifts; for geo patterns the spatial plane (regions, IN_REGION, PARENT_OF, CO_LOCATED), derived from the cells, and IN_REGION for a table level's patterns, derived from their events; for a dataset with a time column the temporal plane (PEAKED_AT, DROPPED_AT to the `TemporalNode` of a calendar period), derived from each pattern's series and never walked ([6.1](06_graph_and_storage.md#61-the-structural-plane)) | RELATED_TO — mutual nearest neighbours among centroids; CO_OCCURS — anchors that share member insights |
 | Bridge | ACTIVATES: Pattern → Attractor, weighted by cosine alignment (strength = alignment × insight weight); a *weak* membership (rerouted, or now aligned below `MIN_ACTIVATION_ALIGNMENT`) counts for coverage but is not walked | |
 | Schema and provenance | `Dimension`, `Metric`, `Dataset`, `Batch` nodes; HAS_SCOPE, TARGETS (Pattern → schema), DISCOVERED_IN, OF_DATASET (provenance) — never walked by retrieval | |
 | Never | embeddings never create structural edges | scope predicates never create latent edges |
@@ -96,6 +96,7 @@ The repository is split into bounded contexts: four libraries, which import only
 | `subgroup_miner/` | `config.py` | `MinerConfig` | [2.6](02_discovery.md#26-configuration), [3.5](03_insights.md#35-configuration) |
 | | `ingestion.py` | file validation, categories, bands, dataset id | [2.1](02_discovery.md#21-ingestion) |
 | | `discovery.py`, `vendor/eda/` | EDA adapter: closed intents, deduplication before validation, typed insights | [2](02_discovery.md) |
+| | `temporal.py` | the calendar grid of a time column, each insight's series over it, its smoothing, events and trend | [2.10](02_discovery.md#210-time-the-calendar-grid-and-an-insights-dynamics) |
 | | `selection.py` | validity rules R1–R3 and `insight_weight` | [3](03_insights.md) |
 | | `lattice.py` | the exact lattice edges | [6.1](06_graph_and_storage.md#61-the-structural-plane) |
 | | `describe.py` | insights as numbered lines of LLM context | [12.3](12_architecture.md#123-using-a-library-on-its-own) |
@@ -106,12 +107,13 @@ The repository is split into bounded contexts: four libraries, which import only
 | | `ontology.py`, `vendor/lac/` | `LatentOntology` over lac's lifecycle, activation records | [5](05_latent_anchors.md) |
 | `graph_query_engine/` | `graph.py` | `DualGraph` (the read model of a snapshot), `LatentFrame` | [6.2](06_graph_and_storage.md#62-the-graph-schema) |
 | | `question.py` | question parsing with multilingual literal grounding | [7.1](07_question_answering.md#71-from-question-to-query) |
+| | `temporal.py` | a calendar period in the question, an insight's time line and time score | [7.2](07_question_answering.md#72-seeds), [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `seeds.py`, `traversal.py` | seed scoring; the transversal walk, structural closure | [7.2](07_question_answering.md#72-seeds), [7.3](07_question_answering.md#73-transversal-traversal) |
 | | `vertical.py` | the scale chain: a geo pattern's coarser and finer levels of the same phenomenon, the regions above, the `scale` label | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `evidence.py` | the evidence object, the LLM prompt and the evidence-only summary | [7.4](07_question_answering.md#74-the-evidence-object) |
 | | `search.py`, `ports.py`, `config.py` | one question end to end over a `CommittedState`; the embedder shape it needs; `QueryConfig` | [7](07_question_answering.md) |
 | `insight_graph_service/core/` | `settings.py` | `Settings`: every package config built from one environment | [9.3](09_operations.md#93-configuration), [11.3](11_reference.md#113-parameters) |
-| | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question | [9](09_operations.md) |
+| | `engine.py`, `batch.py` | `Engine`: batch lifecycle, admission, deletion, reset, recovery, the committed read state, the evidence for a question; `batch.py` also the time column's check and the series signed at the commit | [9](09_operations.md) |
 | | `uploads.py`, `verify.py` | the levels of one upload, the version it replaces and its declared language (glossary, metadata document); an insight recomputed from its stored upload | [6.8](06_graph_and_storage.md#68-deleting-a-dataset), [6.7](06_graph_and_storage.md#67-configuration-and-guarantees) |
 | | `geo_views.py`, `errors.py` | the map's reads over one commit's graph; the error codes as `PipelineError` | [8.7](08_interface.md#87-the-map), [9.4](09_operations.md#94-error-codes) |
 | | `snapshot.py` | the dual-graph compiler and the anchor descriptions | [6.2](06_graph_and_storage.md#62-the-graph-schema), [5.8](05_latent_anchors.md#58-how-an-anchor-is-described) |

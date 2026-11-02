@@ -2,7 +2,7 @@
 
 These chapters describe the system as it is implemented, in the order data flows through it. Read them in sequence for a complete technical overview; each chapter also stands on its own, links back to what it builds on, and names the code and tests it describes. One example — the insight *"phones in the US: discount +2.21 sd, margin −1.10 sd"* from the demo dataset — is followed through every chapter.
 
-Specification lives in [`current_docs/`](current_docs/). Everything under [`init_concepts/`](init_concepts/) and [`extra_funcs/`](extra_funcs/) is context, not specification.
+Specification lives in [`current_docs/`](current_docs/). Everything under [`init_concepts/`](init_concepts/), [`general_notes/`](general_notes/) and [`extra_funcs/`](extra_funcs/) is context, not specification.
 
 | # | Chapter | What it answers | Code |
 |---|---|---|---|
@@ -35,6 +35,8 @@ Specification lives in [`current_docs/`](current_docs/). Everything under [`init
 
 These documents are context, not specification:
 
-* [`init_concepts/`](init_concepts/) — theory the project started from (latent insight graph, auto-EDA + topology, embedding audit, multilingual retrieval, hierarchical multi-resolution geograph) and the implementation overview [`general_func_overview.md`](init_concepts/general_func_overview.md). Read-only.
+* [`general_notes/`](general_notes/) — implementation overview with comparative analysis: [`general_func_overview.md`](general_notes/general_func_overview.md). Context, not specification.
+* [`init_concepts/`](init_concepts/) — theory the project started from (latent insight graph, auto-EDA + topology, embedding audit, multilingual retrieval, hierarchical multi-resolution geograph). Read-only.
 * [`extra_funcs/spatial_analytics/`](extra_funcs/spatial_analytics/) — Spatial Knowledge Graph epic studies (#2): [architecture](extra_funcs/spatial_analytics/spatial_knowledge_graph_architecture.md), [transition](extra_funcs/spatial_analytics/spatial_knowledge_graph_transition.md), [story](extra_funcs/spatial_analytics/spatial_knowledge_graph_story.md). Theory they respond to: [`init_concepts/architecture_hierarchical_multi_resolution_geograph.md`](init_concepts/architecture_hierarchical_multi_resolution_geograph.md).
-* [`extra_funcs/temporal_analytics/`](extra_funcs/temporal_analytics/) — proposed temporal POC: [`add_time_pattern_to_sig.md`](extra_funcs/temporal_analytics/add_time_pattern_to_sig.md). Not implemented; chapters 01–13 describe the code.
+* [`decisions/`](decisions/) — architecture decision records: [ADR-195 — the map's hexes and the IN VIEW list by one rule](decisions/ADR-195-Map-Hexes-And-In-View.md) (accepted).
+* [`extra_funcs/temporal_analytics/`](extra_funcs/temporal_analytics/) — the temporal track: the draft [`add_time_pattern_to_sig.md`](extra_funcs/temporal_analytics/add_time_pattern_to_sig.md); its first synchronisation with the code, [`temporal_tracking_architecture.md`](extra_funcs/temporal_analytics/temporal_tracking_architecture.md) (Ukrainian: the chain model of M13, replaced on this branch); the event-graph concept [`temporal_ontology.md`](extra_funcs/temporal_analytics/temporal_ontology.md) (superseded — kept as the idea's record) and its specification [`temporal_event_graph_architecture.md`](extra_funcs/temporal_analytics/temporal_event_graph_architecture.md) (Ukrainian: one global discovery, time as each insight's series, TemporalNode hubs and event edges), which the code follows slice by slice ([2.10](current_docs/02_discovery.md#210-time-the-calendar-grid-and-an-insights-dynamics) describes what is implemented).

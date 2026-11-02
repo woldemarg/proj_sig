@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, pattern_id
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import (
@@ -93,6 +94,17 @@ def test_selection_keeps_planted_phenomena(discovered):
     # EMM-only correlation break becomes a covariance insight
     cov = kept["category=phones AND region=EU"]
     assert cov.phenomenon_type == "covariance" and set(cov.covariance["pair"]) == {"discount", "margin"}
+
+
+def test_pass1_mask_cache_is_the_selectors_cover(demo_df):
+    """Pass 1 reads a conjunction's rows from one cached mask per (attribute, value): the rows pysubgroup's own
+    ``covers`` selects, whatever the order in which conjunctions share a selector."""
+    profile = eda.step1_profile_data(demo_df)
+    space = eda.step3_generate_search_space(profile, eda.step2_evaluate_macro_groupings(profile, min_categories=3))
+    masks = {}
+    for selector in [*space, *reversed(space)]:
+        assert np.array_equal(eda.cached_covers(selector, profile["data_safe"], masks), selector.covers(profile["data_safe"]))
+    assert len(masks) < len(space)  # each (attribute, value) once, not once per conjunction
 
 
 def test_closed_intent_adds_implied_conditions():

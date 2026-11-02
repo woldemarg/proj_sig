@@ -19,11 +19,13 @@ from __future__ import annotations
 import heapq
 import itertools
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any
 
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
+from graph_query_engine.temporal import recency
 from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES
 
 STRUCTURAL = {e.value for e in STRUCTURAL_EDGES}
@@ -35,6 +37,7 @@ LATTICE_EDGES = frozenset({"SPECIALIZES", "CONTRASTS", "CO_LOCATED"})  # the str
 STRUCTURAL_HOPS = 1
 STRUCTURAL_EDGE_DECAY = 0.85
 LOCATED_RELATIONS = frozenset({"adjacent", "same_region"})  # CO_LOCATED relations that mean the same area, not the same zone
+RECENCY_RANK_WEIGHT = 0.5  # λ: a reached finding's rank × (1 − λ + λ · its freshness) when no period is asked (§7.3)
 
 
 @dataclass
@@ -108,7 +111,9 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
     return hops
 
 
-def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> TraversalResult:
+def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig, as_of: datetime | None = None) -> TraversalResult:
+    """The walk from the seeds; ``as_of`` (the reference date, None when the question names a period) scales each reached
+    pattern's rank by its freshness — a finding without a core keeps its rank."""
     counter = itertools.count()
     heap: list[tuple] = []
     for s in seeds:
@@ -172,7 +177,8 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig) -> T
             continue
         weight = graph.insight(node).weight
         route = "seed" if node in seed_ids and not path else ("structural" if phase == "P0" else "transversal")
-        ranked = score if route == "seed" else score * weight
+        fresh = recency(graph.trajectories.get(node), as_of, config.temporal_recency_half_life_days)
+        ranked = score if route == "seed" else score * weight * (1.0 if fresh is None else 1 - RECENCY_RANK_WEIGHT + RECENCY_RANK_WEIGHT * fresh)
         conds = _conds(graph, node)
         overlap = max((len(conds & c) / len(conds | c) for c in seed_conds), default=0.0)
         r = Retrieved(

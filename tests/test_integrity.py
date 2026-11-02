@@ -291,7 +291,7 @@ def test_credibility_by_place_phase_b():
 
     from insight_contracts import PhenomenonThresholds, Shift
     from insight_graph_service.core.snapshot import credibility
-    from subgroup_miner.spatial import SpatialStructure
+    from subgroup_miner.spatial_plane import SpatialStructure
 
     def ins(pid, ds, z, scope=(("lisa", "high"),)):
         return toy_insight(list(scope), [Shift("load", z, 10.0, 12.0, 1.0)], id=pid, dataset_id=ds, batch_id=f"b-{ds}")
@@ -362,7 +362,7 @@ def test_credibility_from_independent_sources_phase_a():
 
     from insight_contracts import PhenomenonThresholds, Shift
     from insight_graph_service.core.snapshot import credibility
-    from subgroup_miner.spatial import SpatialStructure
+    from subgroup_miner.spatial_plane import SpatialStructure
 
     def ins(pid, ds, z, scope=(("zone", "north"),), metric="margin"):
         return toy_insight(list(scope), [Shift(metric, z, 10.0, 12.0, 1.0)], id=pid, dataset_id=ds, batch_id=f"b-{ds}")

@@ -36,7 +36,8 @@ def test_points_per_cell_and_level_are_counted_once_per_distinct_place():
     rng = np.random.default_rng(0)
     text = pd.Series(rng.choice(["a", "b", "c", None], 5000, p=[0.5, 0.3, 0.15, 0.05]), dtype="string")
     codes = rng.integers(0, 40, 5000)
-    got = _level_counts(text, codes, 45)
+    order = text.value_counts().index
+    got = _level_counts((order.get_indexer(text), order), codes, 45)  # a profiled column: its codes by frequency
     want = pd.crosstab(codes[text.notna().to_numpy()], text.dropna().to_numpy()).reindex(
         index=range(45), columns=text.value_counts().index, fill_value=0
     )

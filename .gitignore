@@ -19,6 +19,9 @@ models/**
 !models/.gitkeep
 data/**
 !data/.gitkeep
+# the shipped datasets the console offers (scripts/demo_datasets.py builds them; data/demo/SOURCES.md their licences)
+!data/demo/
+!data/demo/*
 
 # Python / tooling
 .venv/

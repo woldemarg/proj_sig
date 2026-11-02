@@ -19,7 +19,7 @@ from typing import Any
 from insight_graph_service.core.settings import Settings
 
 CYPHER_DIR = Path(__file__).parent / "cypher"
-LABELS = ("Pattern", "Attractor", "Region", "Dimension", "Metric", "Dataset", "Batch")
+LABELS = ("Pattern", "Attractor", "Region", "TemporalNode", "Dimension", "Metric", "Dataset", "Batch")
 EDGE_ENDPOINTS = {
     "SPECIALIZES": ("Pattern", "Pattern"),
     "SIBLING": ("Pattern", "Pattern"),
@@ -34,6 +34,11 @@ EDGE_ENDPOINTS = {
     "CO_OCCURS": ("Attractor", "Attractor"),
     "DISCOVERED_IN": ("Pattern", "Batch"),
     "OF_DATASET": ("Batch", "Dataset"),
+    "PEAKED_AT": ("Pattern", "TemporalNode"),
+    "DROPPED_AT": ("Pattern", "TemporalNode"),
+    "STARTS_AT": ("Pattern", "TemporalNode"),
+    "ENDS_AT": ("Pattern", "TemporalNode"),
+    "WITHIN": ("TemporalNode", "TemporalNode"),
 }
 STALE_TYPES_QUERY = (  # relationships between SIG nodes of a type EDGE_ENDPOINTS no longer lists
     "MATCH (s)-[r]->(t) WHERE NOT type(r) IN $types AND any(l IN labels(s) WHERE l IN $labels) AND any(l IN labels(t) WHERE l IN $labels) DELETE r"

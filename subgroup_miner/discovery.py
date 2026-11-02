@@ -108,7 +108,7 @@ def _conditions_of(selector: Any) -> tuple[Condition, ...]:
 
 def closed_intent(data: pd.DataFrame, rows: np.ndarray, categoricals: list[str]) -> tuple[Condition, ...]:
     """Galois closure int(ext(S)): every (attribute, value) that holds on all covered rows (docs/02_discovery.md §2.3)."""
-    covered = data.iloc[rows]
+    covered = data[categoricals].iloc[rows]  # the dimensions alone: a row take of every column (long text too) cost seconds
     closed = []
     for col in categoricals:
         values = covered[col].unique()

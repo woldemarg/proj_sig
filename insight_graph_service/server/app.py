@@ -14,6 +14,7 @@ import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -22,10 +23,11 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
-from insight_graph_service.core.demo import generate_retail_dataset
+from graph_query_engine.temporal import parse_as_of, parse_period
+from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
-from insight_graph_service.core.settings import PROJECT_ROOT, Settings
+from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
@@ -72,6 +74,8 @@ class SearchIn(BaseModel):
     cells: list[str] | None = None  # a map zone as H3 cells
     geometry: dict[str, Any] | None = None  # or as GeoJSON, {center, radius_m} or {bbox}
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
+    as_of: str | None = None  # the reference date, ISO; the latest data when absent
+    period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
 
 
 class DatasetMetadataIn(BaseModel):
@@ -99,6 +103,16 @@ def _text(upload: UploadFile | None) -> str | None:
 def _log_failure(future: Future) -> None:
     if future.exception() is not None:  # process() records its own failures; this is what escaped it
         log.error("background job failed", exc_info=future.exception())
+
+
+def asked_period(start: str, end: str) -> tuple[datetime, datetime]:
+    """A period a request asks (``temporal.parse_period``), or ``invalid_options``."""
+    try:
+        return parse_period(start, end)
+    except ValueError as exc:
+        raise PipelineError(
+            "invalid_options", f"period: [start, end) as ISO dates (an end date included) or dates and times, no zone: {start!r}, {end!r}"
+        ) from exc
 
 
 def create_app(engine: Engine) -> FastAPI:
@@ -173,10 +187,15 @@ def create_app(engine: Engine) -> FastAPI:
             raise HTTPException(404, "unknown batch")
         return engine.polled(record)
 
+    @app.get("/api/demo/datasets")
+    def demo_list() -> list[dict[str, Any]]:
+        return demo_datasets()
+
     @app.post("/api/upload")
     def upload(
         request: Request,
-        file: UploadFile = File(...),
+        file: UploadFile | None = File(None),
+        demo: str = Form(""),
         bins: str = Form(""),
         categories: str = Form(""),
         geo: str = Form(""),
@@ -187,25 +206,34 @@ def create_app(engine: Engine) -> FastAPI:
         metadata: UploadFile | None = File(None),
         table: bool = Form(False),
         supersedes: str = Form(""),
+        time: str = Form(""),
+        grid: str = Form(""),
+        tz: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
-            raise UploadTooLarge(f"{file.filename} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
+            raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
+        # a shipped dataset by its key (GET /api/demo/datasets) instead of a file: the form's options as sent
+        shipped = next((d for d in demo_datasets() if d["key"] == demo), None) if demo else None
+        if (file is None) == (shipped is None):
+            raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
-        name = Path(file.filename or "upload.csv").name
-        return accept(
-            name,
-            file.file,
-            bins.strip() or None,
-            categories.strip() or None,
-            geo.strip() or None,
-            source=source,
-            reliability=reliability,
-            indicators=indicators,
-            glossary=glossary,
-            metadata=_text(metadata),
-            table=table,
-            supersedes=supersedes,
-        )
+        options = {
+            "source": source,
+            "reliability": reliability,
+            "indicators": indicators,
+            "glossary": glossary,
+            "metadata": _text(metadata),
+            "table": table,
+            "supersedes": supersedes,
+            "time": time.strip() or None,
+            "grid": grid.strip() or None,
+            "tz": tz.strip() or None,
+        }
+        parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
+        if shipped:
+            with (DEMO_DIR / shipped["file"]).open("rb") as stream:
+                return accept(shipped["file"], stream, *parsed, **options)
+        return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -215,8 +243,8 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/demo/geo")
     def demo_geo() -> JSONResponse:
         # the shipped California housing table (located block groups) as H3 cells at resolution 5, with the cells' typical
-        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies this one file of data/
-        with (PROJECT_ROOT / "data" / "demo" / "california_housing.csv").open("rb") as table:
+        # income as a band dimension (docs/10_verification.md §10.2); the Dockerfile copies data/demo/
+        with (DEMO_DIR / "california_housing.csv").open("rb") as table:
             return accept("california_housing.csv", table, "median_income_median:4", "", "auto@5")
 
     @app.get("/api/graph")
@@ -233,7 +261,12 @@ def create_app(engine: Engine) -> FastAPI:
             raise HTTPException(400, "a zone is cells or geometry, not both")
         if not body.question.strip() and body.cells is None and body.geometry is None:
             raise HTTPException(400, "empty question")
-        return engine.evidence(body.question, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        try:
+            as_of = parse_as_of(body.as_of) if body.as_of else None
+        except ValueError as exc:
+            raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
+        period = asked_period(*body.period) if body.period else None
+        return engine.evidence(body.question, as_of, period, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
@@ -256,20 +289,24 @@ def create_app(engine: Engine) -> FastAPI:
         return Response(engine.export_geosparql(), media_type="text/turtle")
 
     @app.get("/api/geo/{dataset_id}/overlay")
-    def geo_overlay(dataset_id: str) -> dict[str, Any]:
-        return engine.geo_overlay(dataset_id)
+    def geo_overlay(dataset_id: str, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
+
+    @app.get("/api/geo/{dataset_id}/counts")
+    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, asked_period(start, end))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
         return engine.geo_projected(dataset_id)
 
     @app.get("/api/geo/{dataset_id}/window")
-    def geo_window(dataset_id: str, bbox: str) -> dict[str, Any]:
-        return engine.geo_window(dataset_id, bbox)
+    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
-    def geo_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id)
+    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, rings)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:

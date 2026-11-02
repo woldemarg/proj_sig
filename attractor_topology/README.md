@@ -6,7 +6,7 @@
 
 **The attractors.** Insights with the same statistical behaviour join the same attractor, even when their scopes share no condition. The attractors are extracted by OMP, move with EMA updates and are linked by a mutual-kNN topology ([docs/05_latent_anchors.md](../docs/05_latent_anchors.md)).
 
-It depends only on `insight_contracts` and on numpy, scikit-learn and sentence-transformers (`requirements.txt`; install torch for your device first). Its input is any list of `Insight` records, from `subgroup_miner` or from another source.
+It depends only on `insight_contracts` and on numpy, scikit-learn and sentence-transformers (the `topology` group of the root `pyproject.toml`, with `cpu` or `cu130` for the torch build). Its input is any list of `Insight` records, from `subgroup_miner` or from another source.
 
 ```python
 from pathlib import Path

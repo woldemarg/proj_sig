@@ -32,6 +32,8 @@ class QueryIn(BaseModel):
     cells: list[str] | None = None  # a map zone, passed to POST /api/search as given
     geometry: dict[str, Any] | None = None
     resolution: int | None = None
+    as_of: str | None = None  # the reference date, passed to POST /api/search as given
+    period: list[str] | None = None  # [start, end), the console's period bar, passed as given
 
 
 def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None = None) -> FastAPI:
@@ -76,7 +78,9 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
                     {
                         "at": datetime.now(UTC).isoformat(timespec="seconds"),
                         "question": qa.question,
-                        **body.model_dump(include={"cells", "geometry", "resolution"}, exclude_none=True),  # a zone, to replay it
+                        **body.model_dump(
+                            include={"cells", "geometry", "resolution", "as_of", "period"}, exclude_none=True
+                        ),  # a zone and dates, to replay it
                         "mode": qa.answer_mode,
                         "metrics": qa.metrics,
                         "evidence": [c["pattern_id"] for c in payload.citations.values()],

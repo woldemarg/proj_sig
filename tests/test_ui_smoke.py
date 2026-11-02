@@ -11,7 +11,6 @@ import pytest
 from conftest import make_engine, serve, stack
 from dev import chromium
 
-from graph_query_engine.vertical import ZONES_MAX
 from insight_contracts.wording import TERMS, name
 from insight_graph_service.core.settings import PROJECT_ROOT
 
@@ -79,13 +78,14 @@ def test_upload_process_render_query(client, demo_csv):
     cells = client.get(f"/api/geo/{geo_ds}/cells", headers={"Accept-Encoding": "gzip"})
     assert cells.headers["content-encoding"] == "gzip" and len(cells.json()["rings"]) == 884
     assert client.get("/api/geo/ds-nope/cells").status_code == client.get("/api/geo/ds-../cells").status_code == 404
-    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # its insights' places and the regions above, their trust and scale
-    assert overlay["features"] and all(f["properties"]["resolution"] <= 5 and f["properties"]["patterns"] > 0 for f in overlay["features"])
-    own = [f for f in overlay["features"] if f["properties"]["resolution"] == 5]
-    assert len(own) <= ZONES_MAX * len(overlay["patterns"]) < 884  # at most five places each, not every cell of every insight
-    assert {r for f in overlay["features"] for r in f["properties"]["rows"]} <= set(range(884))
+    overlay = client.get(f"/api/geo/{geo_ds}/overlay").json()  # every region holding a cell, its count of rows, the trust and scale
+    assert overlay["features"] and all(f["properties"]["resolution"] < 5 and f["properties"]["n"] >= 0 for f in overlay["features"])
+    for level in {f["properties"]["resolution"] for f in overlay["features"]}:  # each level's regions hold every cell once
+        rows = [r for f in overlay["features"] if f["properties"]["resolution"] == level for r in f["properties"]["rows"]]
+        assert sorted(rows) == list(range(884))
     assert set(overlay["patterns"]) == {p["id"] for p in client.get(f"/api/geo/{geo_ds}/cells").json()["patterns"]}
     assert {t["credibility"] for t in overlay["patterns"].values()} <= {1, 2, 5, 6}
+    assert client.get(f"/api/geo/{geo_ds}/overlay", params={"datasets": f" {geo_ds} ,"}).json() == overlay  # ids as typed, spaces too
     plain, view = (client.get(f"/api/graph?dataset={geo_ds}{q}").json() for q in ("", "&regions=1"))  # the regions with their switch alone
     regions = [n["data"] for n in view["nodes"] if n["data"]["kind"] == "Region"]
     assert regions and all(r["resolution"] <= 5 and r["patterns"] > 0 for r in regions) and view["datasets"][geo_ds]["integrity"] == "ok"
@@ -171,13 +171,16 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         assert page.text_content("#drawer-kind") == "Інсайт"  # shown in capitals by the stylesheet
         heads = page.evaluate("[...document.querySelectorAll('#inspector .nb-group summary')].map((s) => s.firstChild.textContent.trim())")
-        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава"}
+        relations = set(heads) - {"Складники сили свідчення", "Канонічний опис", "Походження", "Підстава", "Події", "Решта"}
         assert relations and relations <= {name(k)[0].upper() + name(k)[1:] for k in TERMS}  # the relations in TERMS' words, as the chain's
         page.click("#verify-btn")  # the insight recomputed from the stored upload
         page.wait_for_selector("#verify-out .chip.ok", timeout=30000)
         assert "Відтворено" in page.inner_text("#verify-out")
         assert "підтвердження" in page.inner_text("#inspector") and page.is_visible("#inspector .chip")  # the trust axes of the insight
-        labelled = "[...document.querySelectorAll('#inspector .kv')].slice(0, 2).flatMap((kv) => [...kv.querySelectorAll('dt')])"
+        labelled = (  # every fact but the provenance's plain labels
+            "[...document.querySelectorAll('#inspector .kv')].filter((kv) => !kv.closest('details')?.firstChild.textContent.startsWith('Походження'))"
+            ".flatMap((kv) => [...kv.querySelectorAll('dt')])"
+        )
         assert page.evaluate(f"{labelled}.length >= 8 && {labelled}.every((dt) => dt.querySelector('.term[title]'))")  # evidence, trust: term(key)
         assert page.get_attribute(".key[data-key='latent']", "title").startswith("пов'язана тема: ")  # the legend's tooltips: the terms' meanings
         assert page.evaluate("document.querySelectorAll('.ev .ev-trust').length") > 0  # two uploads: every card shows its trust
@@ -186,7 +189,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function("[...document.querySelectorAll('.ds-src .chip')].some((c) => c.title.includes('здебільшого надійне'))", timeout=20000)
         # one legend for every view; by default Hierarchy, Theme links and Memberships are on, with live counts
         assert page.is_visible("#legend") and page.is_visible("#legend .toggle[data-key='activates']")
-        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == ["lattice", "latent", "activates"]
+        assert page.evaluate("[...document.querySelectorAll('#legend .toggle.on')].map(b => b.dataset.key)") == [
+            "lattice",
+            "latent",
+            "temporal",
+            "activates",
+        ]
         assert page.evaluate("S.cy.edges('[type=\"ACTIVATES\"]').filter('.hidden').length") == 0  # memberships drawn from the start
         assert int(page.inner_text("[data-n='lattice']")) == page.evaluate("S.cy.edges('[type=\"SPECIALIZES\"]').length") > 0
         page.hover("#legend .key[data-key='cov']")  # spotlight: the rest of the graph dims
@@ -239,7 +247,11 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(f"layerState().region && S.regionsIn && S.cy.getElementById('{rid}').visible()", timeout=10000)
         assert page.evaluate(f"S.cy.getElementById('{rid}').selected()")  # and it is the selected node
         page.click("#legend .toggle[data-key='region']")
-        undrawn = page.evaluate(regional.replace("drawn.has(r.dataset.id)", "!drawn.has(r.dataset.id)"))  # one this view does not draw
+        undrawn = page.evaluate(  # one this view does not draw: a finer region, listed by a drawn region's drawer
+            regional.replace("drawn.has(r.dataset.id)", "!drawn.has(r.dataset.id)").replace(
+                "for (const n of S.nodes) { await inspect(n.id);", "for (const n of drawn) { await inspect(n);"
+            )
+        )
         assert undrawn and not page.evaluate("layerState().region")
         title = page.inner_text("#drawer-title")
         page.click(f"#inspector .nb[data-id='{undrawn}'] >> nth=0")
@@ -352,10 +364,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("G.focusId") and page.evaluate(painted) == page.evaluate("G.focus.length") > 0 and page.is_visible("#map-card")
         forged = """(pid) => { const was = G.focusId, ev = G.evidence; GeoMap.focusPattern(pid, false);  // focused when a commit marks it
             const t = G.overlay.patterns[pid]; G.overlay.patterns[pid] = { ...t, integrity: "mismatch" }; mergePatterns();
-            const drawn = [GeoMap.has(pid), G.byRow.some((r) => r.includes(pid)), G.focusId];
+            const drawn = [GeoMap.has(pid), G.focusId];
             G.overlay.patterns[pid] = t; mergePatterns(); G.evidence = ev; GeoMap.focusPattern(was); return [...drawn, GeoMap.has(pid)]; }"""
         own = page.evaluate("G.data.patterns.find((p) => GeoMap.has(p.id)).id")  # a record that fails its digest is never drawn
-        assert page.evaluate(forged, own) == [False, False, None, True]  # and its focus goes
+        assert page.evaluate(forged, own) == [False, None, True]  # and its focus goes
         opacity = "G.map.getPaintProperty('focus-line', 'line-opacity')"
         page.wait_for_timeout(1500)  # the camera settles, then the outline pulses
         first = page.evaluate(opacity)
@@ -381,7 +393,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             "cells": pack(0),
             "projected": [],
             "overlay": {"type": "FeatureCollection", "features": [], "patterns": {}},
-            "window": {"cells": 1, "points": 3, "first": "map", "insights": 0, "themes": []},
+            "window": {"cells": 1, "points": 3, "level": None, "regions": 1, "insights": 0, "themes": []},
         }
         page.route("**/api/geo/ds-stub/**", lambda r: r.fulfill(json=stub[r.request.url.split("/")[6].split("?")[0]]))
         race = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms)), slow = {
@@ -410,18 +422,20 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
               return [G.ds, G.loading]; } finally { api = orig; $("dataset-filter").value = ""; } }"""
         assert page.evaluate(pick, [real, "ds-stub"]) == [real, False]  # the filter's choice wins over the load in flight
         listed = page.evaluate("G.datasets")  # the stub listed as a geo dataset, as an answer's other dataset is
-        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, {**listed[0], "dataset_id": "ds-stub", "filename": "stub"}]))
-        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            api = async (path, o) => { if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
-            try { const a = loadDataset(stub); await wait(50);  // an answer's load in flight
+        stub_entry = {**listed[0], "dataset_id": "ds-stub", "filename": "stub", "upload_id": listed[0].get("upload_id") or listed[0]["dataset_id"]}
+        page.route("**/api/geo", lambda r: r.fulfill(json=[*listed, stub_entry]))  # one upload with the real one: the one-dataset map
+        keep = """async ([real, stub, own]) => { const orig = api, wait = (ms) => new Promise((r) => setTimeout(r, ms)), reads = [];
+            api = async (path, o) => { reads.push(path); if (path.endsWith(`/${stub}/cells`)) await wait(300); return orig(path, o); };
+            try { const a = G.load = loadDataset(stub); await wait(50);  // an answer's load in flight
               $("dataset-filter").value = ""; await GeoMap.refresh(); await a;  // a refresh with no filter keeps to it
-              const kept = G.ds;
+              const kept = G.ds, stale = reads.filter((p) => p.includes(`/${real}/overlay`)).length;  // nothing of the map it leaves
+              const fresh = reads.filter((p) => p.includes(`/${stub}/overlay`)).length;  // the load's read, then the pass's after it
               await loadDataset(real);
               const b = loadDataset(stub); await wait(50);  // an answer on the map still shown arrives during a load: it wins
               GeoMap.onAnswer({ view: { evidence: { items: [{ pattern_id: own, provenance: { dataset_id: real }, statistics: {} }] } } });
               await b; await wait(800);
-              return [kept, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
-        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", real, [own]]
+              return [kept, stale, fresh, G.ds, G.evidence.map((i) => i.pattern_id)]; } finally { api = orig; } }"""
+        assert page.evaluate(keep, [real, "ds-stub", own]) == ["ds-stub", 0, 2, real, [own]]
         page.unroute("**/api/geo")
         page.unroute("**/api/geo/ds-stub/**")
         page.evaluate("GeoMap.refresh()")
@@ -440,6 +454,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
             const k = Object.keys(WALK).find((k) => (n[k] || []).some(free)), id = n[k].find(free).id, has = (d) => insightCard(d).includes(`data-id="${id}"`);
             return [has(t), has({ ...t, insight: { ...t.insight, neighbors: { ...n, [k]: n[k].map((it) => (it.id === id ? { ...it, integrity: "mismatch" } : it)) } } })]; }"""
         assert page.evaluate(walk) == [True, False]  # Walk on offers intact insights only
+        page.click(f"#map-window .mw-i[data-pid='{pid}']")  # the focused one clicked again: off, and no second card
+        page.wait_for_function("G.focusId === null", timeout=10000)
+        assert page.evaluate("S.chat.length") == turns + 1 and page.locator("#map-window .mw-i.on").count() == 0
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
         page.click("#theme-btn")
@@ -709,4 +726,236 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         page.wait_for_function("document.querySelectorAll('#thread .bot-card.error').length === 2", timeout=10000)
         assert all(t.startswith("Відповіді вчасно немає.") for t in page.locator("#thread .bot-card.error").all_inner_texts())
         browser.close()
+        assert not errors, errors
+
+
+def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tmp_path):
+    """The form sends a time column and its grid; the graph draws the periods of the events behind a legend switch, the
+    drawer draws an insight's curve and names its trend, and an evidence card names its dynamics (docs/08_interface.md)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    from conftest import weekly_retail
+
+    path = weekly_retail(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.set_input_files("#file", str(path))
+        page.evaluate("document.querySelector('#time').closest('details').open = true")  # the form's further options
+        page.fill("#time", "when")
+        page.select_option("#grid", "week")
+        page.click("#upload-btn")
+        page.wait_for_function("S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=90000)
+        (record,) = [b for b in engine.ws.list_batches() if b["status"] == "READY"]
+        assert (record["time"], record["grid"], record["temporal"]["grid"]) == ("when", "week", "week")
+        hub = 'node[kind="TemporalNode"]'
+        assert "T:week:2031-W13" in page.evaluate(f"S.cy.$('{hub}').map((n) => n.id())")  # with the cores' ends and the periods above
+        lowest = "Math.max(...S.cy.nodes().filter((n) => n.data('kind') === 'Pattern').map((n) => n.position('y')))"
+        assert page.evaluate(f"S.cy.$('{hub}')[0].position('y') > {lowest}")  # the periods' row under the insights
+        assert page.get_attribute(".key[data-key='temporal']", "title").startswith(f"{name('temporal_hub')}: ")
+        page.click("#legend .toggle[data-key='temporal']")  # the event layer off, and on again
+        page.wait_for_function(f"S.cy.$('{hub}').every((n) => n.hidden() || n.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        pid = page.evaluate("S.cy.$('edge[type=\"PEAKED_AT\"]')[0].source().id()")
+        page.evaluate("(id) => inspect(id)", pid)
+        page.wait_for_selector("#inspector svg.spark", timeout=10000)
+        drawer = page.inner_text("#inspector").lower()  # headings are upper-cased by the style
+        assert name("trend") in drawer and name("trend_spike") in drawer and "2031-w13" in drawer
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function(f"document.getElementById('drawer-kind').textContent === '{name('temporal_hub').capitalize()}'", timeout=10000)
+        assert "2031-03-24" in page.inner_text("#inspector") and name("PEAKED_AT (in)") in page.inner_text("#inspector").lower()
+        item = {
+            "key": "P1", "pattern_id": pid, "role": "seed", "located": "", "transversal_only": False, "scope": [], "also": [], "scale": "insufficient",
+            "trust": "", "reading": {"where": "де", "what": "що"}, "provenance": {"dataset_id": "ds"}, "path": [],
+            "statistics": {"support": 10, "weight": 0.5, "shifts": [], "covariance": {}, "drivers": []},
+            "time": {"trend": "spike", "words": "динаміка: сплеск; зараз: помітно вище (+2.21 sd); пік у періоді 2031-W13"},
+        }  # fmt: skip
+        qa = {"answer": "", "answer_mode": "fallback", "llm": {}, "citations": {}, "prompt": "", "provenance_footer": "", "metrics": {}}
+        turn = {"question": "q", "pane": "0", "qa": {**qa, "view": {"evidence": {"items": [item]}, "traversal": {}}}}
+        card = page.evaluate("(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }", turn)
+        assert item["time"]["words"] in card  # the evidence card's chip, the server's words
+        assert not errors, errors
+
+
+HUB_ROWS = """() => { const by = {}; S.cy.nodes('[kind="TemporalNode"]').forEach((n) => { (by[n.data('granularity')] ||= []).push([n.position('y'), n.position('x'), n.data('t_start')]); }); return by; }"""
+
+
+def _hub_levels(page) -> dict[str, float]:
+    """The y of each level's row of periods; asserts one row a level, in calendar order along it."""
+    rows = page.evaluate(HUB_ROWS)
+    assert all(len({round(y) for y, _, _ in hubs}) == 1 for hubs in rows.values()), rows
+    assert all([r[2] for r in sorted(hubs, key=lambda r: r[1])] == sorted(r[2] for r in hubs) for hubs in rows.values())
+    return {level: hubs[0][0] for level, hubs in rows.items()}
+
+
+@pytest.mark.browser
+def test_the_periods_lie_in_rows_by_level_and_a_periods_drawer_lists_who_lives_and_moved_there(timed):
+    """The time hubs of each calendar level in a row of their own under the insights, the finest nearest them, WITHIN
+    arrows from a row to the next, in both layouts and behind the periods' switch; a period's drawer lists the insights
+    active in it and those that peaked or dipped there, a month's by their week; an insight's drawer its core and where
+    it stands at the latest data (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    latest = record["temporal"]["span"][1][:10]
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        y = _hub_levels(page)
+        lowest = page.evaluate("Math.max(...S.cy.nodes('[kind=\"Pattern\"]').map((n) => n.position('y')))")
+        assert {"week", "month", "quarter"} <= y.keys() and lowest < y["week"] < y["month"] < y["quarter"]
+        within = page.evaluate("S.cy.edges('[type=\"WITHIN\"]').map((e) => [e.source().data('granularity'), e.target().data('granularity')])")
+        assert within and {tuple(w) for w in within} <= {("day", "week"), ("week", "month"), ("month", "quarter")}
+        assert name("WITHIN") in page.get_attribute(".key[data-key='temporal']", "title")
+        page.click("#legend .toggle[data-key='temporal']")  # the periods' layer off: the new edges with it
+        page.wait_for_function("S.cy.$(MARKS.temporal).every((el) => el.hidden() || el.style('display') === 'none')", timeout=10000)
+        page.click("#legend .toggle[data-key='temporal']")
+        page.select_option("#layout", "force")
+        y = _hub_levels(page)
+        assert y["week"] < y["month"] < y["quarter"]
+        page.select_option("#layout", "dual")
+        page.evaluate("inspect('T:week:2031-W13')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert "тиждень" in text and name("time_active") in text and name("PEAKED_AT (in)") in text
+        assert page.locator('#inspector .nb[data-id^="P-"]').count() > 0
+        page.evaluate("inspect('T:month:2031-03')")
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-03'", timeout=10000)
+        assert "2031-W13" in page.inner_text("#inspector")  # the month's peak, named by the week it fell in
+        page.click('#inspector .nb[data-id^="P-"]')
+        page.wait_for_selector("#inspector svg.spark rect.core", timeout=10000)
+        text = page.inner_text("#inspector").lower()
+        assert name("time_core") in text and f"{name('as_of')} {latest}" in text
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(timed):
+    """The period bar offers the timed data's days, the whole span at first, which sends no period; a preset or the dates
+    set its window and pick it, the thumbs a stretch of it by a step that follows the window (6 hours over a week), by
+    the keyboard or a click on the rail, which brings the nearer thumb; the stretch goes with the question, the end not
+    in it, and the question and the answer both say it; the × gives the whole span back (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, record = timed
+    question = "Why is the discount higher for phones in the US?"
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes().length > 0", timeout=30000)
+        first, latest = (d[:10] for d in record["temporal"]["span"])
+        assert page.is_visible("#period-bar") and page.is_hidden("#pb-clear")
+        assert page.inner_text("#pb-text") == f"{first[8:]}.{first[5:7]}.{first[:4]} — {latest[8:]}.{latest[5:7]}.{latest[:4]}\nувесь період"
+        width = page.locator(".pb-pill").bounding_box()["width"]
+        page.evaluate("document.getElementById('use-llm').checked = false")
+        with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
+            page.evaluate("(q) => ask(q)", question)
+        assert "period" not in json.loads(sent.value.post_data) and "as_of" not in json.loads(sent.value.post_data)  # the whole span: nothing
+        page.wait_for_selector("#thread .bot-meta", timeout=60000)
+        assert f"{name('as_of')} {latest}" in page.inner_text("#thread .bot-meta")
+        page.click("#pb-label")
+        page.click("#pb-presets button:has-text('останній тиждень')")
+        assert page.is_hidden("#pb-pop") and page.evaluate("S.period") == {"start": "2031-04-07T00:00", "end": "2031-04-14T00:00"}
+        assert page.inner_text("#pb-text") == "07.04.2031 — 13.04.2031\n7 днів" and page.is_visible("#pb-clear")
+        assert page.get_attribute("#pb-to", "max") == "28"  # a week by 6 hours
+        page.focus("#pb-from")
+        page.keyboard.press("ArrowRight")  # a thumb moved by the keyboard: a step later
+        assert page.evaluate("S.period") == {"start": "2031-04-07T06:00", "end": "2031-04-14T00:00"}
+        assert page.inner_text("#pb-text") == "07.04.2031 06:00 — 14.04.2031 00:00\n162 години"
+        assert page.locator(".pb-pill").bounding_box()["width"] == width  # the pill keeps its width whatever it names
+        box = page.locator(".pb-track").bounding_box()
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 10)  # the rail's middle: the nearer thumb, the start, comes to it
+        assert page.evaluate("S.period") == {"start": "2031-04-10T12:00", "end": "2031-04-14T00:00"}
+        page.click("#pb-label")
+        page.fill("#pb-start", "2031-03-24")
+        page.fill("#pb-end", "2031-03-30")
+        page.keyboard.press("Escape")  # the dates kept, the popover closed
+        assert page.is_hidden("#pb-pop") and page.evaluate("S.period") == {"start": "2031-03-24T00:00", "end": "2031-03-31T00:00"}
+        assert page.get_attribute("#pb-to", "max") == "28"  # the dates' week: its own window
+        with page.expect_request(lambda r: r.url.endswith("/api/chat/query")) as sent:
+            page.evaluate("(q) => ask(q)", question)
+        assert json.loads(sent.value.post_data)["period"] == ["2031-03-24T00:00", "2031-03-31T00:00"]
+        page.wait_for_function("document.querySelectorAll('#thread .bot-meta').length === 2", timeout=60000)
+        said = f"{name('period')} 24.03.2031 — 30.03.2031"
+        assert said in page.locator("#thread .msg-user").last.inner_text() and said in page.locator("#thread .bot-meta").last.inner_text()
+        page.evaluate("(q) => ask(q)", question.rstrip("?") + " in 2031-W14?")  # a period of its own text wins: the bubble drops the bar's
+        page.wait_for_function("document.querySelectorAll('#thread .bot-meta').length === 3", timeout=60000)
+        assert name("period") not in page.locator("#thread .msg-user").last.inner_text()
+        assert f"{name('period')} 31.03.2031 — 06.04.2031" in page.locator("#thread .bot-meta").last.inner_text()
+        page.click("#pb-clear")
+        assert page.evaluate("S.period") is None and page.is_hidden("#pb-clear")
+        assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_date(timed):
+    """The «Час» tab: a row an insight placed in time, its core a bar within the span, a mark for each peak, the as-of
+    line, every row bright over the whole span; the levels the graph holds enabled, a level's ruler its
+    periods in calendar order; a period or a row opens its drawer, by click or by Enter; the bar's days draw a band and
+    highlight the rows acting in them (docs/08_interface.md §8.2)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    engine, _ = timed
+    port, app = stack(engine)
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"TemporalNode\"]').length > 0", timeout=30000)
+        page.click("#time-tab")
+        page.wait_for_selector("#time-body .tl-row", timeout=10000)
+        timed_insights = (
+            'S.nodes.filter((d) => d.core || S.cy.edges(\'[type="PEAKED_AT"], [type="DROPPED_AT"]\').some((e) => e.source().id() === d.id)).length'
+        )
+        assert page.locator("#time-body .tl-row").count() == page.evaluate(timed_insights) > 0
+        assert page.locator("#time-body .tl-ev.up").count() == page.evaluate("S.cy.edges('[type=\"PEAKED_AT\"]').length") > 0
+        bars = page.evaluate(
+            "[...document.querySelectorAll('#time-body .tl-core')].map((b) => [parseFloat(b.style.left), parseFloat(b.style.width)])"
+        )
+        assert bars and all(0 <= left and left + width <= 100.01 for left, width in bars)
+        assert page.locator("#time-body .tl-asof").count() == 1
+        assert page.locator("#time-body .tl-core.cut").count() == 0  # the whole span darkens no core
+        assert page.is_disabled('#time-levels [data-level="day"]') and page.is_enabled('#time-levels [data-level="week"]')
+        page.click('#time-levels [data-level="month"]')
+        ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
+        assert ticks == sorted(ticks) and len(ticks) == page.evaluate('S.cy.nodes(\'[kind="TemporalNode"][granularity="month"]\').length')
+        page.click('#time-levels [data-level="week"]')
+        page.click('#time-body .tl-tick:has-text("2031-W13")')
+        page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
+        page.focus("#time-body .tl-row")
+        page.keyboard.press("Enter")
+        page.wait_for_function("document.getElementById('drawer-kind').textContent === 'Інсайт'", timeout=10000)
+        page.evaluate("Timeline.setPeriod('2031-04-07T00:00', '2031-04-14T00:00'); Timeline.apply()")  # the bar's last week
+        assert "07.04.2031 — 13.04.2031" in page.inner_text("#time-caption")
+        cores = page.evaluate(
+            "[...document.querySelectorAll('#time-body .tl-core')].map((b) => [b.closest('.tl-row').dataset.id, b.classList.contains('cut'),"
+            " parseFloat(b.style.getPropertyValue('--in0')), parseFloat(b.style.getPropertyValue('--in1'))])"
+        )
+        meets = "(pid) => { const c = S.nodes.find((d) => d.id === pid).core; return Date.parse(c.t_start) < Date.parse('2031-04-14T00:00Z') && Date.parse('2031-04-07T00:00Z') < Date.parse(c.t_end); }"
+        lit = [pid for pid, cut, in0, in1 in cores if cut and in1 > in0]  # a bright part inside the stretch, the rest dark
+        assert cores and all(cut for _, cut, _, _ in cores) and lit == [pid for pid, *_ in cores if page.evaluate(meets, pid)]
+        assert 0 < len(lit) < len(cores)
+        page.click("#pb-clear")
+        assert page.locator("#time-body .tl-core.cut").count() == 0
         assert not errors, errors

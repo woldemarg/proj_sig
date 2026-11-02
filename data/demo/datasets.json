@@ -1,0 +1,239 @@
+[
+ {
+  "key": "retail_synthetic",
+  "title": "Роздрібні продажі (синтетичні)",
+  "description": "5 000 замовлень із закладеними явищами: де знижка з'їдає маржу, де затримки ведуть до повернень.",
+  "license": "згенеровано (insight_graph_service/core/demo.py)",
+  "source": "SIG, синтетичні дані з відомою істиною",
+  "options": {
+   "bins": "",
+   "categories": ""
+  },
+  "file": "retail_synthetic.csv",
+  "rows": 5000,
+  "bytes": 300296,
+  "sha256": "ecf9aea2b62826c727728d305ef7cf2afea26b13862f91852316f3ba91c27d59",
+  "span": null
+ },
+ {
+  "key": "california_housing",
+  "title": "Житло Каліфорнії (мапа)",
+  "description": "20 640 кварталів перепису 1990 року з координатами, проаналізовані як комірки H3: ціна житла, дохід, близькість до океану.",
+  "license": "StatLib (Pace & Barry, 1997), вільне використання з посиланням",
+  "source": "Pace R. K., Barry R. Sparse spatial autoregressions, 1997 (StatLib)",
+  "options": {
+   "bins": "median_income_median:4",
+   "categories": "",
+   "geo": "auto@5"
+  },
+  "file": "california_housing.csv",
+  "rows": 20640,
+  "bytes": 1299502,
+  "sha256": "2e5f02b12a6620546632e28e104ffd5eef77c96fb479d8c898d2bbf9962d0892",
+  "span": null
+ },
+ {
+  "key": "sf_fire_calibration",
+  "title": "Пожежі Сан-Франциско: 2017-01 … 2019-06",
+  "description": "Інциденти пожежної служби (без медичних викликів), 2017-01 … 2019-06: точки й час тривоги, час прибуття і тривалість, задіяні сили, типи ситуацій і об'єктів. Блок, на якому калібрували й перевіряли часовий шар.",
+  "license": "Open Data Commons Public Domain Dedication and License (PDDL) 1.0",
+  "source": "DataSF «Fire Incidents» (wr8u-xric) через Kaggle san-francisco/sf-fire-data-incidents-violations-and-more",
+  "prepared": "scripts/sf_fire_benchmark.py: дублікати прибрано, 2017-01 … 2020-08, точки в межах міста, тривалості з часових міток, коди NFIRS згруповано",
+  "options": {
+   "time": "alarm_dttm",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "DataSF, Fire Incidents"
+  },
+  "file": "sf_fire_calibration.csv",
+  "rows": 80567,
+  "bytes": 18740499,
+  "sha256": "098fa4b97ba045cbf88faa1889cd64900061f146c038ec9b57bc4d514be3a890",
+  "span": [
+   "2017-01-01",
+   "2019-06-30"
+  ]
+ },
+ {
+  "key": "sf_fire_holdout_a",
+  "title": "Пожежі Сан-Франциско: 2019-07 … 2020-02",
+  "description": "Інциденти пожежної служби (без медичних викликів), 2019-07 … 2020-02: точки й час тривоги, час прибуття і тривалість, задіяні сили, типи ситуацій і об'єктів. Блок, на якому калібрували й перевіряли часовий шар.",
+  "license": "Open Data Commons Public Domain Dedication and License (PDDL) 1.0",
+  "source": "DataSF «Fire Incidents» (wr8u-xric) через Kaggle san-francisco/sf-fire-data-incidents-violations-and-more",
+  "prepared": "scripts/sf_fire_benchmark.py: дублікати прибрано, 2017-01 … 2020-08, точки в межах міста, тривалості з часових міток, коди NFIRS згруповано",
+  "options": {
+   "time": "alarm_dttm",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "DataSF, Fire Incidents"
+  },
+  "file": "sf_fire_holdout_a.csv",
+  "rows": 22118,
+  "bytes": 5136747,
+  "sha256": "0f68ef96e173b638f49a371ecad5dda147589ac97ac802bf3c0af8392a509042",
+  "span": [
+   "2019-07-01",
+   "2020-02-29"
+  ]
+ },
+ {
+  "key": "sf_fire_holdout_b",
+  "title": "Пожежі Сан-Франциско: 2020-03 … 2020-08",
+  "description": "Інциденти пожежної служби (без медичних викликів), 2020-03 … 2020-08: точки й час тривоги, час прибуття і тривалість, задіяні сили, типи ситуацій і об'єктів. Блок, на якому калібрували й перевіряли часовий шар.",
+  "license": "Open Data Commons Public Domain Dedication and License (PDDL) 1.0",
+  "source": "DataSF «Fire Incidents» (wr8u-xric) через Kaggle san-francisco/sf-fire-data-incidents-violations-and-more",
+  "prepared": "scripts/sf_fire_benchmark.py: дублікати прибрано, 2017-01 … 2020-08, точки в межах міста, тривалості з часових міток, коди NFIRS згруповано",
+  "options": {
+   "time": "alarm_dttm",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "DataSF, Fire Incidents"
+  },
+  "file": "sf_fire_holdout_b.csv",
+  "rows": 13178,
+  "bytes": 3042328,
+  "sha256": "0a39640e9b6e840ba4e40023421e732a0b7d1327e4fe809e2ba02180366cebcb",
+  "span": [
+   "2020-03-01",
+   "2020-08-31"
+  ]
+ },
+ {
+  "key": "sf_fire_calls",
+  "title": "Виклики пожежної служби Сан-Франциско, 2016–2018",
+  "description": "Виклики пожежної служби та швидкої допомоги Сан-Франциско, один рядок на виклик: типи викликів, райони й батальйони, де підрозділи виїжджають повільніше або виклик потребує більше машин. Лише дата виклику, без години.",
+  "license": "Open Data Commons PDDL 1.0 (DataSF); копія Kaggle — CC0",
+  "source": "DataSF, Fire Department and EMS Dispatched Calls for Service (nuek-vuh3), через Kaggle jacopoferretti/san-francisco-fire-department-calls-dataset",
+  "attribution": "San Francisco Fire Department / DataSF, Fire Department and EMS Dispatched Calls for Service (PDDL); Kaggle upload by jacopoferretti.",
+  "prepared": "2016-11 … 2018-10; шоста частина викликів за хешем номера; один рядок на виклик — перший направлений підрозділ, кількість підрозділів і затримки виїзду по всіх; рідкісні рівні — Other",
+  "options": {
+   "time": "call_date",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "DataSF, Fire Department Calls for Service"
+  },
+  "file": "sf_fire_calls.csv",
+  "rows": 48856,
+  "bytes": 7336009,
+  "sha256": "11440f72fef6185c0cabe44d2cb9492b81d3fc9d74ebf080fa186221bcab9360",
+  "span": [
+   "2016-11-01",
+   "2018-10-31"
+  ]
+ },
+ {
+  "key": "chicago_crashes",
+  "title": "ДТП у Чикаго, 2023–2024",
+  "description": "Дорожньо-транспортні пригоди в Чикаго за 12 місяців: які умови (погода, освітлення, тип зіткнення, причина) і місця зсувають кількість травмованих і учасників, обмеження швидкості та вік водіїв.",
+  "license": "City of Chicago Data Portal Terms of Use; копія Kaggle позначена CC0",
+  "source": "City of Chicago Data Portal, Traffic Crashes (85ca-t3if, u6pd-qa9d), через Kaggle hientrandai/chicago-traffic-crashes-dataset",
+  "attribution": "City of Chicago / Chicago Police Department (E-Crash), data.cityofchicago.org; Kaggle copy by hientrandai.",
+  "prepared": "2023-10 … 2024-09; третина аварій за хешем ідентифікатора; учасники й вік водіїв з таблиці людей; рідкісні рівні — Other",
+  "options": {
+   "time": "crash_date",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "City of Chicago, Traffic Crashes"
+  },
+  "file": "chicago_crashes.csv",
+  "rows": 37027,
+  "bytes": 6342763,
+  "sha256": "8b6ff3b352b0ca0dfb0724a2322c2d1f3c5921530508e8754ba793bb8d0baf3c",
+  "span": [
+   "2023-10-01",
+   "2024-09-30"
+  ]
+ },
+ {
+  "key": "nyc_collisions",
+  "title": "ДТП у Нью-Йорку, 2023–2024",
+  "description": "Зареєстровані поліцією Нью-Йорка аварії: де, коли, через що і з якими транспортними засобами стаються пригоди з травмованими людьми й пішоходами.",
+  "license": "NYC Open Data Terms of Use; копія Kaggle позначена Apache 2.0",
+  "source": "NYC Open Data (NYPD), Motor Vehicle Collisions - Crashes (h9gi-nx95), через Kaggle sahirmaharajj/motor-vehicle-collisions-crashes",
+  "attribution": "NYPD Motor Vehicle Collisions - Crashes, NYC Open Data (h9gi-nx95); Kaggle mirror by sahirmaharajj.",
+  "prepared": "2023-03 … 2024-02; аварії з точкою в межах міста; половина за хешем COLLISION_ID; тип транспорту — 8 класів; тип місця з полів вулиць (самі вулиці не включено)",
+  "options": {
+   "time": "crash_dttm",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "NYC Open Data, NYPD collisions"
+  },
+  "file": "nyc_collisions.csv",
+  "rows": 44696,
+  "bytes": 5303273,
+  "sha256": "ed45995f559254a3a994ed76f403d5d5372d1750719aea5faad9bc32a56e9dc3",
+  "span": [
+   "2023-03-01",
+   "2024-02-29"
+  ]
+ },
+ {
+  "key": "us_accidents",
+  "title": "ДТП у США: округ Даллас, 2021–2022",
+  "description": "Дорожні інциденти округу Даллас (Техас) з тривалістю, довжиною затору й погодою: які типи доріг, погода, час доби чи міста подовжують інциденти.",
+  "license": "CC BY-NC-SA 4.0 (некомерційне використання, на тих самих умовах)",
+  "source": "Moosavi et al., US Accidents (March 2023 release), через Kaggle sobhanmoosavi/us-accidents",
+  "attribution": "Moosavi, Samavatian, Parthasarathy, Ramnath, \"A Countrywide Traffic Accident Dataset\", 2019 (arXiv:1906.05409); Moosavi, Samavatian, Parthasarathy, Teodorescu, Ramnath, \"Accident Risk Prediction based on Heterogeneous Sparse Data: New Dataset and Insights\", ACM SIGSPATIAL 2019 (arXiv:1909.09638). This sample is redistributed under CC BY-NC-SA 4.0.",
+  "prepared": "округ Даллас, джерело Source1, 2021–2022; повторні трансляції одного інциденту злито (той самий початок і вулиця: найпізніше завершення); неправдоподібні значення — порожні",
+  "options": {
+   "time": "start_time",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "US Accidents (Moosavi et al.), Source1"
+  },
+  "file": "us_accidents.csv",
+  "rows": 37580,
+  "bytes": 5216988,
+  "sha256": "cf7ba84ef0db5efc87069cc96300409cba38bd11ad3cb4a0409a729b3b155ee8",
+  "span": [
+   "2021-01-01",
+   "2022-12-31"
+  ]
+ },
+ {
+  "key": "uk_road_safety",
+  "title": "ДТП у Лондоні, 2017",
+  "description": "Дорожньо-транспортні пригоди з потерпілими, які зареєструвала Столична поліція Лондона у 2017 році: які райони, типи доріг і перехресть, години, освітлення й погода пов'язані з більшою кількістю потерпілих і транспорту.",
+  "license": "Open Government Licence v3.0 (DfT STATS19); копія Kaggle — ODbL 1.0 / DbCL 1.0",
+  "source": "Department for Transport, Road Safety Data (STATS19), через Kaggle tsiaras/uk-road-safety-accidents-and-vehicles",
+  "attribution": "Contains public sector information licensed under the Open Government Licence v3.0 (Department for Transport, STATS19).",
+  "prepared": "Metropolitan Police, 2017; точки в межах Великого Лондона; один рядок на пригоду; рідкісні рівні — Other",
+  "options": {
+   "time": "accident_datetime",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "DfT STATS19, Metropolitan Police"
+  },
+  "file": "uk_road_safety.csv",
+  "rows": 26746,
+  "bytes": 4399677,
+  "sha256": "22d1fe0c6009099d22db4ea053548f7b33f61a504a42a2d11f5faa784564ecd7",
+  "span": [
+   "2017-01-01",
+   "2017-12-31"
+  ]
+ },
+ {
+  "key": "us_wildfires",
+  "title": "Лісові пожежі Каліфорнії, 2016–2018",
+  "description": "Понад 26 тисяч лісових пожеж у Каліфорнії з точкою, часом виявлення, площею, тривалістю локалізації та причиною: де й чому пожежі гасять довше і як змінюється навантаження за сезонами.",
+  "license": "CC0 (Kaggle); USDA Forest Service Research Data Archive, суспільне надбання з посиланням на DOI",
+  "source": "USDA Forest Service, FPA FOD 6th edition (RDS-2013-0009.6), через Kaggle behroozsohrabi/us-wildfire-records-6th-edition",
+  "attribution": "Short, K.C. 2022. Spatial wildfire occurrence data for the United States, 1992-2020 [FPA_FOD_20221014]. 6th Edition. Fort Collins, CO: Forest Service Research Data Archive. https://doi.org/10.2737/RDS-2013-0009.6",
+  "prepared": "Каліфорнія, 2016–2018; повтори однієї пожежі злито до найменшого FOD_ID; клас розміру не включено (він ділить площу на смуги, тож лише повторював би її); рідкісні рівні — other",
+  "options": {
+   "time": "discovery_dttm",
+   "geo": "lat,lon@auto",
+   "table": true,
+   "source": "USDA Forest Service, FPA FOD"
+  },
+  "file": "us_wildfires.csv",
+  "rows": 26884,
+  "bytes": 4181164,
+  "sha256": "d8aa2da61e8f37f7a3922f76e83956ce92df5e34e6ed704f9176b36bebce8ddc",
+  "span": [
+   "2016-01-01",
+   "2018-12-31"
+  ]
+ }
+]

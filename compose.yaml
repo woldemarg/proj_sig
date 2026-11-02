@@ -4,14 +4,15 @@
 #   llm-model-broker   one OpenAI-compatible endpoint for the upstream model (internal + egress, no host port)
 #   insight-graph      the graph service: analysis, graph building, search (the GPU with compose.gpu.yaml, else the CPU; no egress)
 #   evidence-narrator  the chat: the graph's evidence verbalised and citation-checked (no egress)
-#   sig-web-console    nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
+#   web-console        nginx: the UI and one origin for both services     -> http://127.0.0.1:${SIG_WEB_PORT:-8765}
 #
 #   docker compose up -d --build --wait      then open http://127.0.0.1:8765
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait      the embeddings on an NVIDIA GPU
 #
 # Settings: ./.env (template: .env.sample). Only the broker receives the GEMMA_* provider settings and key. The stack's
 # own Neo4j password is SIG_NEO4J_PASSWORD (default sig-local-password, at least 8 characters; the volume keeps it).
-# Host ports: SIG_WEB_PORT, SIG_NEO4J_HTTP_PORT, SIG_NEO4J_BOLT_PORT (scripts/compose_check.py uses others, side by side).
+# Host ports: SIG_WEB_PORT, SIG_NEO4J_HTTP_PORT, SIG_NEO4J_BOLT_PORT; image names: SIG_IMAGE_NAMESPACE (default sig).
+# scripts/compose_check.py sets its own of each, so it runs beside this stack and keeps its images.
 
 name: sig
 
@@ -35,7 +36,7 @@ x-hardened: &hardened
 
 services:
   model-init:
-    image: sig/insight-graph:cpu  # the graph service's image, built once by insight-graph below (compose.gpu.yaml: :gpu)
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/insight-graph:cpu  # the graph service's image, built once by insight-graph below (compose.gpu.yaml: :gpu)
     pull_policy: never
     command: ["python", "-m", "insight_graph_service.core.model_store", "/app/models", "--seed", "/seed"]
     volumes:
@@ -68,6 +69,7 @@ services:
   llm-model-broker:
     <<: *hardened
     build: { context: ., dockerfile: llm_model_broker/Dockerfile }
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/llm-model-broker
     environment:  # the provider settings and key reach this container only
       GEMMA_BASE_URL: ${GEMMA_BASE_URL:-}
       GEMMA_MODEL_NAME: ${GEMMA_MODEL_NAME:-}
@@ -87,7 +89,7 @@ services:
       dockerfile: insight_graph_service/Dockerfile
       target: runtime
       args: { TORCH: cpu }  # the CPU torch build; compose.gpu.yaml builds cu130
-    image: sig/insight-graph:cpu
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/insight-graph:cpu
     env_file:  # the analysis tunables (it reads many; the narrator gets an allow-list)
       - path: .env
         required: false
@@ -115,6 +117,7 @@ services:
   evidence-narrator:
     <<: *hardened
     build: { context: ., dockerfile: evidence_narrator_service/Dockerfile }
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/evidence-narrator
     environment:  # an allow-list, no env_file: nothing else from .env (no key) reaches the chat; "" keeps the default
       INSIGHT_GRAPH_URL: http://insight-graph:8000
       INSIGHT_GRAPH_TIMEOUT_S: ${INSIGHT_GRAPH_TIMEOUT_S:-}
@@ -127,9 +130,10 @@ services:
       llm-model-broker: { condition: service_healthy }
     networks: [internal]
 
-  sig-web-console:
+  web-console:
     <<: *hardened
     build: { context: ., dockerfile: sig_web_console/Dockerfile }
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/web-console
     ports:
       - "127.0.0.1:${SIG_WEB_PORT:-8765}:8080"
     depends_on:

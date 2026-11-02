@@ -1,19 +1,25 @@
 """Pure pieces of the batch lifecycle (docs/09_operations.md §9.1): admission into the graph, the journal records,
-the batch metrics. The engine runs the stages and owns the state."""
+the batch metrics, the time column's check and the series of the admitted insights. The engine runs the stages and owns
+the state."""
 
 from __future__ import annotations
 
 import time
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from attractor_topology.models import CanonicalInsight, EmbeddingSpec
 from attractor_topology.ontology import OntologyUpdate
 from insight_contracts import Insight, Rejection, record_digest
+from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import DiscoveryResult
+from subgroup_miner.ingestion import IngestionError, LoadedDataset
+from subgroup_miner.temporal import annotate, calendar_bins, carriers, dynamics, extent_points, fit_grid, reference_scale
 
 
 def pattern_records(kept: list[Insight], canon: list[CanonicalInsight], row_ids: list[int], spec: EmbeddingSpec) -> list[dict[str, Any]]:
@@ -90,3 +96,67 @@ def batch_metrics(
         "timings": timings,
         "processing_duration_s": time.perf_counter() - t0,
     }
+
+
+def series_times(loaded: LoadedDataset) -> pd.Series:
+    """The times of the rows a batch's series are of (docs/02_discovery.md §2.10): a table's every row, a geo level's
+    located points only (``point_cell >= 0``) — what VALIDATING checks and the commit bins."""
+    if loaded.spatial is None:
+        return loaded.time
+    return loaded.time[loaded.spatial.point_cell >= 0].reset_index(drop=True)
+
+
+def check_time(times: pd.Series, column: str, grid: str, min_bins: int, max_bins: int, rows: str = "", tz: str | None = None) -> None:
+    """A time column spans at most ``max_bins`` bins of ``grid`` (``TEMPORAL_MAX_BINS``) and gives at least ``min_bins``
+    measurable ones (``TEMPORAL_MIN_BINS``, never fewer than one) — bins holding rows and covered at least half by the
+    span —, else ``invalid_options``: at upload over the file's rows, before a batch exists, and at VALIDATING over the
+    rows its series will be of (``series_times``; ``rows`` names them)."""
+    bins = calendar_bins(times, grid, max_bins, tz)[1]
+    if (filled := sum(b["rows"] > 0 and b["covered"] >= 0.5 for b in bins)) < max(min_bins, 1):
+        raise IngestionError(
+            "invalid_options",
+            f"time column '{column}'{rows}: {filled} {grid} bins measurable (rows, and half their days in the span; TEMPORAL_MIN_BINS={min_bins})",
+        )
+
+
+def annotate_batch(
+    loaded: LoadedDataset,
+    kept: list[Insight],
+    rows: dict[str, np.ndarray],
+    column: str,
+    config: MinerConfig,
+    min_bins: int | None = None,
+    dimensions: Sequence[str] = (),
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Every admitted insight's series over the time column's grid, and what the batch record signs of it but the series
+    file's digest — the column, the grid, the span (the first and the last time of the rows), the bins, the rows without
+    a time, each metric's reference scale
+    (docs/02_discovery.md §2.10). A geo level's series are of its located points: a pattern's are those of its cells, a
+    ``<c>_median`` metric's values those of point column ``c``. ``min_bins``: the grid was ``auto``, fitted now to the
+    admitted insights (``fit_grid``, keeping ``TEMPORAL_MIN_BINS`` measurable bins); None: the grid as loaded. A table's
+    pattern keeps the condition of its ``dimensions`` (the profile's categoricals) that carries each of its events
+    (``carriers``) in its series."""
+    times, frame, covers = series_times(loaded), loaded.frame, rows
+    if loaded.spatial is not None:
+        located = loaded.spatial.point_cell >= 0
+        frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
+        covers = extent_points(loaded.spatial.point_cell[located], rows)
+    grid = loaded.grid if min_bins is None else fit_grid(times, loaded.grid, covers, config.temporal_min_rows_bin, min_bins, loaded.tz)
+    codes, bins = calendar_bins(times, grid, tz=loaded.tz)
+    scale = reference_scale(frame)
+    metrics = {i.id: [s.metric for s in i.shifts] for i in kept}
+    series = annotate(frame, codes, bins, covers, metrics, scale, config.temporal_min_rows_bin, config.temporal_tie_share)
+    if loaded.spatial is None and dimensions:  # a geo level's points have no dimension a condition could name
+        events = {pid: dynamics(entry, bins, metrics[pid], config)["events"] for pid, entry in series.items() if entry["series"]}
+        for pid, found in carriers(frame, codes, covers, events, scale, config, dimensions).items():
+            series[pid]["carriers"] = found
+    signed = {
+        "column": column,
+        "grid": grid,
+        "tz": loaded.tz,  # the calendar the bins are named on: what the compile reads of it is signed with them
+        "span": [t.tz_convert(loaded.tz or "UTC").isoformat() for t in (times.min(), times.max())],  # in the grid's zone, as its bins
+        "bins": bins,
+        "rows_without_time": int((codes < 0).sum()),
+        "reference_scale": scale,
+    }
+    return signed, series
