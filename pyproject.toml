@@ -37,8 +37,11 @@ broker = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
 # the torch build of the graph image (build arg TORCH); the host takes PyPI's torch through sentence-transformers
 cpu = ["torch"]
 cu130 = ["torch"]
+# the measurement scripts' model references (scripts/crosstype_demo.py --m19): no service imports it
+eval = ["statsmodels>=0.14"]
 # pinned tools: a new linter or test-runner release must not change the gate's verdict on unchanged code
 dev = [
+    { include-group = "eval" },
     { include-group = "graph" },
     { include-group = "narrator" },
     { include-group = "broker" },
