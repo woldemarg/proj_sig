@@ -3,6 +3,8 @@ Chromium on the ``scripts/dev.py`` composite (docs/08_interface.md §8.2)."""
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 
@@ -180,3 +182,89 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     assert [c["value"] for c in runs[0]["count_values"]] == ["a"] and "count_values" not in runs[1] and patrols.get("time") == "when"
     assert sum(b["status"] == "SKIPPED" for b in batches) == 1
     assert not errors, errors
+
+
+CARD = """(args) => {  // a layer link's card from the drawer's own function, laid out: its rows on lines of their own
+  const p = { target: args.target, effect_size: args.effect ?? 1, shifts: [args.shift || { metric: args.target, local_median: 3, global_median: 1 }] };
+  const d = { dataset: { cross: ["up-l"], cross_layers: ["schools"], filename: "target.csv", level: "9", ...args.ds },
+              link: { disk: "у комірці та шести сусідніх", exposure: "на комірку ≈ 0,1 км²", pair: args.pair || null }, neighbors: args.neighbors || {} };
+  const box = document.createElement("div"); box.innerHTML = linkCard(p, d);
+  document.body.append(box); const text = box.innerText; box.remove(); return text;
+}"""
+COUNTED = {"count_values": [{"column": "kind", "value": "a", "status": "ok"}, {"column": "kind", "value": "b", "status": "sparse"}]}
+SHARE = {"metric": "share_kind_a", "local_median": 0.12, "global_median": 0.07}
+PAIR = {"id": "s", "target": "share_kind_a", "effect": 0.5}
+
+
+@contextlib.contextmanager
+def card_page(cfg):
+    """The console on an empty workspace, ready to call its card function."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    port, app = stack(make_engine(cfg))
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page()
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof linkCard === 'function'", timeout=20000)
+        yield page
+
+
+@pytest.mark.browser
+def test_the_card_answers_more_events_and_other_mix_in_two_rows_from_one_run(cfg):
+    """A layer link's insight reads its run's two questions in words (docs/08_interface.md §8.2): the run's level and disk,
+    *більше подій* from a count insight — its verdict and what a count is per —, *інший склад* from a share insight — the
+    typical shares, never «у N раза» —, each answered by the insight or its pair; a run without counters says the count
+    was not asked, a sparse value too few events, a zone baseline its mode instead of the shares; ``points`` answers the
+    first question, a metric that is neither a count nor a share neither."""
+    with card_page(cfg) as page:
+        both = page.evaluate(CARD, {"target": "count_kind_a", "ds": COUNTED, "pair": PAIR})
+        mix = page.evaluate(CARD, {"target": "share_kind_a", "shift": SHARE, "ds": COUNTED})
+        unasked = page.evaluate(CARD, {"target": "share_kind_a", "shift": SHARE, "ds": {}})
+        sparse = page.evaluate(CARD, {"target": "share_kind_b", "shift": SHARE | {"metric": "share_kind_b"}, "ds": COUNTED})
+        zone = page.evaluate(CARD, {"target": "share_kind_a", "shift": SHARE, "ds": COUNTED | {"baseline": "zone"}})
+        points = page.evaluate(CARD, {"target": "points", "ds": {}})
+        median = page.evaluate(CARD, {"target": "pm25_median", "ds": COUNTED})
+    assert "Біля schools — target.csv" in both and "рівень H3 r9 · у комірці та шести сусідніх" in both
+    assert "так · не пояснюється фоном зони · на комірку ≈ 0,1 км²" in both and "Більше подій і інший склад" in both
+    assert "типова частка 12 % проти 7 %" in mix and "раза" not in mix and "більше подій\nні" in mix.lower()
+    assert "не перевірялось" in unasked and "замало даних для частоти на цьому рівні" in sparse
+    assert "відносно своєї зони" in zone and "проти" not in zone
+    assert "більше подій\nтак" in points.lower() and "більше подій" not in median.lower() and "Біля schools" in median
+
+
+@pytest.mark.browser
+def test_the_quadrant_needs_a_pair_with_the_same_expression_and_value(cfg):
+    """*Більше подій і інший склад* together only with the server's pair (the run's insight with the same conditions on
+    the same value's other question, ``views.link_pair``) and the count raised; without a pair, two rows on their own."""
+    with card_page(cfg) as page:
+        shown = {
+            name: "Більше подій і інший склад" in page.evaluate(CARD, {"target": "count_kind_a", "effect": effect, "ds": COUNTED, "pair": pair})
+            for name, effect, pair in (("pair", 1, PAIR), ("fewer", -1, PAIR), ("alone", 1, None))
+        }
+    assert shown == {"pair": True, "fewer": False, "alone": False}
+
+
+@pytest.mark.browser
+def test_same_places_reads_co_located_without_any_computation(cfg):
+    """The same base layer's other links whose insights the graph places with this one (``CO_LOCATED`` rows the server
+    names with their run's layers): the layer, the overlap's share for ``overlaps`` alone, the relation's words for the
+    others; a row of no other link (no layers) is not one; no word of a joint effect or of nearness."""
+    neighbors = {
+        "CO_LOCATED": [{"id": "P2", "label": "x", "layers": ["stations"], "props": {"relation": "overlaps"}, "weight": 0.62}],
+        "CO_LOCATED (in)": [
+            {"id": "P3", "label": "y", "layers": ["shops"], "props": {"relation": "adjacent"}, "weight": 0.4},
+            {"id": "P4", "label": "own run", "props": {"relation": "overlaps"}, "weight": 0.5},
+        ],
+    }
+    args = {"target": "count_kind_a", "ds": COUNTED}
+    with card_page(cfg) as page:
+        text, alone = page.evaluate(CARD, args | {"neighbors": neighbors}), page.evaluate(CARD, args)
+    places = text[text.index("також у тих самих місцях") :]
+    assert "stations" in places and "ділянки перетинаються: 62 %" in places and "shops" in places and "ділянки торкаються" in places
+    assert "own run" not in places and "також у тих самих місцях" not in alone
+    assert not any(w in places.lower() for w in ("спільний ефект", "взаємод", "оцінка", "поруч"))

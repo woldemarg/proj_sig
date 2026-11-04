@@ -222,3 +222,52 @@ def test_a_planted_dependence_survives_the_zone_baseline(engine, tmp_path):
     assert all(p["provenance"]["spatial"]["baseline"] == "zone" for p in patterns)
     assert engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]["baseline"] == "zone"
     assert engine.verify_pattern(found[0]["id"])["status"] == "reproduced"
+
+
+def test_a_runs_insight_names_its_disk_and_the_other_links_of_its_base_in_the_same_places(engine, tmp_path):
+    """The drawer's facts for a layer link's card (``GET /api/nodes``): the run's disk and what a count is per in words,
+    and each ``CO_LOCATED`` row of another run of the same base layer named with that run's layers; none for a plain
+    upload's insight."""
+    from insight_contracts import wording
+
+    target, context = planted(tmp_path)
+    patrols = tmp_path / "patrols.csv"
+    pd.read_csv(context).assign(unit=1).to_csv(patrols, index=False)  # the same points, other bytes: another layer
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        c = upload_file(client, "patrols.csv", patrols, "lat,lon", layer="true")["upload_id"]
+        first, second = (engine.ws.load_batch(cross_run(client, a, layer).json()["batch_id"]) for layer in (b, c))
+        found = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == first["dataset_id"]]
+        details = [client.get(f"/api/nodes/{pid}").json() for pid in found]
+        plain = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] not in (first["dataset_id"], second["dataset_id"]))
+        assert "link" not in client.get(f"/api/nodes/{plain}").json()
+    assert first["status"] == second["status"] == "READY" and details
+    words = {"disk": wording.disk_words(1), "exposure": wording.exposure_words(details[0]["dataset"]["exposure"])}
+    assert all(d["link"].items() >= words.items() and "pair" in d["link"] for d in details)  # the pair: link_pair's own test
+    rows = [it for d in details for key in ("CO_LOCATED", "CO_LOCATED (in)") for it in d["neighbors"].get(key, [])]
+    named = [it for it in rows if "layers" in it]
+    assert named and all(it["layers"] == ["patrols"] for it in named)
+    assert all(engine.graph().nodes[it["id"]]["props"]["dataset_id"] == second["dataset_id"] for it in named)
+
+
+def test_a_pair_is_the_runs_insight_with_the_same_conditions_on_the_same_values_other_question():
+    """``views.link_pair`` (X-08): a count's share and a share's count of one run with the same conditions; another scope,
+    another value, another run or a metric of neither kind is no pair."""
+    from types import SimpleNamespace as N
+
+    from insight_graph_service.server.views import link_pair
+
+    def ins(target, dataset="ds-r", *conds):
+        return N(target=target, dataset_id=dataset, conditions=[N(expr=c) for c in conds or ("band=q4",)], effect_size=0.5)
+
+    insights = {"c": ins("count_kind_a"), "s": ins("share_kind_a"), "p": ins("points")}
+    graph = N(insights=insights, insight=insights.__getitem__)
+    assert link_pair(graph, "c") == {"id": "s", "target": "share_kind_a", "effect": 0.5} and link_pair(graph, "s")["id"] == "c"
+    assert link_pair(graph, "p") is None
+    insights |= {"s": ins("share_kind_a", "ds-r", "band=q4", "hour=night")}
+    assert link_pair(graph, "c") is None  # another scope
+    insights |= {"s": ins("share_kind_b")}
+    assert link_pair(graph, "c") is None  # another value
+    insights |= {"s": ins("share_kind_a", "ds-other")}
+    assert link_pair(graph, "c") is None  # another run
