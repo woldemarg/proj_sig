@@ -40,8 +40,25 @@ TERMS: dict[str, tuple[str, str]] = {
     ),
     "outside_cross_type": (
         "без умови шару",
-        "знахідки крос-типового прогону без смуги шару: це знахідки самої цілі, вони лишаються на її власних рівнях",
+        "знахідки прогону зв'язку шарів без смуги шару: це знахідки самого базового шару, вони лишаються на його власних рівнях",
     ),
+    # the two layers and what their link answers (docs/extra_funcs/spatial_analytics_multi_type/cross_layer_analysis_concept.md §6)
+    "base_layer": ("базовий шар", "набір подій, чиї метрики й склад аналізуємо"),
+    "context_layer": (
+        "контекстний шар",
+        "точки іншого набору як умова для подій базового шару: скільки їх у комірці й поруч; сам шар не аналізується",
+    ),
+    "layer_link": ("зв'язок шарів", "прогін базового шару з одним контекстним: чи інші події там, де багато точок шару"),
+    "more_events": ("більше подій", "подій обраного типу в комірці більше, ніж у типовій комірці мапи — на одну комірку, без поділу на площу"),
+    "other_mix": ("інший склад", "частка типу серед подій комірки інша, ніж у типовій комірці мапи"),
+    "exploratory": ("дослідницька знахідка", "знайдено й перевірено на цих самих даних; на іншому періоді чи наборі не відтворювали"),
+    "insufficient_data": ("замало даних", "замало подій чи комірок, щоб тест мав силу: висновку немає, причина названа"),
+    "same_places": (
+        "також у тих самих місцях",
+        "інсайти інших контекстних шарів того самого базового, чиї місця перекриваються чи межують; спільна дія шарів не перевірялась",
+    ),
+    "per_event": ("з вагою подій", "частку перевірено з вагою подій кожної комірки; шукали — по комірках"),
+    "zone_baseline": ("відносно своєї зони", "кожна метрика — відносно медіани своєї батьківської комірки, а не всієї мапи"),
     "stability": (
         "стабільність",
         "1 − min(CV, 0,9), де CV — коефіцієнт варіації суми |z| головних зсувів на 20 бутстреп-вибірках; "
@@ -292,6 +309,15 @@ def time_words(facts: Mapping[str, Any]) -> str:
 def _layer(column: str) -> str:
     """The layer a ``context_<layer>_band`` column counts, in words."""
     return humanize(column.removeprefix("context_").removesuffix("_band"))
+
+
+def exposure_words(exposure: Mapping[str, Any] | None) -> str:
+    """What a per-type count is per (a geo level's ``exposure``): the level's cell area, ``на комірку ≈ 0,1 км²``; empty
+    without one. A count per cell, never per person."""
+    if not exposure or exposure.get("kind") != "area":
+        return ""
+    km2 = exposure["cell_km2"]
+    return f"на комірку ≈ {f'{km2:.2g}' if km2 < 1 else f'{km2:.1f}'.rstrip('0').rstrip('.')} км²".replace(".", ",")
 
 
 def disk_words(ring: int) -> str:
