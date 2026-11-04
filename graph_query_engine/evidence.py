@@ -546,7 +546,7 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
-def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool) -> list[dict[str, Any]]:
+def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool, hidden: frozenset[str]) -> list[dict[str, Any]]:
     """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
     (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
     the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
@@ -562,7 +562,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
         host.scale = chain.scale
         restates = restating(graph, chain)
         for steps in (chain.up, chain.down):
-            for step in steps:
+            for step in (s for s in steps if s.pattern_id not in hidden):  # a hidden layer's run joins no answer
                 other = by_id.get(step.pattern_id)
                 if other is None:
                     path_text = f"vertical {step.direction} from {by_id[step.origin].key} through {step.attractor} in {step.region}"
@@ -810,6 +810,7 @@ def build_evidence(
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
     as_of: tuple[datetime, str] | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> Evidence:
     """The walk's patterns as citable evidence: the items (with the vertical zoom's and the trust lines), the anchors
     visited, the datasets and their baselines, the notes, the zones or the asked area; ``as_of``: the reference date and
@@ -820,7 +821,7 @@ def build_evidence(
         _item(graph, config, trusted, f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located)
         for idx, r in enumerate(chosen, start=1)
     ]
-    chains = _add_vertical(items, graph, config, trusted)
+    chains = _add_vertical(items, graph, config, trusted, hidden)
     if trusted:
         _add_trust(items, graph)
     datasets = _datasets(items, graph)

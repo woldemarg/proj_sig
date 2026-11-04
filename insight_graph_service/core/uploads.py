@@ -593,10 +593,11 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     ``stale`` — ``{layers, reason}``, ``superseded`` when a stored version names that upload, else ``deleted`` —, and
     every record of an upload a run reads as a layer counts those runs (``layer_of``); an upload's finest geo level, mined
     — READY, or none of its findings admitted alone — and not coarser than ``LINK_MIN_LEVEL``, can take a layer (``linkable``: the console's *+ контекстний шар*, a run of
-    that level, ``cross_runs``'s default). Read off the registry, never
+    that level, ``cross_runs``'s default); a run reading a hidden layer names it (``hidden_by``). Read off the registry, never
     stored: a deletion rolled back leaves no mark, and the run, which holds copies of its layers, stays whole and
     reproducible (docs/06_graph_and_storage.md §6.8)."""
     stored, replaced = {b.get("upload_id") for b in batches}, {b.get("supersedes") for b in batches}
+    hidden = {b.get("upload_id") for b in batches if b.get("hidden")}
     runs: dict[str, int] = {}
     finest: dict[str, int] = {}  # an upload's finest geo level, a run's own aside
     out: dict[str, dict[str, Any]] = {}
@@ -607,6 +608,8 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             finest[b.get("upload_id")] = max(r, finest.get(b.get("upload_id"), r))
         if gone := [u for u in b.get("cross", ()) if u not in stored]:
             out[b["batch_id"]] = {"stale": {"layers": gone, "reason": "superseded" if all(u in replaced for u in gone) else "deleted"}}
+        if off := [u for u in b.get("cross", ()) if u in hidden]:  # a run of a hidden layer: out of the answers and the views
+            out.setdefault(b["batch_id"], {})["hidden_by"] = off
     for b in batches:
         if n := runs.get(b.get("upload_id")):
             out.setdefault(b["batch_id"], {})["layer_of"] = n
@@ -614,6 +617,28 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if mined and "upload_id" in b and "cross" not in b and LINK_MIN_LEVEL <= (resolution(b) or -1) == finest.get(b["upload_id"]):
             out.setdefault(b["batch_id"], {})["linkable"] = True
     return out
+
+
+def set_hidden(ws: Workspace, batches: Sequence[dict[str, Any]], upload_id: str, hidden: bool) -> list[str]:
+    """A layer hidden from the answers and the views, or shown again (docs/06_graph_and_storage.md §6.8): ``hidden`` on
+    every record of its upload, unsigned as ``stale`` is — no digest moves, nothing is rebuilt —, and its runs hidden
+    through it (``cross_state``'s ``hidden_by``). Only a layer-only upload or one a run reads as a layer; twice is once."""
+    mine = [b for b in batches if b.get("upload_id") == upload_id]
+    if not mine:
+        raise PipelineError("unknown_upload", upload_id)
+    if all(b["status"] != "LAYER" for b in mine) and not any(upload_id in b.get("cross", ()) for b in batches):
+        raise PipelineError("invalid_options", f"{upload_id}: no run reads it as a layer")
+    for b in mine:
+        b["hidden"] = hidden
+        ws.save_batch(b)
+    return [b["batch_id"] for b in mine]
+
+
+def hidden_datasets(batches: Sequence[dict[str, Any]]) -> frozenset[str]:
+    """The datasets of the runs that read a hidden layer: what a search leaves out (model A, docs/07_question_answering.md
+    §7.4), read off the registry as ``cross_state`` is."""
+    state = cross_state(batches)
+    return frozenset(b["dataset_id"] for b in batches if b.get("dataset_id") and "hidden_by" in state.get(b["batch_id"], {}))
 
 
 def cross_type_only(insights: Sequence[Insight]) -> tuple[list[Insight], list[Rejection]]:

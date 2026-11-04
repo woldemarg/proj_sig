@@ -331,6 +331,9 @@ async function loadGraph() {
   S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
   S.asOf = (g.stats || {}).as_of || null;  // the latest data: the date the answers and the drawer count freshness from
+  const off = new Set(g.nodes.filter((n) => n.data.kind === "Pattern" && S.hidden.has(n.data.dataset)).map((n) => n.data.id));
+  g.nodes = g.nodes.filter((n) => !off.has(n.data.id)); g.edges = g.edges.filter((e) => !off.has(e.data.source) && !off.has(e.data.target));
+  S.hiddenCount = off.size;  // the table's foot names them
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
@@ -431,6 +434,7 @@ function renderTable() {
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">${S.nodes.length ? "Жоден інсайт не відповідає фільтру." : "Інсайтів ще немає."}</td></tr>`;
+  if (S.hiddenCount) $("ins-table").querySelector("tbody").insertAdjacentHTML("beforeend", `<tr class="hidden-foot"><td colspan="6" class="muted">ще ${plural(S.hiddenCount, "інсайт", "інсайти", "інсайтів")} приховано: їхній шар вимкнено</td></tr>`);
   $("table-summary").textContent = S.nodes.length ? `${rows.length} з ${S.nodes.length}` : "";
 }
 
@@ -631,7 +635,8 @@ function linkCard(p, d) {
     (count && share && count.effect > 0 ? `<p class="link-both">${esc(cap(word("more_events")))} і ${esc(word("other_mix"))}</p>` : "") +  // the pair: one run, one scope, one value
     (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
     (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
-      same.map((it) => nbRow(it.id, it.layers.join(", "), it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "")).join("") : "") + `</div>`;
+      same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
+        (S.hidden.has(it.dataset_id) ? " · у відповідях шар вимкнено" : ""))).join("") : "") + `</div>`;
 }
 
 async function inspect(id, note = "") {

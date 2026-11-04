@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -402,6 +402,7 @@ function init() {
   });
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
   $("link-form").addEventListener("submit", runLink);
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
   const sources = ["link-layer", "link-sample", "link-file"];  // the layer comes from one of them: picking one clears the others

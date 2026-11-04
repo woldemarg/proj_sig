@@ -110,6 +110,7 @@ def resolve_seeds(
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
     as_of: datetime | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> list[SeedMatch]:
     """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap; without a
     period, its freshness at ``as_of``, the reference date) and pick diverse top seeds. A question that names a period
@@ -137,7 +138,7 @@ def resolve_seeds(
                 fresh(pid),
             )
             for pid, ins in graph.insights.items()
-            if not graph.tampered(pid)  # a tampered pattern never starts a walk
+            if not graph.tampered(pid) and pid not in hidden  # a tampered or hidden pattern never starts a walk
         ),
         key=lambda s: -s.score,
     )
