@@ -290,6 +290,28 @@
     </form>
   </aside>
 </main>
+<dialog id="link-dialog" aria-labelledby="link-title">
+  <form id="link-form">
+    <h3 id="link-title">+ контекстний шар</h3>
+    <div class="hint">Окремий прогін базового шару з одним контекстним: найдрібніший рівень базового, одне оточення. Другий шар — ще одна дія й ще один прогін.</div>
+    <label class="small" for="link-layer">Збережений шар</label>
+    <select class="field" id="link-layer"><option value="">—</option></select>
+    <label class="small" for="link-sample">Або готовий набір</label>
+    <select class="field" id="link-sample"><option value="">—</option></select>
+    <label class="small" for="link-file">Або файл точок</label>
+    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet">
+    <div class="hint">Готовий набір чи файл спершу збережеться як «лише шар».</div>
+    <label class="small" for="link-counts">Типи для «більше подій»</label>
+    <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
+    <div class="hint">Типи базового шару, якщо їх обрано; порожньо — питаємо лише про склад.</div>
+    <details class="adv"><summary><span>Додатково</span></summary>
+      <label class="small" for="link-ring">Що рахувати поруч</label>
+      <select class="field" id="link-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+    </details>
+    <div class="msg" id="link-msg"></div>
+    <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button><button type="submit" class="btn" id="link-go">Запустити</button></div>
+  </form>
+</dialog>
 <script src="/vendor/cytoscape.min.js"></script>
 <script src="/vendor/plotly-gl3d.min.js"></script>
 <script src="/vendor/maplibre-gl.js"></script>

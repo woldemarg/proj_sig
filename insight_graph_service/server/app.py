@@ -85,7 +85,7 @@ class CrossTypeIn(BaseModel):
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
     align: str | None = None  # span: an event layer's events within the target's span only
     layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
-    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: the target level's own
+    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: none; absent: the target level's own
     baseline: str | None = None  # map | zone: what the run's metrics are read against; empty: the target level's own
 
 

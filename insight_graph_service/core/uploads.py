@@ -44,6 +44,9 @@ SOURCE_MAX_CHARS = 120  # characters of a declared source
 # context files of one upload, one forced band each (docs/02_discovery.md §2.9): a third multiplies the Bonferroni family,
 # fills the validation budget with context cohorts and, on a wide table, empties the 3-conjunctions (spec §14.6)
 MAX_CONTEXT_LAYERS = 2
+# a layer link coarser than this H3 level is warned of, and the console offers none: a zone this wide already holds
+# different places (concept §9); preliminary, the spike #281 may move it
+LINK_MIN_LEVEL = 8
 TRUST_FIELDS = ("source", "reliability", "indicators", "user_glossary", "metadata_doc")  # what a cross-type run keeps of its target
 _FIELD = re.compile(r"([A-Za-z][\w ()/.-]{0,40}):\s*(.*)$")  # "Key: value" (a key of at most 41 characters)
 
@@ -495,8 +498,9 @@ def cross_runs(
     without time whole, with a warning. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under
     a filter, as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read
     in place, not copied. ``count_values`` (``column=value,...``) asks for per-type counters, checked against the target's
-    rows (``resolve_counts``), and ``baseline`` (``map`` | ``zone``) what its metrics are read against; without them the
-    run keeps the target level's own."""
+    rows (``resolve_counts``) — an empty one asks for none —, and ``baseline`` (``map`` | ``zone``) what its metrics are
+    read against; without them the run keeps the target level's own. A level coarser than ``LINK_MIN_LEVEL`` is named in
+    its run's warnings."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
     if (align := (align or "").strip() or None) not in (None, "span"):
@@ -532,9 +536,8 @@ def cross_runs(
     chosen = chosen or {max(own)}  # the target's finest
     latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
     try:  # asked for the run, checked as an upload checks them: the target's rows, its reading's filter
-        counts = (
-            resolve_counts(read_rows(Path(latest[0]["source_path"]), latest[0].get("where")), count_values, settings.miner) if count_values else None
-        )
+        rows = read_rows(Path(latest[0]["source_path"]), latest[0].get("where")) if (count_values or "").strip() else None
+        counts = None if count_values is None else resolve_counts(rows, count_values, settings.miner)
     except IngestionError as exc:
         raise PipelineError(exc.code, f"cross-type run: {exc}") from exc
     shared = {Path(b["source_path"]) for b in own.values()}  # the target's own file: a layer of it is read in place
@@ -566,7 +569,11 @@ def cross_runs(
                 "context": context,
                 "context_ring": ring,
                 "inherited": inherited,
-                "warnings": list(warnings),
+                "warnings": warnings
+                + [
+                    f"r{resolution(b)}: a layer link coarser than r{LINK_MIN_LEVEL}; a zone this wide already holds different places, a link on it is preliminary"
+                ]
+                * (resolution(b) < LINK_MIN_LEVEL),
             }
         )
     return runs
@@ -584,20 +591,28 @@ def context_files(record: dict[str, Any]) -> list[tuple]:
 def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """What the registry says of cross-type runs and their layers, by batch id: a run naming an upload no record holds is
     ``stale`` — ``{layers, reason}``, ``superseded`` when a stored version names that upload, else ``deleted`` —, and
-    every record of an upload a run reads as a layer counts those runs (``layer_of``). Read off the registry, never
+    every record of an upload a run reads as a layer counts those runs (``layer_of``); an upload's finest geo level, mined
+    — READY, or none of its findings admitted alone — and not coarser than ``LINK_MIN_LEVEL``, can take a layer (``linkable``: the console's *+ контекстний шар*, a run of
+    that level, ``cross_runs``'s default). Read off the registry, never
     stored: a deletion rolled back leaves no mark, and the run, which holds copies of its layers, stays whole and
     reproducible (docs/06_graph_and_storage.md §6.8)."""
     stored, replaced = {b.get("upload_id") for b in batches}, {b.get("supersedes") for b in batches}
     runs: dict[str, int] = {}
+    finest: dict[str, int] = {}  # an upload's finest geo level, a run's own aside
     out: dict[str, dict[str, Any]] = {}
     for b in batches:
         for upload in b.get("cross", ()):
             runs[upload] = runs.get(upload, 0) + 1
+        if (r := resolution(b)) is not None and "cross" not in b:
+            finest[b.get("upload_id")] = max(r, finest.get(b.get("upload_id"), r))
         if gone := [u for u in b.get("cross", ()) if u not in stored]:
             out[b["batch_id"]] = {"stale": {"layers": gone, "reason": "superseded" if all(u in replaced for u in gone) else "deleted"}}
     for b in batches:
         if n := runs.get(b.get("upload_id")):
             out.setdefault(b["batch_id"], {})["layer_of"] = n
+        mined = b.get("status") == "READY" or (b.get("error") or {}).get("code") == "no_viable_insights"  # read, mined: a layer may add
+        if mined and "upload_id" in b and "cross" not in b and LINK_MIN_LEVEL <= (resolution(b) or -1) == finest.get(b["upload_id"]):
+            out.setdefault(b["batch_id"], {})["linkable"] = True
     return out
 
 

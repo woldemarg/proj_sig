@@ -105,3 +105,78 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
     (layer,) = engine.ws.list_batches()
     assert (layer["status"], layer["geo"]) == ("LAYER", "auto")
     assert not errors, errors
+
+
+@pytest.mark.browser
+def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_one_level_and_one_ring(cfg, tmp_path, monkeypatch):
+    """*+ контекстний шар* on a base layer's card (docs/08_interface.md §8.2): a shipped set picked in its dialog is kept
+    as a layer with its time column and run with the base at its finest level, one layer, the default disk, the base's
+    types confirmed; the same layer again is no new run and says so; another layer with no types is a second run of its
+    own, without counters. Only the base's finest mined level offers the action, never a run or a layer."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    import time
+
+    import httpx
+    import pandas as pd
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+    from test_crosstype import RES, planted, upload_file
+
+    import insight_graph_service.server.app as app_module
+    from insight_graph_service.core import uploads
+    from insight_graph_service.core.workspace import TERMINAL
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    target, context = planted(tmp_path)
+    pd.read_csv(context).assign(when="2025-06-15").to_csv(tmp_path / "patrols.csv", index=False)
+    entries = [
+        {"key": "schools", "file": "schools.csv", "title": "schools", "context_only": True, "options": {"geo": "lat,lon"}},
+        {"key": "patrols", "file": "patrols.csv", "title": "patrols", "context_only": True, "options": {"geo": "lat,lon", "time": "when"}},
+    ]
+    monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "demo_datasets", lambda: entries)
+    monkeypatch.setattr(uploads, "LINK_MIN_LEVEL", RES)  # the planted target is read at r7
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+
+    def settled() -> list[dict]:
+        deadline = time.time() + 300
+        while any(r["status"] not in TERMINAL for r in engine.ws.list_batches()):
+            assert time.time() < deadline, "a batch still running"
+            time.sleep(0.3)
+        return engine.ws.list_batches()
+
+    with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_selector(".ds-link", timeout=20000)
+        page.click(".ds-link")
+        assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == ("kind=a", "1")  # the base's types, the default disk
+        page.select_option("#link-sample", "schools")
+        page.click("#link-go")
+        page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        settled()
+        page.evaluate("refreshBatches()")
+        assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
+        (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
+        page.click(".ds-link")
+        page.select_option("#link-layer", layer)  # the same layer again: the run exists
+        page.click("#link-go")
+        page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
+        page.click(".ds-link")
+        page.select_option("#link-sample", "patrols")
+        page.fill("#link-counts", "")  # no types: the composition alone
+        page.click("#link-go")
+        page.wait_for_function("document.getElementById('batches').textContent.includes('+ patrols')", timeout=20000)
+        batches = settled()
+    runs = sorted((b for b in batches if b.get("cross") and b["status"] != "SKIPPED"), key=lambda b: b["created_at"])
+    patrols = next(b for b in batches if b["status"] == "LAYER" and b["filename"] == "patrols.csv")
+    assert [(r["upload_id"], r["level"], r["context_ring"], len(r["cross"])) for r in runs] == [(a, str(RES), 1, 1)] * 2
+    assert [c["value"] for c in runs[0]["count_values"]] == ["a"] and "count_values" not in runs[1] and patrols.get("time") == "when"
+    assert sum(b["status"] == "SKIPPED" for b in batches) == 1
+    assert not errors, errors
