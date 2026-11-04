@@ -105,13 +105,14 @@ def dataset_fingerprint(
     context: list[str] | None = None,
     context_ring: int = 1,
     where: str | None = None,
+    counts: Sequence[str] = (),
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
     file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
     order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
     only when it is not the default (an upload made before the option keeps its id); ``where`` a reading's row filter,
-    mixed in only when given (a whole file keeps its id)."""
+    and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id)."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -128,6 +129,8 @@ def dataset_fingerprint(
             h.update(f"ring={context_ring}".encode())
     if where:
         h.update(f"where={where}".encode())
+    if counts:
+        h.update(f"counts={sorted(counts)}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -305,6 +308,19 @@ def parse_where(spec: str | None) -> str | None:
     return f"{column.strip()}={value.strip()}"
 
 
+def check_counts(frame: pd.DataFrame | None, spec: str | None, min_rows: int) -> list[dict[str, Any]]:
+    """The values to count per cell (``<column>=<value>,...``, each as ``parse_where`` reads it, once each, in order),
+    each with its rows and its status: ``ok`` — a per-type counter of the cells — or ``sparse`` (fewer than ``min_rows``
+    rows: too few events for a frequency; no counter). A column the frame lacks, a number or one that is no category,
+    and a value no row holds are ``invalid_options`` (``filter_rows``). None asked, none (the frame is not read)."""
+    out = []
+    for where in dict.fromkeys(parse_where(part) for part in (spec or "").split(",") if part.strip()):
+        column, _, value = where.partition("=")
+        rows = len(filter_rows(frame, where))
+        out.append({"column": column, "value": value, "rows": rows, "status": "ok" if rows >= min_rows else "sparse"})
+    return out
+
+
 def filter_rows(frame: pd.DataFrame, where: str) -> pd.DataFrame:
     """The rows of ``frame`` whose ``where`` column (``parse_where``) holds the value, read as text, that column dropped:
     it is constant now. A column the frame lacks, a number or one of more than ``GEO_MODE_MAX_LEVELS`` values (no
@@ -368,6 +384,7 @@ def load_dataset(
     context: Sequence[tuple] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
     context_ring: int | str | None = 1,
     where: str | None = None,
+    count_values: Sequence[str] = (),
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -383,7 +400,8 @@ def load_dataset(
     locator[, window])`` per context layer — another type's points, read apart (``read_context``; ``window`` keeps its
     events within a span) and counted into the cells as one
     forced band each over the disk of ``context_ring`` rings around a cell (``parse_ring``; §2.9); it needs ``geo``.
-    ``where``: the rows holding one value of one column (``filter_rows``), its own reading of the file (§2.9)."""
+    ``where``: the rows holding one value of one column (``filter_rows``), its own reading of the file (§2.9).
+    ``count_values``: ``column=value`` each, counted per cell (``count_<column>_<value>``; geo only, §2.9)."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -429,7 +447,7 @@ def load_dataset(
     if geo_spec:
         points = frame
         key = (digest.hexdigest(), geo_spec[0], where) if shared else None  # the levels of one reading: one point profile
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring)
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring, count_values)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
@@ -459,6 +477,7 @@ def load_dataset(
             context=[fingerprint for _, fingerprint in layers],
             context_ring=ring,
             where=where,
+            counts=count_values if geo_spec else (),
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -533,10 +552,11 @@ def _to_cells(
     profile_key: object = None,
     context: Sequence[ContextSource] = (),
     context_ring: int = 1,
+    count_values: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
     one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells,
-    each over the disk of ``context_ring`` rings."""
+    each over the disk of ``context_ring`` rings; ``count_values`` the values counted per cell."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
@@ -545,6 +565,7 @@ def _to_cells(
             profile_key=profile_key,
             context=context,
             context_ring=context_ring,
+            count_values=count_values,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
