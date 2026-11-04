@@ -202,7 +202,8 @@ function paintFocus(p, item, cells, h3) {
   /* a focused insight's cells — orange where its target is higher, cyan lower, green a correlation — and the rest dimmed;
      G.focus their H3 ids, of whichever dataset draws it (never row ids: another dataset's index other cells) */
   const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
-  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, color);
+  const layer = layersOf(item ? item.provenance.dataset_id : p.dataset_id)[0];  // a layer link's insight: outlined in its layer's colour
+  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, id === "hl-line" && layer ? layerColor(layer) : color);
   G.focus = h3; G.map.getSource("focus").setData(cells);
   G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
 }

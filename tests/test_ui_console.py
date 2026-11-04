@@ -268,3 +268,53 @@ def test_same_places_reads_co_located_without_any_computation(cfg):
     assert "stations" in places and "ділянки перетинаються: 62 %" in places and "shops" in places and "ділянки торкаються" in places
     assert "own run" not in places and "також у тих самих місцях" not in alone
     assert not any(w in places.lower() for w in ("спільний ефект", "взаємод", "оцінка", "поруч"))
+
+
+@pytest.mark.browser
+def test_a_runs_insights_are_highlighted_in_every_block_and_the_base_layers_are_not(cfg, tmp_path):
+    """A layer link's insights carry their layer in the blocks that are there (docs/08_interface.md §8.2): a chip in the
+    insights table and the drawer, a ring of the layer's colour in the graph, the layer named in the legend, the chip an
+    answer's card reads; the base layer's own insights carry none of it."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    import httpx
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+    from test_crosstype import RES, cross_run, planted, upload_file
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    target, context = planted(tmp_path)
+    engine = make_engine(cfg)
+    port, app = stack(engine)
+    with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+        own = {x["id"] for x in engine.ws.patterns() if x["dataset_id"] == run["dataset_id"]}
+        base_ds = next(x["dataset_id"] for x in engine.ws.patterns() if x["dataset_id"] != run["dataset_id"])
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("S.nodes && S.nodes.length > 0 && !!S.cy", timeout=30000)
+        page.click("#view-switch button[data-view='table']")
+        table = dict(
+            page.evaluate(
+                "[...document.querySelectorAll('#ins-table tbody tr')].map((tr) => [tr.dataset.id, tr.querySelector('.tag.layer')?.textContent || ''])"
+            )
+        )
+        ringed = dict(page.evaluate("""S.cy.nodes('[kind="Pattern"]').map((n) => [n.id(), n.style('border-width') === '3px'])"""))
+        legend = page.evaluate("[document.getElementById('lg-layers').hidden, document.getElementById('lg-layers').textContent]")
+        chips = page.evaluate(f"[layerChip('{run['dataset_id']}'), layerChip('{base_ds}')]")  # an answer's card reads its item's dataset
+        page.evaluate(f"inspect('{sorted(own)[0]}')")
+        page.wait_for_function("document.querySelector('#inspector .link-card .tag.layer')", timeout=10000)
+        ring = f"S.cy.getElementById('{sorted(own)[0]}').style('border-color')"
+        before = page.evaluate(ring)
+        page.evaluate("setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark')")  # the colours follow the theme
+        follows = page.evaluate(ring) != before
+    assert own and {pid for pid, chip in table.items() if chip} == own and all("schools" in table[pid] for pid in own)
+    assert {pid for pid, has in ringed.items() if has} == own
+    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and follows
+    assert not errors, errors

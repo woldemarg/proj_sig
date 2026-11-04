@@ -10,6 +10,7 @@ function graphStyle() {
     { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
     { selector: 'node[kind="Pattern"][direction < 0]', style: { "background-color": down } },
+    { selector: "node[layer]", style: { "border-width": 3, "border-color": (n) => layerColor(n.data("layer")) } },  // a layer link's insight
     { selector: 'node[kind="Pattern"][ptype="covariance"]', style: { "background-color": cov, shape: "round-rectangle" } },
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
@@ -335,6 +336,7 @@ async function loadGraph() {
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
   $("view-caption").textContent = S.nodes.length ? `Показано: ${plural(S.nodes.length, "інсайт", "інсайти", "інсайтів")} · ${plural(themes, "тема", "теми", "тем")}` : "Немає інсайтів для показу";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
+  for (const n of g.nodes) { const l = layersOf(n.data.dataset)[0]; if (l) n.data.layer = l; }
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
     els.push({ data: { id: "__lbl_latent", kind: "PlaneLabel", label: "ТЕМИ" }, selectable: false, grabbable: false });
@@ -347,6 +349,9 @@ async function loadGraph() {
   } else {
     S.cy.elements().remove(); S.cy.add(els);
   }
+  const shown = [...new Set(S.nodes.flatMap((d) => layersOf(d.dataset)))].sort();  // the layers of the insights in view
+  $("lg-layers").hidden = !shown.length;
+  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(l)}</span></div>`).join("");
   countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);
@@ -421,7 +426,7 @@ function renderTable() {
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
     const effect = d.ptype === "covariance" ? word("covariance") : `${signed(d.effect)} sd`;
-    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
+    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}${layerChip(d.dataset)}</div></td>` +
       `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
@@ -621,7 +626,7 @@ function linkCard(p, d) {
   const mix = share ? `так · ${held}` + (ds.baseline === "zone" ? ` · ${word("zone_baseline")}` : s0 ? ` · типова частка ${pct(s0.local_median)} проти ${pct(s0.global_median)}` : "") +
     (ds.weight_by_events ? ` · ${word("per_event")}` : "") : "ні";
   const same = [...(d.neighbors.CO_LOCATED || []), ...(d.neighbors["CO_LOCATED (in)"] || [])].filter((it) => it.layers);
-  return `<div class="link-card"><h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
+  return `<div class="link-card">${layerChip(ds.dataset_id)}<h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
     `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
     (count && share && count.effect > 0 ? `<p class="link-both">${esc(cap(word("more_events")))} і ${esc(word("other_mix"))}</p>` : "") +  // the pair: one run, one scope, one value
     (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
