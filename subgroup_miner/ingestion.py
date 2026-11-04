@@ -107,6 +107,7 @@ def dataset_fingerprint(
     where: str | None = None,
     counts: Sequence[str] = (),
     weights: bool = False,
+    baseline: str | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
@@ -114,7 +115,8 @@ def dataset_fingerprint(
     order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
     only when it is not the default (an upload made before the option keeps its id); ``where`` a reading's row filter,
     and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id); ``weights`` the
-    event-weighted median of the shares (``WEIGHT_BY_EVENTS``), mixed in only when on."""
+    event-weighted median of the shares (``WEIGHT_BY_EVENTS``), mixed in only when on; ``baseline`` the zone baseline,
+    mixed in only when it is not the map."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -135,6 +137,8 @@ def dataset_fingerprint(
         h.update(f"counts={sorted(counts)}".encode())
     if weights:
         h.update(b"weights=events")
+    if baseline:
+        h.update(f"baseline={baseline}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -301,6 +305,15 @@ def parse_ring(ring: int | str | None) -> int:
     return int(text)
 
 
+def parse_baseline(spec: str | None) -> str | None:
+    """What a geo level's metrics are read against (docs/02_discovery.md §2.9): ``map`` (the default: None or empty) or
+    ``zone`` (each cell's parent one resolution coarser). Another value is ``invalid_options``."""
+    text = (spec or "map").strip().lower() or "map"
+    if text not in {"map", "zone"}:
+        raise IngestionError("invalid_options", f"baseline {spec!r}: map (every cell) or zone (the cell's parent cell)")
+    return None if text == "map" else text
+
+
 def parse_where(spec: str | None) -> str | None:
     """A reading's row filter as written (``<column>=<value>``: one column, one value) -> ``column=value`` trimmed, None
     for none; another shape is ``invalid_options``."""
@@ -389,6 +402,7 @@ def load_dataset(
     context_ring: int | str | None = 1,
     where: str | None = None,
     count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -405,7 +419,8 @@ def load_dataset(
     events within a span) and counted into the cells as one
     forced band each over the disk of ``context_ring`` rings around a cell (``parse_ring``; §2.9); it needs ``geo``.
     ``where``: the rows holding one value of one column (``filter_rows``), its own reading of the file (§2.9).
-    ``count_values``: ``column=value`` each, counted per cell (``count_<column>_<value>``; geo only, §2.9)."""
+    ``count_values``: ``column=value`` each, counted per cell (``count_<column>_<value>``; geo only, §2.9); ``baseline``
+    ``zone`` reads every cell metric against its parent cell's median (``parse_baseline``; geo only, §2.9)."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -418,7 +433,7 @@ def load_dataset(
     if context and not geo_spec:
         raise IngestionError("invalid_options", "context layers need the geo option: they are counted into its cells")
     ring = parse_ring(context_ring)
-    where = parse_where(where)
+    where, baseline = parse_where(where), parse_baseline(baseline)
     layers = [read_context(*layer) for layer in context]
     frame, digest = read_file(path, shared=shared)
     frame = filter_rows(frame, where) if where else frame
@@ -451,7 +466,7 @@ def load_dataset(
     if geo_spec:
         points = frame
         key = (digest.hexdigest(), geo_spec[0], where) if shared else None  # the levels of one reading: one point profile
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring, count_values)
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring, count_values, baseline)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
@@ -483,6 +498,7 @@ def load_dataset(
             where=where,
             counts=count_values if geo_spec else (),
             weights=config.weight_by_events,
+            baseline=baseline if geo_spec else None,
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -558,10 +574,12 @@ def _to_cells(
     context: Sequence[ContextSource] = (),
     context_ring: int = 1,
     count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
     one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells,
-    each over the disk of ``context_ring`` rings; ``count_values`` the values counted per cell."""
+    each over the disk of ``context_ring`` rings; ``count_values`` the values counted per cell; ``baseline`` ``zone``
+    the metrics read against their parent cell's median."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
@@ -571,6 +589,7 @@ def _to_cells(
             context=context,
             context_ring=context_ring,
             count_values=count_values,
+            baseline=baseline,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc

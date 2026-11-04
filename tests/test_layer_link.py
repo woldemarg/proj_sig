@@ -1,7 +1,7 @@
 """The layer link's cell metrics (docs/02_discovery.md §2.9; the concept's §4 and §9 in
 docs/extra_funcs/spatial_analytics_multi_type/cross_layer_analysis_concept.md): the per-type counters asked for (*більше
-подій*), the shares confirmed per event (*інший склад*) — what a run of a base layer with a context layer reads, and the
-layer's null on them."""
+подій*), the shares confirmed per event (*інший склад*), the zone baseline — what a run of a base layer with a context layer
+reads, and the layer's null on them."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from insight_contracts.graph import dataset_node_id
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.context import NONE_NEARBY
 from subgroup_miner.discovery import _median_z, _weighted_median, _weighted_stats, recompute_statistics
 from subgroup_miner.ingestion import load_dataset
 
@@ -153,7 +154,7 @@ def test_counted_values_are_checked_against_the_rows_and_a_rare_one_is_a_status(
             engine.upload(path.name, stream, geo="latitude,longitude@7", count_values=bad)
     with path.open("rb") as stream, pytest.raises(PipelineError, match="count_values"):
         engine.upload(path.name, stream, geo="latitude,longitude", layer=True, count_values="channel=phone")
-    with path.open("rb") as stream, pytest.raises(PipelineError, match="count_values without geo"):
+    with path.open("rb") as stream, pytest.raises(PipelineError, match="without geo"):
         engine.upload(path.name, stream, count_values="channel=phone")  # a table has no cells to count into
 
 
@@ -173,3 +174,51 @@ def test_the_weighted_median_follows_the_events_not_the_cells():
         0.2,
         pytest.approx(0.0845, abs=1e-3),
     )  # NaN out; the mean deviation
+
+
+def test_the_zone_baseline_uses_the_nulls_parent_and_replaces_the_columns():
+    """The zone is the null's parent cell; counters and shares are replaced by their distance from its median (§2.9)."""
+    frame = geo_frame()
+    plain, ctx_map, _ = cells_of(frame)
+    zoned, ctx, _ = cells_of(frame, baseline="zone")
+    assert list(zoned.columns) == list(plain.columns) and (ctx.baseline, ctx_map.baseline) == ("zone", None)
+    parents = pd.Series([h3.cell_to_parent(c, 6) for c in ctx.cells])
+    assert (pd.factorize(parents)[0] == ctx.blocks).all()  # the zone is the null's and the bootstrap's parent cell
+    logged = np.log1p(plain["points"])
+    assert np.allclose(zoned["points"], logged - logged.groupby(parents).transform("median"))
+    shares = plain["share_channel_phone"]
+    assert np.allclose(zoned["share_channel_phone"], shares - shares.groupby(parents).transform("median"), equal_nan=True)
+    assert zoned["share_channel_phone"].isna().equals(shares.isna()) and zoned["neighbours_points"].equals(plain["neighbours_points"])
+
+
+def test_the_zone_baseline_removes_the_difference_between_zones():
+    """Two halves of a map at different levels: against the map the north half's cells read six units higher; against
+    their zones the difference between the halves is gone, while each cell keeps its distance from its zone's median."""
+    frame = geo_frame()
+    frame["load"] = frame["load"] + np.where(frame["sector"] == "north", 6.0, 0.0)
+    plain, ctx, _ = cells_of(frame)
+    zoned = cells_of(frame, baseline="zone")[0]
+    north = plain["sector_mode"] == "north"
+    gap = lambda t: t.loc[north, "load_median"].median() - t.loc[~north, "load_median"].median()  # noqa: E731
+    assert gap(plain) > 5 and abs(gap(zoned)) < 1
+
+
+def test_a_planted_dependence_survives_the_zone_baseline(engine, tmp_path):
+    """A zone baseline takes out the differences between parent cells only: the schools' dependence, which varies within
+    them, still beats the dealt layer. The run asks for the baseline (or keeps its target level's), names it on its
+    record, its insights' provenance and its Dataset node, and ``verify`` reads it the same (docs/02_discovery.md §2.9)."""
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        assert cross_run(client, a, b, baseline="region").json()["code"] == "invalid_options"
+        run = engine.ws.load_batch(cross_run(client, a, b, baseline="zone").json()["batch_id"])
+        plain = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+    assert run["baseline"] == "zone" and "baseline" not in plain and run["dataset_id"] != plain["dataset_id"]
+    patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"]]
+    found = [p for p in patterns if p["effect_size"] > 0 and any(c["attribute"] == BAND and c["value"] != NONE_NEARBY for c in p["conditions"])]
+    family = found[0]["provenance"]["spatial"]["context_family"]
+    assert any(p["provenance"]["spatial"]["p_context"] * family <= 0.05 for p in found)  # the dependence within the zones
+    assert all(p["provenance"]["spatial"]["baseline"] == "zone" for p in patterns)
+    assert engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]["baseline"] == "zone"
+    assert engine.verify_pattern(found[0]["id"])["status"] == "reproduced"

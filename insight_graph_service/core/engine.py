@@ -50,6 +50,7 @@ from subgroup_miner.ingestion import (
     auto_levels,
     forget_tables,
     load_dataset,
+    parse_baseline,
     parse_grid,
     parse_ring,
     parse_tz,
@@ -329,6 +330,7 @@ class Engine:
         layer: bool = False,
         where: str | None = None,
         count_values: str | None = None,
+        baseline: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -342,23 +344,24 @@ class Engine:
         cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
         (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
         ``where`` (``column=value``): the rows holding the value, a reading of its own over the file stored once;
-        ``count_values`` (``column=value,...``) the geo levels' per-type counters (``uploads.resolve_counts``). Processing is a separate call."""
+        ``count_values`` and ``baseline``: the geo levels' per-type counters and what their metrics are read against (§2.9)."""
         if layer:
-            asked = {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where, "count_values": count_values}
+            asked = {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where}
+            asked |= {"count_values": count_values, "baseline": baseline}  # a layer is counted, never mined
             refused = [k for k, v in asked.items() if v]
             return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
         uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
-        uploads.check_geo_options(context, geo, context_ring, count_values)
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
             ring = parse_ring(context_ring)
-            where = parse_where(where)
+            where, baseline = parse_where(where), parse_baseline(baseline)
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
+        uploads.check_geo_options(context, geo, context_ring, count_values, baseline)
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
@@ -425,6 +428,7 @@ class Engine:
                 locator=None if g else locator.strip() or None,
                 context=layers if g else None,  # a table level has no cells, and counts none
                 count_values=counts if g else (),
+                baseline=baseline if g else None,
                 context_ring=ring,
                 **options,
             )
@@ -459,6 +463,7 @@ class Engine:
         warnings: Sequence[str] = (),
         where: str | None = None,
         count_values: Sequence[dict[str, Any]] | None = None,
+        baseline: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -491,7 +496,7 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
-            **{k: v for k, v in {"where": where, "count_values": list(count_values or ())}.items() if v},
+            **{k: v for k, v in {"where": where, "count_values": list(count_values or ()), "baseline": baseline}.items() if v},
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
             **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
