@@ -38,11 +38,22 @@
         <label class="small" for="sample">Або готовий датасет</label>
         <select class="field" id="sample"><option value="">— не обрано —</option></select>
         <div class="hint" id="sample-hint"></div>
+        <fieldset class="roles" id="roles" disabled>
+          <legend class="small">Що це</legend>
+          <label class="role-card"><input type="radio" name="role" id="role-events" value="events"><b>Події з координатами</b><span>базовий шар: комірки мапи та їхні інсайти</span></label>
+          <label class="role-card"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця без координат</b><span>інсайти рядків таблиці</span></label>
+          <label class="role-card"><input type="radio" name="role" id="role-layer" value="layer"><b>Лише шар</b><span>контекстний шар: точки, що лише стоять поруч із подіями базового</span></label>
+        </fieldset>
         <details class="adv">
-          <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Параметри колонок</span></summary>
+          <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>
           <label class="small" for="where">Лише рядки</label>
           <input class="field" id="where" placeholder="колонка=значення">
           <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>
+          <label class="small" for="count-values">Типи для «більше подій»</label>
+          <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
+          <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
+          <label class="small" for="baseline">Порівнювати комірки</label>
+          <select class="field" id="baseline"><option value="">з усією мапою</option><option value="zone">зі своєю зоною (батьківською коміркою)</option></select>
           <label class="small" for="categories">Вважати категоріями</label>
           <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
           <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
@@ -53,7 +64,6 @@
           <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
           <div class="hint"><span class="mono">auto</span> знайде координати; <span class="mono">@7</span> — рівень H3, <span class="mono">@7,5</span> — кілька, <span class="mono">@auto</span> — за точками.</div>
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
-          <label class="small chk"><input type="checkbox" id="layer-only"> Лише шар — зберегти точки як контекстний шар, не аналізувати</label>
           <label class="small" for="context">Контекстний шар — точки іншого типу</label>
           <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
           <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>

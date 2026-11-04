@@ -315,7 +315,7 @@ function init() {
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
-    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; syncTable(); }
+    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
     $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
   });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -324,23 +324,22 @@ function init() {
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
-  $("layer-only").addEventListener("change", fillSamples);
+  $("roles").addEventListener("change", (e) => setRole(e.target.value));  // a set locked to a layer has no other card to change to
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
-    fillSamples();
+    $("sample").insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));  // every shipped set: its role proposed when picked
     $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(sampleItem).join(""));
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];
     $("sample-hint").textContent = d ? `${d.description} ${d.span ? `${d.span[0]} — ${d.span[1]}. ` : ""}Ліцензія: ${d.license}.` : "";
-    if (!d) { $("upload-btn").disabled = !$("file").files[0]; return; }
+    if (!d) { $("upload-btn").disabled = !$("file").files[0]; setRole(""); return; }
     $("file").value = ""; $("file-name").textContent = d.file;
     const o = d.options || {};
     for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
     $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
-    syncTable();
-    document.querySelector("#upload-form details.adv").open = true;  // what the dataset will be read with, before it is
+    setRole(d.context_only ? "layer" : o.geo ? "events" : "table", !!d.context_only);  // a set meant only as a layer mines nothing
     $("upload-btn").disabled = false;
   });
   $("reset-btn").addEventListener("click", async () => {

@@ -773,9 +773,9 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
 
 @pytest.mark.browser
 def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, tmp_path, monkeypatch):
-    """A shipped set meant only as a layer is not offered as a dataset; with *Лише шар* ticked every shipped set with
-    points is, and the one chosen is kept as a layer through the form — its time column sent —; the form's *Лише рядки*
-    is sent and refused for a value no row holds. A run of the kept layer with a stored upload (``POST /api/crosstype``)
+    """Every shipped set is listed and its role proposed when picked — events for a set with points, a table without,
+    *Лише шар* alone for a set meant only as a layer —; the one kept as a layer goes through the form with its time
+    column sent; the form's *Лише рядки* is sent and refused for a value no row holds. A run of the kept layer with a stored upload (``POST /api/crosstype``)
     joins the target's group as ``+ <layer>``; the console holds no control that runs one."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
@@ -810,29 +810,28 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
-        page.wait_for_function(f"{offered}.length === 2", timeout=20000)
-        assert page.evaluate(offered) == ["plain", "target"]  # a layer alone mines nothing
+        page.wait_for_function(f"{offered}.length === 4", timeout=20000)
+        assert page.evaluate(offered) == ["plain", "target", "schools", "patrols"]  # every shipped set, its role proposed
         assert page.locator("#cross-panel, #cross-btn").count() == 0  # runs are queued through the API alone
         page.select_option("#sample", "target")
+        assert page.is_checked("#role-events") and page.text_content("#upload-btn") == "Аналізувати"
+        page.evaluate("document.querySelector('#where').closest('details').open = true")
         page.fill("#where", "kind=zzz")  # its own reading under a filter: a value no row holds, refused with the values listed
         page.click("#upload-btn")
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('the values of kind')", timeout=20000)
         page.fill("#where", "")
-        page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
-        page.check("#layer-only")
-        assert page.evaluate(offered) == ["target", "schools", "patrols"] and page.input_value("#sample") == "target"  # any set with points
-        page.select_option("#sample", "schools")
-        page.uncheck("#layer-only")
-        assert page.input_value("#sample") == "" and page.is_disabled("#upload-btn")  # a choice no longer listed goes
+        page.select_option("#sample", "plain")  # no points: a table, no geo sent
+        assert page.is_checked("#role-table") and page.is_disabled("#geo")  # held, not sent
+        page.select_option("#sample", "schools")  # meant only as a layer: the other roles closed
+        assert page.is_checked("#role-layer") and page.is_disabled("#role-events") and page.is_disabled("#role-table")
+        assert page.text_content("#upload-btn") == "Зберегти шар"
         for key in ("schools", "patrols"):  # the shipped schools and the timed patrols, kept as layers through the form
-            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")  # a send folds the options
-            page.check("#layer-only")
             page.select_option("#sample", key)
             page.click("#upload-btn")
             page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
         layer, patrols = sorted((r for r in engine.ws.list_batches() if r["status"] == "LAYER"), key=lambda r: r["filename"] != "schools.csv")
         assert (patrols.get("time"), "span" in patrols) == ("when", True)  # the form sent the layer's time column
-        assert not page.is_checked("#layer-only") and page.evaluate(offered) == ["plain", "target"]  # the form reset
+        assert page.is_disabled("#role-events") and not page.is_checked("#role-layer") and page.input_value("#sample") == ""  # the form reset
         run = engine.ws.load_batch(cross_run(client, a, layer["upload_id"]).json()["batch_id"])
         page.evaluate("refreshBatches()")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
@@ -884,10 +883,9 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         page.click("#upload-btn")
         crimes = finished(filename="chicago_crimes.csv")
         assert (crimes["status"], crimes["level"]) == ("READY", "9")
-        for key in ("chicago_bars", "chicago_l_stations"):  # kept as layers from the shipped list
-            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
-            page.check("#layer-only")
+        for key in ("chicago_bars", "chicago_l_stations"):  # kept as layers from the shipped list: the role proposed
             page.select_option("#sample", key)
+            assert page.is_checked("#role-layer")
             page.click("#upload-btn")
             page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
         layers = {b["filename"]: b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"}
