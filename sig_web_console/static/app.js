@@ -395,6 +395,11 @@ function init() {
     setView("graph"); reveal(p.id);
   });
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
+  on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  $("link-form").addEventListener("submit", runLink);
+  $("link-cancel").addEventListener("click", () => $("link-dialog").close());
+  const sources = ["link-layer", "link-sample", "link-file"];  // the layer comes from one of them: picking one clears the others
+  sources.forEach((id) => $(id).addEventListener("change", () => sources.forEach((other) => { if (other !== id) $(other).value = ""; })));
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
   on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer

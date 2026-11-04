@@ -622,6 +622,39 @@ def test_cross_state_marks_a_run_whose_layer_is_gone_and_counts_a_layers_runs():
     assert uploads.cross_state(batches) == state and "stale" not in batches[3]  # a function of the registry: nothing written
 
 
+def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_level(engine, tmp_path):
+    """A run of one layer reads the target's finest level on one disk and keeps the target's per-type counters and
+    baseline only where its record holds them; an empty ``count_values`` asks for none. A level coarser than
+    ``LINK_MIN_LEVEL`` is named in the run's warnings, and the registry offers a link only on an upload's finest mined
+    level not coarser than it (``linkable``: the console's *+ контекстний шар*) — READY, or none of its findings admitted
+    alone —, never on a run."""
+    target, context = planted(tmp_path)
+    plain = tmp_path / "plain.csv"
+    pd.read_csv(target).iloc[:-1].to_csv(plain, index=False)  # other bytes: another upload
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES + 1},{RES}", count_values="kind=a", baseline="zone")["upload_id"]
+        p = upload_file(client, "plain.csv", plain, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        asked = [((a, b), {}), ((a, b), {"levels": [RES], "count_values": ""}), ((p, b), {})]
+        kept, coarse, bare = (engine.ws.load_batch(cross_run(client, *pair, **options).json()["batch_id"]) for pair, options in asked)
+    assert ([c["value"] for c in kept["count_values"]], kept["baseline"], kept["level"], kept["context_ring"], kept["cross"]) == (
+        ["a"],
+        "zone",
+        str(RES + 1),
+        1,
+        [b],
+    )
+    assert "count_values" not in coarse and coarse["baseline"] == "zone" and "count_values" not in bare and "baseline" not in bare
+    words = f"coarser than r{uploads.LINK_MIN_LEVEL}"
+    assert [any(words in w for w in r.get("warnings", ())) for r in (kept, coarse, bare)] == [False, True, True]
+    level = lambda bid, upload, r, status="READY", **x: {"batch_id": bid, "upload_id": upload, "geo": f"lat,lon@{r}", "status": status, **x}  # noqa: E731
+    registry = [
+        *(level("a9", "up-a", 9), level("a7", "up-a", 7), level("run", "up-a", 9, cross=["up-l"]), level("k7", "up-k", 7)),
+        *(level("q9", "up-q", 9, "FAILED", error={"code": "no_viable_insights"}), level("n9", "up-n", 9, "FAILED", error={"code": "no_candidates"})),
+    ]
+    assert sorted(b for b, s in uploads.cross_state(registry).items() if s.get("linkable")) == ["a9", "q9"]
+
+
 def test_runs_follow_their_target_and_outlive_their_layer(engine, tmp_path):
     """The incremental operations around cross-type runs (the M18 specification §13): a third upload leaves the insights
     already there as they were; deleting one run leaves its target, its layer and the other run whole; a new version of
@@ -868,8 +901,8 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
 def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_verdict(cfg):
     """The M18 acceptance case (docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md §12)
     from an empty workspace, on the shipped tables: the crimes picked in the console and read with their manifest's
-    options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes through
-    ``POST /api/crosstype`` at its defaults — the crimes' finest level, the default disk. The verdict is the one measured
+    options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes from their
+    card's *+ контекстний шар* at its defaults — the crimes' finest level, the default disk. The verdict is the one measured
     (§12a): the bars' run admits nothing and its card counts the cohorts the bars' arrangement reproduces; the stations'
     admits one finding, whose drawer reads the layer's verdict."""
     sync_api = pytest.importorskip("playwright.sync_api")
@@ -915,8 +948,10 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
             page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
         layers = {b["filename"]: b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"}
         runs = {}
-        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # crossed at the defaults: the crimes' finest level, the default disk
-            cross_run(client, crimes["upload_id"], layers[name])
+        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # from the crimes' card: their finest level, the default disk
+            page.click(".ds-link")
+            page.select_option("#link-layer", layers[name])
+            page.click("#link-go")
             runs[name] = finished(cross=[layers[name]])
             assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 1)
         page.evaluate("refreshBatches()")

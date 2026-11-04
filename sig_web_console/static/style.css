@@ -102,9 +102,15 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .ds { position: relative; border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 10px; background: var(--surface); transition: border-color .15s, box-shadow .15s; }
 .ds.clickable { cursor: pointer; } .ds.clickable:hover { border-color: var(--line-2); }
 .ds-pick { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }  /* a READY card's name: its keyboard handle */
-.ds-foot { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-.ds-del { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-xs); background: transparent; color: var(--ink-2); font-size: 12.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+.ds-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ds-del, .ds-link { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-xs); background: transparent; color: var(--ink-2); font-size: 12.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
 .ds-del:hover { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.ds-link { margin-right: auto; color: var(--accent); }
+.ds-link:hover { background: var(--accent-soft); border-color: transparent; }
+#link-dialog { width: min(440px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-lg); }
+#link-dialog::backdrop { background: rgba(10, 12, 20, .45); }
+#link-form { display: grid; gap: 6px; } #link-title { margin: 0 0 4px; font-size: 15px; }
+.link-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .ds.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .ds-head { display: flex; align-items: center; gap: 8px; }
 .ds-name { flex: 1; min-width: 0; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

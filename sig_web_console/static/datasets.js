@@ -50,7 +50,8 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   }
   const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? chip("", "Шар") : chip("", "Пропущено");
   const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
-  const del = running ? "" : `<div class="ds-foot"><button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
+  const link = b.linkable ? `<button type="button" class="ds-link" data-link="${esc(b.batch_id)}" title="Окремий прогін цього рівня з одним контекстним шаром">+ ${esc(word("context_layer"))}</button>` : "";  // uploads.cross_state
+  const del = running ? "" : `<div class="ds-foot">${link}<button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
     (busy ? `disabled title="Іде обробка: видалення відхиляється, доки вона не скінчиться">` : `title="Прибрати цей датасет і його інсайти з бази знань">`) +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Видалити</button></div>`;
   return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
@@ -126,6 +127,8 @@ function renderRail(html) {
 async function refreshBatches() {
   let batches = [];
   try { batches = await api("/api/batches"); } catch (e) { clearTimeout(S.poll); S.poll = setTimeout(refreshBatches, 3000); return; }
+  S.batches = batches;  // the stored layers the link dialog offers
+  if (S.linkRun && batches.find((b) => b.batch_id === S.linkRun)?.status === "SKIPPED") { S.linkRun = null; setUploadMsg("Такий прогін уже є — нового немає."); }  // a repeat, known once read
   // one card per dataset (newest first): its READY batch if it has one, otherwise its latest attempt
   const byDataset = new Map();
   for (const b of batches) {
@@ -187,6 +190,45 @@ function setRole(r, layerOnly = false) {
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
   syncTable();
+}
+
+// *+ контекстний шар* (docs/08_interface.md §8.2): one layer, one run of the base layer's finest level — the API's two calls
+function openLink(batchId) {
+  const b = S.batches.find((x) => x.batch_id === batchId);  // a card's button: rendered from the batches stored with it
+  const stored = new Map(S.batches.filter((x) => x.upload_id !== b.upload_id && !x.cross && (x.status === "LAYER" || (x.status === "READY" && geoLevel(x)))).map((x) => [x.upload_id, x]));
+  $("link-dialog").dataset.target = b.upload_id;
+  $("link-title").textContent = `+ ${word("context_layer")} · ${datasetName(b)}`;
+  $("link-form").reset(); $("link-msg").textContent = "";
+  $("link-layer").length = 1;
+  $("link-layer").insertAdjacentHTML("beforeend", [...stored.values()].map((x) => `<option value="${esc(x.upload_id)}">${esc(x.filename + (x.where ? ` · ${x.where}` : ""))}</option>`).join(""));
+  $("link-sample").length = 1;
+  $("link-sample").insertAdjacentHTML("beforeend", Object.values(S.samples || {}).filter((d) => (d.options || {}).geo).map(sampleItem).join(""));
+  $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
+  $("link-dialog").showModal();
+}
+
+async function runLink(e) {
+  e.preventDefault();
+  const f = $("link-file").files[0], key = $("link-sample").value, o = key ? S.samples[key].options || {} : {};
+  let layer = $("link-layer").value;
+  $("link-go").disabled = true;
+  try {
+    if (!layer && !f && !key) throw new Error("Оберіть збережений шар, готовий набір або файл.");
+    if (!layer) {  // kept as a layer first: the upload's own call with *Лише шар*
+      const fd = new FormData();
+      if (f) fd.append("file", f); else fd.append("demo", key);
+      fd.append("layer", "true"); fd.append("geo", o.geo || "auto"); fd.append("time", o.time || ""); fd.append("tz", o.tz || "");
+      layer = (await api("/api/upload", { method: "POST", body: fd })).upload_id;
+      $("link-layer").insertAdjacentHTML("beforeend", `<option value="${esc(layer)}">${esc(f ? f.name : S.samples[key].file)}</option>`);  // kept: a retry reads it
+      $("link-layer").value = layer; $("link-sample").value = ""; $("link-file").value = "";
+    }
+    const body = { target: $("link-dialog").dataset.target, layers: [layer], ring: $("link-ring").value, count_values: $("link-counts").value };  // empty: no types
+    const run = await api("/api/crosstype", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    $("link-dialog").close();
+    S.linkRun = run.batch_id; setUploadMsg("Прогін у черзі — поступ видно нижче.");
+    refreshBatches();
+  } catch (err) { $("link-msg").className = "msg err"; $("link-msg").textContent = err.message; }
+  finally { $("link-go").disabled = false; }
 }
 
 async function upload() {
