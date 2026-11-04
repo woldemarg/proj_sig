@@ -10,6 +10,7 @@ function graphStyle() {
     { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
     { selector: 'node[kind="Pattern"][direction < 0]', style: { "background-color": down } },
+    { selector: "node[layer]", style: { "border-width": 3, "border-color": (n) => layerColor(n.data("layer")) } },  // a layer link's insight
     { selector: 'node[kind="Pattern"][ptype="covariance"]', style: { "background-color": cov, shape: "round-rectangle" } },
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
@@ -330,11 +331,15 @@ async function loadGraph() {
   S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
   S.asOf = (g.stats || {}).as_of || null;  // the latest data: the date the answers and the drawer count freshness from
+  const off = new Set(g.nodes.filter((n) => n.data.kind === "Pattern" && S.hidden.has(n.data.dataset)).map((n) => n.data.id));
+  g.nodes = g.nodes.filter((n) => !off.has(n.data.id)); g.edges = g.edges.filter((e) => !off.has(e.data.source) && !off.has(e.data.target));
+  S.hiddenCount = off.size;  // the table's foot names them
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
   $("view-caption").textContent = S.nodes.length ? `Показано: ${plural(S.nodes.length, "інсайт", "інсайти", "інсайтів")} · ${plural(themes, "тема", "теми", "тем")}` : "Немає інсайтів для показу";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
+  for (const n of g.nodes) { const l = layersOf(n.data.dataset)[0]; if (l) n.data.layer = l; }
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
     els.push({ data: { id: "__lbl_latent", kind: "PlaneLabel", label: "ТЕМИ" }, selectable: false, grabbable: false });
@@ -347,6 +352,9 @@ async function loadGraph() {
   } else {
     S.cy.elements().remove(); S.cy.add(els);
   }
+  const shown = [...new Set(S.nodes.flatMap((d) => layersOf(d.dataset)))].sort();  // the layers of the insights in view
+  $("lg-layers").hidden = !shown.length;
+  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(l)}</span></div>`).join("");
   countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);
@@ -421,11 +429,12 @@ function renderTable() {
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
     const effect = d.ptype === "covariance" ? word("covariance") : `${signed(d.effect)} sd`;
-    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
+    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}${layerChip(d.dataset)}</div></td>` +
       `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">${S.nodes.length ? "Жоден інсайт не відповідає фільтру." : "Інсайтів ще немає."}</td></tr>`;
+  if (S.hiddenCount) $("ins-table").querySelector("tbody").insertAdjacentHTML("beforeend", `<tr class="hidden-foot"><td colspan="6" class="muted">ще ${plural(S.hiddenCount, "інсайт", "інсайти", "інсайтів")} приховано: їхній шар вимкнено</td></tr>`);
   $("table-summary").textContent = S.nodes.length ? `${rows.length} з ${S.nodes.length}` : "";
 }
 
@@ -605,6 +614,31 @@ function ageWords(core, asOf) {
   return at < end ? `${word("as_of")} ${date} триває` : `${word("as_of")} ${date} закінчилося ${span(at - end)} тому`;
 }
 
+const pct = (x) => `${num(x * 100, 0)} %`;
+
+function linkCard(p, d) {
+  /* a layer link's insight in its two questions (docs/08_interface.md §8.2): more events and another mix, each from one
+     run's own insights — this one and, for the same scope and value, its pair (the server's link.pair) —, never one
+     number; the run's level and disk; the same base layer's other links in the same places (CO_LOCATED, no test of
+     their joint effect). A metric neither a count nor a share answers neither question: no rows */
+  const ds = d.dataset, me = { target: p.target, effect: p.effect_size }, pair = d.link.pair, [kind, key] = me.target.split(/_(.+)/);
+  const { count = null, share = null } = { [kind === "points" ? "count" : kind]: me, ...(pair && { [pair.target.split("_")[0]]: pair }) };  // points: every event's count
+  const asked = (ds.count_values || []).find((c) => `${c.column}_${c.value}` === key), held = `не ${word("context_confounded")}`;  // admitted: past the layer's null
+  const more = count ? `${count.effect > 0 ? "так" : "менше"} · ${held}${d.link.exposure ? ` · ${d.link.exposure}` : ""}`
+    : !(ds.count_values || []).length ? "не перевірялось" : asked && asked.status !== "ok" ? `${word("insufficient_data")} для частоти на цьому рівні` : "ні";
+  const s0 = share === me ? p.shifts[0] : null;
+  const mix = share ? `так · ${held}` + (ds.baseline === "zone" ? ` · ${word("zone_baseline")}` : s0 ? ` · типова частка ${pct(s0.local_median)} проти ${pct(s0.global_median)}` : "") +
+    (ds.weight_by_events ? ` · ${word("per_event")}` : "") : "ні";
+  const same = [...(d.neighbors.CO_LOCATED || []), ...(d.neighbors["CO_LOCATED (in)"] || [])].filter((it) => it.layers);
+  return `<div class="link-card">${layerChip(ds.dataset_id)}<h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
+    `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
+    (count && share && count.effect > 0 ? `<p class="link-both">${esc(cap(word("more_events")))} і ${esc(word("other_mix"))}</p>` : "") +  // the pair: one run, one scope, one value
+    (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
+    (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
+      same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
+        (S.hidden.has(it.dataset_id) ? " · у відповідях шар вимкнено" : ""))).join("") : "") + `</div>`;
+}
+
 async function inspect(id, note = "") {
   const within = $("drawer").contains(document.activeElement);  // a drawer row followed: the focus stays in the drawer
   let d;
@@ -617,13 +651,14 @@ async function inspect(id, note = "") {
     $("drawer-title").textContent = d.reading.where;  // the insight in words (insight_contracts/wording.py), as every surface reads it
     const cov = p.covariance && p.covariance.pair ? p.covariance : null, ds = d.dataset || {};
     html += `<p class="lead">${esc(d.reading.gist)}</p>`;  // the words alone: the table below holds the numbers
+    if (d.link) html += linkCard(p, d);
     html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>${shiftRows(p.shifts, ds.metadata_doc)}`;
     if (cov) html += kv([[term("covariance"), `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}`]]);
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
-      `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
+      `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])
+        .concat(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : [])) + `</details>` +  // a cohort on a layer's band: the layer's p
       kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
-        ...(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : []),  // a cohort on a layer's band: the layer's verdict
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
         [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
       ]);
@@ -632,8 +667,8 @@ async function inspect(id, note = "") {
     if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
-    tail += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
-    tail += `<details class="nb-group"><summary>Походження</summary>` + kv([
+    tail += `<details class="nb-group" data-dev><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
+    tail += `<details class="nb-group" data-dev><summary>Походження</summary>` + kv([
       ["Датасет", esc(`${p.provenance.filename}${(ds.cross_layers || []).length ? ` · + ${ds.cross_layers.join(", ")}` : ""}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
       ["Селектор", `<span class="mono">${esc(p.expression)}</span>`],
       ...(p.aliases || []).length ? [[esc(cap(word("aliases"))), p.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>")]] : [],

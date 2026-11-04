@@ -14,6 +14,9 @@
   <div class="brand"><span class="brand-mark">SIG</span><span>Граф інсайтів</span></div>
   <div class="spacer"></div>
   <div class="pills" id="health"></div>
+  <button class="icon-btn" id="dev-btn" aria-pressed="false" title="Режим розробника: граф, 3D-сфера й технічні поля" aria-label="Режим розробника">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6"/></svg>
+  </button>
   <button class="icon-btn" id="theme-btn" title="Світла / темна тема" aria-label="Перемкнути тему">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
   </button>
@@ -35,11 +38,22 @@
         <label class="small" for="sample">Або готовий датасет</label>
         <select class="field" id="sample"><option value="">— не обрано —</option></select>
         <div class="hint" id="sample-hint"></div>
+        <fieldset class="roles" id="roles" disabled>
+          <legend class="small">Що це</legend>
+          <label class="role-card"><input type="radio" name="role" id="role-events" value="events"><b>Події з координатами</b><span>базовий шар: комірки мапи та їхні інсайти</span></label>
+          <label class="role-card"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця без координат</b><span>інсайти рядків таблиці</span></label>
+          <label class="role-card"><input type="radio" name="role" id="role-layer" value="layer"><b>Лише шар</b><span>контекстний шар: точки, що лише стоять поруч із подіями базового</span></label>
+        </fieldset>
         <details class="adv">
-          <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Параметри колонок</span></summary>
+          <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>
           <label class="small" for="where">Лише рядки</label>
           <input class="field" id="where" placeholder="колонка=значення">
           <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>
+          <label class="small" for="count-values">Типи для «більше подій»</label>
+          <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
+          <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
+          <label class="small" for="baseline">Порівнювати комірки</label>
+          <select class="field" id="baseline"><option value="">з усією мапою</option><option value="zone">зі своєю зоною (батьківською коміркою)</option></select>
           <label class="small" for="categories">Вважати категоріями</label>
           <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
           <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
@@ -50,7 +64,6 @@
           <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
           <div class="hint"><span class="mono">auto</span> знайде координати; <span class="mono">@7</span> — рівень H3, <span class="mono">@7,5</span> — кілька, <span class="mono">@auto</span> — за точками.</div>
           <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
-          <label class="small chk"><input type="checkbox" id="layer-only"> Лише шар — зберегти точки для крос-типового аналізу, не аналізувати</label>
           <label class="small" for="context">Контекстний шар — точки іншого типу</label>
           <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
           <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>
@@ -108,15 +121,15 @@
   <section class="canvas" aria-label="Граф знань">
     <div class="canvas-bar">
       <div class="tabs" id="view-switch" role="tablist">
-        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true">Граф</button>
-        <button type="button" data-view="sphere" role="tab" aria-selected="false">3D-сфера</button>
+        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true" data-dev>Граф</button>
+        <button type="button" data-view="sphere" role="tab" aria-selected="false" data-dev>3D-сфера</button>
         <button type="button" data-view="table" role="tab" aria-selected="false">Інсайти <span class="count" id="ins-count"></span></button>
         <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Мапа</button>
         <button type="button" data-view="time" role="tab" aria-selected="false" id="time-tab" hidden>Час</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Датасет"><option value="">Усі датасети</option></select>
-      <select class="field graph-only" id="layout" aria-label="Розкладка">
+      <select class="field graph-only" id="layout" aria-label="Розкладка" data-dev>
         <option value="dual">Дві площини</option>
         <option value="force">Силове розміщення</option>
       </select>
@@ -156,7 +169,7 @@
         <div class="key" data-key="down"><i class="sw down"></i><span>Метрика нижча</span><b data-n="down"></b></div>
         <div class="key" data-key="cov"><i class="sw cov"></i><span>Зміна зв'язку</span><b data-n="cov"></b></div>
       </section>
-      <section class="lg"><h5>Зв'язки</h5>
+      <section class="lg" data-dev><h5>Зв'язки</h5>
         <button type="button" class="key toggle on" data-key="lattice"><i class="ln lattice"></i><span>Вужчі й ширші</span><b data-n="lattice"></b></button>
         <button type="button" class="key toggle on" data-key="latent"><i class="ln rel"></i><span>Пов'язані теми</span><b data-n="latent"></b></button>
         <button type="button" class="key toggle" data-key="contrast"><i class="ln contrast"></i><span>Протилежні зсуви</span><b data-n="contrast"></b></button>
@@ -167,6 +180,7 @@
         <button type="button" class="key toggle" data-key="region"><i class="sw region"></i><span>Регіони мапи</span><b data-n="region"></b></button>
         <button type="button" class="key toggle" data-key="schema"><i class="sw col"></i><span>Колонки</span><b data-n="schema"></b></button>
       </section>
+      <section class="lg" id="lg-layers" hidden><h5>Контекстні шари</h5><div id="lg-layers-keys"></div></section>
       <section class="lg"><h5>Відповідь</h5>
         <div class="key" data-key="seed"><i class="ring seed"></i><span>Відповідає питанню</span><b data-n="seed"></b></div>
         <div class="key" data-key="ev"><i class="ring ev"></i><span>Свідчення</span><b data-n="ev"></b></div>
@@ -277,6 +291,28 @@
     </form>
   </aside>
 </main>
+<dialog id="link-dialog" aria-labelledby="link-title">
+  <form id="link-form">
+    <h3 id="link-title">+ контекстний шар</h3>
+    <div class="hint">Окремий прогін базового шару з одним контекстним: найдрібніший рівень базового, одне оточення. Другий шар — ще одна дія й ще один прогін.</div>
+    <label class="small" for="link-layer">Збережений шар</label>
+    <select class="field" id="link-layer"><option value="">—</option></select>
+    <label class="small" for="link-sample">Або готовий набір</label>
+    <select class="field" id="link-sample"><option value="">—</option></select>
+    <label class="small" for="link-file">Або файл точок</label>
+    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet">
+    <div class="hint">Готовий набір чи файл спершу збережеться як «лише шар».</div>
+    <label class="small" for="link-counts">Типи для «більше подій»</label>
+    <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
+    <div class="hint">Типи базового шару, якщо їх обрано; порожньо — питаємо лише про склад.</div>
+    <details class="adv"><summary><span>Додатково</span></summary>
+      <label class="small" for="link-ring">Що рахувати поруч</label>
+      <select class="field" id="link-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+    </details>
+    <div class="msg" id="link-msg"></div>
+    <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button><button type="submit" class="btn" id="link-go">Запустити</button></div>
+  </form>
+</dialog>
 <script src="/vendor/cytoscape.min.js"></script>
 <script src="/vendor/plotly-gl3d.min.js"></script>
 <script src="/vendor/maplibre-gl.js"></script>

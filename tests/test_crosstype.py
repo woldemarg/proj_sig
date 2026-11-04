@@ -188,6 +188,31 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
     assert others and all("p_context" not in i.provenance["spatial"] for i in others)  # no context condition: no test, no key
 
 
+def test_a_per_type_counter_passes_the_layer_null_like_points(engine, tmp_path):
+    """A run asks for a per-type counter its target was read without (``count_values``, checked against the target's
+    rows): three times as many a's in a school's disk, the counter ``count_kind_a`` is a metric of the run's cells, and
+    the cohort near the schools raises it past the dealt layer as it raises ``points`` — the same null, read through the
+    run's own reading. Whether mining admits a counter depends on the data's other conditions: here every cohort beside
+    the band holds a neighbourhood condition, which restates the counters. The run's Dataset node names the counters
+    asked and what a count is per (docs/02_discovery.md §2.9)."""
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        refused = cross_run(client, a, b, count_values="kind=z")
+        assert refused.status_code == 400 and "no row holds" in refused.json()["detail"]
+        run = engine.ws.load_batch(cross_run(client, a, b, count_values="kind=a").json()["batch_id"])
+    assert run["status"] == "READY" and [(c["value"], c["status"]) for c in run["count_values"]] == [("a", "ok")]
+    loaded = engine._load(run)  # the run's file, its layer and its counter, as its processing read them
+    near = [(BAND, "q1")]
+    for metric in ("count_kind_a", "points"):
+        fresh = recompute_statistics(loaded.frame, near, f"{BAND}=='q1'", [metric], loaded.spatial, 10, engine.settings.miner, 4)
+        assert fresh["shifts"][0]["robust_z"] > 1 and fresh["spatial"]["p_context"] * 4 <= 0.05, (metric, fresh["spatial"])
+    assert "count_kind_a" in loaded.spatial.derived_from["lisa_points"]  # the neighbourhood conditions restate it
+    props = engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]
+    assert props["count_values"] == run["count_values"] and props["exposure"]["kind"] == "area"
+
+
 def test_without_draws_there_is_no_context_test(tmp_path):
     target, context = planted(tmp_path)
     config = MinerConfig(context_permutations=0)
@@ -597,6 +622,39 @@ def test_cross_state_marks_a_run_whose_layer_is_gone_and_counts_a_layers_runs():
     assert uploads.cross_state(batches) == state and "stale" not in batches[3]  # a function of the registry: nothing written
 
 
+def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_level(engine, tmp_path):
+    """A run of one layer reads the target's finest level on one disk and keeps the target's per-type counters and
+    baseline only where its record holds them; an empty ``count_values`` asks for none. A level coarser than
+    ``LINK_MIN_LEVEL`` is named in the run's warnings, and the registry offers a link only on an upload's finest mined
+    level not coarser than it (``linkable``: the console's *+ контекстний шар*) — READY, or none of its findings admitted
+    alone —, never on a run."""
+    target, context = planted(tmp_path)
+    plain = tmp_path / "plain.csv"
+    pd.read_csv(target).iloc[:-1].to_csv(plain, index=False)  # other bytes: another upload
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES + 1},{RES}", count_values="kind=a", baseline="zone")["upload_id"]
+        p = upload_file(client, "plain.csv", plain, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        asked = [((a, b), {}), ((a, b), {"levels": [RES], "count_values": ""}), ((p, b), {})]
+        kept, coarse, bare = (engine.ws.load_batch(cross_run(client, *pair, **options).json()["batch_id"]) for pair, options in asked)
+    assert ([c["value"] for c in kept["count_values"]], kept["baseline"], kept["level"], kept["context_ring"], kept["cross"]) == (
+        ["a"],
+        "zone",
+        str(RES + 1),
+        1,
+        [b],
+    )
+    assert "count_values" not in coarse and coarse["baseline"] == "zone" and "count_values" not in bare and "baseline" not in bare
+    words = f"coarser than r{uploads.LINK_MIN_LEVEL}"
+    assert [any(words in w for w in r.get("warnings", ())) for r in (kept, coarse, bare)] == [False, True, True]
+    level = lambda bid, upload, r, status="READY", **x: {"batch_id": bid, "upload_id": upload, "geo": f"lat,lon@{r}", "status": status, **x}  # noqa: E731
+    registry = [
+        *(level("a9", "up-a", 9), level("a7", "up-a", 7), level("run", "up-a", 9, cross=["up-l"]), level("k7", "up-k", 7)),
+        *(level("q9", "up-q", 9, "FAILED", error={"code": "no_viable_insights"}), level("n9", "up-n", 9, "FAILED", error={"code": "no_candidates"})),
+    ]
+    assert sorted(b for b, s in uploads.cross_state(registry).items() if s.get("linkable")) == ["a9", "q9"]
+
+
 def test_runs_follow_their_target_and_outlive_their_layer(engine, tmp_path):
     """The incremental operations around cross-type runs (the M18 specification §13): a third upload leaves the insights
     already there as they were; deleting one run leaves its target, its layer and the other run whole; a new version of
@@ -665,6 +723,7 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -730,6 +789,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         crossed = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == run["dataset_id"])
         plain = next(x["id"] for x in engine.ws.patterns() if x["dataset_id"] == own["dataset_id"] and "p_context" not in x["provenance"]["spatial"])
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -771,9 +831,9 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
 
 @pytest.mark.browser
 def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, tmp_path, monkeypatch):
-    """A shipped set meant only as a layer is not offered as a dataset; with *Лише шар* ticked every shipped set with
-    points is, and the one chosen is kept as a layer through the form — its time column sent —; the form's *Лише рядки*
-    is sent and refused for a value no row holds. A run of the kept layer with a stored upload (``POST /api/crosstype``)
+    """Every shipped set is listed and its role proposed when picked — events for a set with points, a table without,
+    *Лише шар* alone for a set meant only as a layer —; the one kept as a layer goes through the form with its time
+    column sent; the form's *Лише рядки* is sent and refused for a value no row holds. A run of the kept layer with a stored upload (``POST /api/crosstype``)
     joins the target's group as ``+ <layer>``; the console holds no control that runs one."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
@@ -804,32 +864,32 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", time="when")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
-        page.wait_for_function(f"{offered}.length === 2", timeout=20000)
-        assert page.evaluate(offered) == ["plain", "target"]  # a layer alone mines nothing
+        page.wait_for_function(f"{offered}.length === 4", timeout=20000)
+        assert page.evaluate(offered) == ["plain", "target", "schools", "patrols"]  # every shipped set, its role proposed
         assert page.locator("#cross-panel, #cross-btn").count() == 0  # runs are queued through the API alone
         page.select_option("#sample", "target")
+        assert page.is_checked("#role-events") and page.text_content("#upload-btn") == "Аналізувати"
+        page.evaluate("document.querySelector('#where').closest('details').open = true")
         page.fill("#where", "kind=zzz")  # its own reading under a filter: a value no row holds, refused with the values listed
         page.click("#upload-btn")
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('the values of kind')", timeout=20000)
         page.fill("#where", "")
-        page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
-        page.check("#layer-only")
-        assert page.evaluate(offered) == ["target", "schools", "patrols"] and page.input_value("#sample") == "target"  # any set with points
-        page.select_option("#sample", "schools")
-        page.uncheck("#layer-only")
-        assert page.input_value("#sample") == "" and page.is_disabled("#upload-btn")  # a choice no longer listed goes
+        page.select_option("#sample", "plain")  # no points: a table, no geo sent
+        assert page.is_checked("#role-table") and page.is_disabled("#geo")  # held, not sent
+        page.select_option("#sample", "schools")  # meant only as a layer: the other roles closed
+        assert page.is_checked("#role-layer") and page.is_disabled("#role-events") and page.is_disabled("#role-table")
+        assert page.text_content("#upload-btn") == "Зберегти шар"
         for key in ("schools", "patrols"):  # the shipped schools and the timed patrols, kept as layers through the form
-            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")  # a send folds the options
-            page.check("#layer-only")
             page.select_option("#sample", key)
             page.click("#upload-btn")
             page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
         layer, patrols = sorted((r for r in engine.ws.list_batches() if r["status"] == "LAYER"), key=lambda r: r["filename"] != "schools.csv")
         assert (patrols.get("time"), "span" in patrols) == ("when", True)  # the form sent the layer's time column
-        assert not page.is_checked("#layer-only") and page.evaluate(offered) == ["plain", "target"]  # the form reset
+        assert page.is_disabled("#role-events") and not page.is_checked("#role-layer") and page.input_value("#sample") == ""  # the form reset
         run = engine.ws.load_batch(cross_run(client, a, layer["upload_id"]).json()["batch_id"])
         page.evaluate("refreshBatches()")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
@@ -841,8 +901,8 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
 def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_verdict(cfg):
     """The M18 acceptance case (docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md §12)
     from an empty workspace, on the shipped tables: the crimes picked in the console and read with their manifest's
-    options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes through
-    ``POST /api/crosstype`` at its defaults — the crimes' finest level, the default disk. The verdict is the one measured
+    options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes from their
+    card's *+ контекстний шар* at its defaults — the crimes' finest level, the default disk. The verdict is the one measured
     (§12a): the bars' run admits nothing and its card counts the cohorts the bars' arrangement reproduces; the stations'
     admits one finding, whose drawer reads the layer's verdict."""
     sync_api = pytest.importorskip("playwright.sync_api")
@@ -865,6 +925,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
 
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -880,16 +941,17 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         page.click("#upload-btn")
         crimes = finished(filename="chicago_crimes.csv")
         assert (crimes["status"], crimes["level"]) == ("READY", "9")
-        for key in ("chicago_bars", "chicago_l_stations"):  # kept as layers from the shipped list
-            page.evaluate("document.querySelector('#layer-only').closest('details').open = true")
-            page.check("#layer-only")
+        for key in ("chicago_bars", "chicago_l_stations"):  # kept as layers from the shipped list: the role proposed
             page.select_option("#sample", key)
+            assert page.is_checked("#role-layer")
             page.click("#upload-btn")
             page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
         layers = {b["filename"]: b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"}
         runs = {}
-        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # crossed at the defaults: the crimes' finest level, the default disk
-            cross_run(client, crimes["upload_id"], layers[name])
+        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # from the crimes' card: their finest level, the default disk
+            page.click(".ds-link")
+            page.select_option("#link-layer", layers[name])
+            page.click("#link-go")
             runs[name] = finished(cross=[layers[name]])
             assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 1)
         page.evaluate("refreshBatches()")
@@ -898,7 +960,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         assert (bars["status"], bars["error"]["code"]) == ("FAILED", "no_viable_insights") and bars["metrics"]["pruned"]["context_confounded"] > 0
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_bars')", timeout=20000)
         card = page.locator(".ds", has_text="+ chicago_bars").inner_text()
-        assert f"відтворює розклад шару: {bars['metrics']['pruned']['context_confounded']}" in card
+        assert f"пояснюється фоном зони: {bars['metrics']['pruned']['context_confounded']}" in card
         # the stations: one finding, its drawer reading the layer's verdict
         (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == stations["dataset_id"]]
         page.evaluate(f"inspect('{found}')")

@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -79,8 +79,18 @@ const TERMS = {
   "support": ["рядки", "скільки рядків даних охоплює інсайт і яку частку всіх рядків"],
   "p_adjusted": ["скоригована p", "результат тесту медіани з поправкою на кількість перевірок; поріг відбору, а не точна ймовірність"],
   "p_context": ["нуль шару", "частка перестановок шару в межах батьківських комірок, за яких зсув не слабший за знайдений, помножена на кількість когорт зі смугою шару; інсайт зі смугою шару допущено, лише коли вона не більша за поріг відбору: розклад шару всередині батька зсуву не відтворює"],
-  "context_confounded": ["відтворює розклад шару", "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар"],
-  "outside_cross_type": ["без умови шару", "знахідки крос-типового прогону без смуги шару: це знахідки самої цілі, вони лишаються на її власних рівнях"],
+  "context_confounded": ["пояснюється фоном зони", "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар"],
+  "outside_cross_type": ["без умови шару", "знахідки прогону зв'язку шарів без смуги шару: це знахідки самого базового шару, вони лишаються на його власних рівнях"],
+  "base_layer": ["базовий шар", "набір подій, чиї метрики й склад аналізуємо"],
+  "context_layer": ["контекстний шар", "точки іншого набору як умова для подій базового шару: скільки їх у комірці й поруч; сам шар не аналізується"],
+  "layer_link": ["зв'язок шарів", "прогін базового шару з одним контекстним: чи інші події там, де багато точок шару"],
+  "more_events": ["більше подій", "подій обраного типу в комірці більше, ніж у типовій комірці мапи — на одну комірку, без поділу на площу"],
+  "other_mix": ["інший склад", "частка типу серед подій комірки інша, ніж у типовій комірці мапи"],
+  "exploratory": ["дослідницька знахідка", "знайдено й перевірено на цих самих даних; на іншому періоді чи наборі не відтворювали"],
+  "insufficient_data": ["замало даних", "замало подій чи комірок, щоб тест мав силу: висновку немає, причина названа"],
+  "same_places": ["також у тих самих місцях", "інсайти інших контекстних шарів того самого базового, чиї місця перекриваються чи межують; спільна дія шарів не перевірялась"],
+  "per_event": ["з вагою подій", "частку перевірено з вагою подій кожної комірки; шукали — по комірках"],
+  "zone_baseline": ["відносно своєї зони", "кожна метрика — відносно медіани своєї батьківської комірки, а не всієї мапи"],
   "stability": ["стабільність", "1 − min(CV, 0,9), де CV — коефіцієнт варіації суми |z| головних зсувів на 20 бутстреп-вибірках; від 0,1 до 1, 0 коли зсуву немає; ближче до 1 — менше коливання"],
   "drivers": ["супутні чинники", "колонки, чиї значення в цій частині даних розподілені помітно інакше (тест хі-квадрат); вони можуть пояснювати зсув"],
   "covariance": ["зміна зв'язку", "кореляція двох метрик тут інша, ніж у всіх даних"],
@@ -198,6 +208,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(x))) ? "–" : Number(x).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+// a layer link's insights (docs/08_interface.md §8.2): one colour per context layer, from its run's dataset (cross_layers)
+const allLayers = () => [...new Set(Object.values(S.datasets).flatMap((d) => d.cross_layers || []))].sort();
+const layersOf = (datasetId) => S.datasets[datasetId]?.cross_layers || [];
+const layerVar = (name) => `--layer-${(allLayers().indexOf(name) % 4) + 1}`;  // a palette of its own, the same place in both themes
+const layerColor = (name) => cssVar(layerVar(name));  // read when painted: a theme switch follows
+const layerChip = (datasetId) => layersOf(datasetId).map((l) => `<span class="tag layer" style="--lc:var(${layerVar(l)})" title="${esc(TERMS.layer_link[1])}">${esc(word("context_layer"))}: ${esc(l)}</span>`).join("");
 const human = (s) => String(s || "").replace(/_/g, " ");
 const PLURAL = new Intl.PluralRules("uk");
 const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+
@@ -254,6 +270,15 @@ function setLegend(show) {
   if (S.cy) S.cy.resize();
 }
 
+// the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
+const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
+function setDev(on) {
+  document.body.classList.toggle("dev", on);
+  $("dev-btn").setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
+  if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+}
+
 function initResize() {
   /* drag the border of the datasets rail or of the chat; widths are remembered, a double-click resets */
   const app = document.querySelector(".app");
@@ -296,7 +321,7 @@ function init() {
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
-    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; syncTable(); }
+    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
     $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
   });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -305,23 +330,22 @@ function init() {
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
-  $("layer-only").addEventListener("change", fillSamples);
+  $("roles").addEventListener("change", (e) => setRole(e.target.value));  // a set locked to a layer has no other card to change to
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
-    fillSamples();
+    $("sample").insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));  // every shipped set: its role proposed when picked
     $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(sampleItem).join(""));
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];
     $("sample-hint").textContent = d ? `${d.description} ${d.span ? `${d.span[0]} — ${d.span[1]}. ` : ""}Ліцензія: ${d.license}.` : "";
-    if (!d) { $("upload-btn").disabled = !$("file").files[0]; return; }
+    if (!d) { $("upload-btn").disabled = !$("file").files[0]; setRole(""); return; }
     $("file").value = ""; $("file-name").textContent = d.file;
     const o = d.options || {};
     for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
     $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
-    syncTable();
-    document.querySelector("#upload-form details.adv").open = true;  // what the dataset will be read with, before it is
+    setRole(d.context_only ? "layer" : o.geo ? "events" : "table", !!d.context_only);  // a set meant only as a layer mines nothing
     $("upload-btn").disabled = false;
   });
   $("reset-btn").addEventListener("click", async () => {
@@ -330,7 +354,8 @@ function init() {
     S.lastReady = null; refreshBatches(); refreshHealth();
   });
   // canvas
-  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => { S.picked = true; setView(b.dataset.view); }));
+  $("dev-btn").addEventListener("click", () => setDev(!document.body.classList.contains("dev")));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (b.dataset.key === "region") return toggleRegions();
@@ -376,6 +401,12 @@ function init() {
     setView("graph"); reveal(p.id);
   });
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
+  on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
+  $("link-form").addEventListener("submit", runLink);
+  $("link-cancel").addEventListener("click", () => $("link-dialog").close());
+  const sources = ["link-layer", "link-sample", "link-file"];  // the layer comes from one of them: picking one clears the others
+  sources.forEach((id) => $(id).addEventListener("change", () => sources.forEach((other) => { if (other !== id) $(other).value = ""; })));
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
   on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer
@@ -414,6 +445,9 @@ function init() {
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
+  let dev = false;
+  try { dev = localStorage.getItem("sig-dev") === "on"; } catch (e) { /* private mode: off */ }
+  setDev(dev);
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
   setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders

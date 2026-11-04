@@ -128,6 +128,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -504,6 +505,7 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -580,6 +582,7 @@ def test_an_item_reached_by_location_alone_says_so(cfg):
 
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page()
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         page.goto(f"{url}/")
         page.wait_for_function("typeof botCard === 'function' && typeof renderCard === 'function'", timeout=20000)
         text = "(t) => { const d = document.createElement('div'); d.innerHTML = botCard(t); return d.textContent; }"  # the card as read, apostrophes unescaped
@@ -624,6 +627,7 @@ def test_the_poll_keeps_the_rail_and_the_filter_while_a_batch_runs(cfg, demo_csv
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -682,6 +686,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -743,6 +748,7 @@ def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tm
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -810,6 +816,7 @@ def test_the_periods_lie_in_rows_by_level_and_a_periods_drawer_lists_who_lives_a
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -857,6 +864,7 @@ def test_a_question_is_asked_over_the_period_bars_days_and_the_answer_says_so(ti
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -919,6 +927,7 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")

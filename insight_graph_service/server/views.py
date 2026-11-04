@@ -95,7 +95,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         if e["source"] in keep and e["target"] in keep and (e["type"] != "IN_REGION" or e["target"] in drawn_regions(graph, e["source"]))
     ]  # an insight's IN_REGION to the regions drawn for it: a broad one lies in hundreds more
     trust = {
-        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]} | _declared(n["props"])
+        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity", "cross_layers") if k in n["props"]}
+        | _declared(n["props"])
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust and declared language, whatever the filter
     spans = [
@@ -177,7 +178,14 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["reading"] = insight_reading(graph, node_id, thresholds)
         out["numbers"] = wording.value_words(graph.insight(node_id))
-        out["dataset"] = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        out["dataset"] = ds = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        if ds.get("cross"):  # a layer link's card (docs/08_interface.md §8.2): its disk, what a count is per, its base's other links
+            out["link"] = {"disk": wording.disk_words(ds.get("context_ring", 1)), "exposure": wording.exposure_words(ds.get("exposure"))}
+            out["link"]["pair"] = link_pair(graph, node_id)
+            for item in neighbors.get("CO_LOCATED", []) + neighbors.get("CO_LOCATED (in)", []):
+                other = graph.nodes.get(dataset_node_id(graph.nodes[item["id"]]["props"]["dataset_id"]), {"props": {}})["props"]
+                if other.get("cross") and other.get("upload_id") == ds.get("upload_id") and other["dataset_id"] != ds["dataset_id"]:
+                    item |= {"layers": other.get("cross_layers", []), "dataset_id": other["dataset_id"]}
         if node_id in graph.trajectories:  # its series over time, for the drawer's curve (docs/08_interface.md §8.2)
             t = graph.trajectories[node_id]  # the drawer draws its metric's curve: the other series stay in the snapshot
             out["trajectory"] = t | {k: {t["metric"]: t[k][t["metric"]]} if t["metric"] in t[k] else {} for k in ("series", "smoothed")}
@@ -210,6 +218,22 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     elif node["kind"] == "Attractor":
         out["reading"] = {"what": wording.theme_reading(node["props"], theme_glossary(graph, node_id))}
     return out
+
+
+def link_pair(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
+    """A layer link's insight's pair (docs/08_interface.md §8.2, X-08): the run's insight with the same conditions on the
+    same value's other question — a count's share, a share's count —, or None."""
+    ins = graph.insight(pattern_id)
+    kind, _, key = ins.target.partition("_")
+    want, scope = {"count": f"share_{key}", "share": f"count_{key}"}.get(kind), sorted(c.expr for c in ins.conditions)
+    return next(
+        (
+            {"id": pid, "target": other.target, "effect": other.effect_size}
+            for pid, other in graph.insights.items()
+            if want and other.dataset_id == ins.dataset_id and other.target == want and sorted(c.expr for c in other.conditions) == scope
+        ),
+        None,
+    )
 
 
 def _members(graph: DualGraph, found: list[tuple[str, str | None]]) -> list[dict[str, Any]]:

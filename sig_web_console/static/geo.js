@@ -155,6 +155,7 @@ function spread(filter) {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
+  if (G.datasets.length && !S.picked && S.view === "table" && !document.body.classList.contains("dev")) setView("map");  // geo data: the map first
   if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
@@ -201,7 +202,8 @@ function paintFocus(p, item, cells, h3) {
   /* a focused insight's cells — orange where its target is higher, cyan lower, green a correlation — and the rest dimmed;
      G.focus their H3 ids, of whichever dataset draws it (never row ids: another dataset's index other cells) */
   const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
-  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, color);
+  const layer = layersOf(item ? item.provenance.dataset_id : p.dataset_id)[0];  // a layer link's insight: outlined in its layer's colour
+  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, id === "hl-line" && layer ? layerColor(layer) : color);
   G.focus = h3; G.map.getSource("focus").setData(cells);
   G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
 }
@@ -565,10 +567,10 @@ function renderCard(p, item, pts) {
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by every cell holding one of its located events
       ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
-      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
-      .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
-    (p.numbers && p.numbers.p_context ? `<div class="mc-note">${term("p_context")}: ${esc(p.numbers.p_context)}</div>` : "") +
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
+      .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
+    (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
+    (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
     (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -660,8 +662,16 @@ const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the
 const readingOf = (pid) => (G.patterns[pid] || G.overlay?.patterns[pid] || {}).reading;  // as the map holds it; «Усі датасети» another dataset's as its overlay does
 const reading = (pid) => { const r = readingOf(pid); return r ? `${r.where} — ${r.what}` : ""; };  // a row's insight in a sentence
 
+function visibleWindow(d) {
+  /* the window without a hidden layer's runs (S.hidden): their rows gone, the rest ranked again, the count without them */
+  const themes = d.themes.map((t) => ({ ...t, insights: t.insights.filter((i) => !S.hidden.has(i.dataset_id)) })).filter((t) => t.insights.length);
+  const order = themes.flatMap((t) => t.insights).sort((a, b) => a.rank - b.rank).map((i) => i.id);
+  const gone = d.themes.reduce((n, t) => n + t.insights.length, 0) - order.length;
+  return { ...d, insights: d.insights - gone, themes: themes.map((t) => ({ ...t, insights: t.insights.map((i) => ({ ...i, rank: order.indexOf(i.id) })) })) };
+}
+
 function renderWindow() {
-  const el = $("map-window"), d = W.data;
+  const el = $("map-window"), d = W.data && !W.data.error ? visibleWindow(W.data) : W.data;
   el.hidden = !d || !G.ds;
   if (el.hidden) return;
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells

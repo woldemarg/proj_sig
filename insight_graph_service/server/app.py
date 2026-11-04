@@ -76,6 +76,11 @@ class SearchIn(BaseModel):
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
+    include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
+
+
+class HiddenIn(BaseModel):
+    hidden: bool  # a layer out of the answers and the views, or back
 
 
 class CrossTypeIn(BaseModel):
@@ -85,7 +90,7 @@ class CrossTypeIn(BaseModel):
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
     align: str | None = None  # span: an event layer's events within the target's span only
     layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
-    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: the target level's own
+    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: none; absent: the target level's own
     baseline: str | None = None  # map | zone: what the run's metrics are read against; empty: the target level's own
 
 
@@ -306,7 +311,8 @@ def create_app(engine: Engine) -> FastAPI:
         except ValueError as exc:
             raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
         period = asked_period(*body.period) if body.period else None
-        return engine.evidence(body.question, as_of, period, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        zone = {"cells": body.cells, "geometry": body.geometry, "resolution": body.resolution}
+        return engine.evidence(body.question, as_of, period, include_hidden=body.include_hidden, **zone).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
@@ -376,6 +382,10 @@ def create_app(engine: Engine) -> FastAPI:
     @app.delete("/api/uploads/{upload_id}")
     def delete_upload(upload_id: str) -> dict[str, Any]:
         return written(engine.delete_upload(upload_id))
+
+    @app.patch("/api/uploads/{upload_id}")
+    def hide_upload(upload_id: str, body: HiddenIn) -> dict[str, Any]:
+        return engine.set_hidden(upload_id, body.hidden)  # unsigned: no commit, no rebuild
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
