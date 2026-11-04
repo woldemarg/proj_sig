@@ -33,6 +33,7 @@ a { color: var(--accent); }
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12.5px; }
 [hidden] { display: none !important; }
+body:not(.dev) [data-dev] { display: none !important; }  /* the developer mode's tools and technical fields (docs/08 §8.2) */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- top bar */
@@ -46,6 +47,7 @@ a { color: var(--accent); }
 .pill.ok .dot { background: var(--ok); } .pill.warn .dot { background: var(--warn); } .pill.bad .dot { background: var(--bad); }
 .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); cursor: pointer; color: var(--ink-2); }
 .icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+.icon-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
 /* ---------------------------------------------------------------- layout */
 .app { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--rail-w, 300px) minmax(0, 1fr) var(--chat-w, 430px); }

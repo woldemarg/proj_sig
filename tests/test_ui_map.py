@@ -33,6 +33,7 @@ def test_the_drawer_lists_where_a_base_insight_lies(cfg):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -67,6 +68,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -154,6 +156,7 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         requested: list[str] = []
@@ -259,6 +262,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -380,6 +384,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -462,6 +467,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)

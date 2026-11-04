@@ -620,7 +620,7 @@ async function inspect(id, note = "") {
     html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>${shiftRows(p.shifts, ds.metadata_doc)}`;
     if (cov) html += kv([[term("covariance"), `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}`]]);
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
-      `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
+      `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
       kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
         ...(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : []),  // a cohort on a layer's band: the layer's verdict
@@ -632,8 +632,8 @@ async function inspect(id, note = "") {
     if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
-    tail += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
-    tail += `<details class="nb-group"><summary>Походження</summary>` + kv([
+    tail += `<details class="nb-group" data-dev><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
+    tail += `<details class="nb-group" data-dev><summary>Походження</summary>` + kv([
       ["Датасет", esc(`${p.provenance.filename}${(ds.cross_layers || []).length ? ` · + ${ds.cross_layers.join(", ")}` : ""}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
       ["Селектор", `<span class="mono">${esc(p.expression)}</span>`],
       ...(p.aliases || []).length ? [[esc(cap(word("aliases"))), p.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>")]] : [],
