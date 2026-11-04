@@ -95,24 +95,6 @@
         </div>
       </form>
       <div id="upload-msg" class="msg"></div>
-      <details class="adv" id="cross-panel">
-        <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg><span>Крос-типовий аналіз</span></summary>
-        <label class="small" for="cross-target">Ціль — датасет, чиї метрики шукаємо</label>
-        <select class="field" id="cross-target"></select>
-        <label class="small" for="cross-layers">Шари — точки іншого типу як умова (до двох; Ctrl — кілька)</label>
-        <select class="field" id="cross-layers" multiple size="3"></select>
-        <div class="small">Рівні H3 цілі</div>
-        <div id="cross-levels"></div>
-        <label class="small" for="cross-ring">Що рахувати поруч</label>
-        <select class="field" id="cross-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
-        <label class="small chk" title="Лише коли і ціль, і шар мають колонку часу"><input type="checkbox" id="cross-align"> події шару — лише за період цілі</label>
-        <label class="small" for="cross-where">Лише рядки шару</label>
-        <input class="field" id="cross-where" placeholder="колонка=значення" title="Фільтр одного шару: оберіть лише його">
-        <label class="small chk" title="Те саме питання до метрик уже іншого файлу, на його типових рівнях; недоступно з фільтром шару — фільтр називає колонки шару, а він стає ціллю"><input type="checkbox" id="cross-both"> і навпаки: шар як ціль, ціль як шар — метрики вже його</label>
-        <div class="hint">Шар рахується з його точок на сітці цілі. Типово — найдрібніший рівень цілі й рівні, на яких аналізували й шар. Результат — нові датасети цілі з позначкою «+ шар»: лише знахідки з умовою на шар. Прогін перевіряє, чи зсув відтворюється розкладом шару в батьківських комірках (склад подій біля об'єктів); частоту одного типу подій біля них питає окреме читання цілі — «Лише рядки» (один клас подій), а тоді прогін. Той самий шар можна дати й при завантаженні цілі («Контекстний шар»).</div>
-        <div class="rail-actions"><button type="button" class="btn" id="cross-btn" disabled>Порахувати крос-типові ознаки</button></div>
-        <div id="cross-msg" class="msg"></div>
-      </details>
       <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
     </div>
     <div class="rail-list">

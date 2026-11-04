@@ -46,7 +46,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   } else if (b.status === "SKIPPED") {
     body = `<div class="ds-note">Уже проаналізовано — нового немає.</div>`;
   } else if (b.status === "LAYER") {
-    body = `<div class="ds-note">${plural(b.points, "точка", "точки", "точок")} іншого типу — оберіть шар у «Крос-типовий аналіз».</div>`;
+    body = `<div class="ds-note">${plural(b.points, "точка", "точки", "точок")} іншого типу.</div>`;
   }
   const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? chip("", "Шар") : chip("", "Пропущено");
   const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
@@ -150,7 +150,6 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  renderCross(batches);
   renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">Датасетів ще немає.<br>Завантажте таблицю або оберіть готовий датасет.</div>`);  // after the graph: the cards read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
@@ -207,70 +206,4 @@ async function upload() {
     $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("where").value = ""; fillSamples(); syncTable(); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
-}
-
-// the cross-type panel: two stored uploads, the target's levels read again with the other's points as a layer (docs/08_interface.md §8.2)
-function crossUploads(batches) {
-  /* the uploads a run can name: the file, the geo levels it was read at, a layer only or not */
-  const by = new Map();
-  for (const b of batches) {
-    if (!b.upload_id || b.cross) continue;  // a run's own batches add no level
-    const u = by.get(b.upload_id) || { id: b.upload_id, file: b.filename, levels: new Set(), layer: false, timed: false };
-    if (b.status === "LAYER") u.layer = true; else if (geoLevel(b)) u.levels.add(Number(b.level));
-    u.timed ||= !!b.time;  // read with a time column: a span to align on
-    by.set(b.upload_id, u);
-  }
-  return [...by.values()].filter((u) => u.layer || u.levels.size);
-}
-
-const crossLabel = (u) => `${u.file} · ${u.levels.size ? `рівні ${[...u.levels].sort((a, b) => b - a).join(", ")}` : "шар"}`;
-
-function renderCross(batches) {
-  /* both lists rewritten only when the uploads change: a choice in progress survives the poll */
-  const ups = crossUploads(batches), key = ups.map(crossLabel).join("|");
-  S.crossUploads = new Map(ups.map((u) => [u.id, u]));
-  if (key === S.crossKey) return;
-  S.crossKey = key;
-  const fill = (sel, list) => {
-    const kept = new Set([...sel.selectedOptions].map((o) => o.value));
-    sel.innerHTML = list.map((u) => `<option value="${esc(u.id)}"${kept.has(u.id) ? " selected" : ""}>${esc(crossLabel(u))}</option>`).join("");
-  };
-  fill($("cross-target"), ups.filter((u) => u.levels.size));
-  fill($("cross-layers"), ups);
-  crossLevels();
-}
-
-function crossPick() {
-  const target = S.crossUploads?.get($("cross-target").value);
-  return { target, layers: [...$("cross-layers").selectedOptions].map((o) => S.crossUploads.get(o.value)).filter((u) => u && u !== target) };
-}
-
-function crossLevels() {
-  /* the target's levels, ticked as the server would choose them: its finest and those every mined layer has too */
-  const { target, layers } = crossPick(), levels = target ? [...target.levels].sort((a, b) => b - a) : [];
-  const mined = layers.filter((u) => u.levels.size), shared = mined.length ? levels.filter((r) => mined.every((u) => u.levels.has(r))) : [];
-  $("cross-levels").innerHTML = levels.map((r) => `<label class="small chk"><input type="checkbox" value="${r}"${r === levels[0] || shared.includes(r) ? " checked" : ""}> H3 r${r}` +
-    `${r === levels[0] ? " — найдрібніший цілі" : shared.includes(r) ? " — спільний із шаром" : ""}</label>`).join("");
-  $("cross-align").disabled = !(target && target.timed && layers.some((u) => u.timed));  // a span on both sides, or nothing to align
-  $("cross-where").disabled = layers.length !== 1;  // a filter is one layer's
-  const filtered = !$("cross-where").disabled && $("cross-where").value.trim();
-  $("cross-both").disabled = !(layers.length === 1 && layers[0].levels.size) || !!filtered;  // the other way needs a mined layer and no filter: a filter names the layer's columns
-  $("cross-btn").disabled = !target || !layers.length || layers.length > 2;
-}
-
-function setCrossMsg(text, err = false) { const el = $("cross-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
-
-async function runCross() {
-  const { target, layers } = crossPick(), ring = $("cross-ring").value, on = (id) => $(id).checked && !$(id).disabled;
-  const levels = [...$("cross-levels").querySelectorAll("input:checked")].map((i) => i.value);
-  const where = $("cross-where").disabled ? "" : $("cross-where").value.trim();  // the one chosen layer read under a filter
-  const run = { target: target.id, layers: layers.map((u) => u.id), levels, ring, ...(on("cross-align") ? { align: "span" } : {}), ...(where ? { layer_where: { [layers[0].id]: where } } : {}) };
-  const runs = [run];
-  if (on("cross-both")) runs.push({ ...run, target: layers[0].id, layers: [target.id], levels: undefined });  // the same run the other way, at the other's own default levels: the target's are not its
-  $("cross-btn").disabled = true;
-  try {
-    for (const run of runs) await api("/api/crosstype", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(run) });
-    setCrossMsg("У черзі — поступ видно нижче.");
-  } catch (err) { setCrossMsg(err.message, true); }
-  crossLevels(); refreshBatches();
 }

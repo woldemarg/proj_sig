@@ -23,7 +23,6 @@ import argparse
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import replace
 from typing import Any
 
 import h3
@@ -32,15 +31,13 @@ import pandas as pd
 from attractor_benchmark import parse_seeds
 from geo_benchmark import CENTRE
 from perf_benchmark import EPOCH
-from scratch import build_engine, parse_overrides, save_result, scratch_dir, settings
+from scratch import admitted, build_engine, parse_overrides, save_result, scratch_dir, settings, without
 from temporal_benchmark import wilson
 
 from insight_contracts import Insight
-from insight_graph_service.core.batch import admit_insights
 from insight_graph_service.core.settings import Settings
 from subgroup_miner.discovery import DiscoveryError, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import load_dataset
-from subgroup_miner.selection import select_insights
 
 RES = 8
 BOX = (CENTRE[0] - 0.15, CENTRE[1] - 0.2, 0.3, 0.4)  # lat0, lon0, dlat, dlon: about 1,600 cells at RES
@@ -124,12 +121,6 @@ def generate(name: str, seed: int) -> dict[str, Any]:
     return {"frame": frame, "layers": layers, "planted": sorted({c for c, p in memo.items() if p > 0})}
 
 
-def without(insight: Insight, *keys: str) -> Insight:
-    """The insight with these ``provenance.spatial`` keys left out (gate A: ``p_context``; B0: ``context_family``)."""
-    spatial = {k: v for k, v in insight.provenance.get("spatial", {}).items() if k not in keys}
-    return replace(insight, provenance={**insight.provenance, "spatial": spatial})
-
-
 def cross_rows(insights: list[Insight], covers: dict[str, np.ndarray], cells: np.ndarray, planted: set[str]) -> dict[str, Any]:
     """The admitted insights with a context condition (target, sign, ``lisa_points`` in the scope or not) and whether
     they find the plant: the finders (a planted metric raised, at least ``FOUND`` of their cells planted) together
@@ -174,15 +165,16 @@ def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool, ring
     except DiscoveryError as exc:
         return row | {"error": exc.code, **dict.fromkeys(GATES, {"insights": [], "found": False}), "seconds": time.perf_counter() - t0}
     insights = build_insights(result, cfg, dataset_id=loaded.dataset_id, batch_id="bench", filename=target.name)
-    admit = lambda found: admit_insights(select_insights(found, cfg).kept, config.min_insight_weight, config.max_insights_per_batch)[0]  # noqa: E731
     covers, cells, planted = covers_of(result), loaded.spatial.cells, set(upload["planted"])
     marginal = [i for i in insights if i.p_adjusted is not None and i.p_adjusted <= cfg.max_p_adjusted and abs(i.effect_size) >= cfg.min_effect_z]
     row |= {
-        "A": cross_rows(admit([without(i, "p_context") for i in insights]), covers, cells, planted),
-        "B0": cross_rows(admit([without(i, "context_family") for i in insights]), covers, cells, planted),
-        "B": cross_rows(admit(insights), covers, cells, planted),
+        "A": cross_rows(admitted([without(i, "p_context") for i in insights], config), covers, cells, planted),
+        "B0": cross_rows(admitted([without(i, "context_family") for i in insights], config), covers, cells, planted),
+        "B": cross_rows(admitted(insights, config), covers, cells, planted),
         "p_context": [i.provenance["spatial"]["p_context"] for i in marginal if "p_context" in i.provenance["spatial"]],
-        "admitted_p_context": sorted(i.provenance["spatial"]["p_context"] for i in admit(insights) if "p_context" in i.provenance["spatial"]),
+        "admitted_p_context": sorted(
+            i.provenance["spatial"]["p_context"] for i in admitted(insights, config) if "p_context" in i.provenance["spatial"]
+        ),
         "selected": [d for d in result.profile.selected_dimensions if d.startswith("context_")],
         "space": result.profile.search_space_size,
         "longest": max((len(c.conditions) for c in result.candidates), default=0),

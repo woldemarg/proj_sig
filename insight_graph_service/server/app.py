@@ -82,7 +82,7 @@ class CrossTypeIn(BaseModel):
     target: str  # an upload id (``up-…``): the dataset whose metrics are mined, every geo level of it
     layers: list[str]  # the uploads whose points become its context layers
     ring: int | str | None = None  # their disk: 0, 1 (empty), 2
-    levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest and those a mined layer has too
+    levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
     align: str | None = None  # span: an event layer's events within the target's span only
     layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
 
@@ -233,7 +233,8 @@ def create_app(engine: Engine) -> FastAPI:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # a shipped dataset by its key (GET /api/demo/datasets) instead of a file: the form's options as sent
-        shipped = next((d for d in demo_datasets() if d["key"] == demo), None) if demo else None
+        sets = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
+        shipped = sets.get(demo)
         if (file is None) == (shipped is None):
             raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
@@ -254,12 +255,11 @@ def create_app(engine: Engine) -> FastAPI:
             "where": where.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
-        layers = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
-        if unknown := [k for k in context_demo or [] if k not in layers]:
+        if unknown := [k for k in context_demo or [] if k not in sets]:
             raise HTTPException(400, f"no shipped dataset {unknown}")
         with ExitStack() as files:  # every file read is closed once the upload is stored
             options["context"] = [(Path(f.filename or "context.csv").name, f.file) for f in context or []]
-            options["context"] += [(layers[k]["file"], files.enter_context((DEMO_DIR / layers[k]["file"]).open("rb"))) for k in context_demo or []]
+            options["context"] += [(sets[k]["file"], files.enter_context((DEMO_DIR / sets[k]["file"]).open("rb"))) for k in context_demo or []]
             if shipped:
                 return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
             return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
@@ -267,7 +267,7 @@ def create_app(engine: Engine) -> FastAPI:
     @app.post("/api/crosstype")
     def crosstype(body: CrossTypeIn) -> JSONResponse:
         # two stored uploads: the target's levels read again with the layers as context (docs/02_discovery.md §2.9)
-        return queued(engine.cross(body.target, body.layers, body.ring, body.levels, body.align, body.layer_where))
+        return queued(engine.cross(**body.model_dump()))  # its fields are Engine.cross's arguments
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:

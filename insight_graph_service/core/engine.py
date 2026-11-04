@@ -349,10 +349,7 @@ class Engine:
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
-        if context and not geo:
-            raise PipelineError("invalid_options", "context files without geo: they are counted into the cells of the geo option")
-        if str(context_ring or "").strip() and not context:
-            raise PipelineError("invalid_options", "context_ring without context files: it is the disk their points are counted over")
+        uploads.check_context(context, geo, context_ring)
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
@@ -393,7 +390,7 @@ class Engine:
             forget_tables()
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
         try:  # the upload's own file accepted: its context files now, refused together
-            located = [(n, s, (context_geo or "").strip() or "auto") for n, s in context]
+            located = [(n, s, (context_geo or "").strip() or "auto", None) for n, s in context]
             layers = uploads.save_context(self.ws, located, self.settings.max_upload_bytes)
         except Exception:
             path.unlink(missing_ok=True)
@@ -507,19 +504,10 @@ class Engine:
         return record
 
     @_healthy
-    def cross(
-        self,
-        target: str,
-        layers: Sequence[str],
-        context_ring: int | str | None = None,
-        levels: Sequence[int | str] | None = None,
-        align: str | None = None,
-        layer_where: dict[str, str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """A cross-type run of two stored uploads (``uploads.cross_runs``): one batch per level. Processing is a separate call."""
-        runs = uploads.cross_runs(
-            self.ws, self.ws.list_batches(), target, layers, levels, context_ring, self.settings.max_upload_bytes, align, layer_where
-        )
+    def cross(self, target: str, layers: Sequence[str], **options: Any) -> list[dict[str, Any]]:
+        """A cross-type run of two stored uploads (``uploads.cross_runs``, its keyword options): one batch per level.
+        Processing is a separate call."""
+        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings.max_upload_bytes, **options)
         return [self.submit(**run) for run in runs]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:

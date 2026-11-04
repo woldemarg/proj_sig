@@ -16,18 +16,16 @@ import argparse
 import itertools
 import math
 import time
-from dataclasses import replace
 
 import numpy as np
 import pandas as pd
-from scratch import save_result, settings
+from scratch import admitted, context_family, save_result, settings, without
 
-from insight_graph_service.core.batch import admit_insights
 from insight_graph_service.core.demo import DEMO_DIR
 from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.core.uploads import cross_type_only
 from subgroup_miner.discovery import build_insights, run_discovery
 from subgroup_miner.ingestion import load_dataset
-from subgroup_miner.selection import select_insights
 
 WORK = PROJECT_ROOT / "data" / "benchmarks" / "crosstype" / "prepared"  # git-ignored, never beside raw exports
 TARGETS = {  # name -> the shipped table, its time column (left out), the geo option, the layers in the order added
@@ -51,15 +49,6 @@ def run(name: str, target, geo: str, layers: tuple[str, ...], files: dict, cfg_a
     null_s = time.perf_counter() - t0
     sizes = [levels(loaded.frame[d]) for d in result.profile.selected_dimensions]
     pairs, triples = (sum(math.prod(c) for c in itertools.combinations(sizes, r)) for r in (2, 3))
-
-    def cross(found):
-        kept = admit_insights(select_insights(found, cfg).kept, cfg_all.min_insight_weight, cfg_all.max_insights_per_batch)[0]
-        return [i for i in kept if any(c.attribute.startswith("context_") for c in i.conditions)]
-
-    off = [
-        replace(i, provenance={**i.provenance, "spatial": {k: v for k, v in i.provenance["spatial"].items() if k != "p_context"}}) for i in insights
-    ]
-    family = next((i.provenance["spatial"]["context_family"] for i in insights if "context_family" in i.provenance["spatial"]), 0)
     return {
         "target": name,
         "layers": len(layers),
@@ -70,10 +59,10 @@ def run(name: str, target, geo: str, layers: tuple[str, ...], files: dict, cfg_a
         "space": result.profile.search_space_size,
         "triples_kept": pairs + triples <= cfg.compute_budget,
         "validated": len(result.validated),
-        "context_cohorts": family,
+        "context_cohorts": context_family(insights),
         "n_tests": result.n_tests,
-        "A": len(cross(off)),
-        "B": [f"{i.target} z={i.effect_size:+.2f} | {i.expression}" for i in cross(insights)],
+        "A": len(cross_type_only(admitted([without(i, "p_context") for i in insights], cfg_all))[0]),
+        "B": [f"{i.target} z={i.effect_size:+.2f} | {i.expression}" for i in cross_type_only(admitted(insights, cfg_all))[0]],
         "null_s": round(null_s, 1),
     }
 

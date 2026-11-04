@@ -286,8 +286,8 @@ def parse_tz(tz: str | None) -> str | None:
 def parse_ring(ring: int | str | None) -> int:
     """A context layer's disk (``RINGS``): the cell alone (0), with its six neighbours (1, the default: None or empty),
     two rings (2). Another value is ``invalid_options``."""
-    text = "1" if ring is None or str(ring).strip() == "" else str(ring).strip()
-    if text not in {str(r) for r in RINGS}:
+    text = str(1 if ring is None else ring).strip() or "1"
+    if text not in map(str, RINGS):
         raise IngestionError(
             "invalid_options", f"context_ring {ring!r}: one of {', '.join(map(str, RINGS))} — the rings around a cell its layers are counted over"
         )
