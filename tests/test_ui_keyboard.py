@@ -27,6 +27,7 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)

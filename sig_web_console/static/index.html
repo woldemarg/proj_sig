@@ -14,6 +14,9 @@
   <div class="brand"><span class="brand-mark">SIG</span><span>Граф інсайтів</span></div>
   <div class="spacer"></div>
   <div class="pills" id="health"></div>
+  <button class="icon-btn" id="dev-btn" aria-pressed="false" title="Режим розробника: граф, 3D-сфера й технічні поля" aria-label="Режим розробника">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6"/></svg>
+  </button>
   <button class="icon-btn" id="theme-btn" title="Світла / темна тема" aria-label="Перемкнути тему">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
   </button>
@@ -108,15 +111,15 @@
   <section class="canvas" aria-label="Граф знань">
     <div class="canvas-bar">
       <div class="tabs" id="view-switch" role="tablist">
-        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true">Граф</button>
-        <button type="button" data-view="sphere" role="tab" aria-selected="false">3D-сфера</button>
+        <button type="button" data-view="graph" class="active" role="tab" aria-selected="true" data-dev>Граф</button>
+        <button type="button" data-view="sphere" role="tab" aria-selected="false" data-dev>3D-сфера</button>
         <button type="button" data-view="table" role="tab" aria-selected="false">Інсайти <span class="count" id="ins-count"></span></button>
         <button type="button" data-view="map" role="tab" aria-selected="false" id="map-tab" hidden>Мапа</button>
         <button type="button" data-view="time" role="tab" aria-selected="false" id="time-tab" hidden>Час</button>
       </div>
       <div class="spacer"></div>
       <select class="field" id="dataset-filter" aria-label="Датасет"><option value="">Усі датасети</option></select>
-      <select class="field graph-only" id="layout" aria-label="Розкладка">
+      <select class="field graph-only" id="layout" aria-label="Розкладка" data-dev>
         <option value="dual">Дві площини</option>
         <option value="force">Силове розміщення</option>
       </select>
@@ -156,7 +159,7 @@
         <div class="key" data-key="down"><i class="sw down"></i><span>Метрика нижча</span><b data-n="down"></b></div>
         <div class="key" data-key="cov"><i class="sw cov"></i><span>Зміна зв'язку</span><b data-n="cov"></b></div>
       </section>
-      <section class="lg"><h5>Зв'язки</h5>
+      <section class="lg" data-dev><h5>Зв'язки</h5>
         <button type="button" class="key toggle on" data-key="lattice"><i class="ln lattice"></i><span>Вужчі й ширші</span><b data-n="lattice"></b></button>
         <button type="button" class="key toggle on" data-key="latent"><i class="ln rel"></i><span>Пов'язані теми</span><b data-n="latent"></b></button>
         <button type="button" class="key toggle" data-key="contrast"><i class="ln contrast"></i><span>Протилежні зсуви</span><b data-n="contrast"></b></button>

@@ -254,6 +254,15 @@ function setLegend(show) {
   if (S.cy) S.cy.resize();
 }
 
+// the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
+const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
+function setDev(on) {
+  document.body.classList.toggle("dev", on);
+  $("dev-btn").setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
+  if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+}
+
 function initResize() {
   /* drag the border of the datasets rail or of the chat; widths are remembered, a double-click resets */
   const app = document.querySelector(".app");
@@ -330,7 +339,8 @@ function init() {
     S.lastReady = null; refreshBatches(); refreshHealth();
   });
   // canvas
-  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => { S.picked = true; setView(b.dataset.view); }));
+  $("dev-btn").addEventListener("click", () => setDev(!document.body.classList.contains("dev")));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (b.dataset.key === "region") return toggleRegions();
@@ -414,6 +424,9 @@ function init() {
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
+  let dev = false;
+  try { dev = localStorage.getItem("sig-dev") === "on"; } catch (e) { /* private mode: off */ }
+  setDev(dev);
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
   setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders
