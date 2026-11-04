@@ -22,10 +22,10 @@ import numpy as np
 
 from graph_query_engine.graph import DualGraph, declared_words, insight_reading, primary_anchor, theme_glossary
 from graph_query_engine.vertical import affinity, restating, scale_chain, scale_label
-from insight_contracts import Insight, PhenomenonThresholds, region_node_id, wording
+from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import same_points
+from insight_graph_service.core.uploads import hidden_datasets, same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
@@ -44,11 +44,11 @@ WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region
 
 
 def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
-    """READY datasets analysed as H3 cells, with what the map needs to offer them."""
-    out = []
+    """READY datasets analysed as H3 cells, with what the map needs to offer them; a hidden layer's runs left out."""
+    out, hidden = [], hidden_datasets(ws.list_batches())
     for b in ws.list_batches():
         geo = (b.get("profile") or {}).get("geo")
-        if b.get("status") == "READY" and geo:
+        if b.get("status") == "READY" and geo and b["dataset_id"] not in hidden:
             out.append(
                 {
                     "dataset_id": b["dataset_id"],
@@ -233,6 +233,7 @@ def geo_cells(ws: Workspace, dataset_id: str, loaded: Any) -> dict[str, Any]:
         for name, values in cols.items():
             v = values[i]
             props[name] = (None if not np.isfinite(v) else round(float(v), 4)) if values.dtype.kind == "f" else str(v)
+        props["points"] = int(ctx.events[i])  # the hover's events: as counted, whatever the baseline
         features.append({"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [cell_boundary(str(cell))]}, "properties": props})
     lonlat = ctx.lonlat[ctx.point_cell >= 0]  # never empty: build_cells refuses a level without a valid point
     west, east = lon_span(lonlat[:, 0])
@@ -267,10 +268,16 @@ def lon_span(lons: np.ndarray) -> tuple[float, float]:
     return float(x[i + 1]), float(x[i])
 
 
+def _props(graph: DualGraph, pid: str) -> dict[str, Any]:
+    """The props of a pattern's Dataset node (empty for a dataset the graph lost)."""
+    return graph.nodes.get(dataset_node_id(graph.insight(pid).dataset_id), {"props": {}})["props"]
+
+
 def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any]:
     """An insight as the map lists it (``geo_cells``, ``geo_projected``): its cell rows, scope, shift, support and weight."""
     return {
         "id": ins.id,
+        "dataset_id": ins.dataset_id,
         "rows": rows.tolist(),
         "scope": [f"{c.attribute} = {c.value}" for c in ins.conditions],
         "target": ins.target,
@@ -326,8 +333,9 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
     view of that region alone lists (``_rows``; the datasets' insights are of different uploads, so their counts add), and
     ``by``, that count per dataset; and each pattern of the dataset and of the table levels of its upload, and each one
     another dataset of the set lists, with its credibility, integrity, scale and reading — the latter with ``map_dataset``,
-    the dataset whose ``/patterns`` draws it. Derived once per commit."""
-    kept = map_set(ws, dataset_id, datasets)
+    the dataset whose ``/patterns`` draws it. Derived once per commit and hidden set (model A: a hidden layer's runs
+    are not listed, not counted, not drawn)."""
+    hidden, kept = hidden_datasets(ws.list_batches()), map_set(ws, dataset_id, datasets)  # map_set offers no hidden run
 
     def build() -> dict[str, Any]:
         geo = _geo(ws, dataset_id, ("cells",))  # inside: a memo hit reads no file
@@ -335,29 +343,29 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
         tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
         held: defaultdict[str, dict[str, int]] = defaultdict(dict)
-        levels = _region_sets(ws, graph, dataset_id).keys()  # the map's: another dataset's finer ones would lie inside its cells
+        levels = _region_sets(ws, graph, dataset_id, hidden).keys()  # the map's: another dataset's finer ones would lie inside its cells
         for ds in kept:
-            for lv, sets in _region_sets(ws, graph, ds).items():
+            for lv, sets in _region_sets(ws, graph, ds, hidden).items():
                 for cell, listed in zip(sets.ids, sets.listed, strict=True) if lv in levels else ():
                     held[region_node_id(lv, str(cell))][ds] = len(_rows(graph, ds, listed))
         features = region_features(geo["cells"], sorted(held))
         for f in features:
             by = held[f["properties"]["id"]]
             f["properties"].update(n=sum(by.values()), by=by)
-        elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds)["patterns"]}
+        elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds, hidden)["patterns"]}
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
             | {
                 "scale": scale_label(graph, pid),
                 "reading": insight_reading(graph, pid, thresholds),
-                "numbers": wording.value_words(graph.insight(pid)),
+                "numbers": wording.value_words(graph.insight(pid), bool(_props(graph, pid).get("weight_by_events"))),
             }
             | ({"map_dataset": elsewhere[pid]} if pid in elsewhere else {})
             for pid in [*pids, *elsewhere]
         }
         return {"type": "FeatureCollection", "features": features, "patterns": trust}
 
-    return graph.memoised(("overlay", *kept), build)
+    return graph.memoised(("overlay", *kept, hidden), build)
 
 
 def map_set(ws: Workspace, dataset_id: str, datasets: tuple[str, ...]) -> tuple[str, ...]:
@@ -390,7 +398,7 @@ class RegionSets(NamedTuple):
     own: list[set[str]]
 
 
-def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, RegionSets]:
+def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: frozenset[str] = frozenset()) -> dict[int, RegionSets]:
     """``RegionSets`` at every region level of the graph coarser than the dataset's cells (its own cells without one)
     where a region lists an insight — a level of none gives the map no hint, so it is left out unless every level is —,
     derived once per commit. An insight of the projection is characteristic of a region by the rule of
@@ -400,7 +408,7 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, 
     coarser regions holding its cells that have an event in it: a zoom never loses what the coarser region listed."""
 
     def build() -> dict[int, RegionSets]:
-        proj = _projection(ws, graph, dataset_id)
+        proj = _projection(ws, graph, dataset_id, hidden)
         cells = _geo(ws, dataset_id, ("cells",))["cells"]
         per_cell, res = proj["per_cell"], proj["resolution"]
         total = int(per_cell.sum())
@@ -432,7 +440,7 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[int, 
             out[lv] = coarser = RegionSets(ids, idx, listed, own)
         return {lv: s for lv, s in out.items() if any(s.listed)} or {min(out): out[min(out)]}
 
-    return graph.memoised(("region_sets", dataset_id), build)
+    return graph.memoised(("region_sets", dataset_id, hidden), build)
 
 
 def _rows(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> dict[str, list[str]]:
@@ -466,8 +474,9 @@ class Projected(NamedTuple):
     counts: np.ndarray
 
 
-def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, Any]:
-    """Every intact insight of the dataset's upload on the dataset's cells (``Projected``), derived once per commit: an
+def _projection(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Every intact insight of the dataset's upload on the dataset's cells (``Projected``), a ``hidden`` dataset's (a
+    hidden layer's run) left out, derived once per commit and hidden set: an
     insight of the dataset is drawn by its cells, one of another level by every cell holding its located events, so it
     is drawn where it is counted and a region listing it shows it. ``per_cell``: points;
     ``centres``; ``resolution``: the dataset's."""
@@ -479,7 +488,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
         owner = _owner(ws, dataset_id)
         patterns: dict[str, Projected] = {}
         for b in ws.list_batches():
-            if b.get("status") != "READY":
+            if b.get("status") != "READY" or b["dataset_id"] in hidden:
                 continue
             own = b["dataset_id"] == dataset_id
             members = None if own else member_rows(ws, b, owner, len(point_cell))
@@ -502,14 +511,15 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str) -> dict[str, A
             "resolution": int(owner["profile"]["geo"]["resolution"]),
         }
 
-    return graph.memoised(("projection", dataset_id), build)
+    return graph.memoised(("projection", dataset_id, hidden), build)
 
 
 def geo_projected(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds) -> list[dict[str, Any]]:
     """The insights of the dataset's upload found at another level (the table, another resolution) drawn on its cells as
-    ``geo_cells`` draws its own: the rows holding their located events, scope, shift and reading."""
-    out = []
-    for pid, p in _projection(ws, graph, dataset_id)["patterns"].items():
+    ``geo_cells`` draws its own: the rows holding their located events, scope, shift and reading; a hidden layer's runs
+    left out."""
+    out, hidden = [], hidden_datasets(ws.list_batches())
+    for pid, p in _projection(ws, graph, dataset_id, hidden)["patterns"].items():
         ins = graph.insight(pid)
         if ins.dataset_id == dataset_id:
             continue
@@ -561,7 +571,7 @@ def geo_window(
     level: int | None = None,
     datasets: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """The IN VIEW list (docs/08_interface.md §8.7): the regions of ``level`` (the finest of ``_region_sets`` without one)
+    """The IN VIEW list (docs/08_interface.md §8.7), a hidden layer's runs left out: the regions of ``level`` (the finest of ``_region_sets`` without one)
     holding a cell whose centre lies in ``bbox`` (``window_view``), and the rows of the insights characteristic of any
     of them, over the datasets ``map_set`` keeps, each result once (``_rows``); ranked (``rank``) by how many of those
     regions it is characteristic of in its own right — a row a region lists only as a coarser one's comes after —,
@@ -571,12 +581,13 @@ def geo_window(
     rows: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     cells = points = 0
     regions: set[str] = set()
-    own_levels = _region_sets(ws, graph, dataset_id)
+    hidden = hidden_datasets(ws.list_batches())
+    own_levels = _region_sets(ws, graph, dataset_id, hidden)
     lv = max(own_levels) if level is None else level  # the map's level reads every dataset of the set
     if lv not in own_levels:
         raise PipelineError("invalid_options", f"level {level} is not a region level of {dataset_id}")
     for ds in map_set(ws, dataset_id, datasets):
-        proj, sets = _projection(ws, graph, ds), _region_sets(ws, graph, ds)
+        proj, sets = _projection(ws, graph, ds, hidden), _region_sets(ws, graph, ds, hidden)
         if lv not in sets:
             continue
         view, at = window_view(proj["centres"], bbox), sets[lv]

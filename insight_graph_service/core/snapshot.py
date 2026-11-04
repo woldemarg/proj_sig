@@ -541,6 +541,8 @@ BATCH_DIGEST_FIELDS = (
     "supersedes",
     "profile",
     "temporal",  # the time column's grid and bins, and the SHA-256 of its series file (docs/02_discovery.md §2.10)
+    "count_values",  # a geo level's per-type counters with their statuses: what the card reads (§2.9)
+    "baseline",  # zone: what its metrics are read against
     "window",  # a chain-model time record's window: no new record has it; kept so such a record stays verifiable (§6.1)
 )
 

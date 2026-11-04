@@ -272,3 +272,12 @@ def test_a_layer_link_speaks_of_layers_and_places_not_nearness():
     assert "площ" in w.TERMS["more_events"][1] and "раза" not in " ".join(w.TERMS["other_mix"])
     assert w.exposure_words({"kind": "area", "cell_km2": 0.105}) == "на комірку ≈ 0,1 км²"
     assert w.exposure_words({"kind": "area", "cell_km2": 5.16}) == "на комірку ≈ 5,2 км²" and w.exposure_words(None) == ""
+
+
+def test_n_eff_under_event_weights_reads_as_events_not_cells():
+    """With the dataset's shares confirmed per event, ``n_eff`` is Kish's effective number of events: the words say so and
+    name no count of cells (the e2e review's F-22, F-33)."""
+    ins = toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.01, provenance={"spatial": {"cells": 420, "n_eff": 120.0, "moran_i": 0.2}})
+    weighted, plain = w.value_words(ins, True)["n_eff"], w.value_words(ins)["n_eff"]
+    assert weighted.startswith("120: обсяг Кіша") and "комірок метрики" not in weighted and "схожістю" in weighted
+    assert "непорожніх комірок метрики" in plain and "Кіша" in w.TERMS["n_eff"][1]

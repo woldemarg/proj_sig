@@ -53,7 +53,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
   const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? chip("", "Шар") : chip("", "Пропущено");
   const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
   const link = b.linkable ? `<button type="button" class="ds-link" data-link="${esc(b.batch_id)}" title="Окремий прогін цього рівня з одним контекстним шаром">+ ${esc(word("context_layer"))}</button>` : "";  // uploads.cross_state
-  const hide = b.status === "LAYER" || b.layer_of ? `<button type="button" class="ds-hide" data-hide="${esc(b.upload_id)}" data-on="${b.hidden ? "" : "1"}">${b.hidden ? "Показати шар" : "Сховати шар"}</button>` : "";
+  const hide = b.status === "LAYER" || b.layer_of ? `<button type="button" class="ds-hide" data-hide="${esc(b.upload_id)}" data-on="${b.hidden ? "" : "1"}"${busy ? " disabled title=\"Іде обробка: зачекайте\"" : ""}>${b.hidden ? "Показати шар" : "Сховати шар"}</button>` : "";
   const del = running ? "" : `<div class="ds-foot">${link}${hide}<button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
     (busy ? `disabled title="Іде обробка: видалення відхиляється, доки вона не скінчиться">` : `title="Прибрати цей датасет і його інсайти з бази знань">`) +
     `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Видалити</button></div>`;
@@ -200,7 +200,7 @@ function setRole(r, layerOnly = false) {
 function openLink(batchId) {
   const b = S.batches.find((x) => x.batch_id === batchId);  // a card's button: rendered from the batches stored with it
   const stored = new Map(S.batches.filter((x) => x.upload_id !== b.upload_id && !x.cross && (x.status === "LAYER" || (x.status === "READY" && geoLevel(x)))).map((x) => [x.upload_id, x]));
-  $("link-dialog").dataset.target = b.upload_id;
+  $("link-dialog").dataset.target = b.dataset_id || b.upload_id;  // the reading the card stands for
   $("link-title").textContent = `+ ${word("context_layer")} · ${datasetName(b)}`;
   $("link-form").reset(); $("link-msg").textContent = "";
   $("link-layer").length = 1;
@@ -256,7 +256,7 @@ async function upload() {
     if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
     if ($("time").value.trim()) fd.append("grid", $("grid").value);
     if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
-    fd.append("count_values", $("count-values").value); fd.append("baseline", $("baseline").value);  // the geo cells': refused without geo
+    if (geo.trim()) { fd.append("count_values", $("count-values").value); fd.append("baseline", $("baseline").value); }  // the geo cells'
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);

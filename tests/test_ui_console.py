@@ -193,7 +193,7 @@ CARD = """(args) => {  // a layer link's card from the drawer's own function, la
 }"""
 COUNTED = {"count_values": [{"column": "kind", "value": "a", "status": "ok"}, {"column": "kind", "value": "b", "status": "sparse"}]}
 SHARE = {"metric": "share_kind_a", "local_median": 0.12, "global_median": 0.07}
-PAIR = {"id": "s", "target": "share_kind_a", "effect": 0.5}
+PAIR = {"target": "share_kind_a", "effect": 0.5, "local": 0.12, "baseline": 0.07}
 
 
 @contextlib.contextmanager
@@ -218,9 +218,10 @@ def card_page(cfg):
 def test_the_card_answers_more_events_and_other_mix_in_two_rows_from_one_run(cfg):
     """A layer link's insight reads its run's two questions in words (docs/08_interface.md §8.2): the run's level and disk,
     *більше подій* from a count insight — its verdict and what a count is per —, *інший склад* from a share insight — the
-    typical shares, never «у N раза» —, each answered by the insight or its pair; a run without counters says the count
-    was not asked, a sparse value too few events, a zone baseline its mode instead of the shares; ``points`` answers the
-    first question, a metric that is neither a count nor a share neither."""
+    typical shares, never «у N раза» —, one the insight's tested primary and the other the same cohort's other metric,
+    untested on its own; a run without counters says the count was not asked, a sparse value too few events, a
+    question the insight holds no metric for that it was not measured, a zone baseline its mode instead of the shares;
+    ``points`` answers the first question, a metric that is neither a count nor a share neither."""
     with card_page(cfg) as page:
         both = page.evaluate(CARD, {"target": "count_kind_a", "ds": COUNTED, "pair": PAIR})
         mix = page.evaluate(CARD, {"target": "share_kind_a", "shift": SHARE, "ds": COUNTED})
@@ -230,23 +231,34 @@ def test_the_card_answers_more_events_and_other_mix_in_two_rows_from_one_run(cfg
         points = page.evaluate(CARD, {"target": "points", "ds": {}})
         median = page.evaluate(CARD, {"target": "pm25_median", "ds": COUNTED})
     assert "Біля schools — target.csv" in both and "рівень H3 r9 · у комірці та шести сусідніх" in both
-    assert "так · не пояснюється фоном зони · на комірку ≈ 0,1 км²" in both and "Більше подій і інший склад" in both
-    assert "типова частка 12 % проти 7 %" in mix and "раза" not in mix and "більше подій\nні" in mix.lower()
+    assert "так · не пояснюється фоном зони · на комірку ≈ 0,1 км²" in both and "Більше подій і інший склад" not in both
+    assert "так · та сама когорта, окремо не перевірялось · типова частка 12 % проти 7 %" in both  # the other question, described
+    assert "типова частка 12 % проти 7 %" in mix and "раза" not in mix and "більше подій\nу цій знахідці не вимірювалось" in mix.lower()
     assert "не перевірялось" in unasked and "замало даних для частоти на цьому рівні" in sparse
     assert "відносно своєї зони" in zone and "проти" not in zone
     assert "більше подій\nтак" in points.lower() and "більше подій" not in median.lower() and "Біля schools" in median
 
 
 @pytest.mark.browser
-def test_the_quadrant_needs_a_pair_with_the_same_expression_and_value(cfg):
-    """*Більше подій і інший склад* together only with the server's pair (the run's insight with the same conditions on
-    the same value's other question, ``views.link_pair``) and the count raised; without a pair, two rows on their own."""
+def test_the_other_question_reads_the_same_cohort_untested_and_never_a_quadrant(cfg):
+    """The card never joins two tests into a quadrant: the other question is the same cohort's other metric when the
+    insight holds it (``views.link_pair``), said to be untested on its own, with its sign; without it the question was
+    not measured in this insight. A count's pair reads its counts per cell."""
     with card_page(cfg) as page:
-        shown = {
-            name: "Більше подій і інший склад" in page.evaluate(CARD, {"target": "count_kind_a", "effect": effect, "ds": COUNTED, "pair": pair})
-            for name, effect, pair in (("pair", 1, PAIR), ("fewer", -1, PAIR), ("alone", 1, None))
+        cards = {
+            name: page.evaluate(CARD, {"target": target, "shift": shift, "ds": COUNTED, "pair": pair}).lower()
+            for name, target, shift, pair in (
+                ("count", "count_kind_a", None, PAIR),
+                ("fewer", "count_kind_a", None, PAIR | {"effect": -0.5}),
+                ("alone", "count_kind_a", None, None),
+                ("share", "share_kind_a", SHARE, {"target": "count_kind_a", "effect": 1.2, "local": 3.0, "baseline": 1.0}),
+            )
         }
-    assert shown == {"pair": True, "fewer": False, "alone": False}
+    assert all("більше подій і інший склад" not in c for c in cards.values())
+    assert "інший склад\nтак · та сама когорта, окремо не перевірялось · типова частка 12 % проти 7 %" in cards["count"]
+    assert "інший склад\nменше · та сама когорта, окремо не перевірялось" in cards["fewer"]
+    assert "інший склад\nу цій знахідці не вимірювалось" in cards["alone"]
+    assert "більше подій\nтак · та сама когорта, окремо не перевірялось · 3 проти 1" in cards["share"]
 
 
 @pytest.mark.browser
@@ -265,7 +277,12 @@ def test_same_places_reads_co_located_without_any_computation(cfg):
     with card_page(cfg) as page:
         text, alone = page.evaluate(CARD, args | {"neighbors": neighbors}), page.evaluate(CARD, args)
     places = text[text.index("також у тих самих місцях") :]
-    assert "stations" in places and "ділянки перетинаються: 62 %" in places and "shops" in places and "ділянки торкаються" in places
+    assert (
+        "stations" in places
+        and "ділянки з сусідніми комірками перетинаються: 62 %" in places
+        and "shops" in places
+        and "ділянки торкаються" in places
+    )
     assert "own run" not in places and "також у тих самих місцях" not in alone
     assert not any(w in places.lower() for w in ("спільний ефект", "взаємод", "оцінка", "поруч"))
 
@@ -310,11 +327,16 @@ def test_a_runs_insights_are_highlighted_in_every_block_and_the_base_layers_are_
         chips = page.evaluate(f"[layerChip('{run['dataset_id']}'), layerChip('{base_ds}')]")  # an answer's card reads its item's dataset
         page.evaluate(f"inspect('{sorted(own)[0]}')")
         page.wait_for_function("document.querySelector('#inspector .link-card .tag.layer')", timeout=10000)
+        page.click("#dev-btn")  # the developer mode off: an insight revealed from the table stays on the table
+        page.click("#view-switch button[data-view='table']")
+        page.evaluate(f"reveal('{sorted(own)[0]}')")
+        stayed = page.evaluate("S.view")
+        page.click("#dev-btn")
         ring = f"S.cy.getElementById('{sorted(own)[0]}').style('border-color')"
         before = page.evaluate(ring)
         page.evaluate("setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark')")  # the colours follow the theme
         follows = page.evaluate(ring) != before
     assert own and {pid for pid, chip in table.items() if chip} == own and all("schools" in table[pid] for pid in own)
     assert {pid for pid, has in ringed.items() if has} == own
-    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and follows
+    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and follows and stayed == "table"
     assert not errors, errors

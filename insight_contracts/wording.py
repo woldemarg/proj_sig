@@ -191,7 +191,7 @@ TERMS: dict[str, tuple[str, str]] = {
     ),
     "n_eff": (
         "ефективний обсяг",
-        "ефективний обсяг для тесту медіани: кількість комірок з непорожнім значенням метрики, зменшена за схожістю сусідніх комірок (Moran's I > 0)",
+        "ефективний обсяг для тесту медіани (з вагою подій — обсяг Кіша: події за їхньою вагою, не комірки): кількість комірок з непорожнім значенням метрики, зменшена за схожістю сусідніх комірок (Moran's I > 0)",
     ),
     "moran_i": ("схожість сусідів", "наскільки сусідні комірки інсайту схожі за метрикою (Moran's I): більше 0 — схожі, 0 і менше — ні"),
     "sac": (
@@ -492,9 +492,10 @@ def lift_words(kind: str, lift: float) -> str:
     return words + (" (згладжено)" if kind == "window" else "")
 
 
-def value_words(ins: Insight) -> dict[str, str]:
+def value_words(ins: Insight, weighted: bool = False) -> dict[str, str]:
     """What an insight's test numbers say: ``p_adjusted`` its bucket and the exact value, and for a geo insight
-    ``n_eff``, the effective sample size of its median test with the cells it counts. ``n_eff`` is the cells holding a
+    ``n_eff``, the effective sample size of its median test with the cells it counts — or, ``weighted`` (the dataset's
+    ``weight_by_events``), Kish's effective number of events, which no cell count restates. ``n_eff`` is the cells holding a
     value of the metric times ``(1 − ρ) / (1 + ρ)``, ``ρ`` Moran's I clipped to [0, 0.99] as
     ``spatial.effective_n_factor`` clips it: a sparse cell holds no value, so ``n_eff`` below the extent's cells says
     nothing of its neighbours by itself, and ``I ≤ 0`` reduces nothing. With ``I > 0`` the counted cells come back from
@@ -515,7 +516,8 @@ def value_words(ins: Insight) -> dict[str, str]:
         valued = min(valued, int(spatial.get("cells") or valued))  # the rounded n_eff and I can give one cell more than the extent holds
         tail = f"зменшено за схожістю сусідніх комірок (Moran's I {moran:.2f})" if rho > 0 else "без зменшення за автокореляцією"
         cells = plural(valued, "непорожня комірка", "непорожні комірки", "непорожніх комірок")
-        out["n_eff"] = f"{spatial['n_eff']:g}: {'≈' if rho > 0 else ''}{valued} {cells} метрики, {tail}"
+        counted = f"обсяг Кіша — події комірок за їхньою вагою, не {cells}" if weighted else f"{'≈' if rho > 0 else ''}{valued} {cells} метрики"
+        out["n_eff"] = f"{spatial['n_eff']:g}: {counted}, {tail}"
     if (p_context := spatial.get("p_context")) is not None:
         family = spatial.get("context_family") or 1
         cohorts = plural(family, "когорта", "когорти", "когорт")

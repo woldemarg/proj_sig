@@ -35,7 +35,7 @@ from subgroup_miner.ingestion import (
     read_rows,
     read_times,
 )
-from subgroup_miner.spatial import SpatialError, parse_geo_levels
+from subgroup_miner.spatial import SpatialError, locate_points, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
 GLOSSARY_VALUE_MAX = 120  # characters of one declared glossary value
@@ -227,6 +227,8 @@ def check_target(batches: list[dict[str, Any]], target: str | None) -> str | Non
     target = (target or "").strip() or None
     if target and not any(target in (b.get("dataset_id"), b.get("upload_id")) and b["status"] in ("READY", "SKIPPED") for b in batches):
         raise PipelineError("invalid_options", f"supersedes {target}: no READY dataset or upload has this id")
+    if target:
+        check_removal(batches, [b for b in batches if target in (b.get("dataset_id"), b.get("upload_id"))])
     return target
 
 
@@ -311,10 +313,14 @@ def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[
     return layers
 
 
-def resolve_counts(rows: Any, spec: str | None, miner: MinerConfig) -> list[dict[str, Any]]:
+def resolve_counts(rows: Any, spec: str | None, miner: MinerConfig, geo: str | None = None) -> list[dict[str, Any]]:
     """An upload's ``count_values`` (``column=value,...``) checked against its rows (``ingestion.check_counts``): each
     value with its rows and status — ``ok`` with at least ``MIN_ROWS × MIN_CELL_POINTS`` rows, else ``sparse`` (no
-    counter: too few events for a frequency, docs/02_discovery.md §2.9); none asked, none."""
+    counter: too few events for a frequency, docs/02_discovery.md §2.9); none asked, none. With ``geo`` the rows are
+    the located ones — what the cells will count — so a value held mostly by unlocated rows reads ``sparse``."""
+    if rows is not None and spec and geo:
+        lat, lon, _ = locate_points(rows, geo.partition("@")[0].strip())
+        rows = rows[np.isfinite(lat) & np.isfinite(lon)]
     return check_counts(rows, spec, miner.min_rows * miner.min_cell_points)
 
 
@@ -485,24 +491,30 @@ def cross_runs(
     layer_where: dict[str, str] | None = None,
     count_values: str | None = None,
     baseline: str | None = None,
+    allow_coarse: bool = False,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
-    file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
-    their stored files, so deleting a layer's own upload leaves the run whole. The levels: ``levels`` when given (each one
-    of the target's), otherwise the target's finest — a layer is counted from its points on the target's grid, so the
-    levels a mined layer was read at say nothing about the run. One ``Engine.submit`` keyword
-    set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads, each
-    context entry's time rule (``layer_time``) and, for a target with a time column, one warning per event layer
-    (``time_warning``): every layer is read as static over its whole span. ``align`` ``span`` counts an event layer's
-    events within the target's span only (its own reading's time record) — the ``window`` of its entry —, a layer
-    without time whole, with a warning. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under
-    a filter, as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read
-    in place, not copied. ``count_values`` (``column=value,...``) asks for per-type counters, checked against the target's
-    rows (``resolve_counts``) — an empty one asks for none —, and ``baseline`` (``map`` | ``zone``) what its metrics are
-    read against; without them the run keeps the target level's own. A level coarser than ``LINK_MIN_LEVEL`` is named in
-    its run's warnings."""
-    if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
-        raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
+    file with one layer (another upload, mined or ``LAYER``) as its context — a copy of its stored file, so deleting
+    the layer's own upload leaves the run whole; a second layer is a second run (1:1). ``target`` is an upload id, or
+    the dataset id of the reading the run is asked from (the card's): that record's options and trust, not the
+    level's latest. The levels: ``levels`` when given (each one of the target's), otherwise the target's finest — a
+    layer is counted from its points on the target's grid, so the levels a mined layer was read at say nothing about
+    the run —, each read from its latest processed record, never a repeat's (``SKIPPED``). A level coarser
+    than ``LINK_MIN_LEVEL`` is refused unless ``allow_coarse`` (scripts and eval; the console never sets it), then named
+    in the run's warnings. One ``Engine.submit`` keyword set per level, finest first: the level's own record's options
+    and trust, ``cross`` naming the layer's upload, the context entry's time rule (``layer_time``) and, for a target
+    with a time column, a warning for an event layer (``time_warning``): read as static over its whole span. ``align``
+    ``span`` counts an event layer's events within the target's span only (its own reading's time record) — the
+    ``window`` of its entry. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under a filter,
+    as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read in
+    place, not copied. ``count_values`` (``column=value,...``) asks for per-type counters, checked against the
+    target's located rows (``resolve_counts``) — an empty one asks for none —, and ``baseline`` (``map`` | ``zone``)
+    what its metrics are read against; without them the run keeps the target level's own."""
+    clicked = next((b for b in batches if b.get("dataset_id") == target and "cross" not in b and resolution(b) is not None), None)
+    if clicked:  # the reading asked from: its level reads that record
+        target = clicked["upload_id"]
+    if len(layers) != 1 or target in layers:
+        raise PipelineError("invalid_options", "one layer, another upload than the target: a second layer is a second run")
     if (align := (align or "").strip() or None) not in (None, "span"):
         raise PipelineError("invalid_options", f"align {align!r}: span (the target's) or none")
     try:
@@ -513,9 +525,11 @@ def cross_runs(
     except (IngestionError, ValueError) as exc:
         raise PipelineError("invalid_options", f"cross-type run: {exc}") from exc
     own: dict[int, dict[str, Any]] = {}
-    for b in sorted(batches, key=lambda b: b["created_at"]):  # per level its latest reading, a run's own batches aside
-        if b.get("upload_id") == target and resolution(b) is not None and "cross" not in b:
+    for b in sorted(batches, key=lambda b: b["created_at"]):  # per level its latest reading, a run's own batches and repeats (SKIPPED) aside
+        if b.get("upload_id") == target and resolution(b) is not None and "cross" not in b and b.get("status") != "SKIPPED":
             own[resolution(b)] = b
+    if clicked:
+        own[resolution(clicked)] = clicked
     if not own:
         raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
     if stray := sorted(set(layer_where) - set(layers)):
@@ -534,10 +548,15 @@ def cross_runs(
     if missing := sorted(chosen - set(own)):
         raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
     chosen = chosen or {max(own)}  # the target's finest
-    latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
+    if (coarse := sorted(r for r in chosen if r < LINK_MIN_LEVEL)) and not allow_coarse:
+        raise PipelineError(
+            "invalid_options",
+            f"levels {coarse} are coarser than r{LINK_MIN_LEVEL}: a zone this wide already holds different places (allow_coarse runs them)",
+        )
+    picked = [own[r] for r in sorted(chosen, reverse=True)]  # the records the runs read, finest first
     try:  # asked for the run, checked as an upload checks them: the target's rows, its reading's filter
-        rows = read_rows(Path(latest[0]["source_path"]), latest[0].get("where")) if (count_values or "").strip() else None
-        counts = None if count_values is None else resolve_counts(rows, count_values, settings.miner)
+        rows = read_rows(Path(picked[0]["source_path"]), picked[0].get("where")) if (count_values or "").strip() else None
+        counts = None if count_values is None else resolve_counts(rows, count_values, settings.miner, picked[0].get("geo"))
     except IngestionError as exc:
         raise PipelineError(exc.code, f"cross-type run: {exc}") from exc
     shared = {Path(b["source_path"]) for b in own.values()}  # the target's own file: a layer of it is read in place
@@ -546,18 +565,16 @@ def cross_runs(
         context = save_context(ws, opened, settings.max_upload_bytes)
     for entry, rule in zip(context, rules):
         entry.update(rule)
-    target_span = next((b["temporal"]["span"] for b in latest if b.get("temporal")), None)
+    target_span = next((b["temporal"]["span"] for b in picked if b.get("temporal")), None)
     if align:
-        if not target_span or not any(e["time_rule"] == "events" for e in context):
+        if not target_span or context[0]["time_rule"] != "events":
             discard_context(context)
             raise PipelineError("invalid_options", "align=span needs a target with a time record and a layer with a time column")
-        for e in context:
-            e |= {"window": list(target_span)} if e["time_rule"] == "events" else {}
-        warnings = [f"{e['name']}: no time column, counted whole under align=span" for e in context if "window" not in e]
+        context[0]["window"], warnings = list(target_span), []
     else:
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
-    for b in (own[r] for r in sorted(chosen, reverse=True)):
+    for b in picked:
         keys = ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where", "count_values", "baseline")
         options = {k: b.get(k) for k in keys} | {"strict": b.get("strict", True)} | ({"count_values": counts} if counts is not None else {}) | asked
         inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
@@ -602,13 +619,14 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     finest: dict[str, int] = {}  # an upload's finest geo level, a run's own aside
     out: dict[str, dict[str, Any]] = {}
     for b in batches:
-        for upload in b.get("cross", ()):
+        crossed = b.get("cross", ()) if b.get("status") != "SKIPPED" else ()  # a repeat is no run: it reads nothing, hides nothing
+        for upload in crossed:
             runs[upload] = runs.get(upload, 0) + 1
         if (r := resolution(b)) is not None and "cross" not in b:
             finest[b.get("upload_id")] = max(r, finest.get(b.get("upload_id"), r))
-        if gone := [u for u in b.get("cross", ()) if u not in stored]:
+        if gone := [u for u in crossed if u not in stored]:
             out[b["batch_id"]] = {"stale": {"layers": gone, "reason": "superseded" if all(u in replaced for u in gone) else "deleted"}}
-        if off := [u for u in b.get("cross", ()) if u in hidden]:  # a run of a hidden layer: out of the answers and the views
+        if off := [u for u in crossed if u in hidden]:  # a run of a hidden layer: out of the answers and the views
             out.setdefault(b["batch_id"], {})["hidden_by"] = off
     for b in batches:
         if n := runs.get(b.get("upload_id")):
@@ -628,10 +646,17 @@ def set_hidden(ws: Workspace, batches: Sequence[dict[str, Any]], upload_id: str,
         raise PipelineError("unknown_upload", upload_id)
     if all(b["status"] != "LAYER" for b in mine) and not any(upload_id in b.get("cross", ()) for b in batches):
         raise PipelineError("invalid_options", f"{upload_id}: no run reads it as a layer")
-    for b in mine:
-        b["hidden"] = hidden
-        ws.save_batch(b)
+    for b in mine:  # a copy, saved whole: a failed write leaves the cached record as it was on disk
+        ws.save_batch({**b, "hidden": hidden})
     return [b["batch_id"] for b in mine]
+
+
+def check_removal(batches: Sequence[dict[str, Any]], picked: Sequence[dict[str, Any]]) -> None:
+    """A hidden layer that runs still read is not removed — deleted or superseded —: its runs would come back into the
+    answers with no hide left to hold them (docs/06_graph_and_storage.md §6.8); show it first."""
+    hidden, ids = {b["upload_id"] for b in picked if b.get("hidden")}, {b["batch_id"] for b in picked}
+    if hidden and any(b["batch_id"] not in ids and b.get("status") != "SKIPPED" and set(b.get("cross", ())) & hidden for b in batches):
+        raise PipelineError("invalid_options", f"{sorted(hidden)}: a hidden layer read by runs; show it (hidden: false) before removing it")
 
 
 def hidden_datasets(batches: Sequence[dict[str, Any]]) -> frozenset[str]:

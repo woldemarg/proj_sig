@@ -50,7 +50,7 @@ const Timeline = (() => {
       choose(...(lo < hi ? [lo, hi] : [T.wlo, T.whi]), false);
     } else { S.period = null; drawBar(); }
     if (JSON.stringify(S.period) !== was) GeoMap.onPeriod();  // the map hears of a stretch the filter narrowed or dropped
-    if (!hubs.length && S.view === "time") setView("graph");
+    if (!hubs.length && S.view === "time") setView("table");
     else if (S.view === "time") render();
   }
 

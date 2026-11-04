@@ -28,7 +28,7 @@ from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_re
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import Settings
-from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, cross_state
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, cross_state, hidden_datasets
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
 from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
 
@@ -84,10 +84,11 @@ class HiddenIn(BaseModel):
 
 
 class CrossTypeIn(BaseModel):
-    target: str  # an upload id (``up-…``): the dataset whose metrics are mined, every geo level of it
-    layers: list[str]  # the uploads whose points become its context layers
+    target: str  # an upload id (``up-…``), or a dataset id of its reading: the base layer whose metrics are mined, at its finest level
+    layers: list[str]  # one upload whose points become its context layer (a second layer is a second run)
     ring: int | str | None = None  # their disk: 0, 1 (empty), 2
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
+    allow_coarse: bool = False  # a level coarser than LINK_MIN_LEVEL too (scripts and eval; the console never asks)
     align: str | None = None  # span: an event layer's events within the target's span only
     layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
     count_values: str | None = None  # column=value,...: per-type counters of the run; empty: none; absent: the target level's own
@@ -298,7 +299,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
-        return node_details(engine.graph(), node_id, settings.thresholds)
+        return node_details(engine.graph(), node_id, settings.thresholds, hidden_datasets(engine.ws.list_batches()))
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
@@ -320,7 +321,9 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
-        return sphere_points(engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None)
+        return sphere_points(
+            engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None, hidden_datasets(engine.ws.list_batches())
+        )
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:

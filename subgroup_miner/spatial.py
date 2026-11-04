@@ -48,7 +48,7 @@ NESTED_SHARE = 0.9  # nesting above which a mode condition never explains the ot
 GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also become per-level share metrics
 GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
 GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
-COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset and of the others (the strongest relations)
+COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset, of its base's other runs and of the rest (the strongest relations)
 GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: |P ∩ R| over the smaller of the pattern and the region's occupied cells
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 GEO_AUTO_RESOLUTIONS = range(10, 2, -1)  # the resolutions ``@auto`` weighs, finest first
@@ -91,6 +91,7 @@ class SpatialContext:
     context: dict[str, ContextLayer] = field(default_factory=dict)  # layer name -> its counts and disks (context.py), the null's input; never stored
     exposure: dict[str, Any] = field(default_factory=dict)  # per-type counters' denominator words: {kind: area, cell_km2}; empty without them
     baseline: str | None = None  # zone: every metric read against its parent cell's median; None: the map
+    events: np.ndarray | None = None  # per cell its events as counted: a share's test weighs them (never the zoned ``points``)
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -460,10 +461,12 @@ def build_cells(
         total = table.sum(axis=1).to_numpy(float)
         out[f"{col}_mode"] = np.where(total > 0, table.columns.to_numpy()[table.to_numpy().argmax(axis=1)], "missing")
         glossary[f"{col}_mode"] = f"the most frequent {_words(col)} among the cell's events"
+    asked = {tuple(spec.partition("=")[::2]) for spec in count_values}  # a counted value's share is written too, whatever its rarity
     for col in share_cols:
         table = _level_counts(profile.codes[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
-        kept = table.columns[-1:] if table.shape[1] == 2 else table.columns  # a binary column: its rarer level
+        kept = list(table.columns[-1:] if table.shape[1] == 2 else table.columns)  # a binary column: its rarer level
+        kept += [v for v in table.columns if (col, v) in asked and v not in kept]
         for level in kept:
             with np.errstate(invalid="ignore", divide="ignore"):
                 share = np.where(dense & (total > 0), table[level].to_numpy(float) / total, np.nan)
@@ -482,8 +485,8 @@ def build_cells(
         counted.setdefault(col, []).append(f"count_{col}_{value}")
     exposure = {}
     if counted:
-        areas = np.array([h3.cell_area(c, "km^2") for c in cells])
-        exposure = {"kind": "area", "cell_km2": round(float(h3.average_hexagon_area(resolution, "km^2")), 6)}
+        areas = np.array([h3.cell_area(c, "km^2") for c in cells])  # the occupied cells': the global average is off at high latitudes
+        exposure = {"kind": "area", "cell_km2": round(float(areas.mean()), 6)}
         if (spread := areas.max() / areas.min() - 1) > CELL_AREA_SPREAD:
             warnings.append(f"geo: the occupied cells' areas differ by {spread:.0%} at r{resolution}: a per-type count is per cell, not per km²")
     if dropped:
@@ -506,7 +509,7 @@ def build_cells(
         for q, words in QUARTERS.items():
             glossary[f"{band}={q}"] = f"the surrounding cells are {words} ({by})"
         glossary[f"{band}=missing"] = "no surrounding cell has events"
-        derived[f"{name}_band"] = [*counters, *(c for cs in counted.values() for c in cs)]  # every counter measures the same activity
+        derived[f"{name}_band"] = list(counters)  # the activity counters; a per-type count is a type's own question (§2.9)
     bands, layers, words, notes = context_bands(context, cells, resolution, context_ring)
     out |= bands
     derived |= {column: [] for column in bands}  # forced, and restating no metric of the target
@@ -517,11 +520,11 @@ def build_cells(
         if others or col in counted:  # and the cell's most frequent value restates the column's own per-type counts
             derived[f"{col}_mode"] = [*(m for o in others for m in out if m.startswith((f"share_{o}_", f"count_{o}_"))), *counted.get(col, [])]
     out[LISA_COLUMN] = local_moran(np.log1p(counts), ptr, idx)
-    derived[LISA_COLUMN] = [*counters, *(c for cs in counted.values() for c in cs)]
+    derived[LISA_COLUMN] = list(counters)
     glossary[LISA_COLUMN] = "whether the cell and its neighbours form a cluster of many or few events"
     glossary.update({f"{LISA_COLUMN}={k}": v for k, v in LISA_WORDS.items()})
     if baseline == "zone":  # the difference between zones taken out of every metric, after the conditions read the raw ones
-        logged = set(derived[LISA_COLUMN])  # the counters: points, active days, per-type counts
+        logged = {*counters, *(c for cs in counted.values() for c in cs)}  # the counters: points, active days, per-type counts
         for metric in metrics:
             values = np.log1p(out[metric]) if metric in logged else out[metric]
             out[metric] = values - pd.Series(values).groupby(blocks).transform("median").to_numpy()
@@ -546,6 +549,7 @@ def build_cells(
         context=layers,
         exposure=exposure,
         baseline=baseline,
+        events=counts,  # the frame copies its columns; the zone rebinds them, never writes into these
     )
     return table, ctx, warnings
 

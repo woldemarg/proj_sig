@@ -469,7 +469,7 @@ function highlightPath(turn, item, el) {
   const edges = item.path.map((st) => st.edge_id);
   S.hl = { seeds: h.seeds, anchors: item.path.filter((s) => s.target.startsWith("A-")).map((s) => s.target), evidence: [item.pattern_id],
     transversal_only: item.transversal_only ? [item.pattern_id] : [], edges, traversed: [] };
-  if (S.view === "table") setView("graph");
+  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
   highlight(S.hl);
   if (S.view === "sphere") renderSphere(); else focusNodes([item.pattern_id, ...item.path.map((s) => s.source)]);
   document.querySelectorAll(".ev.on").forEach((x) => x.classList.remove("on"));
@@ -493,7 +493,7 @@ function reveal(id, { isolate = null, walk = false } = {}) {
   if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
   if (S.view === "map") { GeoMap.unfocus(); return inspect(id, GeoMap.offMap(id)); }  // the old focus goes
   if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
-  if (S.view === "table") setView("graph");
+  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
   focusNodes([id]);
   inspect(id);
 }
@@ -617,22 +617,23 @@ function ageWords(core, asOf) {
 const pct = (x) => `${num(x * 100, 0)} %`;
 
 function linkCard(p, d) {
-  /* a layer link's insight in its two questions (docs/08_interface.md §8.2): more events and another mix, each from one
-     run's own insights — this one and, for the same scope and value, its pair (the server's link.pair) —, never one
-     number; the run's level and disk; the same base layer's other links in the same places (CO_LOCATED, no test of
-     their joint effect). A metric neither a count nor a share answers neither question: no rows */
-  const ds = d.dataset, me = { target: p.target, effect: p.effect_size }, pair = d.link.pair, [kind, key] = me.target.split(/_(.+)/);
+  /* a layer link's insight in its two questions (docs/08_interface.md §8.2): one is its tested primary — more events
+     (a count) or another mix (a share) —, the other is the same cohort's other metric when the insight holds it
+     (link.pair: a description of the same cells, not a test of its own), else what the run asked; never one number;
+     the run's level and disk; the same base layer's other links in the same places (CO_LOCATED, no test of their
+     joint effect). A metric neither a count nor a share answers neither question: no rows */
+  const ds = d.dataset, s0 = p.shifts[0], me = { target: p.target, effect: p.effect_size, local: s0.local_median, baseline: s0.global_median, tested: true };
+  const pair = d.link.pair, [kind, key] = me.target.split(/_(.+)/);
   const { count = null, share = null } = { [kind === "points" ? "count" : kind]: me, ...(pair && { [pair.target.split("_")[0]]: pair }) };  // points: every event's count
   const asked = (ds.count_values || []).find((c) => `${c.column}_${c.value}` === key), held = `не ${word("context_confounded")}`;  // admitted: past the layer's null
-  const more = count ? `${count.effect > 0 ? "так" : "менше"} · ${held}${d.link.exposure ? ` · ${d.link.exposure}` : ""}`
-    : !(ds.count_values || []).length ? "не перевірялось" : asked && asked.status !== "ok" ? `${word("insufficient_data")} для частоти на цьому рівні` : "ні";
-  const s0 = share === me ? p.shifts[0] : null;
-  const mix = share ? `так · ${held}` + (ds.baseline === "zone" ? ` · ${word("zone_baseline")}` : s0 ? ` · типова частка ${pct(s0.local_median)} проти ${pct(s0.global_median)}` : "") +
-    (ds.weight_by_events ? ` · ${word("per_event")}` : "") : "ні";
+  const zoned = ds.baseline === "zone", aside = (x) => (x.tested ? held : "та сама когорта, окремо не перевірялось");
+  const more = count ? `${count.effect > 0 ? "так" : "менше"} · ${aside(count)}${zoned ? ` · ${word("zone_baseline")}` : count.tested ? "" : ` · ${num(count.local, 1)} проти ${num(count.baseline, 1)}`}${d.link.exposure ? ` · ${d.link.exposure}` : ""}`
+    : !(ds.count_values || []).length ? "не перевірялось" : asked && asked.status !== "ok" ? `${word("insufficient_data")} для частоти на цьому рівні` : "у цій знахідці не вимірювалось";
+  const mix = share ? `${share.effect > 0 ? "так" : "менше"} · ${aside(share)}` + (zoned ? ` · ${word("zone_baseline")}` : ` · типова частка ${pct(share.local)} проти ${pct(share.baseline)}`) +
+    (ds.weight_by_events && share.tested ? ` · ${word("per_event")}` : "") : "у цій знахідці не вимірювалось";
   const same = [...(d.neighbors.CO_LOCATED || []), ...(d.neighbors["CO_LOCATED (in)"] || [])].filter((it) => it.layers);
   return `<div class="link-card">${layerChip(ds.dataset_id)}<h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
     `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
-    (count && share && count.effect > 0 ? `<p class="link-both">${esc(cap(word("more_events")))} і ${esc(word("other_mix"))}</p>` : "") +  // the pair: one run, one scope, one value
     (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
     (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
       same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
@@ -652,7 +653,9 @@ async function inspect(id, note = "") {
     const cov = p.covariance && p.covariance.pair ? p.covariance : null, ds = d.dataset || {};
     html += `<p class="lead">${esc(d.reading.gist)}</p>`;  // the words alone: the table below holds the numbers
     if (d.link) html += linkCard(p, d);
-    html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>${shiftRows(p.shifts, ds.metadata_doc)}`;
+    html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>` +
+      (ds.baseline === "zone" ? `<p class="hint">${term("zone_baseline")}: ${esc(TERMS.zone_baseline[1])} — медіани нижче читаються так</p>` : "") +  // zoned values, named
+      shiftRows(p.shifts, ds.metadata_doc);
     if (cov) html += kv([[term("covariance"), `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}`]]);
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
       `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])

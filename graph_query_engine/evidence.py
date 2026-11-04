@@ -171,7 +171,10 @@ class Evidence:
             if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
                 trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
             layers = f" layers={','.join(d['cross_layers'])}" if d.get("cross_layers") else ""  # a cross-type run: its context layers
-            lines.append(f"- {d['dataset_id']} file={d['filename']}{layers} batch={d['batch_id']} rows={d.get('rows')}{trust}")
+            read = (" baseline=zone (every metric minus its zone's median)" if d.get("baseline") == "zone" else "") + (
+                " weights=events" if d.get("weight_by_events") else ""
+            )
+            lines.append(f"- {d['dataset_id']} file={d['filename']}{layers}{read} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
     def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
@@ -706,6 +709,9 @@ def _quoted(text: str) -> str:
     return json.dumps(text if len(text) <= CONTEXT_VALUE_MAX else text[: CONTEXT_VALUE_MAX - 1] + "…", ensure_ascii=False)
 
 
+DECLARED = ("source", "reliability", "integrity", "glossary", "user_glossary", "cross_layers", "baseline", "weight_by_events")  # a dataset's line
+
+
 def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
     """The items' datasets (``DATASETS``): file, rows, batch, the declared trust, the glossaries, the metadata document
     and the band count of each quantile-band column the items name."""
@@ -716,7 +722,7 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary", "cross_layers") if props.get(k)}
+            | {k: props[k] for k in DECLARED if props.get(k)}
         )
         mine = [it for it in items if it.provenance["dataset_id"] == ds]
         if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):

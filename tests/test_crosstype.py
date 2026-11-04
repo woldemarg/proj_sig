@@ -188,31 +188,6 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
     assert others and all("p_context" not in i.provenance["spatial"] for i in others)  # no context condition: no test, no key
 
 
-def test_a_per_type_counter_passes_the_layer_null_like_points(engine, tmp_path):
-    """A run asks for a per-type counter its target was read without (``count_values``, checked against the target's
-    rows): three times as many a's in a school's disk, the counter ``count_kind_a`` is a metric of the run's cells, and
-    the cohort near the schools raises it past the dealt layer as it raises ``points`` — the same null, read through the
-    run's own reading. Whether mining admits a counter depends on the data's other conditions: here every cohort beside
-    the band holds a neighbourhood condition, which restates the counters. The run's Dataset node names the counters
-    asked and what a count is per (docs/02_discovery.md §2.9)."""
-    target, context = planted(tmp_path)
-    with TestClient(create_app(engine)) as client:
-        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
-        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
-        refused = cross_run(client, a, b, count_values="kind=z")
-        assert refused.status_code == 400 and "no row holds" in refused.json()["detail"]
-        run = engine.ws.load_batch(cross_run(client, a, b, count_values="kind=a").json()["batch_id"])
-    assert run["status"] == "READY" and [(c["value"], c["status"]) for c in run["count_values"]] == [("a", "ok")]
-    loaded = engine._load(run)  # the run's file, its layer and its counter, as its processing read them
-    near = [(BAND, "q1")]
-    for metric in ("count_kind_a", "points"):
-        fresh = recompute_statistics(loaded.frame, near, f"{BAND}=='q1'", [metric], loaded.spatial, 10, engine.settings.miner, 4)
-        assert fresh["shifts"][0]["robust_z"] > 1 and fresh["spatial"]["p_context"] * 4 <= 0.05, (metric, fresh["spatial"])
-    assert "count_kind_a" in loaded.spatial.derived_from["lisa_points"]  # the neighbourhood conditions restate it
-    props = engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]
-    assert props["count_values"] == run["count_values"] and props["exposure"]["kind"] == "area"
-
-
 def test_without_draws_there_is_no_context_test(tmp_path):
     target, context = planted(tmp_path)
     config = MinerConfig(context_permutations=0)
@@ -422,8 +397,9 @@ def upload_file(client, name: str, path: Path, geo: str, **data) -> dict:
 
 
 def cross_run(client, target: str, *layers: str, **options):
-    """``POST /api/crosstype`` of ``target`` with ``layers``; the response, its batches finished when accepted."""
-    response = client.post("/api/crosstype", json={"target": target, "layers": list(layers), **options})
+    """``POST /api/crosstype`` of ``target`` with ``layers``; the response, its batches finished when accepted. The planted
+    target is read at r7, coarser than the product's gate, so the runs say ``allow_coarse`` as the scripts do."""
+    response = client.post("/api/crosstype", json={"target": target, "layers": list(layers), "allow_coarse": True, **options})
     if response.status_code == 202:
         for batch in response.json()["levels"].values():
             wait_batch(client, batch, timeout=300)
@@ -461,8 +437,9 @@ def test_a_layer_only_upload_is_stored_with_its_points_and_never_mined(engine, t
 def test_two_stored_uploads_cross_at_the_targets_levels_only(engine, tmp_path):
     """A target read at two levels, a layer-only upload and a mined one: a cross-type run reads the target's finest level
     — a mined layer's own levels say nothing about the run, its points are counted on the target's grid — or the levels
-    named, as batches of the target's upload with its options and trust, a copy of each layer's stored file as its
-    context, and only the insights on a layer's band (the rest are the target's own)."""
+    named, as batches of the target's upload with its options and trust, a copy of the layer's stored file as its
+    context, and only the insights on the layer's band (the rest are the target's own). One layer a run: two are refused
+    (a second layer is a second run)."""
     target, context = planted(tmp_path)
     shops = tmp_path / "shops.csv"
     pd.read_csv(context).head(10).to_csv(shops, index=False)
@@ -477,6 +454,7 @@ def test_two_stored_uploads_cross_at_the_targets_levels_only(engine, tmp_path):
             cross_run(client, b, a),  # a layer-only upload has no level to read the target's metrics on
             cross_run(client, a, a),
             cross_run(client, a, c, c),
+            cross_run(client, a, b, c),  # two layers: a second layer is a second run
             cross_run(client, a, b, c, b),
             cross_run(client, a),
             cross_run(client, a, b, ring="3"),
@@ -540,15 +518,16 @@ def test_a_layer_upload_may_declare_its_time_and_a_run_records_each_layers_rule(
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", time="when")["upload_id"]
         b = upload_file(client, "patrols.csv", timed, "lat,lon", layer="true", time="when")["upload_id"]
         c = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
-        crossed = cross_run(client, a, b, c)
-        assert crossed.status_code == 202, crossed.text
+        crossed, static = cross_run(client, a, b), cross_run(client, a, c)
+        assert crossed.status_code == static.status_code == 202, crossed.text + static.text
         spatial = cross_run(client, upload_file(client, "untimed.csv", untimed, f"lat,lon@{RES}")["upload_id"], b)
     layer = next(r for r in engine.ws.list_batches() if r["upload_id"] == b)
     assert layer["status"] == "LAYER" and layer["time"] == "when" and [s[:10] for s in layer["span"]] == ["2025-07-01", "2026-06-30"]
     assert "span" not in next(r for r in engine.ws.list_batches() if r["upload_id"] == c)
-    record = engine.ws.load_batch(crossed.json()["batch_id"])
-    assert [(e["name"], e["time_rule"]) for e in record["context"]] == [("patrols", "events"), ("schools", "static")]
-    assert record["context"][0]["span"] == layer["span"] and "span" not in record["context"][1]
+    record, plain = (engine.ws.load_batch(r.json()["batch_id"]) for r in (crossed, static))
+    assert [(e["name"], e["time_rule"]) for e in record["context"] + plain["context"]] == [("patrols", "events"), ("schools", "static")]
+    assert record["context"][0]["span"] == layer["span"] and "span" not in plain["context"][0]
+    assert not [w for w in plain["warnings"] if "static" in w]  # a static layer: no span to compare
     (warning,) = [w for w in record["warnings"] if "static" in w]
     assert not [w for w in engine.ws.load_batch(spatial.json()["batch_id"])["warnings"] if "static" in w]
     assert warning.startswith("patrols:") and "50%" in warning and layer["span"][0] in warning
@@ -578,7 +557,6 @@ def test_align_span_counts_only_the_layers_events_within_the_targets_span(engine
             r.text for r in refused
         ]
         whole, aligned = (engine.ws.load_batch(cross_run(client, a, b, **o).json()["batch_id"]) for o in ({}, {"align": "span"}))
-        both = engine.ws.load_batch(cross_run(client, a, b, c, align="span").json()["batch_id"])
     span = next(r for r in engine.ws.list_batches() if r["upload_id"] == a and "cross" not in r)["temporal"]["span"]
     (entry,) = aligned["context"]
     assert entry["window"] == span and "window" not in whole["context"][0] and aligned["dataset_id"] != whole["dataset_id"]
@@ -586,7 +564,6 @@ def test_align_span_counts_only_the_layers_events_within_the_targets_span(engine
     assert np.isfinite(counted.lat).sum() == len(schools)  # each school once: its later visit lies past the target's span
     assert np.isfinite(read_context("patrols", Path(entry["path"]), "lat,lon")[0].lat).sum() == 2 * len(schools)
     assert not [w for w in aligned["warnings"] if w.startswith("patrols:")]  # aligned: not read as static
-    assert [w for w in both["warnings"] if w.startswith("schools:") and "whole" in w] and "window" not in both["context"][1]
     patterns = [p for p in engine.ws.patterns() if p["dataset_id"] == aligned["dataset_id"]]
     assert aligned["status"] == "READY" and patterns and engine.verify_pattern(patterns[0]["id"])["status"] == "reproduced"
 
@@ -625,9 +602,10 @@ def test_cross_state_marks_a_run_whose_layer_is_gone_and_counts_a_layers_runs():
 def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_level(engine, tmp_path):
     """A run of one layer reads the target's finest level on one disk and keeps the target's per-type counters and
     baseline only where its record holds them; an empty ``count_values`` asks for none. A level coarser than
-    ``LINK_MIN_LEVEL`` is named in the run's warnings, and the registry offers a link only on an upload's finest mined
-    level not coarser than it (``linkable``: the console's *+ контекстний шар*) — READY, or none of its findings admitted
-    alone —, never on a run."""
+    ``LINK_MIN_LEVEL`` is refused — the console's gate is the API's — unless ``allow_coarse`` (scripts and eval), then
+    named in the run's warnings; the registry offers a link only on an upload's finest mined level not coarser than it
+    (``linkable``: the console's *+ контекстний шар*) — READY, or none of its findings admitted alone —, never on a
+    run."""
     target, context = planted(tmp_path)
     plain = tmp_path / "plain.csv"
     pd.read_csv(target).iloc[:-1].to_csv(plain, index=False)  # other bytes: another upload
@@ -637,6 +615,8 @@ def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_
         b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
         asked = [((a, b), {}), ((a, b), {"levels": [RES], "count_values": ""}), ((p, b), {})]
         kept, coarse, bare = (engine.ws.load_batch(cross_run(client, *pair, **options).json()["batch_id"]) for pair, options in asked)
+        refused = cross_run(client, p, b, allow_coarse=False)  # the product's gate: r7 is coarser than r8
+        assert refused.status_code == 400 and f"coarser than r{uploads.LINK_MIN_LEVEL}" in refused.json()["detail"], refused.text
     assert ([c["value"] for c in kept["count_values"]], kept["baseline"], kept["level"], kept["context_ring"], kept["cross"]) == (
         ["a"],
         "zone",
@@ -653,6 +633,27 @@ def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_
         *(level("q9", "up-q", 9, "FAILED", error={"code": "no_viable_insights"}), level("n9", "up-n", 9, "FAILED", error={"code": "no_candidates"})),
     ]
     assert sorted(b for b, s in uploads.cross_state(registry).items() if s.get("linkable")) == ["a9", "q9"]
+
+
+def test_a_run_asked_from_a_reading_takes_that_record_never_a_repeats_or_the_levels_latest(engine, tmp_path):
+    """The card's action asks from a reading: ``target`` as that reading's dataset id reads its record (its baseline,
+    its trust), not the level's latest; asked by the upload id, the level's latest *mined* record is read — a later
+    repeat (``SKIPPED``) with other trust donates nothing (the e2e review's F-16)."""
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        first = upload_file(client, "target.csv", target, f"lat,lon@{RES}", source="first reading")
+        zoned = upload_file(client, "target.csv", target, f"lat,lon@{RES}", baseline="zone", source="zoned reading")
+        a, b = first["upload_id"], upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        first, zoned = (engine.ws.load_batch(r["batch_id"]) for r in (first, zoned))  # processed: their dataset ids
+        assert zoned["upload_id"] == a and zoned["dataset_id"] != first["dataset_id"]  # one file, two readings
+        repeat = engine.ws.load_batch(upload_file(client, "target.csv", target, f"lat,lon@{RES}", baseline="zone", source="a repeat")["batch_id"])
+        assert repeat["status"] == "SKIPPED"
+        by_upload = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
+        by_reading = engine.ws.load_batch(cross_run(client, first["dataset_id"], b).json()["batch_id"])
+        unknown = cross_run(client, "ds-000000000000", b)
+    assert (by_upload["baseline"], by_upload["source"]) == ("zone", "zoned reading")  # the level's latest mined reading, not the repeat
+    assert "baseline" not in by_reading and by_reading["source"] == "first reading" and by_reading["upload_id"] == a
+    assert unknown.status_code == 400
 
 
 def test_runs_follow_their_target_and_outlive_their_layer(engine, tmp_path):

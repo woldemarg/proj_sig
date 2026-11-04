@@ -139,7 +139,9 @@ IN_REGION_SHOWN = 25  # a pattern's regions in its panel
 NEIGHBOURS_SHOWN = 50  # any other group's strongest: a theme or a region of many insights stays a small panel
 
 
-def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThresholds) -> dict[str, Any]:
+def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThresholds, hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """A node with its neighbours and what its drawer reads; ``hidden`` (a hidden layer's runs, model A) marks a node of
+    theirs ``hidden`` — served by id, for ``verify`` — and keeps their patterns out of a visible insight's scale chain."""
     node = graph.nodes.get(node_id)
     if node is None:
         raise HTTPException(404, f"unknown node {node_id}")
@@ -173,12 +175,14 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     for key, items in neighbors.items():  # a pattern's regions as its places rank them, the rest by weight
         items.sort(key=(lambda x: tuple(-k for k in place_key(x))) if key == "IN_REGION" else (lambda x: -float(x["weight"])))
     out: dict[str, Any] = {"node": node, "neighbors": neighbors, "neighbor_counts": {k: len(v) for k, v in neighbors.items()}}
+    if node["props"].get("dataset_id") in hidden:
+        out["hidden"] = True
     for key, items in neighbors.items():  # the strongest of each group, its count beside them (a broad pattern lies in hundreds of regions)
         neighbors[key] = items[: IN_REGION_SHOWN if key == "IN_REGION" else NEIGHBOURS_SHOWN]
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
         out["reading"] = insight_reading(graph, node_id, thresholds)
-        out["numbers"] = wording.value_words(graph.insight(node_id))
         out["dataset"] = ds = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
+        out["numbers"] = wording.value_words(graph.insight(node_id), bool(ds.get("weight_by_events")))
         if ds.get("cross"):  # a layer link's card (docs/08_interface.md §8.2): its disk, what a count is per, its base's other links
             out["link"] = {"disk": wording.disk_words(ds.get("context_ring", 1)), "exposure": wording.exposure_words(ds.get("exposure"))}
             out["link"]["pair"] = link_pair(graph, node_id)
@@ -195,7 +199,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
             | ({"lift_words": wording.lift_words("place", edges[r]["props"]["lift"])} if "lift" in edges[r]["props"] else {})
             for r, _ in places(graph, node_id)
         ]
-        chain = scale_chain(graph, [node_id])
+        chain = scale_chain(graph, [node_id], frozenset(pid for pid, ins in graph.insights.items() if ins.dataset_id in hidden))
         steps = chain[0].up + chain[0].down if chain else []
         out["scale_chain"] = chain_dict(chain[0], graph) if chain else None
         out["levels"] = {s.pattern_id: graph.facts(s.pattern_id).resolution for s in steps}
@@ -221,19 +225,15 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
 
 
 def link_pair(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:
-    """A layer link's insight's pair (docs/08_interface.md §8.2, X-08): the run's insight with the same conditions on the
-    same value's other question — a count's share, a share's count —, or None."""
+    """A layer link's insight's other question on the same cohort (docs/08_interface.md §8.2): the complementary shift
+    of the same insight — a count's share, a share's count, of the same value —, its medians and sign, or None. One
+    cohort is one insight with one tested primary (its id is its conditions), so the other question is read off the
+    same cohort as a description, never as a second test."""
     ins = graph.insight(pattern_id)
     kind, _, key = ins.target.partition("_")
-    want, scope = {"count": f"share_{key}", "share": f"count_{key}"}.get(kind), sorted(c.expr for c in ins.conditions)
-    return next(
-        (
-            {"id": pid, "target": other.target, "effect": other.effect_size}
-            for pid, other in graph.insights.items()
-            if want and other.dataset_id == ins.dataset_id and other.target == want and sorted(c.expr for c in other.conditions) == scope
-        ),
-        None,
-    )
+    want = {"count": f"share_{key}", "share": f"count_{key}"}.get(kind)
+    other = next((s for s in ins.shifts if s.metric == want), None)
+    return {"target": other.metric, "effect": other.robust_z, "local": other.local_median, "baseline": other.global_median} if other else None
 
 
 def _members(graph: DualGraph, found: list[tuple[str, str | None]]) -> list[dict[str, Any]]:
@@ -288,11 +288,14 @@ def _attractor_hover(graph: DualGraph, node: dict[str, Any]) -> str:
     )
 
 
-def sphere_points(state: CommittedState, seed: int, thresholds: PhenomenonThresholds, dataset: str | None = None) -> dict[str, Any]:
-    """The sphere as data: every pattern and the attractors they activate, placed by one projection of one commit
-    (vectors and centroids share the frame), plus the edges between them; ``message`` when there is nothing to draw."""
+def sphere_points(
+    state: CommittedState, seed: int, thresholds: PhenomenonThresholds, dataset: str | None = None, hidden: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """The sphere as data: every pattern (a hidden layer's runs aside) and the attractors they activate, placed by one
+    projection of one commit (vectors and centroids share the frame), plus the edges between them; ``message`` when
+    there is nothing to draw."""
     g, frame = state.graph, state.frame
-    pats = [n for n in g.of_kind("Pattern") if not dataset or n["props"]["dataset_id"] == dataset]
+    pats = [n for n in g.of_kind("Pattern") if (not dataset or n["props"]["dataset_id"] == dataset) and n["props"]["dataset_id"] not in hidden]
     drawn = {n["id"] for n in pats}
     acts = [e for e in g.edges if e["type"] == "ACTIVATES" and e["source"] in drawn]
     anchors = sorted({e["target"] for e in acts}, key=attractor_id_of)
