@@ -188,6 +188,31 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
     assert others and all("p_context" not in i.provenance["spatial"] for i in others)  # no context condition: no test, no key
 
 
+def test_a_per_type_counter_passes_the_layer_null_like_points(engine, tmp_path):
+    """A run asks for a per-type counter its target was read without (``count_values``, checked against the target's
+    rows): three times as many a's in a school's disk, the counter ``count_kind_a`` is a metric of the run's cells, and
+    the cohort near the schools raises it past the dealt layer as it raises ``points`` — the same null, read through the
+    run's own reading. Whether mining admits a counter depends on the data's other conditions: here every cohort beside
+    the band holds a neighbourhood condition, which restates the counters. The run's Dataset node names the counters
+    asked and what a count is per (docs/02_discovery.md §2.9)."""
+    target, context = planted(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        refused = cross_run(client, a, b, count_values="kind=z")
+        assert refused.status_code == 400 and "no row holds" in refused.json()["detail"]
+        run = engine.ws.load_batch(cross_run(client, a, b, count_values="kind=a").json()["batch_id"])
+    assert run["status"] == "READY" and [(c["value"], c["status"]) for c in run["count_values"]] == [("a", "ok")]
+    loaded = engine._load(run)  # the run's file, its layer and its counter, as its processing read them
+    near = [(BAND, "q1")]
+    for metric in ("count_kind_a", "points"):
+        fresh = recompute_statistics(loaded.frame, near, f"{BAND}=='q1'", [metric], loaded.spatial, 10, engine.settings.miner, 4)
+        assert fresh["shifts"][0]["robust_z"] > 1 and fresh["spatial"]["p_context"] * 4 <= 0.05, (metric, fresh["spatial"])
+    assert "count_kind_a" in loaded.spatial.derived_from["lisa_points"]  # the neighbourhood conditions restate it
+    props = engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]
+    assert props["count_values"] == run["count_values"] and props["exposure"]["kind"] == "area"
+
+
 def test_without_draws_there_is_no_context_test(tmp_path):
     target, context = planted(tmp_path)
     config = MinerConfig(context_permutations=0)
