@@ -156,7 +156,7 @@ async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
   if (G.datasets.length && !S.picked && S.view === "table" && !document.body.classList.contains("dev")) setView("map");  // geo data: the map first
-  if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("table"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
   if (G.focusId && !GeoMap.has(G.focusId)) GeoMap.unfocus();  // another dataset's insight left the set: its zone goes with it
@@ -202,7 +202,7 @@ function paintFocus(p, item, cells, h3) {
   /* a focused insight's cells — orange where its target is higher, cyan lower, green a correlation — and the rest dimmed;
      G.focus their H3 ids, of whichever dataset draws it (never row ids: another dataset's index other cells) */
   const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
-  const layer = layersOf(item ? item.provenance.dataset_id : p.dataset_id)[0];  // a layer link's insight: outlined in its layer's colour
+  const layer = layersOf(item ? item.provenance.dataset_id : p.dataset_id || G.ds)[0];  // a layer link's insight: outlined in its layer's colour, from any list
   for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, id === "hl-line" && layer ? layerColor(layer) : color);
   G.focus = h3; G.map.getSource("focus").setData(cells);
   G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);

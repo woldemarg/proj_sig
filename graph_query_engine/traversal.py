@@ -94,9 +94,11 @@ def _located(graph: DualGraph, node: str, path: list[PathStep]) -> str:
     return relation if relation in LOCATED_RELATIONS else ""
 
 
-def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None) -> dict[str, int]:
-    """Patterns reachable via structural edges only (BFS -> hop count). Baseline 1 uses the
-    traversal's lattice edge set; ``structural_distance`` uses every structural type."""
+def structural_closure(
+    graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None, hidden: frozenset[str] = frozenset()
+) -> dict[str, int]:
+    """Patterns reachable via structural edges only (BFS -> hop count), never through a ``hidden`` one. Baseline 1 uses
+    the traversal's lattice edge set; ``structural_distance`` uses every structural type."""
     types = edge_types or STRUCTURAL
     hops = {s: 0 for s in seed_ids}
     frontier = list(seed_ids)
@@ -104,7 +106,7 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
         nxt = []
         for node in frontier:
             for _, other in graph.incident(node, types):
-                if other not in hops:
+                if other not in hops and other not in hidden:
                     hops[other] = d
                     nxt.append(other)
         frontier = nxt
@@ -165,7 +167,7 @@ def traverse(
                 if e["target"] == node and other not in seed_ids and not e["props"].get("weak"):
                     push(score * e["weight"], other, "P1", 0, l_cnt, seed, step(e, other, e["weight"]))
 
-    closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth)
+    closure = structural_closure(graph, list(seed_ids), config.traversal_max_depth, hidden=hidden)
     seed_conds = [_conds(graph, s) for s in seed_ids]
     seed_uploads = {graph.facts(s).upload for s in seed_ids} - {None}  # another level of a seed's upload is no other segment
     best: dict[str, Retrieved] = {}

@@ -497,7 +497,7 @@ def load_dataset(
             context_ring=ring,
             where=where,
             counts=count_values if geo_spec else (),
-            weights=config.weight_by_events,
+            weights=config.weight_by_events and spatial is not None and any(c.startswith("share_") for c in frame.columns),  # only where they apply
             baseline=baseline if geo_spec else None,
         ),
         filename=filename or path.name,

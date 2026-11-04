@@ -131,8 +131,7 @@ class Engine:
 
     @contextmanager
     def _reading(self) -> Iterator[None]:
-        """A batch reads the parse its upload's levels share (``read_file(shared=True)``); it goes once no batch is left
-        to read it."""
+        """A batch reads the parse its upload's levels share (``read_file(shared=True)``); it goes once no batch is left to read it."""
         try:
             yield
         finally:
@@ -265,7 +264,8 @@ class Engine:
                 else None
             )
             if stored is not None:
-                geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
+                arrays = (stored[k] for k in ("cells", "nbr_ptr", "nbr_idx"))
+                geo.append(GeoDataset(b["dataset_id"], *arrays, self.ws.load_covers(b["dataset_id"]), b.get("upload_id") if "cross" in b else None))
         tables = [t for b in batches.values() if (t := self._table_placement(b, batches)) is not None]
         temporal = {}  # every READY dataset's series and the file's digest: the temporal plane is derived, never journaled
         for b in batches.values():
@@ -377,7 +377,7 @@ class Engine:
         selection, refused = None, None
         try:
             rows = read_rows(path, where) if where or time or count_values else None  # a value no row holds is refused, listed
-            counts = uploads.resolve_counts(rows, count_values, self.settings.miner)
+            counts = uploads.resolve_counts(rows, count_values, self.settings.miner, geo)
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels, where)
             if time:
@@ -522,10 +522,8 @@ class Engine:
 
     @_healthy
     def cross(self, target: str, layers: Sequence[str], **options: Any) -> list[dict[str, Any]]:
-        """A cross-type run of two stored uploads (``uploads.cross_runs``, its keyword options): one batch per level.
-        Processing is a separate call."""
-        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings, **options)
-        return [self.submit(**run) for run in runs]
+        """A cross-type run of two stored uploads (``uploads.cross_runs``, its keyword options): one batch per level, processed apart."""
+        return [self.submit(**run) for run in uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings, **options)]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
         """Submit and process one file in the calling thread (tests and scripts)."""
@@ -881,13 +879,12 @@ class Engine:
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
         """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06_graph_and_storage.md §6.8).
 
-        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their mass recounted;
-        those that lost a member moved to their surviving members' direction); the others go. Journal rows are renumbered, the snapshot is
-        rebuilt and the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the
-        state, the journal, the snapshot and the moved-aside files; an error rolls back at once, and a crash
-        leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
-        ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
-        """
+        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their mass recounted; those that
+        lost a member moved to their surviving members' direction); the others go. Journal rows are renumbered, the snapshot
+        rebuilt, the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the state, the
+        journal, the snapshot and the moved-aside files; an error rolls back at once, a crash leaves ``pending.json`` for
+        the next writer start to roll back (``Workspace.recover``). ``dataset_id`` may be a batch id of a batch that failed
+        before its dataset id was known."""
         return {
             "dataset_id": dataset_id,
             **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), {"dataset_id": dataset_id}, "unknown_dataset"),
@@ -907,6 +904,7 @@ class Engine:
             picked = [b for b in every if chosen(b)]
             if not picked:
                 raise PipelineError(unknown, key)
+            uploads.check_removal(every, picked)  # a hidden layer with runs stays
             ids = {b["dataset_id"] for b in picked if b.get("dataset_id")}
             batches = [b for b in every if chosen(b) or b.get("dataset_id") in ids]
             if any(b["status"] not in TERMINAL for b in batches):

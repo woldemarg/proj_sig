@@ -87,10 +87,13 @@ def empty_payload(question: str) -> EvidencePayload:
     return EvidencePayload(question, graph_empty=True, view={"evidence": {}, "traversal": {}, "highlight": {k: [] for k in _HIGHLIGHT_KEYS}})
 
 
-def compute_baselines(graph: DualGraph, seeds: list[SeedMatch], result: TraversalResult, config: QueryConfig) -> dict[str, Any]:
-    """What the structural lattice alone would have reached from the seeds, and what the walk found beyond it (§7.6). The
-    naive text baseline is a measurement, not part of an answer: ``scripts/experiment.py`` embeds the documents itself."""
-    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES)
+def compute_baselines(
+    graph: DualGraph, seeds: list[SeedMatch], result: TraversalResult, config: QueryConfig, hidden: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """What the structural lattice alone would have reached from the seeds, and what the walk found beyond it (§7.6),
+    ``hidden`` patterns never entered (model A). The naive text baseline is a measurement, not part of an answer:
+    ``scripts/experiment.py`` embeds the documents itself."""
+    closure = structural_closure(graph, [s.pattern_id for s in seeds], config.traversal_max_depth, LATTICE_EDGES, hidden)
     retrieved = {r.node_id for r in result.patterns}
     return {
         "structural_only": sorted(closure),
@@ -125,6 +128,6 @@ def search(
     hidden = frozenset(pid for pid, ins in graph.insights.items() if ins.dataset_id in hidden_datasets)
     seeds = resolve_seeds(parsed, graph, encoder, state.frame.patterns, config, place_scores, clock, hidden)
     result = traverse(graph, seeds, config, None if parsed.when else clock, hidden)  # an asked period is its own window
-    result.baselines = compute_baselines(graph, seeds, result, config)
+    result.baselines = compute_baselines(graph, seeds, result, config, hidden)
     evidence = build_evidence(parsed, result, graph, config, place_scores, (clock, "asked" if as_of else "latest data") if clock else None, hidden)
     return SearchResult(question, parsed, seeds, result, evidence, time.perf_counter() - start)

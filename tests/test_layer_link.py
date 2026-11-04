@@ -16,12 +16,13 @@ from fastapi.testclient import TestClient
 from test_crosstype import BAND, ORIGIN, RES, cross, cross_run, mined, planted, points_at, schools_of, upload_file
 from test_spatial import cells_of
 
+from insight_contracts import Shift
 from insight_contracts.graph import dataset_node_id
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY
-from subgroup_miner.discovery import _median_z, _weighted_median, _weighted_stats, recompute_statistics
+from subgroup_miner.discovery import _event_weights, _median_z, _per_event, _weighted_median, _weighted_stats, recompute_statistics
 from subgroup_miner.ingestion import load_dataset
 
 
@@ -56,11 +57,11 @@ def mixed(tmp_path):
 
 def test_a_per_type_counter_passes_the_layer_null_like_points(engine, tmp_path):
     """A run asks for a per-type counter its target was read without (``count_values``, checked against the target's
-    rows): three times as many a's in a school's disk, the counter ``count_kind_a`` is a metric of the run's cells, and
-    the cohort near the schools raises it past the dealt layer as it raises ``points`` — the same null, read through the
-    run's own reading. Whether mining admits a counter depends on the data's other conditions: here every cohort beside
-    the band holds a neighbourhood condition, which restates the counters. The run's Dataset node names the counters
-    asked and what a count is per (docs/02_discovery.md §2.9)."""
+    rows): three times as many a's in a school's disk, the counter ``count_kind_a`` is a metric of the run's cells, the
+    cohort near the schools raises it past the dealt layer as it raises ``points`` — the same null, read through the
+    run's own reading —, and mining admits it as a primary with the layer's band in its scope: a neighbourhood
+    condition restates ``points``, never a type's own count (docs/02_discovery.md §2.9). The run's Dataset node names
+    the counters asked and what a count is per."""
     target, context = planted(tmp_path)
     with TestClient(create_app(engine)) as client:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
@@ -74,7 +75,10 @@ def test_a_per_type_counter_passes_the_layer_null_like_points(engine, tmp_path):
     for metric in ("count_kind_a", "points"):
         fresh = recompute_statistics(loaded.frame, near, f"{BAND}=='q1'", [metric], loaded.spatial, 10, engine.settings.miner, 4)
         assert fresh["shifts"][0]["robust_z"] > 1 and fresh["spatial"]["p_context"] * 4 <= 0.05, (metric, fresh["spatial"])
-    assert "count_kind_a" in loaded.spatial.derived_from["lisa_points"]  # the neighbourhood conditions restate it
+    assert "count_kind_a" not in loaded.spatial.derived_from["lisa_points"]  # a hot spot restates every event's count, not a type's
+    found = [p for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"] and p["target"] == "count_kind_a"]
+    assert found and all(any(c["attribute"] == BAND for c in p["conditions"]) for p in found)  # F admitted, on the layer's band
+    assert all(p["provenance"]["spatial"]["p_context"] * p["provenance"]["spatial"]["context_family"] <= 0.05 for p in found)
     props = engine.graph().nodes[dataset_node_id(run["dataset_id"])]["props"]
     assert props["count_values"] == run["count_values"] and props["exposure"]["kind"] == "area"
 
@@ -90,6 +94,9 @@ def test_the_layer_null_reads_a_share_cohort_with_the_same_weights(tmp_path):
         loaded.dataset_id
         != load_dataset(target, MinerConfig(context_permutations=99), geo=f"lat,lon@{RES}", context=[("schools", context, "auto")]).dataset_id
     )
+    table = tmp_path / "table.csv"
+    pd.DataFrame({"x": np.random.default_rng(3).normal(size=300), "k": np.resize(["a", "b", "c"], 300)}).to_csv(table, index=False)
+    assert load_dataset(table, on).dataset_id == load_dataset(table, MinerConfig()).dataset_id  # no cells, no shares: the weights apply to nothing
     insights, result = mined(loaded, on)
     assert result.profile.weight_by_events
     family = sum(any(c.attribute == BAND for c in i.conditions) for i in insights)
@@ -108,9 +115,10 @@ def test_the_layer_null_reads_a_share_cohort_with_the_same_weights(tmp_path):
 
 def test_a_chosen_value_becomes_a_counter_the_bands_restate_and_no_band_of_its_own():
     """``count_values`` makes each chosen value a per-type counter of every cell (``count_<column>_<value>``: the cell's
-    events of that value, divided by nothing): the neighbourhood bands and ``lisa_points`` restate it, the mode of its
-    own column too, and it adds no neighbourhood band of its own; ``exposure`` names the level's cell area. Without the
-    option nothing changes; cells far apart in latitude differ in area, and say so (docs/02_discovery.md §2.9)."""
+    events of that value, divided by nothing): the mode of its own column restates it, the neighbourhood bands and
+    ``lisa_points`` do not (they restate every event's count), and it adds no neighbourhood band of its own; the
+    counted value's share is written too, whatever its rarity; ``exposure`` names the occupied cells' mean area. Without
+    the option nothing changes; cells far apart in latitude differ in area, and say so (docs/02_discovery.md §2.9)."""
     frame = geo_frame()
     plain, plain_ctx, _ = cells_of(frame)
     table, ctx, warnings = cells_of(frame, count_values=["channel=phone", "sector=north"])
@@ -119,10 +127,13 @@ def test_a_chosen_value_becomes_a_counter_the_bands_restate_and_no_band_of_its_o
     assert np.array_equal(table["count_channel_phone"].to_numpy(), expected)  # every cell, zero where the value has no event
     assert (table["count_sector_north"] <= table["points"]).all() and table["count_sector_north"].sum() == (frame["sector"] == "north").sum()
     counters = {"count_channel_phone", "count_sector_north"}
-    assert counters <= set(ctx.derived_from["neighbours_points_band"]) and counters <= set(ctx.derived_from["lisa_points"])
+    assert not counters & set(ctx.derived_from["neighbours_points_band"]) and not counters & set(ctx.derived_from["lisa_points"])
     assert "count_sector_north" in ctx.derived_from["sector_mode"]  # the cell's most frequent sector restates its own count
     assert set(table.columns) - set(plain.columns) == counters  # no neighbours_count_*: the family grows by the counters alone
-    assert ctx.exposure == {"kind": "area", "cell_km2": round(h3.average_hexagon_area(7, "km^2"), 6)} and plain_ctx.exposure == {}
+    web = cells_of(frame, count_values=["channel=web"])[0]  # the commoner level of a binary column, counted: its share written too
+    assert "share_channel_web" in web.columns and "share_channel_web" not in plain.columns and "share_channel_phone" in web.columns
+    occupied = round(float(np.mean([h3.cell_area(c, "km^2") for c in ctx.cells])), 6)
+    assert ctx.exposure == {"kind": "area", "cell_km2": occupied} and plain_ctx.exposure == {} and np.array_equal(ctx.events, table["points"])
     assert not any("areas differ" in w for w in warnings)  # one region's cells: one area
     far = frame.assign(latitude=np.where(frame["sector"] == "north", 55.0, 0.5) + frame["latitude"] % 0.01)
     assert any("areas differ by" in w for w in cells_of(far, count_values=["channel=phone"])[2])  # 0.5° and 55° north
@@ -132,9 +143,12 @@ def test_counted_values_are_checked_against_the_rows_and_a_rare_one_is_a_status(
     """An upload's ``count_values`` are read against its rows: each value with its rows and a status — ``ok``, or
     ``sparse`` below ``MIN_ROWS × MIN_CELL_POINTS`` rows (no counter: too few events for a frequency; the level is the
     one asked) —, on the geo levels only; a column the file lacks, a value no row holds (its column's values listed) and
-    a layer-only upload's or a plain table's counters are refused; the dataset id names the counters."""
+    a layer-only upload's or a plain table's counters are refused; the dataset id names the counters. The rows that
+    count are the located ones — what the cells will hold —, so a value held mostly by rows without a point is sparse
+    (the e2e review's F-20)."""
     frame = geo_frame()
-    frame.loc[frame.index[:30], "channel"] = "fax"  # 30 rows: below 50 × 5
+    frame.loc[frame.index[:300], "channel"] = "fax"  # 300 rows, 30 of them with a point: below 50 × 5 on the cells
+    frame.loc[frame.index[30:300], "latitude"] = np.nan
     path = tmp_path / "points.csv"
     frame.to_csv(path, index=False)
     engine = make_engine(make_config(tmp_path))
@@ -146,6 +160,11 @@ def test_counted_values_are_checked_against_the_rows_and_a_rare_one_is_a_status(
     assert "count_values" not in plain  # a table level counts nothing
     columns = engine._load(geo).frame.columns
     assert "count_channel_phone" in columns and "count_channel_fax" not in columns
+    from insight_graph_service.core.snapshot import metadata_digest
+
+    assert (
+        metadata_digest(geo | {"count_values": []}) != metadata_digest(geo) != metadata_digest(geo | {"baseline": "zone"})
+    )  # signed: the card reads them
     with path.open("rb") as stream:
         again = engine.upload(path.name, stream, geo="latitude,longitude@7")[0]
     assert again["status"] == "UPLOADED" and engine.process(again["batch_id"])["dataset_id"] != geo["dataset_id"]  # no counters, another id
@@ -156,6 +175,24 @@ def test_counted_values_are_checked_against_the_rows_and_a_rare_one_is_a_status(
         engine.upload(path.name, stream, geo="latitude,longitude", layer=True, count_values="channel=phone")
     with path.open("rb") as stream, pytest.raises(PipelineError, match="without geo"):
         engine.upload(path.name, stream, count_values="channel=phone")  # a table has no cells to count into
+
+
+def test_event_weights_are_the_counts_as_counted_whatever_the_baseline(tmp_path):
+    """``WEIGHT_BY_EVENTS`` with ``baseline=zone``: the zone replaces ``points`` with signed residuals, but a share's test
+    weighs the cells by their events as counted (``SpatialContext.events``): every weight at least one, the confirmed
+    shift and its z finite, the same weights the recomputation reads (the e2e review's F-01)."""
+    target, context = mixed(tmp_path)
+    on = MinerConfig(context_permutations=49, weight_by_events=True)
+    loaded = load_dataset(target, on, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], baseline="zone")
+    frame, ctx = loaded.frame, loaded.spatial
+    assert (frame["points"] <= 0).any() and (ctx.events >= 1).all() and ctx.events.sum() == (ctx.point_cell >= 0).sum()
+    weights = _event_weights("share_kind_a", on, ctx)
+    assert weights is ctx.events and _event_weights("load_median", on, ctx) is None and _event_weights("share_kind_a", on, None) is None
+    rows = np.flatnonzero(frame["points"].to_numpy() <= 0)  # a silent cohort: every cell at or under its zone's median
+    assert len(rows) >= 2
+    shift, own = _per_event(frame, rows, Shift("share_kind_a", 1.0, 0.5, 0.4, 0.1), on, ctx)
+    assert np.isfinite(shift.local_median) and own is not None and (own >= 1).all() and len(own) == len(rows)
+    assert np.isfinite(_median_z(frame["share_kind_a"].to_numpy(float)[rows], 0.4, 0.1, 0.5, own))
 
 
 def test_the_weighted_median_follows_the_events_not_the_cells():
@@ -170,6 +207,9 @@ def test_the_weighted_median_follows_the_events_not_the_cells():
     kish = w.sum() ** 2 / (w**2).sum()
     expected = (median - 0.4) / (1.2533 * 1.4826 * mad / math.sqrt(kish * 0.5))
     assert kish < 31 and _median_z(sample, 0.4, 0.1, 0.5, w) == pytest.approx(expected)
+    assert (
+        _median_z(sample, 0.4, 0.1, 0.02, w) == 0.0 and _median_z(sample[:2], 0.4, 0.1, 0.3) == 0.0
+    )  # under one effective value: no test, not a floor
     assert _weighted_stats(np.array([0.2, 0.2, 0.2, 0.6, np.nan]), np.ones(5)) == (
         0.2,
         pytest.approx(0.0845, abs=1e-3),
@@ -201,6 +241,19 @@ def test_the_zone_baseline_removes_the_difference_between_zones():
     north = plain["sector_mode"] == "north"
     gap = lambda t: t.loc[north, "load_median"].median() - t.loc[~north, "load_median"].median()  # noqa: E731
     assert gap(plain) > 5 and abs(gap(zoned)) < 1
+
+
+def test_the_maps_hover_counts_events_as_counted_under_a_zone_baseline(engine, tmp_path):
+    """A zoned level's ``points`` column holds signed residuals; the map's cell properties count the events as counted,
+    so the hover never reads a negative number of events (the e2e review's F-15)."""
+    from insight_graph_service.core.geo_views import geo_cells
+
+    target, _ = planted(tmp_path)
+    with target.open("rb") as stream:
+        (record,) = [engine.process(r["batch_id"]) for r in engine.upload("target.csv", stream, geo=f"lat,lon@{RES}", baseline="zone")]
+    loaded = engine._load(record)
+    counts = [f["properties"]["points"] for f in geo_cells(engine.ws, record["dataset_id"], loaded)["features"]]
+    assert (loaded.frame["points"] <= 0).any() and min(counts) >= 1 and sum(counts) == int((loaded.spatial.point_cell >= 0).sum())
 
 
 def test_a_planted_dependence_survives_the_zone_baseline(engine, tmp_path):
@@ -251,23 +304,36 @@ def test_a_runs_insight_names_its_disk_and_the_other_links_of_its_base_in_the_sa
     assert all(engine.graph().nodes[it["id"]]["props"]["dataset_id"] == second["dataset_id"] for it in named)
 
 
-def test_a_pair_is_the_runs_insight_with_the_same_conditions_on_the_same_values_other_question():
-    """``views.link_pair`` (X-08): a count's share and a share's count of one run with the same conditions; another scope,
-    another value, another run or a metric of neither kind is no pair."""
+def test_a_pair_is_the_same_insights_other_question_never_a_second_insight(engine, tmp_path):
+    """``views.link_pair``: one cohort is one insight with one tested primary, so its other question is the complementary
+    shift of the same insight — a count's share, a share's count, of the same value — with its medians, untested on its
+    own; none without that shift or for a metric of neither kind. On ``mixed`` with the a's counted, the count insight
+    carries its share and the share insight its count (the e2e review's F-31)."""
     from types import SimpleNamespace as N
 
     from insight_graph_service.server.views import link_pair
 
-    def ins(target, dataset="ds-r", *conds):
-        return N(target=target, dataset_id=dataset, conditions=[N(expr=c) for c in conds or ("band=q4",)], effect_size=0.5)
+    def ins(target, *shifts):
+        return N(target=target, shifts=[N(metric=m, robust_z=z, local_median=lo, global_median=hi) for m, z, lo, hi in shifts])
 
-    insights = {"c": ins("count_kind_a"), "s": ins("share_kind_a"), "p": ins("points")}
-    graph = N(insights=insights, insight=insights.__getitem__)
-    assert link_pair(graph, "c") == {"id": "s", "target": "share_kind_a", "effect": 0.5} and link_pair(graph, "s")["id"] == "c"
-    assert link_pair(graph, "p") is None
-    insights |= {"s": ins("share_kind_a", "ds-r", "band=q4", "hour=night")}
-    assert link_pair(graph, "c") is None  # another scope
-    insights |= {"s": ins("share_kind_b")}
-    assert link_pair(graph, "c") is None  # another value
-    insights |= {"s": ins("share_kind_a", "ds-other")}
-    assert link_pair(graph, "c") is None  # another run
+    insights = {
+        "c": ins("count_kind_a", ("count_kind_a", 2.0, 3.0, 1.0), ("share_kind_a", 0.5, 0.12, 0.07)),
+        "s": ins("share_kind_a", ("share_kind_a", 1.0, 0.12, 0.07)),
+        "p": ins("points", ("points", 1.0, 3.0, 1.0), ("share_kind_a", 0.5, 0.12, 0.07)),
+    }
+    graph = N(insight=insights.__getitem__)
+    assert link_pair(graph, "c") == {"target": "share_kind_a", "effect": 0.5, "local": 0.12, "baseline": 0.07}
+    assert link_pair(graph, "s") is None and link_pair(graph, "p") is None
+    target, context = mixed(tmp_path)
+    with TestClient(create_app(engine)) as client:
+        a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
+        b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
+        run = engine.ws.load_batch(cross_run(client, a, b, count_values="kind=a").json()["batch_id"])
+        pairs = {
+            p["target"]: client.get(f"/api/nodes/{p['id']}").json()["link"]["pair"]
+            for p in engine.ws.patterns()
+            if p["dataset_id"] == run["dataset_id"]
+        }
+    assert "share_kind_a" in pairs and pairs["share_kind_a"]["target"] == "count_kind_a", sorted(pairs)  # the share's cohort carries its count
+    assert pairs["share_kind_a"]["local"] > pairs["share_kind_a"]["baseline"] >= 1
+    assert all(p["target"] in {"count_kind_a", "share_kind_a"} for t, p in pairs.items() if p and t in ("count_kind_a", "share_kind_a"))

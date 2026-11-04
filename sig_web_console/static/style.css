@@ -418,5 +418,5 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 .link-card { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); }
-.link-card h4 { margin-top: 0; } .link-both { margin: 4px 0; font-weight: 600; color: var(--accent); }
+.link-card h4 { margin-top: 0; }
 .tag.layer { border: 1px solid var(--lc); color: var(--ink); background: color-mix(in srgb, var(--lc) 14%, transparent); }

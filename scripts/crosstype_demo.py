@@ -81,13 +81,13 @@ def measure(
     for name, layer in kept.items():
         for level, ring in settings:
             t0 = time.perf_counter()
-            for record in engine.cross(own[0]["upload_id"], [layer], ring=ring, levels=[level]):
+            for record in engine.cross(own[0]["upload_id"], [layer], ring=ring, levels=[level], allow_coarse=True):  # eval: any level
                 runs.append(summary(engine, engine.process(record["batch_id"]), name, level, ring, time.perf_counter() - t0))
     layer, where = frequency
     reading = upload_all(engine, target, **options | {"where": where})
     for ring in (1, 0):
         t0 = time.perf_counter()
-        for record in engine.cross(reading[0]["upload_id"], [kept[layer]], ring=ring):  # the reading's own finest level
+        for record in engine.cross(reading[0]["upload_id"], [kept[layer]], ring=ring, allow_coarse=True):  # the reading's own finest level
             runs.append(
                 summary(engine, engine.process(record["batch_id"]), f"{layer} · {where}", int(record["level"]), ring, time.perf_counter() - t0)
             )
@@ -97,7 +97,7 @@ def measure(
 def run(engine: Engine, target: str, layer: str, level: int, ring: int, **options: Any) -> dict[str, Any]:
     """One cross-type run processed, summarized as ``summary`` does, with its family and the admitted findings' keys."""
     t0 = time.perf_counter()
-    (record,) = [engine.process(r["batch_id"]) for r in engine.cross(target, [layer], ring=ring, levels=[level], **options)]
+    (record,) = [engine.process(r["batch_id"]) for r in engine.cross(target, [layer], ring=ring, levels=[level], allow_coarse=True, **options)]
     out = summary(engine, record, "", level, ring, time.perf_counter() - t0)
     family = {p["provenance"]["spatial"].get("context_family") for p in engine.ws.patterns() if p["dataset_id"] == record["dataset_id"]}
     return out | {"family": max(family - {None}, default=None), "keys": sorted((a["scope"], a["target"], a["z"] > 0) for a in out["admitted"])}

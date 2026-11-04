@@ -170,7 +170,7 @@ function insightCard(turn) {
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
     (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
-    `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph">Показати в графі</button></div></div>`;
+    `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph" data-dev>Показати в графі</button></div></div>`;
 }
 
 function botTurn(turn, isLast) {
