@@ -554,7 +554,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
     by_id = {it.pattern_id: it for it in items}
     hosts: set[str] = set()
     chains = []
-    for chain in scale_chain(graph, [it.pattern_id for it in items]):
+    for chain in scale_chain(graph, [it.pattern_id for it in items], hidden):
         host = by_id[chain.pattern_id]
         if host.folded_into:
             continue
@@ -562,7 +562,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
         host.scale = chain.scale
         restates = restating(graph, chain)
         for steps in (chain.up, chain.down):
-            for step in (s for s in steps if s.pattern_id not in hidden):  # a hidden layer's run joins no answer
+            for step in steps:
                 other = by_id.get(step.pattern_id)
                 if other is None:
                     path_text = f"vertical {step.direction} from {by_id[step.origin].key} through {step.attractor} in {step.region}"

@@ -173,16 +173,17 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
     return best[1] if best else None
 
 
-def scale_chain(graph: DualGraph, pattern_ids: list[str]) -> list[ScaleChain]:
+def scale_chain(graph: DualGraph, pattern_ids: list[str], hidden: frozenset[str] = frozenset()) -> list[ScaleChain]:
     """The vertical chain of every geo pattern in ``pattern_ids``: up to ``VERTICAL_MAX_PER_PATTERN`` steps each way,
     at most ``VERTICAL_MAX_TOTAL`` distinct vertical patterns in all (one already in a chain costs nothing again), then
     the regions above the top pattern (from the region the last step met in); the ``scale`` label compares the pattern
-    with its first step up, budget or not."""
+    with its first step up, budget or not. A ``hidden`` pattern (a hidden layer's run, model A) is never a step: the next
+    visible one is taken instead."""
     chains, reached = [], set()
     for pid in pattern_ids:
         if graph.facts(pid).resolution is None or not graph.facts(pid).finest:
             continue
-        chain, seen = ScaleChain(pid), {pid}
+        chain, seen = ScaleChain(pid), {pid} | hidden
         nearest = _step(graph, pid, "up", seen)
         for direction, steps in (("up", chain.up), ("down", chain.down)):
             step = nearest if direction == "up" else _step(graph, pid, "down", seen)

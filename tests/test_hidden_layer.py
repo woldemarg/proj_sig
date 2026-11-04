@@ -83,6 +83,20 @@ def test_a_hidden_layer_is_prefiltered_from_seeds_expansion_and_evidence_unless_
     assert not cited(payload) & mine and cited(asked) & mine
 
 
+def test_a_hidden_run_is_no_vertical_step_of_a_visible_level():
+    """A hidden coarser level of the same upload (two levels, one anchor, one region shared) is no step of a visible
+    seed's scale chain: no vertical item, no step in the chains, and the prompt builds — before, the step stayed in the
+    chain without its item and the payload raised (the closed review's F-01). Shown, it is the step."""
+    from test_graph_query_engine_standalone import _levels, searched, state_of
+
+    snap, vectors = _levels(-1.2, ("7", "5")), {"P1": [1.0, 0.0, 0.0], "P7": [0.0, 1.0, 0.0]}  # P7: the coarser level's dataset ds5
+    steps = lambda found: {s["pattern_id"] for c in found.evidence.scale_chains for s in [*c["up"], *c["down"]]}  # noqa: E731
+    hidden = searched(state_of(snap, vectors), hidden_datasets=frozenset({"ds5"}))
+    assert "P7" not in steps(hidden) and all(it.pattern_id != "P7" for it in hidden.evidence.items)
+    assert hidden.payload().evidence_prompt  # the prompt builds
+    assert "P7" in steps(searched(state_of(snap, vectors)))
+
+
 @pytest.mark.browser
 def test_the_console_hides_a_layer_from_its_card_and_counts_what_it_hid(cfg, tmp_path):
     """The layer's card switches it (``PATCH``) and reads the state back from ``GET /api/batches``: hidden, its run's
