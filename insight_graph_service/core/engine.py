@@ -328,6 +328,7 @@ class Engine:
         context_ring: int | str | None = None,
         layer: bool = False,
         where: str | None = None,
+        count_values: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -340,16 +341,17 @@ class Engine:
         counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
         cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
         (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
-        ``where`` (``column=value``): the rows holding the value, a reading of its own over the file stored once.
-        Processing is a separate call."""
+        ``where`` (``column=value``): the rows holding the value, a reading of its own over the file stored once;
+        ``count_values`` (``column=value,...``) the geo levels' per-type counters (``uploads.resolve_counts``). Processing is a separate call."""
         if layer:
-            refused = [k for k, v in {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where}.items() if v]
+            asked = {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where, "count_values": count_values}
+            refused = [k for k, v in asked.items() if v]
             return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
         uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
-        uploads.check_context(context, geo, context_ring)
+        uploads.check_geo_options(context, geo, context_ring, count_values)
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
@@ -364,7 +366,8 @@ class Engine:
         path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
         try:
-            rows = read_rows(path, where) if where or time else None  # a value no row holds is refused, its column's values listed
+            rows = read_rows(path, where) if where or time or count_values else None  # a value no row holds is refused, listed
+            counts = uploads.resolve_counts(rows, count_values, self.settings.miner)
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels, where)
             if time:
@@ -420,7 +423,8 @@ class Engine:
                 upload={"upload_id": upload_id, "level": level},
                 geo_levels=selection if g else None,
                 locator=None if g else locator.strip() or None,
-                context=layers if g else None,  # a table level has no cells
+                context=layers if g else None,  # a table level has no cells, and counts none
+                count_values=counts if g else (),
                 context_ring=ring,
                 **options,
             )
@@ -454,6 +458,7 @@ class Engine:
         inherited: dict[str, Any] | None = None,
         warnings: Sequence[str] = (),
         where: str | None = None,
+        count_values: Sequence[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -486,7 +491,7 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
-            **({"where": where} if where else {}),
+            **{k: v for k, v in {"where": where, "count_values": list(count_values or ())}.items() if v},
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
             **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
@@ -507,7 +512,7 @@ class Engine:
     def cross(self, target: str, layers: Sequence[str], **options: Any) -> list[dict[str, Any]]:
         """A cross-type run of two stored uploads (``uploads.cross_runs``, its keyword options): one batch per level.
         Processing is a separate call."""
-        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings.max_upload_bytes, **options)
+        runs = uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings, **options)
         return [self.submit(**run) for run in runs]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
@@ -671,23 +676,7 @@ class Engine:
     def _load(self, record: dict[str, Any], shared: bool = False) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it; ``shared`` for a level being
         processed, never for a re-check (``verify``), which reads the file as it is now."""
-        return load_dataset(
-            Path(record["source_path"]),
-            self.settings.miner,
-            filename=record["filename"],
-            bins=record.get("bins"),
-            categories=record.get("categories"),
-            geo=record.get("geo"),
-            strict=record.get("strict", True),
-            locator=record.get("locator"),
-            shared=shared,
-            time=record.get("time"),
-            grid=record.get("grid"),
-            tz=record.get("tz"),
-            context=uploads.context_files(record),
-            context_ring=record.get("context_ring", 1),  # a record made before the option: the default disk
-            where=record.get("where"),
-        )
+        return load_dataset(Path(record["source_path"]), self.settings.miner, shared=shared, **uploads.reading(record))
 
     @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:

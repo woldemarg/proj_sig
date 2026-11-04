@@ -248,7 +248,8 @@ def plural(n: int, one: str, few: str, many: str) -> str:
 
 def source_column(column: str, declared: Collection[str]) -> str | None:
     """The declared column a dataset column stands for: itself, a band's (``<c>_band``), a geo cell's derivation
-    (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``); None when it is none of them."""
+    (``<c>_median`` / ``_mode`` / ``_late_share`` / ``_active_days``, ``share_<c>_<level>``, ``count_<c>_<level>``); None
+    when it is none of them."""
     if column in declared:
         return column
     if column.startswith("context_"):  # a context layer's band: another file's points, no column of this one
@@ -260,10 +261,10 @@ def source_column(column: str, declared: Collection[str]) -> str | None:
     for suffix in _DERIVED:
         if column.endswith(suffix) and column.removesuffix(suffix) in declared:
             return column.removesuffix(suffix)
-    if column.startswith("share_"):
+    if column.startswith(("share_", "count_")):
         # ponytail: the longest declared prefix wins; a declared "region" reads share_region_code_UA when region_code is
         # not declared, as the profile keeps no share column's source to tell them apart
-        rest = column.removeprefix("share_")
+        rest = column.partition("_")[2]
         return next((c for c in sorted(declared, key=len, reverse=True) if rest.startswith(c + "_")), None)
     return None
 
@@ -311,12 +312,13 @@ def column_words(column: str, glossary: Mapping[str, str], geo: bool, ring: int 
             return f"кількість {_layer(column)} {disk_words(ring)}"
         if column.startswith("neighbours_") and not column.endswith("_band"):
             return f"{column_words(column.removeprefix('neighbours_'), glossary, geo)} (середнє шести сусідніх комірок)"
-        if column.startswith("share_"):
-            rest = column.removeprefix("share_")
+        if column.startswith(("share_", "count_")):
+            rest = column.partition("_")[2]
             # ponytail: a source column the glossary does not name splits at the last "_"; a level holding "_" misreads
             source = source_column(column, glossary) or rest.rpartition("_")[0]
             if source:
-                return f"частка подій комірки, де {column_words(source, glossary, False)} — {rest[len(source) + 1 :]}"
+                head = "частка подій комірки" if column.startswith("share_") else "кількість подій комірки"
+                return f"{head}, де {column_words(source, glossary, False)} — {rest[len(source) + 1 :]}"
         for suffix, template in _DERIVED.items():
             if column.endswith(suffix):
                 return template.format(column_words(column.removesuffix(suffix), glossary, False))

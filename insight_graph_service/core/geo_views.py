@@ -95,6 +95,7 @@ def geo_profile(loaded: Any) -> dict[str, Any]:
         "base": "H3 cells holding at least one point",
         "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
         "glossary": ctx.glossary,
+        **({"exposure": ctx.exposure} if ctx.exposure else {}),  # what a per-type count is per (docs/02_discovery.md §2.9)
     }
 
 

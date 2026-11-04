@@ -85,6 +85,7 @@ class CrossTypeIn(BaseModel):
     levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
     align: str | None = None  # span: an event layer's events within the target's span only
     layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
+    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: the target level's own
 
 
 class DatasetMetadataIn(BaseModel):
@@ -229,6 +230,7 @@ def create_app(engine: Engine) -> FastAPI:
         context_ring: str = Form(""),
         layer: bool = Form(False),
         where: str = Form(""),
+        count_values: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
@@ -253,6 +255,7 @@ def create_app(engine: Engine) -> FastAPI:
             "context_ring": context_ring.strip() or None,
             "layer": layer,
             "where": where.strip() or None,
+            "count_values": count_values.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
         if unknown := [k for k in context_demo or [] if k not in sets]:

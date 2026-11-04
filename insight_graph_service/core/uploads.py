@@ -19,8 +19,21 @@ from insight_contracts import Insight, Rejection
 from insight_contracts.text import RELIABILITY
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
+from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
-from subgroup_miner.ingestion import IngestionError, parse_indicators, parse_ring, parse_tz, parse_where, read_context, read_file, read_times
+from subgroup_miner.config import MinerConfig
+from subgroup_miner.ingestion import (
+    IngestionError,
+    check_counts,
+    parse_indicators,
+    parse_ring,
+    parse_tz,
+    parse_where,
+    read_context,
+    read_file,
+    read_rows,
+    read_times,
+)
 from subgroup_miner.spatial import SpatialError, parse_geo_levels
 
 EMPTY_LEVEL = frozenset({"invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"})  # a level with nothing to mine
@@ -294,10 +307,39 @@ def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[
     return layers
 
 
-def check_context(context: Sequence, geo: str | None, ring: int | str | None) -> None:
-    """An upload's context files need its geo option (they are counted into its cells), and a disk needs them."""
-    if context and not geo:
-        raise PipelineError("invalid_options", "context files without geo: they are counted into the cells of the geo option")
+def resolve_counts(rows: Any, spec: str | None, miner: MinerConfig) -> list[dict[str, Any]]:
+    """An upload's ``count_values`` (``column=value,...``) checked against its rows (``ingestion.check_counts``): each
+    value with its rows and status — ``ok`` with at least ``MIN_ROWS × MIN_CELL_POINTS`` rows, else ``sparse`` (no
+    counter: too few events for a frequency, docs/02_discovery.md §2.9); none asked, none."""
+    return check_counts(rows, spec, miner.min_rows * miner.min_cell_points)
+
+
+def reading(record: dict[str, Any]) -> dict[str, Any]:
+    """The options ``load_dataset`` reads a batch's stored file with, from its record: its processing's, a re-check's
+    (``verify``). A geo level counts its ``count_values`` of status ``ok`` (no table level holds any); a record made
+    before an option reads its default."""
+    return {
+        "filename": record["filename"],
+        "bins": record.get("bins"),
+        "categories": record.get("categories"),
+        "geo": record.get("geo"),
+        "strict": record.get("strict", True),
+        "locator": record.get("locator"),
+        "time": record.get("time"),
+        "grid": record.get("grid"),
+        "tz": record.get("tz"),
+        "context": context_files(record),
+        "context_ring": record.get("context_ring", 1),
+        "where": record.get("where"),
+        "count_values": [f"{c['column']}={c['value']}" for c in record.get("count_values", []) if c["status"] == "ok"],  # a geo level's
+    }
+
+
+def check_geo_options(context: Sequence, geo: str | None, ring: int | str | None, count_values: str | None) -> None:
+    """The options of an upload's cells need its geo option: context files and per-type counters are counted into them;
+    and a disk needs context files."""
+    if (context or count_values) and not geo:
+        raise PipelineError("invalid_options", "context files or count_values without geo: they are counted into the cells of the geo option")
     if str(ring or "").strip() and not context:
         raise PipelineError("invalid_options", "context_ring without context files: it is the disk their points are counted over")
 
@@ -431,11 +473,12 @@ def cross_runs(
     batches: Sequence[dict[str, Any]],
     target: str,
     layers: Sequence[str],
-    max_bytes: int,
+    settings: Settings,
     levels: Sequence[int | str] | None = None,
     ring: int | str | None = None,
     align: str | None = None,
     layer_where: dict[str, str] | None = None,
+    count_values: str | None = None,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
     file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
@@ -448,7 +491,8 @@ def cross_runs(
     events within the target's span only (its own reading's time record) — the ``window`` of its entry —, a layer
     without time whole, with a warning. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under
     a filter, as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read
-    in place, not copied."""
+    in place, not copied. ``count_values`` (``column=value,...``) asks for per-type counters, checked against the target's
+    rows (``resolve_counts``); without it the run keeps the target level's own."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
     if (align := (align or "").strip() or None) not in (None, "span"):
@@ -481,13 +525,19 @@ def cross_runs(
     if missing := sorted(chosen - set(own)):
         raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
     chosen = chosen or {max(own)}  # the target's finest
+    latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
+    try:  # asked for the run, checked as an upload checks them: the target's rows, its reading's filter
+        counts = (
+            resolve_counts(read_rows(Path(latest[0]["source_path"]), latest[0].get("where")), count_values, settings.miner) if count_values else None
+        )
+    except IngestionError as exc:
+        raise PipelineError(exc.code, f"cross-type run: {exc}") from exc
     shared = {Path(b["source_path"]) for b in own.values()}  # the target's own file: a layer of it is read in place
     with ExitStack() as files:
         opened = [(n, p if p in shared else files.enter_context(p.open("rb")), loc, w) for n, p, loc, w in sources]
-        context = save_context(ws, opened, max_bytes)
+        context = save_context(ws, opened, settings.max_upload_bytes)
     for entry, rule in zip(context, rules):
         entry.update(rule)
-    latest = sorted(own.values(), key=lambda b: b["created_at"], reverse=True)
     target_span = next((b["temporal"]["span"] for b in latest if b.get("temporal")), None)
     if align:
         if not target_span or not any(e["time_rule"] == "events" for e in context):
@@ -500,7 +550,8 @@ def cross_runs(
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
     for b in (own[r] for r in sorted(chosen, reverse=True)):
-        options = {k: b.get(k) for k in ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where")} | {"strict": b.get("strict", True)}
+        keys = ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where", "count_values")
+        options = {k: b.get(k) for k in keys} | {"strict": b.get("strict", True)} | ({"count_values": counts} if counts is not None else {})
         inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
         runs.append(
             options

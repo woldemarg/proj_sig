@@ -102,6 +102,8 @@ def _schema_plane(
                 **({"cross_layers": [c["name"] for c in b["context"]]} if b.get("cross") else {}),  # a run names its layers
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+                **({"count_values": b["count_values"]} if b.get("count_values") else {}),  # the per-type counters asked, each with its status
+                **({"exposure": profile["geo"]["exposure"]} if "exposure" in profile.get("geo", {}) else {}),  # what a count is per
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
                 **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
                 **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
