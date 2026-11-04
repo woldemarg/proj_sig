@@ -23,22 +23,20 @@ import argparse
 import hashlib
 import importlib
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import demo_datasets
 import pandas as pd
 from demo_data import chicago_crimes
-from scratch import save_result, settings
+from scratch import admitted, context_family, save_result, settings, without
 
 from insight_contracts import Insight
-from insight_graph_service.core.batch import admit_insights
 from insight_graph_service.core.demo import DEMO_DIR
 from insight_graph_service.core.settings import PROJECT_ROOT
+from insight_graph_service.core.uploads import cross_type_only
 from subgroup_miner.discovery import DiscoveryError, build_insights, recompute_statistics, run_discovery
 from subgroup_miner.ingestion import load_dataset
-from subgroup_miner.selection import select_insights
 
 WORK = PROJECT_ROOT / "data" / "benchmarks" / "crosstype" / "prepared"  # the prepared targets (git-ignored); never beside raw exports
 LAYERS = {"bars": "chicago_bars", "liquor_stores": "chicago_liquor_stores", "l_stations": "chicago_l_stations", "schools": "chicago_schools"}
@@ -101,12 +99,8 @@ def run_case(name: str, case: dict[str, Any], files: dict[str, Path], cfg_all) -
     except DiscoveryError as exc:
         return {"case": name, "error": exc.code}
     insights = build_insights(result, cfg, dataset_id=loaded.dataset_id, batch_id="validation", filename=name)
-    admit = lambda found: admit_insights(select_insights(found, cfg).kept, cfg_all.min_insight_weight, cfg_all.max_insights_per_batch)[0]  # noqa: E731
-    off = [
-        replace(i, provenance={**i.provenance, "spatial": {k: v for k, v in i.provenance["spatial"].items() if k != "p_context"}}) for i in insights
-    ]
-    cross = lambda found: [i for i in found if any(c.attribute.startswith("context_") for c in i.conditions)]  # noqa: E731
-    gate_a, gate_b = cross(admit(off)), cross(admit(insights))
+    gate_a = cross_type_only(admitted([without(i, "p_context") for i in insights], cfg_all))[0]
+    gate_b = cross_type_only(admitted(insights, cfg_all))[0]
     mined_s = time.perf_counter() - t0
     held = load_dataset(files[case["holdout"]], cfg, geo=case["geo"], context=context)
     by_expression = {i.expression: i for i in insights}  # with its p_context, whichever gate admitted it
@@ -150,10 +144,10 @@ def run_case(name: str, case: dict[str, Any], files: dict[str, Path], cfg_all) -
         "cells": len(loaded.frame),
         "layers": {layer: int(len(pd.read_csv(files[layer]))) for layer in case["layers"]},
         "bands": [c for c in loaded.frame if c.startswith("context_")],
-        "admitted": {"A": len(gate_a), "B": len(gate_b), "all": len(admit(insights))},
+        "admitted": {"A": len(gate_a), "B": len(gate_b), "all": len(admitted(insights, cfg_all))},
         "n_tests": result.n_tests,
         "space": result.profile.search_space_size,
-        "context_family": next((i.provenance["spatial"]["context_family"] for i in insights if "context_family" in i.provenance["spatial"]), 0),
+        "context_family": context_family(insights),
         "findings": rows,
         "mined_s": round(mined_s, 1),
     }

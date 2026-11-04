@@ -15,14 +15,12 @@ refusals by reason, the seconds.
 from __future__ import annotations
 
 import argparse
-import json
 import time
-from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from scratch import build_engine, save_result, scratch_dir
+from scratch import build_engine, save_result, scratch_dir, upload_all
 
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets
 from insight_graph_service.core.engine import Engine
@@ -31,21 +29,6 @@ TARGET = "chicago_crimes"
 LAYERS = ("chicago_bars", "chicago_l_stations")
 SETTINGS = ((9, 1), (9, 0), (10, 0))  # (H3 level, disk radius), the console's default first
 FREQUENCY = ("chicago_bars", "crime=robbery")  # the frequency of one class near the layer: the target under a filter, crossed
-
-
-def upload(engine: Engine, path: Path, options: dict[str, Any]) -> list[dict[str, Any]]:
-    """``path`` uploaded with ``options`` as the console sends them, every batch it made processed."""
-    with path.open("rb") as stream:
-        records = engine.upload(path.name, stream, **options)
-    return [engine.process(r["batch_id"]) if r["status"] == "UPLOADED" else r for r in records]
-
-
-def refusals(engine: Engine, record: dict[str, Any]) -> dict[str, int]:
-    """A run's refusals by reason, from its rejections file: a run that admits nothing fails after writing it."""
-    path = engine.ws.dataset_dir(record["dataset_id"]) / "rejections.json"
-    if not path.is_file():
-        return dict(record.get("metrics", {}).get("pruned", {}))
-    return dict(Counter(r["reason"] for r in json.loads(path.read_text(encoding="utf-8"))))
 
 
 def summary(engine: Engine, record: dict[str, Any], layer: str, level: int, ring: int, seconds: float) -> dict[str, Any]:
@@ -63,7 +46,7 @@ def summary(engine: Engine, record: dict[str, Any], layer: str, level: int, ring
         "status": record["status"],
         "error": (record.get("error") or {}).get("code"),
         "admitted": admitted,
-        "refused": refusals(engine, record),
+        "refused": dict(record.get("metrics", {}).get("pruned", {})),  # a run that admits none counts its refusals too
         "seconds": round(seconds, 1),
     }
 
@@ -75,22 +58,22 @@ def measure(
     one upload id), each of ``layers`` kept as a layer-only upload, and one cross-type run per layer and setting; then
     ``target`` read under ``frequency``'s filter (its own upload at the level ``@auto`` gives it) crossed with
     ``frequency``'s layer over each disk."""
-    own = upload(engine, target, options)
+    own = upload_all(engine, target, **options)
     locator = options["geo"].partition("@")[0]
     for level in sorted({str(lv) for lv, _ in settings} - {r["level"] for r in own}):
-        own += upload(engine, target, options | {"geo": f"{locator}@{level}"})
-    kept = {name: upload(engine, path, {"geo": locator, "layer": True})[0]["upload_id"] for name, path in layers.items()}
+        own += upload_all(engine, target, **options | {"geo": f"{locator}@{level}"})
+    kept = {name: upload_all(engine, path, geo=locator, layer=True)[0]["upload_id"] for name, path in layers.items()}
     runs = []
     for name, layer in kept.items():
         for level, ring in settings:
             t0 = time.perf_counter()
-            for record in engine.cross(own[0]["upload_id"], [layer], ring, [level]):
+            for record in engine.cross(own[0]["upload_id"], [layer], ring=ring, levels=[level]):
                 runs.append(summary(engine, engine.process(record["batch_id"]), name, level, ring, time.perf_counter() - t0))
     layer, where = frequency
-    reading = upload(engine, target, options | {"where": where})
+    reading = upload_all(engine, target, **options | {"where": where})
     for ring in (1, 0):
         t0 = time.perf_counter()
-        for record in engine.cross(reading[0]["upload_id"], [kept[layer]], ring, None):  # the reading's own finest level
+        for record in engine.cross(reading[0]["upload_id"], [kept[layer]], ring=ring):  # the reading's own finest level
             runs.append(
                 summary(engine, engine.process(record["batch_id"]), f"{layer} · {where}", int(record["level"]), ring, time.perf_counter() - t0)
             )

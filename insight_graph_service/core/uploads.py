@@ -267,7 +267,7 @@ def layer_name(filename: str, taken: Collection[str]) -> str:
 
 
 def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[dict[str, Any]]:
-    """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator[, where])`` each —, each stored
+    """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator, where)`` each —, each stored
     (``MAX_UPLOAD_MB`` apiece) or, given as the stored ``Path`` of the target's own file, read in place (``in_place``:
     no copy, never removed by ``discard_context``), named (``layer_name``; ``<stem>_<value>`` under a filter) and its
     points located once (``read_context``, ``where``'s rows): ``{name, path, geo[, where, in_place]}`` per layer, as the
@@ -277,8 +277,7 @@ def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[
         raise PipelineError("invalid_options", f"at most {MAX_CONTEXT_LAYERS} context files, got {len(files)}")
     layers: list[dict[str, str]] = []
     try:
-        for filename, source, locator, *rest in files:
-            where = rest[0] if rest else None
+        for filename, source, locator, where in files:
             named = f"{Path(filename).stem}_{where.partition('=')[2]}{Path(filename).suffix}" if where else filename
             name, in_place = layer_name(named, [layer["name"] for layer in layers]), isinstance(source, Path)
             path = source if in_place else ws.save_upload(filename, source, max_bytes)
@@ -293,6 +292,14 @@ def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[
         discard_context(layers)
         raise
     return layers
+
+
+def check_context(context: Sequence, geo: str | None, ring: int | str | None) -> None:
+    """An upload's context files need its geo option (they are counted into its cells), and a disk needs them."""
+    if context and not geo:
+        raise PipelineError("invalid_options", "context files without geo: they are counted into the cells of the geo option")
+    if str(ring or "").strip() and not context:
+        raise PipelineError("invalid_options", "context_ring without context files: it is the disk their points are counted over")
 
 
 def discard_context(layers: Sequence[dict[str, str]]) -> None:
@@ -424,17 +431,17 @@ def cross_runs(
     batches: Sequence[dict[str, Any]],
     target: str,
     layers: Sequence[str],
-    levels: Sequence[int | str] | None,
-    ring: int | str | None,
     max_bytes: int,
+    levels: Sequence[int | str] | None = None,
+    ring: int | str | None = None,
     align: str | None = None,
     layer_where: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
     file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
     their stored files, so deleting a layer's own upload leaves the run whole. The levels: ``levels`` when given (each one
-    of the target's), otherwise the target's finest and every level each mined layer was read at too (a layer is counted
-    from its points on the target's grid, so its levels only say where it was looked at). One ``Engine.submit`` keyword
+    of the target's), otherwise the target's finest — a layer is counted from its points on the target's grid, so the
+    levels a mined layer was read at say nothing about the run. One ``Engine.submit`` keyword
     set per level, finest first: the level's own record's options and trust, ``cross`` naming the layers' uploads, each
     context entry's time rule (``layer_time``) and, for a target with a time column, one warning per event layer
     (``time_warning``): every layer is read as static over its whole span. ``align`` ``span`` counts an event layer's
@@ -460,7 +467,7 @@ def cross_runs(
         raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
     if stray := sorted(set(layer_where) - set(layers)):
         raise PipelineError("invalid_options", f"layer_where names no layer of the run: {stray}")
-    sources, read_at, rules = [], [], []
+    sources, rules = [], []
     for upload in layers:
         theirs = [b for b in batches if b.get("upload_id") == upload]
         stored = max(theirs, key=lambda b: b["created_at"], default=None)
@@ -470,12 +477,10 @@ def cross_runs(
             raise PipelineError("invalid_options", f"{upload}: a filtered reading already ({stored['where']}); a run filters a layer stored whole")
         locator = (stored.get("geo") or stored["locator"]).partition("@")[0]
         sources.append((stored["filename"], Path(stored["source_path"]), locator, stored.get("where") or layer_where.get(upload)))
-        read_at += [{resolution(b) for b in theirs} - {None}] if stored["status"] != "LAYER" else []
         rules.append(layer_time(stored, theirs))
     if missing := sorted(chosen - set(own)):
         raise PipelineError("invalid_options", f"levels {missing} are not levels of {target} ({sorted(own, reverse=True)})")
-    if not chosen:  # the target's finest, and the levels every mined layer was read at too
-        chosen = {max(own)}.union(set(own).intersection(*read_at) if read_at else ())
+    chosen = chosen or {max(own)}  # the target's finest
     shared = {Path(b["source_path"]) for b in own.values()}  # the target's own file: a layer of it is read in place
     with ExitStack() as files:
         opened = [(n, p if p in shared else files.enter_context(p.open("rb")), loc, w) for n, p, loc, w in sources]

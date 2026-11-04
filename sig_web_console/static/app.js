@@ -305,8 +305,6 @@ function init() {
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
-  $("cross-target").addEventListener("change", crossLevels); $("cross-layers").addEventListener("change", crossLevels); $("cross-where").addEventListener("input", crossLevels);
-  $("cross-btn").addEventListener("click", runCross);
   $("layer-only").addEventListener("change", fillSamples);
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
