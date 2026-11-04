@@ -25,6 +25,7 @@ from subgroup_miner.config import MinerConfig
 from subgroup_miner.ingestion import (
     IngestionError,
     check_counts,
+    parse_baseline,
     parse_indicators,
     parse_ring,
     parse_tz,
@@ -332,14 +333,15 @@ def reading(record: dict[str, Any]) -> dict[str, Any]:
         "context_ring": record.get("context_ring", 1),
         "where": record.get("where"),
         "count_values": [f"{c['column']}={c['value']}" for c in record.get("count_values", []) if c["status"] == "ok"],  # a geo level's
+        "baseline": record.get("baseline"),
     }
 
 
-def check_geo_options(context: Sequence, geo: str | None, ring: int | str | None, count_values: str | None) -> None:
-    """The options of an upload's cells need its geo option: context files and per-type counters are counted into them;
-    and a disk needs context files."""
-    if (context or count_values) and not geo:
-        raise PipelineError("invalid_options", "context files or count_values without geo: they are counted into the cells of the geo option")
+def check_geo_options(context: Sequence, geo: str | None, ring: int | str | None, count_values: str | None, baseline: str | None) -> None:
+    """The options of an upload's cells need its geo option — context files and per-type counters are counted into them,
+    a zone baseline (``parse_baseline``'s) reads them —; and a disk needs context files."""
+    if (context or count_values or baseline) and not geo:
+        raise PipelineError("invalid_options", "context files, count_values or a zone baseline without geo: they belong to the geo cells")
     if str(ring or "").strip() and not context:
         raise PipelineError("invalid_options", "context_ring without context files: it is the disk their points are counted over")
 
@@ -479,6 +481,7 @@ def cross_runs(
     align: str | None = None,
     layer_where: dict[str, str] | None = None,
     count_values: str | None = None,
+    baseline: str | None = None,
 ) -> list[dict[str, Any]]:
     """A cross-type run of two stored uploads (docs/02_discovery.md §2.9): ``target``'s levels read again from its stored
     file with ``layers`` (at most ``MAX_CONTEXT_LAYERS`` other uploads, mined or ``LAYER``) as its context — copies of
@@ -492,7 +495,8 @@ def cross_runs(
     without time whole, with a warning. ``layer_where`` (``{upload id: column=value}``) reads a layer stored whole under
     a filter, as a filtered reading reads its own rows (``where`` on its entry); a layer of the target's own file is read
     in place, not copied. ``count_values`` (``column=value,...``) asks for per-type counters, checked against the target's
-    rows (``resolve_counts``); without it the run keeps the target level's own."""
+    rows (``resolve_counts``), and ``baseline`` (``map`` | ``zone``) what its metrics are read against; without them the
+    run keeps the target level's own."""
     if not 0 < len(layers) <= MAX_CONTEXT_LAYERS or len(set(layers)) < len(layers) or target in layers:
         raise PipelineError("invalid_options", f"one or {MAX_CONTEXT_LAYERS} layers, each another upload than the target and named once")
     if (align := (align or "").strip() or None) not in (None, "span"):
@@ -501,6 +505,7 @@ def cross_runs(
         ring = parse_ring(ring)
         chosen = {int(x) for x in levels or ()}
         layer_where = {u: w for u, spec in (layer_where or {}).items() if (w := parse_where(spec))}
+        asked = {"baseline": parse_baseline(baseline)} if baseline else {}
     except (IngestionError, ValueError) as exc:
         raise PipelineError("invalid_options", f"cross-type run: {exc}") from exc
     own: dict[int, dict[str, Any]] = {}
@@ -550,8 +555,8 @@ def cross_runs(
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
     for b in (own[r] for r in sorted(chosen, reverse=True)):
-        keys = ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where", "count_values")
-        options = {k: b.get(k) for k in keys} | {"strict": b.get("strict", True)} | ({"count_values": counts} if counts is not None else {})
+        keys = ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where", "count_values", "baseline")
+        options = {k: b.get(k) for k in keys} | {"strict": b.get("strict", True)} | ({"count_values": counts} if counts is not None else {}) | asked
         inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
         runs.append(
             options

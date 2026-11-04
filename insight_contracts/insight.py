@@ -121,6 +121,7 @@ class SpatialProvenance:
     p_adjusted_iid: float | None = None  # the adjusted p-value without the n_eff correction
     p_context: float | None = None  # a cohort with a context-layer condition: the within-parent permutation p of its shift (docs/02 §2.9)
     context_family: int | None = None  # the upload's cohorts tested so (the gate reads p_context × context_family)
+    baseline: str | None = None  # zone: every metric read against its parent cell's median (docs/02 §2.9); None: the map
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> SpatialProvenance | None:
@@ -132,7 +133,7 @@ class SpatialProvenance:
 
 
 # fixed list the stored digests cover; a test keeps it equal to SpatialProvenance
-SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family")
+SPATIAL_DIGEST_FIELDS = ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family", "baseline")
 UNDIGESTED = frozenset({"provenance", "row_id", "record_digest"})  # set after the digest (rows_ref) or rewritten by a deletion (row_id)
 
 

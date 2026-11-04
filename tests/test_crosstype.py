@@ -296,7 +296,7 @@ def test_spatial_provenance_reads_records_without_p_context():
     old = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01}
     spatial = SpatialProvenance.from_dict(old)
     assert spatial.p_context is None and spatial.to_dict() == old  # a record written before M17 reads and writes back the same
-    assert SPATIAL_DIGEST_FIELDS == ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family")
+    assert SPATIAL_DIGEST_FIELDS == ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family", "baseline")
     tested = old | {"p_context": 0.02, "context_family": 12}
     assert SpatialProvenance.from_dict(tested).to_dict() == tested
 

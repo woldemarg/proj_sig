@@ -436,7 +436,7 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
             scope = [(c.attribute, c.value) for c in cand.conditions]
             p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config, family)
             stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context, family, own)
-            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
+            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, baseline=spatial.baseline, **stats).to_dict()
         insights.append(
             Insight(
                 id=pid,

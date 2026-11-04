@@ -90,6 +90,7 @@ class SpatialContext:
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
     context: dict[str, ContextLayer] = field(default_factory=dict)  # layer name -> its counts and disks (context.py), the null's input; never stored
     exposure: dict[str, Any] = field(default_factory=dict)  # per-type counters' denominator words: {kind: area, cell_km2}; empty without them
+    baseline: str | None = None  # zone: every metric read against its parent cell's median; None: the map
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -402,6 +403,7 @@ def build_cells(
     context: Sequence[ContextSource] = (),
     context_ring: int = 1,
     count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``.
     Each ``context`` layer (points of another type) becomes one forced band, the layer's points in the cell and its
@@ -409,7 +411,11 @@ def build_cells(
     Each of ``count_values`` (``column=value``) becomes a per-type counter ``count_<column>_<value>``: the cell's events
     of that value, every cell, divided by nothing (a level's cells are of one area; ``exposure`` names it for the
     words, and a spread of the occupied cells' areas past ``CELL_AREA_SPREAD`` is a warning). The neighbourhood bands
-    and ``lisa_points`` restate it (``derived_from``); it adds no band of its own (docs/02_discovery.md §2.9)."""
+    and ``lisa_points`` restate it (``derived_from``); it adds no band of its own (docs/02_discovery.md §2.9).
+    ``baseline`` ``zone`` reads every metric against the median of its zone — the cell's parent one resolution coarser,
+    the unit the context null deals within and the bootstrap's block —: a counter as ``log(1 + n)`` minus its zone's
+    median, a median or a share minus its zone's; the columns are replaced, not added, and the neighbourhood bands and
+    ``lisa_points`` keep reading the raw activity."""
     profile = point_profile(frame, locator, profile_key)
     lat, lon, location = profile.lat, profile.lon, profile.location
     ok = np.isfinite(lat) & np.isfinite(lon)
@@ -514,6 +520,12 @@ def build_cells(
     derived[LISA_COLUMN] = [*counters, *(c for cs in counted.values() for c in cs)]
     glossary[LISA_COLUMN] = "whether the cell and its neighbours form a cluster of many or few events"
     glossary.update({f"{LISA_COLUMN}={k}": v for k, v in LISA_WORDS.items()})
+    if baseline == "zone":  # the difference between zones taken out of every metric, after the conditions read the raw ones
+        logged = set(derived[LISA_COLUMN])  # the counters: points, active days, per-type counts
+        for metric in metrics:
+            values = np.log1p(out[metric]) if metric in logged else out[metric]
+            out[metric] = values - pd.Series(values).groupby(blocks).transform("median").to_numpy()
+            glossary[metric] = f"{glossary[metric]}{', as log(1 + n),' if metric in logged else ''} minus the median of its zone (the parent cell)"
     table = pd.DataFrame(out)
     ctx = SpatialContext(
         resolution=resolution,
@@ -533,6 +545,7 @@ def build_cells(
         glossary={k: v for k, v in glossary.items() if k.split("=", 1)[0] in table.columns or k.split("=", 1)[0] in derived},
         context=layers,
         exposure=exposure,
+        baseline=baseline,
     )
     return table, ctx, warnings
 
