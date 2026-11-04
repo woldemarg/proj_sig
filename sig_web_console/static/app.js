@@ -208,6 +208,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(x))) ? "–" : Number(x).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+// a layer link's insights (docs/08_interface.md §8.2): one colour per context layer, from its run's dataset (cross_layers)
+const allLayers = () => [...new Set(Object.values(S.datasets).flatMap((d) => d.cross_layers || []))].sort();
+const layersOf = (datasetId) => S.datasets[datasetId]?.cross_layers || [];
+const layerVar = (name) => `--layer-${(allLayers().indexOf(name) % 4) + 1}`;  // a palette of its own, the same place in both themes
+const layerColor = (name) => cssVar(layerVar(name));  // read when painted: a theme switch follows
+const layerChip = (datasetId) => layersOf(datasetId).map((l) => `<span class="tag layer" style="--lc:var(${layerVar(l)})" title="${esc(TERMS.layer_link[1])}">${esc(word("context_layer"))}: ${esc(l)}</span>`).join("");
 const human = (s) => String(s || "").replace(/_/g, " ");
 const PLURAL = new Intl.PluralRules("uk");
 const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+

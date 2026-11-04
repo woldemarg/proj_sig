@@ -95,7 +95,8 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
         if e["source"] in keep and e["target"] in keep and (e["type"] != "IN_REGION" or e["target"] in drawn_regions(graph, e["source"]))
     ]  # an insight's IN_REGION to the regions drawn for it: a broad one lies in hundreds more
     trust = {
-        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity") if k in n["props"]} | _declared(n["props"])
+        n["props"]["dataset_id"]: {k: n["props"][k] for k in ("source", "reliability", "integrity", "cross_layers") if k in n["props"]}
+        | _declared(n["props"])
         for n in graph.of_kind("Dataset")
     }  # every dataset's trust and declared language, whatever the filter
     spans = [
