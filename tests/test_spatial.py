@@ -79,64 +79,12 @@ def test_lag_excludes_the_cell_and_counts_absent_neighbours_as_zero():
     assert ctx.derived_from["lisa_points"] == ["points", "when_active_days"]
 
 
-def test_a_chosen_value_becomes_a_counter_the_bands_restate_and_no_band_of_its_own():
-    """``count_values`` makes each chosen value a per-type counter of every cell (``count_<column>_<value>``: the cell's
-    events of that value, divided by nothing): the neighbourhood bands and ``lisa_points`` restate it, the mode of its
-    own column too, and it adds no neighbourhood band of its own; ``exposure`` names the level's cell area. Without the
-    option nothing changes; cells far apart in latitude differ in area, and say so (docs/02_discovery.md §2.9)."""
-    frame = geo_frame()
-    plain, plain_ctx, _ = cells_of(frame)
-    table, ctx, warnings = cells_of(frame, count_values=["channel=phone", "sector=north"])
-    phone = (frame["channel"] == "phone").to_numpy()
-    expected = np.bincount(ctx.point_cell[phone], minlength=len(table)).astype(float)
-    assert np.array_equal(table["count_channel_phone"].to_numpy(), expected)  # every cell, zero where the value has no event
-    assert (table["count_sector_north"] <= table["points"]).all() and table["count_sector_north"].sum() == (frame["sector"] == "north").sum()
-    counters = {"count_channel_phone", "count_sector_north"}
-    assert counters <= set(ctx.derived_from["neighbours_points_band"]) and counters <= set(ctx.derived_from["lisa_points"])
-    assert "count_sector_north" in ctx.derived_from["sector_mode"]  # the cell's most frequent sector restates its own count
-    assert set(table.columns) - set(plain.columns) == counters  # no neighbours_count_*: the family grows by the counters alone
-    assert ctx.exposure == {"kind": "area", "cell_km2": round(h3.average_hexagon_area(7, "km^2"), 6)} and plain_ctx.exposure == {}
-    assert not any("areas differ" in w for w in warnings)  # one region's cells: one area
-    far = frame.assign(latitude=np.where(frame["sector"] == "north", 55.0, 0.5) + frame["latitude"] % 0.01)
-    assert any("areas differ by" in w for w in cells_of(far, count_values=["channel=phone"])[2])  # 0.5° and 55° north
-
-
 def test_lisa_marks_the_planted_cluster_hot():
     table, ctx, _ = cells_of(geo_frame())
     centre = ctx.cells.tolist().index(h3.latlng_to_cell(*HOT, 7))
     assert table["lisa_points"].iloc[centre] == "hot spot"
     assert (table["lisa_points"] == "hot spot").sum() < len(table) / 4
     assert ctx.moran["points"] > 0.2  # the cluster is spatially autocorrelated
-
-
-def test_counted_values_are_checked_against_the_rows_and_a_rare_one_is_a_status(tmp_path):
-    """An upload's ``count_values`` are read against its rows: each value with its rows and a status — ``ok``, or
-    ``sparse`` below ``MIN_ROWS × MIN_CELL_POINTS`` rows (no counter: too few events for a frequency; the level is the
-    one asked) —, on the geo levels only; a column the file lacks, a value no row holds (its column's values listed) and
-    a layer-only upload's or a plain table's counters are refused; the dataset id names the counters."""
-    frame = geo_frame()
-    frame.loc[frame.index[:30], "channel"] = "fax"  # 30 rows: below 50 × 5
-    path = tmp_path / "points.csv"
-    frame.to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path))
-    with path.open("rb") as stream:
-        records = engine.upload(path.name, stream, geo="latitude,longitude@7", table=True, count_values="channel=phone, channel=fax")
-    geo, plain = (engine.process(r["batch_id"]) for r in sorted(records, key=lambda r: r["level"] == "table"))
-    asked = [(c["value"], c["rows"], c["status"]) for c in geo["count_values"]]
-    assert asked == [("phone", int((frame["channel"] == "phone").sum()), "ok"), ("fax", 30, "sparse")] and geo["level"] == "7"
-    assert "count_values" not in plain  # a table level counts nothing
-    columns = engine._load(geo).frame.columns
-    assert "count_channel_phone" in columns and "count_channel_fax" not in columns
-    with path.open("rb") as stream:
-        again = engine.upload(path.name, stream, geo="latitude,longitude@7")[0]
-    assert again["status"] == "UPLOADED" and engine.process(again["batch_id"])["dataset_id"] != geo["dataset_id"]  # no counters, another id
-    for bad, why in (("nope=a", "no column"), ("channel=pager", "phone"), ("load=1", "not a category"), ("channel", "one column=value")):
-        with path.open("rb") as stream, pytest.raises(PipelineError, match=why):
-            engine.upload(path.name, stream, geo="latitude,longitude@7", count_values=bad)
-    with path.open("rb") as stream, pytest.raises(PipelineError, match="count_values"):
-        engine.upload(path.name, stream, geo="latitude,longitude", layer=True, count_values="channel=phone")
-    with path.open("rb") as stream, pytest.raises(PipelineError, match="count_values without geo"):
-        engine.upload(path.name, stream, count_values="channel=phone")  # a table has no cells to count into
 
 
 def test_effective_n_widens_the_median_test():

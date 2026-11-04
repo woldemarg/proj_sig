@@ -106,13 +106,15 @@ def dataset_fingerprint(
     context_ring: int = 1,
     where: str | None = None,
     counts: Sequence[str] = (),
+    weights: bool = False,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
     file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
     order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
     only when it is not the default (an upload made before the option keeps its id); ``where`` a reading's row filter,
-    and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id)."""
+    and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id); ``weights`` the
+    event-weighted median of the shares (``WEIGHT_BY_EVENTS``), mixed in only when on."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -131,6 +133,8 @@ def dataset_fingerprint(
         h.update(f"where={where}".encode())
     if counts:
         h.update(f"counts={sorted(counts)}".encode())
+    if weights:
+        h.update(b"weights=events")
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -478,6 +482,7 @@ def load_dataset(
             context_ring=ring,
             where=where,
             counts=count_values if geo_spec else (),
+            weights=config.weight_by_events,
         ),
         filename=filename or path.name,
         bins=present_bins,

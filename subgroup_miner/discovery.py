@@ -28,7 +28,7 @@ import subgroup_miner.vendor.eda.main_upd as eda
 from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id, stable_hash
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import deal, dealt_band
-from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
+from subgroup_miner.spatial import COUNTER, SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
 NULL_LEVELS = frozenset({"nan", "<NA>", "None"})  # never a condition (same literals as EDA step 3)
@@ -57,6 +57,7 @@ class DatasetProfile:
     global_mads: dict[str, float]
     dimension_cardinality: dict[str, int]
     dimension_entropy: dict[str, float]
+    weight_by_events: bool = False  # a share's median test weighs each cell by its events (docs/02_discovery.md §2.9)
 
 
 @dataclass
@@ -246,6 +247,7 @@ def run_discovery(
         global_mads=global_mads,
         dimension_cardinality={c: int(data[c].nunique()) for c in categoricals},
         dimension_entropy={c: _entropy(data[c]) for c in categoricals},
+        weight_by_events=config.weight_by_events,
     )
     if not space:
         raise DiscoveryError("no_candidates", f"Search space is empty (dimensions selected: {dims}).")
@@ -316,24 +318,67 @@ def run_discovery(
     )
 
 
-def _median_z(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+def _median_z(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0, weights: np.ndarray | None = None) -> float:
     """The z of the asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the sample to
-    its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). 0 where the test is undefined."""
-    values = values[~np.isnan(values)]
-    n = len(values)
-    if n < 2:
+    its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). With ``weights`` (one per value: a
+    cell's events) the median and the MAD are weighted and the sample is Kish's effective size (Σw)² / Σw², times the
+    same factor — two corrections, one for unequal weights, one for spatial dependence. 0 where the test is undefined."""
+    keep = ~np.isnan(values)
+    values = values[keep]
+    if len(values) < 2:
         return 0.0
+    if weights is None:
+        n, median, scale = len(values), float(np.median(values)), eda.calculate_mad(values)
+    else:
+        w = weights[keep]
+        n, (median, scale) = w.sum() ** 2 / (w**2).sum(), _weighted_stats(values, w)
     root_n = math.sqrt(max(n * n_eff_factor, 1.0))
-    scale = eda.calculate_mad(values) or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
+    scale = scale or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
     se = _MEDIAN_SE_FACTOR * scale / root_n if scale else float(np.std(values, ddof=1)) / root_n
     if not se or not np.isfinite(se):
         return 0.0
-    return (float(np.median(values)) - global_median) / se
+    return (median - global_median) / se
 
 
-def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
+def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0, weights: np.ndarray | None = None) -> float:
     """Two-sided p of ``_median_z``."""
-    return float(2.0 * norm.sf(abs(_median_z(values, global_median, global_mad, n_eff_factor))))
+    return float(2.0 * norm.sf(abs(_median_z(values, global_median, global_mad, n_eff_factor, weights))))
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """The value at which the cumulative weight reaches half of the total (the lower one on an exact half)."""
+    order = np.argsort(values, kind="stable")
+    cumulative = np.cumsum(weights[order])
+    return float(values[order][np.searchsorted(cumulative, cumulative[-1] / 2)])
+
+
+def _weighted_stats(values: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
+    """The weighted median and MAD of ``values`` (NaN left out); the MAD 0 (most weight on one value) falls back to the
+    weighted mean absolute deviation on the normal-consistent scale, as the EDA's ``calculate_mad`` does."""
+    keep = ~np.isnan(values)
+    values, weights = values[keep], weights[keep]
+    median = _weighted_median(values, weights)
+    deviations = np.abs(values - median)
+    return median, _weighted_median(deviations, weights) or eda._MAD_FROM_MEAN_ABS_DEV * float(np.average(deviations, weights=weights))
+
+
+def _event_weights(data: pd.DataFrame, metric: str, config: MinerConfig) -> np.ndarray | None:
+    """Each cell's events as the weights of ``metric``'s median test (``WEIGHT_BY_EVENTS``): a share is about the
+    events, so a cell weighs what it holds; None for any other metric, a table without cells or the option off."""
+    if config.weight_by_events and metric.startswith("share_") and COUNTER in data:
+        return data[COUNTER].to_numpy(dtype=float)
+    return None
+
+
+def _per_event(data: pd.DataFrame, rows: np.ndarray, shift: Shift, config: MinerConfig) -> tuple[Shift, np.ndarray | None]:
+    """A primary shift as its confirmation reads it, and the cohort's weights: a share's under ``WEIGHT_BY_EVENTS`` with
+    each cell weighing its events (the cohort's and the map's weighted medians, the weighted MAD); else as mined, no
+    weights. Mining and the recomputation both confirm here."""
+    weights = _event_weights(data, shift.metric, config)
+    if weights is None:
+        return shift, None
+    column = data[shift.metric].to_numpy(dtype=float)
+    return _shift(shift.metric, _weighted_stats(column[rows], weights[rows])[0], *_weighted_stats(column, weights)), weights[rows]
 
 
 def _covariance_pair(
@@ -381,15 +426,16 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
                 local_median = float(np.median(rows[metric].dropna()))
                 shifts.append(_shift(metric, local_median, prof.global_medians[metric], prof.global_mads[metric], source="covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
+        shifts[0], own = _per_event(result.data, cand.row_indices, shifts[0], config)  # mined per cell, confirmed per event
         primary = shifts[0]
         values = rows[primary.metric].to_numpy(dtype=float)
-        p_value, rho, n_eff_factor = _median_evidence(values, cand.row_indices, spatial, primary.global_median, primary.global_mad)
+        p_value, rho, n_eff_factor = _median_evidence(values, cand.row_indices, spatial, primary.global_median, primary.global_mad, own)
         pid = pattern_id(dataset_id, cand.conditions)
         provenance_extra = {}
         if spatial:
             scope = [(c.attribute, c.value) for c in cand.conditions]
             p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config, family)
-            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context, family)
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context, family, own)
             provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
         insights.append(
             Insight(
@@ -473,12 +519,13 @@ def _global_stats(column: pd.Series) -> tuple[float, float]:
 
 
 def _median_evidence(
-    values: np.ndarray, rows: np.ndarray, spatial: SpatialContext | None, global_median: float, global_mad: float
+    values: np.ndarray, rows: np.ndarray, spatial: SpatialContext | None, global_median: float, global_mad: float, weights: np.ndarray | None = None
 ) -> tuple[float, float, float]:
-    """(p, the subgroup's Moran's I, its n_eff factor) of the primary metric's median test, as an insight records them."""
+    """(p, the subgroup's Moran's I, its n_eff factor) of the primary metric's median test, as an insight records them;
+    ``weights``: the cohort's cells' events (``_event_weights``)."""
     rho = subgroup_moran(values, rows, spatial) if spatial else 0.0  # the subgroup's own dependence, not the map's
     factor = effective_n_factor(rho)
-    return _median_test(values, global_median, global_mad, factor), rho, factor
+    return _median_test(values, global_median, global_mad, factor, weights), rho, factor
 
 
 def _shift(metric: str, local_median: float, global_median: float, global_mad: float, magnitude: float | None = None, source: str = "eda") -> Shift:
@@ -498,14 +545,18 @@ def _spatial_stats(
     n_tests: int,
     p_context: float | None = None,
     context_family: int = 1,
+    weights: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
-    one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
-    p_iid = _median_test(values, primary.global_median, primary.global_mad)
+    one place the rounding lives, for the mining and for the recomputation that must reproduce it. With ``weights`` the
+    effective size is Kish's of the cells' events, times the Moran factor."""
+    p_iid = _median_test(values, primary.global_median, primary.global_mad, weights=weights)
+    finite = np.isfinite(values)
+    n = finite.sum() if weights is None else weights[finite].sum() ** 2 / (weights[finite] ** 2).sum()
     return {
         "cells": cells,
         "moran_i": round(rho, 4),
-        "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
+        "n_eff": round(float(n) * factor, 1),
         "p_adjusted_iid": min(1.0, p_iid * n_tests),
         **({"p_context": p_context, "context_family": context_family} if p_context is not None else {}),
     }
@@ -538,8 +589,8 @@ def _context_evidence(
         return None
     fixed = np.zeros(len(data), dtype=bool)
     fixed[cohort_rows(data, [(a, v) for a, v in conditions if a not in by_column])] = True
-    values = data[primary.metric].to_numpy(dtype=float)
-    observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary)
+    values, weights = data[primary.metric].to_numpy(dtype=float), _event_weights(data, primary.metric, config)
+    observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary, weights)
     rng = np.random.default_rng(config.eda_random_seed ^ int(stable_hash(expression), 16))
     planned = max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))
     hits = draws = 0
@@ -550,16 +601,17 @@ def _context_evidence(
         rows = np.flatnonzero(mask)
         if len(rows) >= config.min_support_rows:
             draws += 1
-            hits += _cohort_z(values, rows, spatial, primary) >= observed
+            hits += _cohort_z(values, rows, spatial, primary, weights) >= observed
         if (1 + hits) * family > config.max_p_adjusted * (draws + left + 1):  # refused whatever the draws left
             break
     return (1 + hits) / (draws + 1)
 
 
-def _cohort_z(values: np.ndarray, rows: np.ndarray, spatial: SpatialContext, primary: Shift) -> float:
-    """|z| of the median test of the metric ``values`` over the cohort ``rows``, with the cohort's own n_eff."""
+def _cohort_z(values: np.ndarray, rows: np.ndarray, spatial: SpatialContext, primary: Shift, weights: np.ndarray | None = None) -> float:
+    """|z| of the median test of the metric ``values`` over the cohort ``rows``, with the cohort's own n_eff (and its
+    cells' events as weights, ``_event_weights``)."""
     factor = effective_n_factor(subgroup_moran(values[rows], rows, spatial))
-    return abs(_median_z(values[rows], primary.global_median, primary.global_mad, factor))
+    return abs(_median_z(values[rows], primary.global_median, primary.global_mad, factor, None if weights is None else weights[rows]))
 
 
 def recompute_statistics(
@@ -587,13 +639,14 @@ def recompute_statistics(
     cohort, shifts = data.iloc[rows], []
     for metric in metrics:
         shifts.append(_shift(metric, float(np.median(cohort[metric].dropna())), *_global_stats(data[metric])))
+    shifts[0], own = _per_event(data, rows, shifts[0], config)  # as mining confirmed it
     primary = shifts[0]
     values = cohort[primary.metric].to_numpy(dtype=float)
-    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
+    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad, own)
     out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
         p_context = _context_evidence(data, conditions, expression, primary, spatial, config, context_family)
-        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context, context_family)
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context, context_family, own)
     return out
 
 

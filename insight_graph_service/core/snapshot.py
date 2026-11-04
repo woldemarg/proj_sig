@@ -104,6 +104,7 @@ def _schema_plane(
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"count_values": b["count_values"]} if b.get("count_values") else {}),  # the per-type counters asked, each with its status
                 **({"exposure": profile["geo"]["exposure"]} if "exposure" in profile.get("geo", {}) else {}),  # what a count is per
+                **({"weight_by_events": True} if profile.get("weight_by_events") else {}),  # its shares confirmed per event
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
                 **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
                 **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
