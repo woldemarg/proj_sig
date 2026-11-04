@@ -16,7 +16,7 @@ const prunedBy = (pruned = {}) => {
 
 const crossChips = (b) =>  // a run whose layer's upload is gone, a layer's runs (uploads.cross_state, read off the registry)
   (b.stale ? ` ${chip("bad", b.stale.reason === "superseded" ? "шар замінено" : "шар видалено", "Завантаження шару цього прогону вже немає; прогін тримає копію шару й лишається відтворюваним. Новий шар — новий прогін.")}` : "") +
-  (b.layer_of ? ` ${chip("", `шар у ${plural(b.layer_of, "прогоні", "прогонах", "прогонах")}`, "Скільки крос-типових прогонів читають це завантаження як шар")}` : "");
+  (b.layer_of ? ` ${chip("", `шар у ${plural(b.layer_of, "прогоні", "прогонах", "прогонах")}`, `Скільки прогонів (${word("layer_link")}) читають це завантаження як ${word("context_layer")}`)}` : "");
 
 function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
   const running = !TERMINAL.has(b.status);

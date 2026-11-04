@@ -19,6 +19,15 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | closed intent | scope | — | every `attribute = value` that holds on all of a cohort's rows; the pattern's conditions |
 | target, metric | metric | — | the numeric column whose robust median shift (or correlation change) the pattern reports |
 | robust z, shift | `±x sd` | — | `0.6745 · Δmedian / MAD`, signed, capped at 10: a shift in robust standard deviations |
+| target of a cross-type run | базовий шар | — | the upload whose metrics a run mines ([2.9](02_discovery.md#29-spatial-datasets-the-geo-option)) |
+| context layer | контекстний шар | — | another upload's points, one forced band of the base layer's cells: a condition, never a metric |
+| cross-type run | зв'язок шарів | — | a run of the base layer with one context layer (`POST /api/crosstype`) |
+| per-type counter `count_<col>_<v>` | більше подій | — | the cell's events of one value, per cell, no denominator |
+| share `share_<col>_<v>` | інший склад | — | the value's share of the cell's events |
+| insight status | дослідницька знахідка, замало даних | — | found and tested on the same data; too few events or cells for the test |
+| CO_LOCATED between runs of one base layer | також у тих самих місцях | — | geometry of the graph, no test of the layers' joint effect |
+| `WEIGHT_BY_EVENTS` | з вагою подій | — | a share confirmed with each cell weighing its events |
+| `baseline=zone` | відносно своєї зони | — | every metric read against its parent cell's median |
 | phenomenon | — | — | the signed statistical behaviour of a pattern: its material shifts and, when material, its correlation change |
 | component | — | — | one `(label, signed coefficient)` term of the phenomenon, e.g. `("discount", +2.21)` ([4.2](04_representation.md#42-the-canonical-form)) |
 | `insight_weight`, weight | evidence | weight (the scaled input magnitude) | statistical strength in `[WEIGHT_FLOOR, 1]` ([3.3](03_insights.md#33-insight-weight)) |
