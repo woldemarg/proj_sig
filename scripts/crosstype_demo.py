@@ -10,6 +10,15 @@ both disks. Per run: the cross-type insights admitted (target, z, the layer's ve
 refusals by reason, the seconds.
 
     python scripts/crosstype_demo.py            # the eight runs; the result in .scratch/results
+    python scripts/crosstype_demo.py --m19      # the M19 grid pre-registered in the concept's §14a (#281)
+
+The M19 grid: the crimes of 2025 with per-type counters (``M19_COUNTS``), each layer on its own (1:1), two supports —
+the finest level over the cell alone and r9 over the cell and its six neighbours, eval settings, not the console's —, the
+``map`` and the ``zone`` baseline, event weights off and on, and the counters off at the console's setting (the family
+they add); every admitted finding then looked for in the same run of 2024 (the same expression and target, the same
+sign); per counted type the map median of its count at the finest level and one coarser (item 12); the co-location
+quotient of each counted type to each layer on the raw points (the reference; NB and beta-binomial models need
+``statsmodels``, absent: skipped, said so).
 """
 
 from __future__ import annotations
@@ -20,6 +29,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 from scratch import build_engine, save_result, scratch_dir, upload_all
 
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets
@@ -29,6 +40,9 @@ TARGET = "chicago_crimes"
 LAYERS = ("chicago_bars", "chicago_l_stations")
 SETTINGS = ((9, 1), (9, 0), (10, 0))  # (H3 level, disk radius), the console's default first
 FREQUENCY = ("chicago_bars", "crime=robbery")  # the frequency of one class near the layer: the target under a filter, crossed
+HELD_OUT = "chicago_crimes_2024"  # the replication year (concept §14a)
+M19_COUNTS = "crime=robbery,crime=deceptive,crime=theft"  # the counted types: a rare one, the stations' one, a common one
+M19_SUPPORTS = ((9, 0), (9, 1))  # (level, disk): the finest @auto gives the crimes, over the cell alone; r9 and its six neighbours
 
 
 def summary(engine: Engine, record: dict[str, Any], layer: str, level: int, ring: int, seconds: float) -> dict[str, Any]:
@@ -80,13 +94,113 @@ def measure(
     return {"target": [{"level": r["level"], "where": r.get("where"), "status": r["status"]} for r in own + reading], "runs": runs}
 
 
+def run(engine: Engine, target: str, layer: str, level: int, ring: int, **options: Any) -> dict[str, Any]:
+    """One cross-type run processed, summarized as ``summary`` does, with its family and the admitted findings' keys."""
+    t0 = time.perf_counter()
+    (record,) = [engine.process(r["batch_id"]) for r in engine.cross(target, [layer], ring=ring, levels=[level], **options)]
+    out = summary(engine, record, "", level, ring, time.perf_counter() - t0)
+    family = {p["provenance"]["spatial"].get("context_family") for p in engine.ws.patterns() if p["dataset_id"] == record["dataset_id"]}
+    return out | {"family": max(family - {None}, default=None), "keys": sorted((a["scope"], a["target"], a["z"] > 0) for a in out["admitted"])}
+
+
+def type_medians(path: Path, locator: str, counts: str, levels: tuple[int, int]) -> dict[str, dict[str, float]]:
+    """Item 12: per counted type the map median of its count over the target's occupied cells, at each level."""
+    import h3
+
+    from subgroup_miner.ingestion import read_rows
+
+    frame = read_rows(path)
+    lat, lon = (frame[c].to_numpy(float) for c in locator.split(","))
+    out = {}
+    for spec in counts.split(","):
+        column, _, value = spec.partition("=")
+        typed = (frame[column].astype("string") == value).to_numpy()
+        out[value] = {}
+        for res in levels:
+            cells = pd.Series([h3.latlng_to_cell(a, b, res) for a, b in zip(lat, lon)])
+            out[value][f"r{res}"] = float(pd.Series(typed).groupby(cells).sum().median())
+    return out
+
+
+def clq(path: Path, locator: str, counts: str, layer: Path, layer_locator: str) -> dict[str, float | str]:
+    """The co-location quotient of each counted type to the layer (Leslie & Kronenfeld): of the type's events, the share
+    whose nearest other point of the pooled events and layer points is a layer point, over the layer's share of the pool;
+    on the raw points, with the cell run's locator and rows. A layer without raw points is refused."""
+    from scipy.spatial import cKDTree
+
+    from subgroup_miner.ingestion import read_rows
+
+    frame, points = read_rows(path), read_rows(layer)
+    if not set(layer_locator.split(",")) <= set(points.columns):
+        return {"refused": "the layer has no raw points under its locator"}
+    xy = lambda f, loc: np.c_[[f[c].to_numpy(float) for c in loc.split(",")]].T * [1.0, np.cos(np.radians(41.8))]  # noqa: E731
+    events, spots = xy(frame, locator), xy(points, layer_locator)
+    pool = np.vstack([events, spots])
+    _, nearest = cKDTree(pool).query(events, k=2)
+    to_layer = nearest[:, 1] >= len(events)
+    out = {}
+    for spec in counts.split(","):
+        column, _, value = spec.partition("=")
+        typed = (frame[column].astype("string") == value).to_numpy()
+        out[value] = round(float(to_layer[typed].mean() / (len(spots) / (len(pool) - 1))), 3)
+    return out
+
+
+def m19(engine: Engine, weighted: Engine, shipped: dict[str, Any]) -> dict[str, Any]:
+    """The pre-registered grid (concept §14a) on the 2025 crimes, its findings looked for in 2024, the medians, the CLQ."""
+    options = shipped[TARGET]["options"]
+    locator = options["geo"].partition("@")[0]
+    runs = []
+    for which, eng in (("unweighted", engine), ("weighted", weighted)):
+        own = {key: upload_all(eng, DEMO_DIR / shipped[key]["file"], **options)[0]["upload_id"] for key in (TARGET, HELD_OUT)}
+        kept = {name: upload_all(eng, DEMO_DIR / shipped[name]["file"], geo=locator, layer=True)[0]["upload_id"] for name in LAYERS}
+        for name, layer in kept.items():
+            if which == "unweighted":  # the counters' cost at the console's setting: the run without them (the reading's own)
+                runs.append(run(eng, own[TARGET], layer, 9, 1) | {"layer": name, "weights": which, "baseline": "map", "counters": False})
+            for level, ring in M19_SUPPORTS:
+                for baseline in ("map", "zone"):  # the counters asked for the run, checked against the year's own rows
+                    found = run(eng, own[TARGET], layer, level, ring, baseline=baseline, count_values=M19_COUNTS)
+                    again = run(eng, own[HELD_OUT], layer, level, ring, baseline=baseline, count_values=M19_COUNTS)
+                    replicated = sorted(set(map(tuple, found["keys"])) & set(map(tuple, again["keys"])))
+                    runs.append(found | {"layer": name, "weights": which, "baseline": baseline, "replicated": replicated})
+    target, layers = DEMO_DIR / shipped[TARGET]["file"], {name: DEMO_DIR / shipped[name]["file"] for name in LAYERS}
+    try:
+        import statsmodels  # noqa: F401
+
+        models = "statsmodels present: the NB and beta-binomial references are not run by this spike yet"
+    except ImportError:
+        models = "skipped: statsmodels is not installed (an optional dependency of this script only)"
+    return {
+        "runs": runs,
+        "medians": type_medians(target, locator, M19_COUNTS, (9, 8)),
+        "clq": {name: clq(target, locator, M19_COUNTS, path, locator) for name, path in layers.items()},
+        "models": models,
+    }
+
+
 def main() -> int:
     from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="current")
+    parser.add_argument("--m19", action="store_true", help="the M19 grid pre-registered in the concept's §14a")
     args = parser.parse_args()
     shipped = {d["key"]: d for d in demo_datasets()}
+    if args.m19:
+        t0, base = time.perf_counter(), scratch_dir("crosstype_m19", fresh=True)
+        result = m19(
+            build_engine(base / "ws", embedder=HashingEmbedder()),
+            build_engine(base / "wsw", embedder=HashingEmbedder(), weight_by_events=True),
+            shipped,
+        )
+        for r in result["runs"]:
+            tag = f"{r['layer']:<20} {r['weights']:<10} r{r['level']} disk {r['ring']} {r['baseline']:<4}{'' if r.get('counters', True) else ' no counters'}"
+            print(f"{tag}: admitted {len(r['admitted'])}, family {r['family']}, replicated {len(r.get('replicated', []))}, refused {r['refused']}")
+            for a in r["admitted"]:
+                print(f"    {a['target']:<28} z={a['z']:+.2f} | {a['scope']}")
+        print("medians:", result["medians"], "\nclq:", result["clq"], "\nmodels:", result["models"])
+        print(save_result("crosstype_demo", f"{args.label}_m19", {"seconds": round(time.perf_counter() - t0, 1), **result}))
+        return 0
     engine = build_engine(scratch_dir("crosstype_demo", fresh=True) / "ws", embedder=HashingEmbedder())
     t0 = time.perf_counter()
     layers = {key: DEMO_DIR / shipped[key]["file"] for key in LAYERS}
