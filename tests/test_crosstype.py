@@ -935,7 +935,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         assert (bars["status"], bars["error"]["code"]) == ("FAILED", "no_viable_insights") and bars["metrics"]["pruned"]["context_confounded"] > 0
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_bars')", timeout=20000)
         card = page.locator(".ds", has_text="+ chicago_bars").inner_text()
-        assert f"відтворює розклад шару: {bars['metrics']['pruned']['context_confounded']}" in card
+        assert f"пояснюється фоном зони: {bars['metrics']['pruned']['context_confounded']}" in card
         # the stations: one finding, its drawer reading the layer's verdict
         (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == stations["dataset_id"]]
         page.evaluate(f"inspect('{found}')")
