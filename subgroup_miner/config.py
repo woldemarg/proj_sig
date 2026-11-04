@@ -22,6 +22,7 @@ class MinerConfig:
     geo_resolution: int = 7  # H3 resolution when the geo option names none
     min_cell_points: int = 5  # below it a cell keeps its counters but not its medians and shares (NaN)
     context_permutations: int = 199  # draws of the cross-type null (the layer dealt anew within each parent cell); 0 turns the test off
+    weight_by_events: bool = False  # a share's median test with each cell weighing its events (Kish's n x the Moran factor); mining stays per cell
 
     # discovery (docs/02_discovery.md) — EDA defaults preserved
     compute_budget: int = 5000  # step3 compute_budget

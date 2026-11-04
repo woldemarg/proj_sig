@@ -93,16 +93,21 @@ def test_the_fingerprint_names_the_layers_whatever_their_order():
     assert ab == "ds-22ba51b5b5c8"  # the default disk keeps the id an upload had before the option
 
 
-def planted(tmp_path):
-    """A uniform target and a dozen schools two rings apart or more; in each school's disk (the cell and its six
-    neighbours) the target is three times as dense and ``load`` four units higher — the dependence the band reads."""
-    rng = np.random.default_rng(5)
-    cells = list(h3.grid_disk(ORIGIN, 9))  # 271 cells
+def schools_of(rng) -> tuple[list[str], list[str], set[str]]:
+    """The 271 cells around ``ORIGIN``, a dozen schools two rings apart or more among them and the schools' disks."""
+    cells = list(h3.grid_disk(ORIGIN, 9))
     schools: list[str] = []
     for c in rng.permutation(cells):
         if len(schools) < 12 and h3.grid_distance(c, ORIGIN) <= 7 and all(h3.grid_distance(c, s) > 3 for s in schools):
             schools.append(str(c))
-    near = {n for s in schools for n in h3.grid_disk(s, 1)}
+    return cells, schools, {n for s in schools for n in h3.grid_disk(s, 1)}
+
+
+def planted(tmp_path):
+    """A uniform target and a dozen schools two rings apart or more; in each school's disk (the cell and its six
+    neighbours) the target is three times as dense and ``load`` four units higher — the dependence the band reads."""
+    rng = np.random.default_rng(5)
+    cells, schools, near = schools_of(rng)
     parts = []
     for c in cells:
         n, lift = (24, 4.0) if c in near else (8, 0.0)
