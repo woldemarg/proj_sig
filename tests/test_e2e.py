@@ -394,6 +394,38 @@ def test_crosstype_demo_apparatus(engine, tmp_path):
     assert planted["refused"]["outside_cross_type"] > 0 and planted["seconds"] > 0  # the target's own findings refused by reason
 
 
+def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engine, tmp_path):
+    """The M19 spike's apparatus (concept §14a) on a planted upload: one run summarized with its family and its findings'
+    keys, the counted types' map medians at two levels, the co-location quotient of a type to the layer on the raw
+    points (and a refusal for a layer without them), and two null repeats of the calibration with their Moran's I, their
+    errors, the median test's alone and the draws dropped for support."""
+    from crosstype_benchmark import RES, generate
+    from crosstype_demo import clq, run, type_medians
+    from crosstype_null_calibration import repeat, summarize
+
+    from insight_graph_service.core.settings import load_settings
+
+    upload = generate("X2", 1)
+    target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
+    upload["frame"].to_csv(target, index=False)
+    upload["layers"]["schools"].to_csv(layer, index=False)
+    with target.open("rb") as stream:
+        own = [engine.process(r["batch_id"]) for r in engine.upload("target.csv", stream, geo=f"lat,lon@{RES}")][0]["upload_id"]
+    with layer.open("rb") as stream:
+        kept = engine.upload("schools.csv", stream, geo="lat,lon", layer=True)[0]["upload_id"]
+    found = run(engine, own, kept, RES, 1)
+    assert found["status"] == "READY" and found["family"] and found["keys"] and all(len(k) == 3 for k in found["keys"])
+    spec = "road_type=local"
+    medians = type_medians(target, "lat,lon", spec, (RES, RES - 1))
+    assert set(medians["local"]) == {f"r{RES}", f"r{RES - 1}"} and medians["local"][f"r{RES - 1}"] >= medians["local"][f"r{RES}"]
+    assert clq(target, "lat,lon", spec, layer, "lat,lon")["local"] > 0
+    assert "refused" in clq(target, "lat,lon", spec, layer, "x,y")
+    settings = load_settings(neo4j_enabled=False)
+    rows = [repeat(seed, settings.miner, settings) for seed in (0, 1)]
+    assert all({"moran_i", "errors", "median_only", "dropped"} <= set(r) for r in rows)
+    assert summarize(rows)["reps"] == 2 and 0 <= summarize(rows)["fwer"] <= 1
+
+
 def test_crosstype_benchmark_apparatus():
     import h3
     import numpy as np
