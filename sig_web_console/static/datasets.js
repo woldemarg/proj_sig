@@ -159,41 +159,52 @@ async function refreshBatches() {
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
-function syncTable() {
+function syncTable() {  // a table's geo is held, not sent: its field disabled
   /* the base level is one of a geo upload's — none for a shipped set whose manifest says it has no number of its own
      beyond the point ("table": false): without cells it has nothing to measure, so the box cannot be ticked */
   const d = (S.samples || {})[$("sample").value], none = !!d && (d.options || {}).table === false;
-  $("table").disabled = !$("geo").value.trim() || none;
+  $("table").disabled = $("geo").disabled || !$("geo").value.trim() || none;
   if (none) $("table").checked = false;
   $("table").title = none ? "У цього набору немає власних чисел поза координатами: без комірок він нічого не виміряє" : "";
 }
 
 const sampleItem = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
 
-function fillSamples() {  // *Або готовий датасет*: a layer alone mines nothing; kept as a layer, any shipped set with points
-  const sel = $("sample"), kept = sel.value, layer = $("layer-only").checked;
-  const list = Object.values(S.samples || {}).filter((d) => (layer ? d.options && d.options.geo : !d.context_only));
-  sel.length = 1;  // the placeholder stays
-  sel.insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));
-  sel.value = list.some((d) => d.key === kept) ? kept : "";
-  if (sel.value !== kept) sel.dispatchEvent(new Event("change"));  // a choice no longer listed: its hint goes, the button waits for another
+// the upload's role (docs/08_interface.md §8.2): proposed from a shipped set's manifest or a file's header, confirmed or changed
+const POINT_COLUMNS = /^(lat|latitude|lon|lng|long|longitude|geometry|geom|point|location|wkt|coordinates)$/i;
+
+async function fileRole(f) {  // events when the header names a coordinate column, else a table; a Parquet header is not read here
+  if (/\.parquet$/i.test(f.name)) return "table";
+  const head = (await f.slice(0, 65536).text()).split(/\r?\n/)[0];
+  return head.split(/[\t;,]/).some((n) => POINT_COLUMNS.test(n.trim().replace(/^"|"$/g, ""))) ? "events" : "table";
+}
+
+function setRole(r, layerOnly = false) {
+  /* the role's radio, the geo option it needs and the button's words; a set meant only as a layer mines nothing */
+  $("roles").disabled = !r;
+  for (const v of ["events", "table", "layer"]) { const el = $(`role-${v}`); el.checked = v === r; el.disabled = layerOnly && v !== "layer"; }
+  $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
+  if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
+  $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
+  syncTable();
 }
 
 async function upload() {
   const f = $("file").files[0], sample = $("sample").value; if (!f && !sample) return;
-  const fd = new FormData();
+  const fd = new FormData(), geo = $("geo").disabled ? "" : $("geo").value;
   if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
-  fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", $("geo").value);
+  fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", geo);
   if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("tz", $("tz").value); }  // a layer's too: its span, for a run's time rule
-  if ($("layer-only").checked) fd.append("layer", "true");  // kept as another type's points: none of the mining options
+  if ($("role-layer").checked) fd.append("layer", "true");  // kept as another type's points: none of the mining options
   else {
-    if ($("geo").value.trim() && $("table").checked) fd.append("table", "true");
+    if (geo.trim() && $("table").checked) fd.append("table", "true");
     for (const c of $("context").files) fd.append("context", c);  // another type of points: one band of the cells each
     const layers = [...$("context-sample").selectedOptions].map((o) => o.value);  // shipped layers: the server reads its own copies
     for (const key of layers) fd.append("context_demo", key);
     if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
     if ($("time").value.trim()) fd.append("grid", $("grid").value);
     if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
+    fd.append("count_values", $("count-values").value); fd.append("baseline", $("baseline").value);  // the geo cells': refused without geo
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
@@ -203,7 +214,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("layer-only").checked = false; $("where").value = ""; fillSamples(); syncTable(); $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("where").value = ""; $("count-values").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
 }

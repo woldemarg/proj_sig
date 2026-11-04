@@ -77,8 +77,8 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
             " ? (__sent.push(opts.body.get('demo')), new Promise((r) => { window.__go = () => r({}); })) : __real(path, opts); }"
         )
         page.wait_for_function("$('sample').options.length > 1", timeout=10000)
-        page.select_option("#sample", "retail_synthetic")  # the form takes its options and shows them
-        assert page.evaluate("$('file-name').textContent === 'retail_synthetic.csv' && document.querySelector('#upload-form details.adv').open")
+        page.select_option("#sample", "retail_synthetic")  # the form takes its options and proposes its role
+        assert page.evaluate("$('file-name').textContent === 'retail_synthetic.csv' && $('role-table').checked")
         page.click("#upload-btn")
         assert page.is_disabled("#upload-btn")
         page.evaluate("() => { window.api = __real; __go(); }")
