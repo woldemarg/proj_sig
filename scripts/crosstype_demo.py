@@ -17,8 +17,8 @@ the finest level over the cell alone and r9 over the cell and its six neighbours
 ``map`` and the ``zone`` baseline, event weights off and on, and the counters off at the console's setting (the family
 they add); every admitted finding then looked for in the same run of 2024 (the same expression and target, the same
 sign); per counted type the map median of its count at the finest level and one coarser (item 12); the co-location
-quotient of each counted type to each layer on the raw points (the reference; NB and beta-binomial models need
-``statsmodels``, absent: skipped, said so).
+quotient of each counted type to each layer on the raw points and the model references (``models``: needs
+``statsmodels``, the ``eval`` dependency group; absent: skipped, said so).
 """
 
 from __future__ import annotations
@@ -146,6 +146,48 @@ def clq(path: Path, locator: str, counts: str, layer: Path, layer_locator: str) 
     return out
 
 
+def models(path: Path, locator: str, counts: str, layers: dict[str, Path], level: int = 9, ring: int = 1) -> dict[str, Any]:
+    """The model references (concept §14a) on the cells the run reads — the target's occupied H3 cells at ``level``, its
+    rows and locator —, per counted type and layer, each on «the layer within the disk» (a point of it in the cell or
+    its ``ring`` neighbours, the band's *none nearby* or not): a negative-binomial regression (NB2, its dispersion
+    estimated) of the type's count with the cell's own area as offset (log km²) — the incidence-rate ratio, the
+    frequency question — and a quasi-binomial regression of the type's share of the cell's events (the overdispersed
+    binomial: the beta-binomial's usual stand-in) — the odds ratio, the composition question —, each with its p."""
+    import h3
+    import statsmodels.api as sm
+
+    from subgroup_miner.ingestion import read_rows
+
+    def cells_of(frame: pd.DataFrame, loc: str) -> tuple[pd.Series, np.ndarray]:
+        lat, lon = (frame[c].to_numpy(float) for c in loc.split(","))
+        ok = np.isfinite(lat) & np.isfinite(lon)
+        return pd.Series([h3.latlng_to_cell(a, b, level) for a, b in zip(lat[ok], lon[ok])]), ok
+
+    frame = read_rows(path)
+    cells, ok = cells_of(frame, locator)
+    rows, events = frame.loc[ok].reset_index(drop=True), cells.value_counts()
+    offset = np.log([h3.cell_area(c, "km^2") for c in events.index])
+    out: dict[str, Any] = {}
+    for name, layer in layers.items():
+        spots = set(cells_of(read_rows(layer), locator)[0])
+        near = np.array([any(n in spots for n in h3.grid_disk(c, ring)) for c in events.index], dtype=float)
+        x = sm.add_constant(near)
+        for spec in counts.split(","):
+            column, _, value = spec.partition("=")
+            k = (rows[column].astype("string") == value).groupby(cells).sum().reindex(events.index, fill_value=0).to_numpy(float)
+            nb = sm.NegativeBinomial(k, x, offset=offset).fit(disp=0, maxiter=200)
+            qb = sm.GLM(np.c_[k, events.to_numpy(float) - k], x, family=sm.families.Binomial()).fit(scale="X2")
+            out.setdefault(name, {})[value] = {
+                "cells": len(k),
+                "near": int(near.sum()),
+                "irr": round(float(np.exp(nb.params[1])), 3),
+                "p_irr": float(nb.pvalues[1]),
+                "or": round(float(np.exp(qb.params[1])), 3),
+                "p_or": float(qb.pvalues[1]),
+            }
+    return out
+
+
 def m19(engine: Engine, weighted: Engine, shipped: dict[str, Any]) -> dict[str, Any]:
     """The pre-registered grid (concept §14a) on the 2025 crimes, its findings looked for in 2024, the medians, the CLQ."""
     options = shipped[TARGET]["options"]
@@ -165,16 +207,14 @@ def m19(engine: Engine, weighted: Engine, shipped: dict[str, Any]) -> dict[str, 
                     runs.append(found | {"layer": name, "weights": which, "baseline": baseline, "replicated": replicated})
     target, layers = DEMO_DIR / shipped[TARGET]["file"], {name: DEMO_DIR / shipped[name]["file"] for name in LAYERS}
     try:
-        import statsmodels  # noqa: F401
-
-        models = "statsmodels present: the NB and beta-binomial references are not run by this spike yet"
+        references: Any = {f"r{level} disk {ring}": models(target, locator, M19_COUNTS, layers, level, ring) for level, ring in M19_SUPPORTS}
     except ImportError:
-        models = "skipped: statsmodels is not installed (an optional dependency of this script only)"
+        references = "skipped: statsmodels is not installed (the eval dependency group)"
     return {
         "runs": runs,
         "medians": type_medians(target, locator, M19_COUNTS, (9, 8)),
         "clq": {name: clq(target, locator, M19_COUNTS, path, locator) for name, path in layers.items()},
-        "models": models,
+        "models": references,
     }
 
 

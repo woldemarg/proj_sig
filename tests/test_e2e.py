@@ -399,8 +399,10 @@ def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engin
     keys, the counted types' map medians at two levels, the co-location quotient of a type to the layer on the raw
     points (and a refusal for a layer without them), and two null repeats of the calibration with their Moran's I, their
     errors, the median test's alone and the draws dropped for support."""
+    import importlib.util
+
     from crosstype_benchmark import RES, generate
-    from crosstype_demo import clq, run, type_medians
+    from crosstype_demo import clq, models, run, type_medians
     from crosstype_null_calibration import repeat, summarize
 
     from insight_graph_service.core.settings import load_settings
@@ -420,6 +422,9 @@ def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engin
     assert set(medians["local"]) == {f"r{RES}", f"r{RES - 1}"} and medians["local"][f"r{RES - 1}"] >= medians["local"][f"r{RES}"]
     assert clq(target, "lat,lon", spec, layer, "lat,lon")["local"] > 0
     assert "refused" in clq(target, "lat,lon", spec, layer, "x,y")
+    if importlib.util.find_spec("statsmodels"):  # the eval group: the model references, an incidence and an odds ratio
+        ref = models(target, "lat,lon", spec, {"schools": layer}, RES)["schools"]["local"]
+        assert ref["irr"] > 0 and ref["or"] > 0 and 0 <= ref["p_irr"] <= 1 and ref["cells"] >= ref["near"] > 0
     settings = load_settings(neo4j_enabled=False)
     rows = [repeat(seed, settings.miner, settings) for seed in (0, 1)]
     assert all({"moran_i", "errors", "median_only", "dropped"} <= set(r) for r in rows)
