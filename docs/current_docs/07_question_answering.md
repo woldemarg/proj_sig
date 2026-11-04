@@ -138,6 +138,8 @@ Because the skip rule for seeds covers only SPECIALIZES, a second seed that is a
 
 ## 7.4 The evidence object
 
+**A hidden layer (model A).** The runs of a hidden context layer ([6.8](06_graph_and_storage.md#68-deleting-a-dataset)) are left out before the walk: `search(..., hidden_datasets)` turns them into the set of their patterns, which `resolve_seeds` never scores, `traverse` never enters (whatever the edge, `CO_LOCATED` included) and the vertical zoom skips; so no seed, step, item, `path`, `traversed` node or `excluded` slot holds one, and none takes a slot of the budget — unlike a tampered pattern, which is ranked and set aside. `POST /api/search` with `include_hidden: true` asks with them, once.
+
 `build_evidence(parsed, result, graph, config, place_scores)` takes the first `EVIDENCE_MAX_PATTERNS` (10) retrieved patterns (then adds the vertical ones, below) in rank order and assigns citation keys `P1 … Pn`:
 
 ```python

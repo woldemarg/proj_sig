@@ -111,7 +111,9 @@ def structural_closure(graph: DualGraph, seed_ids: list[str], depth: int, edge_t
     return hops
 
 
-def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig, as_of: datetime | None = None) -> TraversalResult:
+def traverse(
+    graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig, as_of: datetime | None = None, hidden: frozenset[str] = frozenset()
+) -> TraversalResult:
     """The walk from the seeds; ``as_of`` (the reference date, None when the question names a period) scales each reached
     pattern's rank by its freshness — a finding without a core keeps its rank."""
     counter = itertools.count()
@@ -128,7 +130,7 @@ def traverse(graph: DualGraph, seeds: list[SeedMatch], config: QueryConfig, as_o
     seed_ids = {s.pattern_id for s in seeds}
 
     def push(score: float, node: str, phase: str, s_used: int, l_used: int, seed: str, path: list[PathStep]) -> None:
-        if len(path) <= config.traversal_max_depth and (node, phase, s_used, l_used) not in final:
+        if len(path) <= config.traversal_max_depth and (node, phase, s_used, l_used) not in final and node not in hidden:
             heapq.heappush(heap, (-score, next(counter), node, phase, s_used, l_used, seed, path))
 
     while heap:

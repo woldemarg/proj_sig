@@ -662,8 +662,16 @@ const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the
 const readingOf = (pid) => (G.patterns[pid] || G.overlay?.patterns[pid] || {}).reading;  // as the map holds it; «Усі датасети» another dataset's as its overlay does
 const reading = (pid) => { const r = readingOf(pid); return r ? `${r.where} — ${r.what}` : ""; };  // a row's insight in a sentence
 
+function visibleWindow(d) {
+  /* the window without a hidden layer's runs (S.hidden): their rows gone, the rest ranked again, the count without them */
+  const themes = d.themes.map((t) => ({ ...t, insights: t.insights.filter((i) => !S.hidden.has(i.dataset_id)) })).filter((t) => t.insights.length);
+  const order = themes.flatMap((t) => t.insights).sort((a, b) => a.rank - b.rank).map((i) => i.id);
+  const gone = d.themes.reduce((n, t) => n + t.insights.length, 0) - order.length;
+  return { ...d, insights: d.insights - gone, themes: themes.map((t) => ({ ...t, insights: t.insights.map((i) => ({ ...i, rank: order.indexOf(i.id) })) })) };
+}
+
 function renderWindow() {
-  const el = $("map-window"), d = W.data;
+  const el = $("map-window"), d = W.data && !W.data.error ? visibleWindow(W.data) : W.data;
   el.hidden = !d || !G.ds;
   if (el.hidden) return;
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells

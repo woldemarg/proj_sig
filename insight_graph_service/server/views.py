@@ -185,7 +185,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
             for item in neighbors.get("CO_LOCATED", []) + neighbors.get("CO_LOCATED (in)", []):
                 other = graph.nodes.get(dataset_node_id(graph.nodes[item["id"]]["props"]["dataset_id"]), {"props": {}})["props"]
                 if other.get("cross") and other.get("upload_id") == ds.get("upload_id") and other["dataset_id"] != ds["dataset_id"]:
-                    item["layers"] = other.get("cross_layers", [])
+                    item |= {"layers": other.get("cross_layers", []), "dataset_id": other["dataset_id"]}
         if node_id in graph.trajectories:  # its series over time, for the drawer's curve (docs/08_interface.md §8.2)
             t = graph.trajectories[node_id]  # the drawer draws its metric's curve: the other series stay in the snapshot
             out["trajectory"] = t | {k: {t["metric"]: t[k][t["metric"]]} if t["metric"] in t[k] else {} for k in ("series", "smoothed")}

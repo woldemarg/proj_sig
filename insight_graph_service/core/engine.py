@@ -210,6 +210,12 @@ class Engine:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
 
     @_healthy
+    def set_hidden(self, upload_id: str, hidden: bool) -> dict[str, Any]:
+        """A layer hidden from the answers and the views, or shown (``uploads.set_hidden``): one write, nothing re-signed."""
+        with self._writing():
+            return {"upload_id": upload_id, "hidden": hidden, "batches": uploads.set_hidden(self.ws, self.ws.list_batches(), upload_id, hidden)}
+
+    @_healthy
     def search(self, question: str, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any) -> SearchResult:
         """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md
         §7.1–7.4); ``as_of``: the reference date (the latest data when None); ``period``: a period asked beside the text;
@@ -228,7 +234,8 @@ class Engine:
     ) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period)
+        hidden = frozenset() if zone.pop("include_hidden", False) else uploads.hidden_datasets(self.ws.list_batches())  # model A
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden)
         found.seconds = time.perf_counter() - start
         return found
 

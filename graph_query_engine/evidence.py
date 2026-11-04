@@ -546,7 +546,7 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
-def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool) -> list[dict[str, Any]]:
+def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool, hidden: frozenset[str]) -> list[dict[str, Any]]:
     """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
     (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
     the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
@@ -554,7 +554,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
     by_id = {it.pattern_id: it for it in items}
     hosts: set[str] = set()
     chains = []
-    for chain in scale_chain(graph, [it.pattern_id for it in items]):
+    for chain in scale_chain(graph, [it.pattern_id for it in items], hidden):
         host = by_id[chain.pattern_id]
         if host.folded_into:
             continue
@@ -810,6 +810,7 @@ def build_evidence(
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
     as_of: tuple[datetime, str] | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> Evidence:
     """The walk's patterns as citable evidence: the items (with the vertical zoom's and the trust lines), the anchors
     visited, the datasets and their baselines, the notes, the zones or the asked area; ``as_of``: the reference date and
@@ -820,7 +821,7 @@ def build_evidence(
         _item(graph, config, trusted, f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located)
         for idx, r in enumerate(chosen, start=1)
     ]
-    chains = _add_vertical(items, graph, config, trusted)
+    chains = _add_vertical(items, graph, config, trusted, hidden)
     if trusted:
         _add_trust(items, graph)
     datasets = _datasets(items, graph)
