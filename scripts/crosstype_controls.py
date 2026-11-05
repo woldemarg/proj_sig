@@ -1,6 +1,7 @@
 """Controls for a layer link on real data (the cross-layer experiments of 2026-11-04, R-9): what the layer's null does with
 points that carry no effect, run the console's way (``Engine.cross``) on any target and layer, each repeated over seeds:
 
+* ``real``      — the real layer against the whole target, once: the findings the halves should find again;
 * ``shuffled``  — the target's type labels (``--column``) shuffled over all its events: no composition structure is left,
   so an admitted share finding is a false one (the small-cell artefact the event weights remove);
 * ``fine``      — a layer of the target's own events at random, jittered 30 m: co-located with the events at the cell's
@@ -12,7 +13,7 @@ points that carry no effect, run the console's way (``Engine.cross``) on any tar
 Per control the share of runs that admitted a layer-link finding (and of share findings for ``shuffled``), each run's
 admitted findings and refusals. The shipped Chicago crimes and bars by default.
 
-    python scripts/crosstype_controls.py [--target KEY] [--layer KEY] [--column crime] [--seeds 3] [--ring 0] [--label NAME]
+    python scripts/crosstype_controls.py [--target KEY] [--layer KEY] [--column crime] [--seeds 3] [--ring 0] [--count-values crime=theft,...] [--label NAME]
 """
 
 from __future__ import annotations
@@ -101,7 +102,8 @@ def controls(
         engine = build_engine(work / f"ws{seed}", embedder=HashingEmbedder())
         shuffled = frame.copy()
         shuffled[column] = np.random.default_rng(seed).permutation(shuffled[column].to_numpy())
-        files = {
+        files = {"real": (frame, layer)} if seed == 1 else {}
+        files |= {
             "shuffled": (shuffled, layer),
             "fine": (frame, jittered(events, locator, len(points), 30, seed)),
             "coarse": (frame, jittered(events, locator, len(points), 1000, seed)),
@@ -119,14 +121,19 @@ def controls(
                 points_of.to_csv(l_path, index=False)
             runs.append(run(engine, t_path, options, l_path, ring, tag) | {"seed": seed})
     rate = {}
-    for tag in ("shuffled", "fine", "coarse", "uniform", "half a", "half b"):
+    for tag in ("real", "shuffled", "fine", "coarse", "uniform", "half a", "half b"):
         mine = [r for r in runs if r["control"] == tag]
         rate[tag] = {
             "runs": len(mine),
             "admitting": sum(bool(r["admitted"]) for r in mine),
         }
         if tag == "shuffled":
-            rate[tag]["admitting_a_share"] = sum(any(a["target"].startswith("share_") for a in r["admitted"]) for r in mine)
+            # a share of the shuffled column is a false one; another column's share is a fact the shuffle kept
+            rate[tag]["admitting_a_share"] = sum(any(a["target"].startswith(f"share_{column}_") for a in r["admitted"]) for r in mine)
+    keys = lambda r: {(a["target"], a["z"] > 0) for a in r["admitted"]}  # noqa: E731
+    found = set().union(*(keys(r) for r in runs if r["control"] == "real"))
+    halves = [[r for r in runs if r["seed"] == s and r["control"].startswith("half")] for s in range(1, seeds + 1)]
+    rate["replicated"] = {"real": len(found), "on both halves": [len(found & keys(a) & keys(b)) for a, b in halves]}
     return {"rates": rate, "runs": runs}
 
 
@@ -140,6 +147,7 @@ def main() -> int:
         help="the target's type column the shuffled control permutes",
     )
     parser.add_argument("--seeds", type=int, default=3)
+    parser.add_argument("--count-values", default="", help="per-type counters for the target (column=value,...), as the upload takes them")
     parser.add_argument("--ring", type=int, default=0)
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
@@ -147,7 +155,7 @@ def main() -> int:
     t0, work = time.perf_counter(), scratch_dir("crosstype_controls", fresh=True)
     result = controls(
         DEMO_DIR / shipped[args.target]["file"],
-        shipped[args.target]["options"],
+        shipped[args.target]["options"] | ({"count_values": args.count_values} if args.count_values else {}),
         DEMO_DIR / shipped[args.layer]["file"],
         args.column,
         args.seeds,
