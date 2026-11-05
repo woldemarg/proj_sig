@@ -26,7 +26,7 @@ import pandas as pd
 from scratch import admitted, save_result, settings, without
 
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import NONE_NEARBY, deal, dealt_band
+from subgroup_miner.context import DEFAULT_RING, NONE_NEARBY, deal, dealt_band
 from subgroup_miner.discovery import build_insights, run_discovery
 from subgroup_miner.ingestion import load_dataset
 
@@ -49,7 +49,13 @@ def moran(values: np.ndarray, cells: list[str], index: dict[str, int]) -> float:
     return float(len(z) / len(pairs) * sum(z[i] * z[j] for i, j in pairs) / (z @ z))
 
 
-def null_field(rng: np.random.Generator, folder: Path) -> tuple[Path, Path, float]:
+def layer_size(ring: int) -> int:
+    """The layer's points: a dozen at disk 1, scaled by the disk's cells (3r(r+1) + 1), so the layer reaches about the same
+    share of the map at every disk — at disk 0 a dozen cells would leave every band below the support floor, nothing tested."""
+    return 12 * 7 // (3 * ring * (ring + 1) + 1)
+
+
+def null_field(rng: np.random.Generator, folder: Path, ring: int = DEFAULT_RING) -> tuple[Path, Path, float]:
     """One repeat's target and layer files and the target metric's Moran's I over its cells."""
     cells = [str(c) for c in h3.grid_disk(ORIGIN, 9)]
     index = {c: i for i, c in enumerate(cells)}
@@ -66,7 +72,7 @@ def null_field(rng: np.random.Generator, folder: Path) -> tuple[Path, Path, floa
         }))  # fmt: skip
     target, layer = folder / "target.csv", folder / "layer.csv"
     pd.concat(parts, ignore_index=True).to_csv(target, index=False)
-    spots = rng.choice(len(cells), 12, replace=False)
+    spots = rng.choice(len(cells), layer_size(ring), replace=False)
     pd.DataFrame({"lat": [h3.cell_to_latlng(cells[i])[0] for i in spots], "lon": [h3.cell_to_latlng(cells[i])[1] for i in spots]}).to_csv(
         layer, index=False
     )
@@ -86,12 +92,12 @@ def support_dropped(loaded: Any, config: MinerConfig, rng: np.random.Generator) 
     return dropped / total if total else 0.0
 
 
-def repeat(seed: int, miner: MinerConfig, config: Any) -> dict[str, Any]:
+def repeat(seed: int, miner: MinerConfig, config: Any, ring: int = DEFAULT_RING) -> dict[str, Any]:
     """One null repeat: its Moran's I, the admitted insights on the layer's band, the draws dropped for support."""
     rng = np.random.default_rng(seed)
     with tempfile.TemporaryDirectory() as tmp:
-        target, layer, morans_i = null_field(rng, Path(tmp))
-        loaded = load_dataset(target, miner, geo=f"lat,lon@{RES}", context=[("layer", layer, "lat,lon")])
+        target, layer, morans_i = null_field(rng, Path(tmp), ring)
+        loaded = load_dataset(target, miner, geo=f"lat,lon@{RES}", context=[("layer", layer, "lat,lon")], context_ring=ring)
         result = run_discovery(loaded.frame, miner, spatial=loaded.spatial)
         found = build_insights(result, miner, dataset_id="ds", batch_id="b", filename="target.csv")
         band = next(iter(loaded.spatial.context.values())).column
@@ -121,16 +127,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reps", type=int, default=200)
     parser.add_argument("--no-weights", action="store_true", help="WEIGHT_BY_EVENTS off (on by default since 2026-11-05)")
+    parser.add_argument("--ring", type=int, default=DEFAULT_RING, help="the layer's disk (the default's unless set)")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
     config = settings()
     config = replace(config, miner=replace(config.miner, weight_by_events=not args.no_weights))  # the settings' default otherwise
     t0, rows = time.perf_counter(), []
     for seed in range(args.reps):
-        rows.append(repeat(seed, config.miner, config))
+        rows.append(repeat(seed, config.miner, config, args.ring))
         if (seed + 1) % 20 == 0:
             print(f"{seed + 1} repeats: FWER {summarize(rows)['fwer']}, {time.perf_counter() - t0:.0f} s", flush=True)
-    result = summarize(rows) | {"weights": config.miner.weight_by_events, "seconds": round(time.perf_counter() - t0, 1), "rows": rows}
+    result = summarize(rows) | {
+        "weights": config.miner.weight_by_events,
+        "ring": args.ring,
+        "points": layer_size(args.ring),
+        "seconds": round(time.perf_counter() - t0, 1),
+        "rows": rows,
+    }
     print({k: v for k, v in result.items() if k != "rows"})
     print(save_result("crosstype_null_calibration", args.label, result))
     return 0
