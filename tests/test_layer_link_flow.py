@@ -1,6 +1,6 @@
 """The simplified path of a layer link end to end (docs/extra_funcs/spatial_analytics_multi_type/cross_layer_analysis_concept.md
 §10): from an empty workspace, without the developer mode, on the shipped Chicago tables — the crimes read through the
-three steps, a context layer added from their card, the result's card, the marks in the blocks that are there, the layer
+three steps, a context layer added from their card (the bars: the one with a finding at the default disk, the cell alone), the result's card, the marks in the blocks that are there, the layer
 hidden on the server and shown again, a second layer as a run of its own."""
 
 from __future__ import annotations
@@ -59,33 +59,33 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
         crimes = finished(filename="chicago_crimes.csv")
         assert (crimes["status"], crimes["level"]) == ("READY", "9")
         page.wait_for_selector(".ds-link", timeout=30000)
-        link(page, "chicago_l_stations")
-        stations = finished(filename="chicago_l_stations.csv", status="LAYER")
-        run = finished(cross=[stations["upload_id"]])
-        assert (run["status"], run["level"], run["context_ring"]) == ("READY", "9", 1)
+        link(page, "chicago_bars")
+        bars = finished(filename="chicago_bars.csv", status="LAYER")
+        run = finished(cross=[bars["upload_id"]])
+        assert (run["status"], run["level"], run["context_ring"]) == ("READY", "9", 0)  # the default disk: the cell alone
         (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == run["dataset_id"]]
         page.evaluate("refreshBatches()")
         page.wait_for_function(f"S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         page.click("#view-switch button[data-view='table']")
-        assert "контекстний шар: chicago_l_stations" in page.inner_text(f"#ins-table tr[data-id='{found}']")
+        assert "контекстний шар: chicago_bars" in page.inner_text(f"#ins-table tr[data-id='{found}']")
         assert page.evaluate(f"S.cy.getElementById('{found}').style('border-width')") == "3px"
         page.evaluate(f"inspect('{found}')")
         page.wait_for_selector("#inspector .link-card", timeout=10000)
         card = page.text_content("#inspector .link-card")  # its words, not their case on screen
-        assert "Біля chicago_l_stations — chicago_crimes.csv" in card and "рівень H3 r9 · у комірці та шести сусідніх" in card
+        assert "Біля chicago_bars — chicago_crimes.csv" in card and "рівень H3 r9 · у самій комірці" in card
         assert "інший склад" in card.lower() and "дослідницька знахідка" in card
         question = engine.graph().nodes[found]["label"]
         cited = lambda: {c["pattern_id"] for c in client.post("/api/search", json={"question": question}).json()["citations"].values()}  # noqa: E731
         assert found in cited()
-        page.click(".ds:has-text('chicago_l_stations.csv · шар') .ds-hide")
+        page.click(".ds:has-text('chicago_bars.csv · шар') .ds-hide")
         page.wait_for_function(f"!S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         assert found not in cited() and "приховано" in page.inner_text("#ins-table")
-        page.click(".ds:has-text('chicago_l_stations.csv · шар') .ds-hide")
+        page.click(".ds:has-text('chicago_bars.csv · шар') .ds-hide")
         page.wait_for_function(f"S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         assert found in cited()
-        link(page, "chicago_bars")  # the second layer: the same action, a run of its own
-        bars = finished(filename="chicago_bars.csv", status="LAYER")
-        second = finished(cross=[bars["upload_id"]])
+        link(page, "chicago_l_stations")  # the second layer: the same action, a run of its own
+        stations = finished(filename="chicago_l_stations.csv", status="LAYER")
+        second = finished(cross=[stations["upload_id"]])
         assert second["level"] == "9" and second["status"] in TERMINAL
         assert page.locator("#cross-panel, #cross-btn").count() == 0
     runs = [b for b in engine.ws.list_batches() if b.get("cross")]

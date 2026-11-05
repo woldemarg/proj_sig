@@ -121,14 +121,17 @@ def test_an_interrupted_deletion_is_undone(cfg, tmp_path, demo_df, demo_csv, mon
     assert engine.delete_dataset(ds)["patterns_removed"] == rec["metrics"]["validated_insights"]
 
 
-def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(engine, tmp_path, monkeypatch):
+def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(tmp_path, monkeypatch):
     """``supersedes=<upload_id>``: the last level of the new version to be READY removes every level of the old in its own
     commit, and a commit that fails rolls the removal back with it. The pattern ids are those of the new version loaded
-    alone, and the anchors the new version joins keep their ids."""
+    alone, and the anchors the new version joins keep their ids. The transaction on a known pair of versions: their
+    shares confirmed per cell, as the anchors these expectations describe (``WEIGHT_BY_EVENTS`` changes which share
+    insights the two versions yield, not how a version replaces another)."""
     v1, v2 = tmp_path / "points_v1.csv", tmp_path / "points_v2.csv"
     geo_frame(3).to_csv(v1, index=False)
     geo_frame(4).to_csv(v2, index=False)
-    alone = make_engine(make_config(tmp_path / "alone"))
+    engine = make_engine(make_config(tmp_path / "ws", weight_by_events=False))
+    alone = make_engine(make_config(tmp_path / "alone", weight_by_events=False))
     assert [r["status"] for r in upload_levels(alone, v2, geo="auto@8,7")] == ["READY", "READY"]
     old = upload_levels(engine, v1, geo="auto@8,7")
     old_ids, old_upload = {r["dataset_id"] for r in old}, old[0]["upload_id"]

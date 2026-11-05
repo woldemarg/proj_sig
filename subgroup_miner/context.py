@@ -15,7 +15,11 @@ import numpy as np
 
 NONE_NEARBY = "none nearby"  # a cell whose disk holds no point of the layer; two words, as NO_CLUSTER (question._values)
 BANDS = 4  # quarters of the positive disk sums: the labels of apply_bins
-RINGS = (0, 1, 2)  # a layer's disk, the upload's option: the cell alone, with its six neighbours (the default), two rings
+RINGS = (0, 1, 2)  # a layer's disk, the upload's option: the cell alone (the default), with its six neighbours, two rings
+# The cell alone by default: dealt within its parent (one level coarser, seven cells), a layer counted over the cell and its six
+# neighbours stays near most of the cells it was near (88 % of the cells near a bar in the 2026-11-04 experiments, 51 % for
+# the cell alone), so the null reproduces, and refuses, any effect of the layer's own cell. A wider disk is asked for.
+DEFAULT_RING = 0
 BAND_WORDS = {"q1": "the fewest", "q2": "fewer than the middle", "q3": "more than the middle", "q4": "the most"}
 
 
@@ -26,6 +30,7 @@ class ContextSource:
     name: str
     lat: np.ndarray
     lon: np.ndarray
+    key: str = ""  # the points' identity (the file's hash, its locator, window and filter): the null's seed names the layer by it
 
 
 @dataclass
@@ -41,6 +46,7 @@ class ContextLayer:
     disk_ptr: np.ndarray  # CSR: target cell row -> positions of its disk among the cells
     disk_idx: np.ndarray
     edges: np.ndarray  # the quarter edges of the positive disk sums, as observed: every draw is read by them
+    key: str = ""  # the source's ``key``: what the null's seed calls the layer (its points, not its file name)
 
     @property
     def column(self) -> str:
@@ -62,7 +68,7 @@ def context_layer(source: ContextSource, target_cells: np.ndarray, resolution: i
     codes = np.unique([parent(c) for c in cells], return_inverse=True)[1]
     ptr = np.cumsum([0, *map(len, disks)])
     idx = np.array([pos[c] for disk in disks for c in disk], dtype=np.int64)
-    return ContextLayer(source.name, counts, codes, ptr, idx, fit_edges(np.add.reduceat(counts[idx], ptr[:-1])))
+    return ContextLayer(source.name, counts, codes, ptr, idx, fit_edges(np.add.reduceat(counts[idx], ptr[:-1])), source.key)
 
 
 def disk_sums(layer: ContextLayer, counts: np.ndarray | None = None) -> np.ndarray:

@@ -4,6 +4,7 @@ its upload's records, its runs hidden through it, the search's pre-filter (model
 from __future__ import annotations
 
 import copy
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -14,6 +15,15 @@ from insight_graph_service.core import uploads
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.core.snapshot import metadata_digest
 from insight_graph_service.server.app import create_app
+
+
+def hide(client, upload: str, hidden: bool):
+    """``PATCH /api/uploads/{id}`` once the worker's writes after the last batch are done: a 409 (busy: it still warms
+    the maps of the commit) is the service saying «try again», never this test's answer."""
+    deadline = time.monotonic() + 60
+    while (response := client.patch(f"/api/uploads/{upload}", json={"hidden": hidden})).status_code == 409 and time.monotonic() < deadline:
+        time.sleep(0.2)
+    return response
 
 
 def test_hidden_datasets_is_a_pure_function_of_the_registry():
@@ -46,10 +56,10 @@ def test_a_layer_is_hidden_and_shown_through_its_upload_without_resigning_anythi
         b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
         run = cross_run(client, a, b).json()["batch_id"]
         signed = {r["batch_id"]: r.get("metadata_digest") for r in engine.ws.list_batches()}
-        assert client.patch(f"/api/uploads/{a}", json={"hidden": True}).status_code == 400  # the base: no run reads it as a layer
-        assert client.patch("/api/uploads/up-000000000000", json={"hidden": True}).status_code == 404
+        assert hide(client, a, True).status_code == 400  # the base: no run reads it as a layer
+        assert hide(client, "up-000000000000", True).status_code == 404
         for _ in range(2):
-            assert client.patch(f"/api/uploads/{b}", json={"hidden": True}).status_code == 200
+            assert hide(client, b, True).status_code == 200
         listed = {r["batch_id"]: r for r in client.get("/api/batches").json()}
         layer = next(r for r in listed.values() if r["upload_id"] == b)
         assert layer["hidden"] is True and listed[run]["hidden_by"] == [b]
@@ -62,7 +72,7 @@ def test_a_layer_is_hidden_and_shown_through_its_upload_without_resigning_anythi
         records = engine.ws.list_batches()  # superseding goes through the same check (check_target): a mined layer with runs
         with pytest.raises(PipelineError, match="show it"):
             uploads.check_removal(records, [r for r in records if r["upload_id"] == b])
-        assert client.patch(f"/api/uploads/{b}", json={"hidden": False}).status_code == 200
+        assert hide(client, b, False).status_code == 200
         assert not any(r.get("hidden") or "hidden_by" in r for r in client.get("/api/batches").json())
         assert client.delete(f"/api/uploads/{b}").status_code == 200  # shown: removable, its run stale as before
 
@@ -89,7 +99,7 @@ def test_a_hidden_layer_is_prefiltered_from_seeds_expansion_and_evidence_unless_
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}")["upload_id"]
         b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
         run = engine.ws.load_batch(cross_run(client, a, b).json()["batch_id"])
-        assert client.patch(f"/api/uploads/{b}", json={"hidden": True}).status_code == 200
+        assert hide(client, b, True).status_code == 200
         graph = engine.graph()
         mine = {pid for pid, ins in graph.insights.items() if ins.dataset_id == run["dataset_id"]}
         question = graph.nodes[sorted(mine)[0]]["label"]  # a question the run's insight answers in its own words
@@ -139,11 +149,11 @@ def test_every_read_leaves_a_hidden_runs_insights_out_not_only_the_search(engine
         assert {p["dataset_id"] for p in client.get(f"/api/geo/{base}/projected").json()} == {
             run["dataset_id"]
         }  # the map names each insight's dataset
-        assert client.patch(f"/api/uploads/{b}", json={"hidden": True}).status_code == 200
+        assert hide(client, b, True).status_code == 200
         node = client.get(f"/api/nodes/{sorted(mine)[0]}").json()
         visible = client.get(f"/api/nodes/{next(pid for pid in graph.insights if pid not in mine)}").json()
         hidden = reads()
-        assert client.patch(f"/api/uploads/{b}", json={"hidden": False}).status_code == 200
+        assert hide(client, b, False).status_code == 200
         after = reads()
     assert node["hidden"] is True and "hidden" not in visible  # the run's node served by id, marked; the base's not
     assert not any(mine & found for found in hidden.values()) and run["dataset_id"] not in hidden["picker"]

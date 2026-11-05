@@ -766,9 +766,12 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
 
 
-def test_a_zone_from_the_map_is_the_same_question(engine, points_csv):
+def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
     """A zone weighs the seeds of the ordinary search: the question's seed stays first and gets the same scale chain, a
-    zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
+    zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels.
+    The search's mechanics on a known graph: its shares confirmed per cell, as the graph these expectations describe
+    (``WEIGHT_BY_EVENTS`` changes which share insights the fixture yields, not how a zone weighs them)."""
+    engine = make_engine(make_config(tmp_path / "ws", weight_by_events=False))
     assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     question = "Where is load higher?"
     text = engine.search(question)
