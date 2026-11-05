@@ -218,6 +218,67 @@ def annotate(
     return out
 
 
+def count_scale(counts: np.ndarray) -> float | None:
+    """The unit of a count's series: the robust spread of ``log(1 + n)`` over the cells (MAD / 0.6745, the standard
+    deviation where more than half of the cells tie); None for a constant count."""
+    logged = np.log1p(np.asarray(counts, dtype=float))
+    mad = float(np.median(np.abs(logged - np.median(logged))))
+    return mad / 0.6745 if mad > 0 else float(np.std(logged)) or None
+
+
+def annotate_counts(
+    codes: np.ndarray,
+    bins: Sequence[Mapping[str, Any]],
+    covers: Mapping[str, np.ndarray],
+    cells: Mapping[str, int],
+    total_cells: int,
+    metrics: Mapping[str, Sequence[str]],
+    types: Mapping[str, np.ndarray],
+    scale: Mapping[str, float | None],
+    min_rows: int,
+) -> dict[str, dict[str, list[dict[str, float] | None]]]:
+    """Each geo pattern's counts over the grid (``points``, ``count_<column>_<value>``): per bin t, its events of the type
+    per cell against the rest of the map's per cell, as a log rate ratio in the count's unit (``count_scale``),
+
+        z = [ln((N_S(t) + ½) / k_S) − ln((N_R(t) + ½) / k_R)] / s        se = √(1 / (N_S + ½) + 1 / (N_R + ½)) / s
+
+    N the points of the type in the bin (``types``: each point's indicator, ``points`` every point), k the cells; the
+    ratio cancels the season and a part-covered bin, the ½ keeps a bin with none of the type measured (a fall to zero is
+    an event, not a gap). A bin covering less than half its period or holding fewer than ``min_rows`` of the pattern's
+    points of any type is None. ``covers``: pattern -> its points; ``cells``: pattern -> its cell count."""
+    sparse = [b["rows"] < min_rows or b["covered"] < 0.5 for b in bins]
+    every, timed_all = np.ones(len(codes)), codes >= 0
+    kinds = {m: every if m == "points" else types.get(m) for ms in metrics.values() for m in ms}
+    totals = {m: np.bincount(codes[timed_all], weights=w[timed_all], minlength=len(bins)) for m, w in kinds.items() if w is not None}
+    out: dict[str, dict[str, list[dict[str, float] | None]]] = {}
+    for pid, rows in covers.items():
+        k_s, own = cells[pid], codes[rows]
+        k_r = max(total_cells - k_s, 1)
+        timed = own >= 0
+        events = np.bincount(own[timed], minlength=len(bins))
+        for metric in metrics[pid]:
+            indicator = kinds.get(metric)
+            if indicator is None or not scale.get(metric):  # a share or a median: annotate's
+                continue
+            n_all = totals[metric]
+            n_s = np.bincount(own[timed], weights=indicator[rows][timed], minlength=len(bins))
+            entries: list[dict[str, float] | None] = []
+            for t in range(len(bins)):
+                if sparse[t] or events[t] < min_rows:
+                    entries.append(None)
+                    continue
+                s, r = n_s[t] + 0.5, n_all[t] - n_s[t] + 0.5
+                entries.append(
+                    {
+                        "z": (math.log(s / k_s) - math.log(r / k_r)) / scale[metric],
+                        "n": int(events[t]),
+                        "se": math.sqrt(1 / s + 1 / r) / scale[metric],
+                    }
+                )
+            out.setdefault(pid, {})[metric] = entries
+    return out
+
+
 def extent_points(point_cell: np.ndarray, covers: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Each geo pattern's points: those whose cell (``point_cell``, the point → cell row map the geo ingest stored) is one
     of the cell rows it covers — never a point placed again."""
@@ -318,7 +379,7 @@ def core_span(rows: Sequence[int], share: float = TIME_CORE_SHARE) -> tuple[int,
 def dynamics(entry: Mapping[str, Any], bins: Sequence[Mapping[str, Any]], metrics: Sequence[str], config: MinerConfig) -> dict[str, Any]:
     """A pattern's trajectory from its ``annotate`` entry: per metric the measured series and the smoothed level, and the
     events of every metric. Its ``metric`` is the first of ``metrics`` (the insight's target, then its shifts) with a
-    measured bin — a geo pattern's counter or share has no series —, and of it the trend, the current level (x̂ of its
+    measured bin — a geo pattern's active days, late share or lag, or a zoned share or count, has no series —, and of it the trend, the current level (x̂ of its
     last measured bin), the measured bins and the gaps (runs of bins without a measurement, by period). Its ``core``
     (``core_span`` of its rows): the first and last period and bound, the share of its timed rows held, the bins
     spanned and their indices; None without a timed row. Its ``bins``: each bin's bounds, which the readers of a series

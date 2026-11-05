@@ -431,6 +431,24 @@ def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engin
     assert summarize(rows)["reps"] == 2 and 0 <= summarize(rows)["fwer"] <= 1
 
 
+def test_the_crosstype_controls_script_runs_each_control_as_the_console_runs_a_link(tmp_path):
+    """The layer link's controls (the cross-layer experiments of 2026-11-04, R-9) on a planted upload, one seed: the type
+    labels shuffled, layers of the target's own events jittered at the cell's scale and at the parent's, a uniform layer,
+    the real layer against two halves of the target — each a run through ``Engine.cross`` with its verdict, and per
+    control the runs that admitted a finding (for the shuffled one, a share finding)."""
+    from crosstype_benchmark import RES, generate
+    from crosstype_controls import controls
+
+    upload = generate("X2", 1)
+    target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
+    upload["frame"].sample(8000, random_state=1).to_csv(target, index=False)
+    upload["layers"]["schools"].to_csv(layer, index=False)
+    result = controls(target, {"geo": f"lat,lon@{RES}"}, layer, "road_type", 1, 0, tmp_path / "work")
+    assert set(result["rates"]) == {"shuffled", "fine", "coarse", "uniform", "half a", "half b"}
+    assert all(r["runs"] == 1 and 0 <= r["admitting"] <= 1 for r in result["rates"].values()) and "admitting_a_share" in result["rates"]["shuffled"]
+    assert all(r["status"] in {"READY", "FAILED"} and r["seconds"] > 0 and r["seed"] == 1 for r in result["runs"])
+
+
 def test_crosstype_benchmark_apparatus():
     import h3
     import numpy as np

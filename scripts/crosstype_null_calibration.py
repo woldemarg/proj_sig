@@ -8,7 +8,7 @@ least one admitted insight on the layer's band is a family-wise error: the layer
 share of the null's draws that fall below ``MIN_SUPPORT_ROWS`` for each band value's cohort (item 10), replayed with
 the null's own deal (``context.deal``).
 
-    python scripts/crosstype_null_calibration.py [--reps 200] [--weights]     # the result in .scratch/results
+    python scripts/crosstype_null_calibration.py [--reps 200] [--no-weights]     # the result in .scratch/results
 """
 
 from __future__ import annotations
@@ -120,17 +120,17 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reps", type=int, default=200)
-    parser.add_argument("--weights", action="store_true", help="WEIGHT_BY_EVENTS on: the null under event weights")
+    parser.add_argument("--no-weights", action="store_true", help="WEIGHT_BY_EVENTS off (on by default since 2026-11-05)")
     parser.add_argument("--label", default="current")
     args = parser.parse_args()
     config = settings()
-    config = replace(config, miner=replace(config.miner, weight_by_events=args.weights))
+    config = replace(config, miner=replace(config.miner, weight_by_events=not args.no_weights))  # the settings' default otherwise
     t0, rows = time.perf_counter(), []
     for seed in range(args.reps):
         rows.append(repeat(seed, config.miner, config))
         if (seed + 1) % 20 == 0:
             print(f"{seed + 1} repeats: FWER {summarize(rows)['fwer']}, {time.perf_counter() - t0:.0f} s", flush=True)
-    result = summarize(rows) | {"weights": args.weights, "seconds": round(time.perf_counter() - t0, 1), "rows": rows}
+    result = summarize(rows) | {"weights": config.miner.weight_by_events, "seconds": round(time.perf_counter() - t0, 1), "rows": rows}
     print({k: v for k, v in result.items() if k != "rows"})
     print(save_result("crosstype_null_calibration", args.label, result))
     return 0

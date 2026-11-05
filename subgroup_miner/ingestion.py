@@ -6,7 +6,7 @@ import csv
 import functools
 import hashlib
 import zoneinfo
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -470,6 +470,8 @@ def load_dataset(
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
+            if spatial.baseline != "zone":  # and each point's type: a zoned share or count is a residual, no point's
+                point_values = pd.concat([point_values, point_types(points, spatial.levels)], axis=1)
     if time:  # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
         grid = resolve_grid(times if spatial is None else times[spatial.point_cell >= 0], option)
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
@@ -527,6 +529,16 @@ def auto_levels(path: Path, locator: str, config: MinerConfig, region_levels: tu
 
 def _geo_text(spec: tuple[str, int] | None) -> str | None:
     return f"{spec[0]}@{spec[1]}" if spec else None
+
+
+def point_types(points: pd.DataFrame, levels: Mapping[str, tuple[str, str]]) -> pd.DataFrame:
+    """Each point's type as one indicator per share or per-type counter of the cells (``SpatialContext.levels``: metric ->
+    its column and value), named by the metric: 1 where the point's value is that value, 0 elsewhere — the series of a
+    count or a share reads its points by them (docs/02_discovery.md §2.10)."""
+    return pd.DataFrame(
+        {m: points[col].astype("string").eq(value).fillna(False).astype(float).to_numpy() for m, (col, value) in levels.items() if col in points},
+        index=points.index,
+    )
 
 
 def read_context(

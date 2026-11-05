@@ -465,7 +465,7 @@ def _temporal_plane(
         mine = {}
         for pid, entry in sorted(series.items()):
             if pid not in nodes or nodes[pid].props["integrity"] == "mismatch" or not entry["series"]:
-                continue  # no metric of it has a series (a geo counter or share): it has no time line
+                continue  # no metric of it has a series (a geo pattern's time-derived metrics, a zoned share or count): no time line
             props = nodes[pid].props
             metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
             traj = mine[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
