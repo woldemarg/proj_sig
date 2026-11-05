@@ -25,8 +25,10 @@ from graph_query_engine.vertical import affinity, restating, scale_chain, scale_
 from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import hidden_datasets, same_points
+from insight_graph_service.core.uploads import context_files, hidden_datasets, same_points
 from insight_graph_service.core.workspace import Workspace
+from subgroup_miner.context import points_near
+from subgroup_miner.ingestion import read_context
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
@@ -289,6 +291,23 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
+LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it: the nearest so many
+
+
+def layer_points(record: dict[str, Any], cells: np.ndarray) -> list[dict[str, Any]]:
+    """A run's layers' points in and around ``cells`` (their disk one ring wider than the run's), as the run counted them
+    (its window and filter): ``[{name, points: [[lon, lat], …]}]``, the map draws the two layers side by side. A
+    dataset of no layer has none."""
+    if not record.get("cross") or not len(cells):
+        return []
+    out = []
+    for name, path, locator, window, where in context_files(record):
+        source = read_context(name, Path(path), locator, window, where)[0]
+        near = points_near(source, cells, record.get("context_ring", 1) + 1, LAYER_POINTS_MAX)
+        out.append({"name": name, "points": [[round(float(source.lon[i]), 6), round(float(source.lat[i]), 6)] for i in near]})
+    return out
+
+
 def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int, rings: bool = False) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
     another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
@@ -324,6 +343,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
         "phenomenon_type": ins.phenomenon_type,
         "support": ins.support,
         "weight": ins.weight,
+        "layer_points": layer_points(ws.ready_batch_for(dataset_id) or {}, geo["cells"][rows]),  # the run's layer beside it
     } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from html import escape
 from typing import Any
@@ -12,10 +13,11 @@ from fastapi import HTTPException
 
 from graph_query_engine import CommittedState, DualGraph
 from graph_query_engine.evidence import chain_dict
-from graph_query_engine.graph import insight_reading, primary_anchor, theme_glossary
+from graph_query_engine.graph import declared_words, insight_reading, primary_anchor, theme_glossary
 from graph_query_engine.vertical import drawn_regions, picture, place_key, places, scale_chain, shown_regions
 from insight_contracts import Insight, PhenomenonThresholds, attractor_id_of, dataset_node_id, wording
 from insight_contracts.text import humanize
+from insight_graph_service.core.uploads import declared_glossary
 
 
 def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> str:
@@ -44,6 +46,7 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
     members = Counter({r["id"]: sum(p in pids for p in graph.holders(r["id"])) for r in graph.of_kind("Region")})  # the insights in view: a size
     regions = shown_regions(graph, list(pids))  # their places and a scale chain's regions above, with none in view too
     hubs = _hubs_of(graph, pids) if dataset else None
+    variants = run_variants(graph, pids)
     for n in graph.nodes.values():
         p = n["props"]
         if n["kind"] == "Region" and (not with_regions or n["id"] not in regions):
@@ -68,6 +71,9 @@ def _elements(graph: DualGraph, dataset: str | None, with_regions: bool) -> dict
                 target=ins.target,
                 effect=round(ins.effect_size, 3),
                 scope=[c.expr for c in ins.conditions],
+                words=wording.short_conditions(ins, *declared_words(graph, n["id"])),  # the conditions as the drawer reads them
+                metric_words=wording.column_words(ins.target, declared_words(graph, n["id"])[0], bool(ins.provenance.get("spatial"))),
+                **variants.get(n["id"], {}),  # one effect under several conditions: its leader, or the finding it mirrors
                 anchor=anchor["target"] if anchor else None,
                 anchor_label=graph.nodes[anchor["target"]]["label"] if anchor else None,
                 core=graph.trajectories.get(n["id"], {}).get("core"),  # where it lives in time: the console's time axis
@@ -180,6 +186,10 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     for key, items in neighbors.items():  # the strongest of each group, its count beside them (a broad pattern lies in hundreds of regions)
         neighbors[key] = items[: IN_REGION_SHOWN if key == "IN_REGION" else NEIGHBOURS_SHOWN]
     if node["kind"] == "Pattern":  # its dataset's trust, its places and, for a geo pattern, its scale chain (docs/08_interface.md §8.2)
+        glossary, _, _ = declared_words(graph, node_id)
+        out["drivers"] = [
+            wording.driver_words(d, glossary, bool(graph.insight(node_id).provenance.get("spatial"))) for d in graph.insight(node_id).drivers
+        ]
         out["reading"] = insight_reading(graph, node_id, thresholds)
         out["dataset"] = ds = graph.nodes.get(dataset_node_id(node["props"]["dataset_id"]), {"props": {}})["props"]
         out["numbers"] = wording.value_words(graph.insight(node_id), bool(ds.get("weight_by_events")))
@@ -187,6 +197,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
             out["link"] = {"disk": wording.disk_words(ds.get("context_ring", 1)), "exposure": wording.exposure_words(ds.get("exposure"))}
             out["link"]["pair"] = link_pair(graph, node_id)
             out["link"]["time"] = "; ".join(wording.layer_time_words(ds.get("layer_time", ())))  # the layer's time against the base's
+            out["link"]["variants"] = run_variants(graph, [p for p in graph.insights if graph.insights[p].dataset_id == ds.get("dataset_id")])
             for item in neighbors.get("CO_LOCATED", []) + neighbors.get("CO_LOCATED (in)", []):
                 other = graph.nodes.get(dataset_node_id(graph.nodes[item["id"]]["props"]["dataset_id"]), {"props": {}})["props"]
                 if other.get("cross") and other.get("upload_id") == ds.get("upload_id") and other["dataset_id"] != ds["dataset_id"]:
@@ -223,6 +234,74 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
     elif node["kind"] == "Attractor":
         out["reading"] = {"what": wording.theme_reading(node["props"], theme_glossary(graph, node_id))}
     return out
+
+
+VARIANT_OVERLAP = 0.5  # two insights of a run share a place when the smaller's cells are half inside the other's (CO_LOCATED overlaps)
+
+
+def variant_groups(items: Sequence[tuple[str, str, bool, str | None, float]], linked: Iterable[tuple[str, str]]) -> dict[str, dict[str, str]]:
+    """One effect found under several conditions of a run (the miner keeps a cohort per scope): ``items`` its insights as
+    (id, metric, rises, the layer's band, weight), ``linked`` the pairs whose places nest or overlap by half. Insights of
+    one metric and one direction joined by such pairs are one effect, its strongest the leader, the others
+    ``variant_of`` it; an insight on «none nearby» shifting a metric the other way than a leader on a band of the layer
+    is that leader's ``complement_of`` — the same contrast read from the cells without the layer."""
+    item = {i[0]: i for i in items}
+    parent = {i: i for i in item}
+
+    def root(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in linked:
+        if a in item and b in item and item[a][1:3] == item[b][1:3]:  # the same metric, the same direction
+            parent[root(a)] = root(b)
+    groups: dict[str, list[str]] = {}
+    for i in item:
+        groups.setdefault(root(i), []).append(i)
+    out: dict[str, dict[str, str]] = {}
+    leaders = []
+    for members in groups.values():
+        lead = max(members, key=lambda i: (item[i][4], i))
+        leaders.append(lead)
+        out |= {i: {"variant_of": lead} for i in members if i != lead}
+    for i, (_, metric, rises, band, _) in item.items():
+        if i in out or band != "none nearby":
+            continue
+        mirrored = [lead for lead in leaders if item[lead][1] == metric and item[lead][2] != rises and item[lead][3] not in (None, "none nearby")]
+        if mirrored:
+            out[i] = {"complement_of": max(mirrored, key=lambda lead: (item[lead][4], lead))}
+    return out
+
+
+def run_variants(graph: DualGraph, pids: Iterable[str]) -> dict[str, dict[str, str]]:
+    """``variant_groups`` over each layer-link run among ``pids``: their places linked by SPECIALIZES (one nests in the
+    other) and CO_LOCATED ``overlaps`` of at least ``VARIANT_OVERLAP`` (the lattice's pairs carry no CO_LOCATED)."""
+    by_run: dict[str, list[tuple[str, str, bool, str | None, float]]] = {}
+    for pid in pids:
+        ins = graph.insight(pid)
+        if not graph.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("cross"):
+            continue
+        band = next((c.value for c in ins.conditions if c.attribute.startswith("context_") and c.attribute.endswith("_band")), None)
+        by_run.setdefault(ins.dataset_id, []).append((pid, ins.target, ins.effect_size > 0, band, ins.weight))
+    out: dict[str, dict[str, str]] = {}
+    for items in by_run.values():
+        ids = {i[0] for i in items}
+        linked = [
+            (pid, other)
+            for pid in ids
+            for e, other in graph.incident(pid, ("SPECIALIZES", "CO_LOCATED"))
+            if other in ids and (e["type"] == "SPECIALIZES" or (e["props"].get("relation") == "overlaps" and e["weight"] >= VARIANT_OVERLAP))
+        ]
+        out |= variant_groups(items, linked)
+    return out
+
+
+def dimension_words(record: dict[str, Any]) -> dict[str, str]:
+    """A record's searched dimensions in the console's words (its card's chips), as its insights' readings word them."""
+    glossary, ring, geo = declared_glossary(record), record.get("context_ring", 1), bool(record.get("geo"))
+    return {d: wording.column_words(d, glossary, geo, ring) for d in record["profile"]["selected_dimensions"]}
 
 
 def link_pair(graph: DualGraph, pattern_id: str) -> dict[str, Any] | None:

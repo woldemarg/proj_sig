@@ -418,7 +418,10 @@ async function renderSphere() {
 function renderTable() {
   const q = $("table-search").value.trim().toLowerCase();
   const { k, asc } = S.sort;
-  const rows = S.nodes.filter((d) => !q || [d.full_label, d.target, d.anchor_label, ...(d.scope || [])].join(" ").toLowerCase().includes(q));
+  const variants = {};  // one effect under several conditions of a run: its leader's row holds the others (views.run_variants)
+  S.nodes.forEach((d) => { if (d.variant_of) (variants[d.variant_of] ||= []).push(d.id); });
+  const rows = S.nodes.filter((d) => (!d.variant_of || S.openVariants.has(d.variant_of)) &&
+    (!q || [d.full_label, d.target, d.metric_words, d.anchor_label, ...(d.scope || []), ...(d.words || [])].join(" ").toLowerCase().includes(q)));
   rows.sort((a, b) => {
     const va = k === "scope" ? (a.scope || []).join() : a[k], vb = k === "scope" ? (b.scope || []).join() : b[k];
     const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va ?? "").localeCompare(String(vb ?? ""));
@@ -429,8 +432,13 @@ function renderTable() {
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
     const effect = d.ptype === "covariance" ? word("covariance") : `${signed(d.effect)} sd`;
-    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}${layerChip(d.dataset)}</div></td>` +
-      `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
+    const n = (variants[d.id] || []).length;
+    const extra = (n ? `<button type="button" class="tag var-toggle" data-var="${esc(d.id)}" title="Та сама знахідка за іншими умовами в тих самих місцях">${S.openVariants.has(d.id) ? "−" : "+"}${plural(n, "варіант", "варіанти", "варіантів")}</button>` : "") +
+      (d.variant_of ? `<span class="tag" title="Варіант знахідки вище: ті самі місця, інші умови">варіант</span>` : "") +
+      (d.complement_of ? `<span class="tag" title="Той самий контраст, прочитаний з комірок без шару: доповнення іншої знахідки, не окрема">доповнення</span>` : "");
+    const words = d.words || (d.scope || []).map((c) => human(c).replace("=", " = "));
+    return `<tr data-id="${esc(d.id)}" tabindex="0"${d.variant_of ? ' class="variant"' : ""}><td><div class="scope-tags">${words.map((w) => `<span class="tag">${esc(w)}</span>`).join("")}${layerChip(d.dataset)}${extra}</div></td>` +
+      `<td>${esc(d.metric_words || human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">${S.nodes.length ? "Жоден інсайт не відповідає фільтру." : "Інсайтів ще немає."}</td></tr>`;
@@ -636,9 +644,19 @@ function linkCard(p, d) {
     `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
     (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
     (d.link.time ? kv([[term("layer_time"), esc(d.link.time)]]) : "") +
+    variantRows(p.id, d.link.variants || {}) +
     (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
       same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
         (S.hidden.has(it.dataset_id) ? " · у відповідях шар вимкнено" : ""))).join("") : "") + `</div>`;
+}
+
+function variantRows(pid, variants) {
+  /* one effect of a run under several conditions: this insight's variants, or the one it varies or mirrors */
+  const label = (id) => (S.nodes.find((n) => n.id === id) || {}).label || id;
+  const mine = Object.keys(variants).filter((id) => variants[id].variant_of === pid), own = variants[pid] || {};
+  return (mine.length ? `<p class="hint">та сама знахідка за іншими умовами в тих самих місцях: ${mine.length}</p>` + mine.map((id) => nbRow(id, label(id), "варіант")).join("") : "") +
+    (own.variant_of ? nbRow(own.variant_of, label(own.variant_of), "варіант цієї знахідки") : "") +
+    (own.complement_of ? nbRow(own.complement_of, label(own.complement_of), "доповнення: той самий контраст з комірок без шару") : "");
 }
 
 async function inspect(id, note = "") {
@@ -664,7 +682,7 @@ async function inspect(id, note = "") {
       kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
-        [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
+        [term("drivers"), esc((d.drivers || p.drivers || []).join("; ") || "не виявлено")],  // in words (wording.driver_words)
       ]);
     html += `<h4>Довіра</h4>${trustRows(p, ds, d.labels)}`;
     html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;

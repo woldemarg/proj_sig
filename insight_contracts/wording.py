@@ -354,6 +354,34 @@ def _day(stamp: str) -> str:
     return str(stamp)[:10]
 
 
+def layer_band_words(i: int, cardinality: int | None) -> str:
+    """The i-th positive band of a layer's count in the concept's words (cross_layer_analysis_concept.md §6): *мало*, *нижче
+    середнього*, *вище середнього*, *найбільше* — the top band *найбільше* whatever the number of bands (quantiles that
+    coincide leave fewer). ``cardinality``: the band column's values, *немає поруч* among them; four bands without it."""
+    # ponytail: the cardinality counts «none nearby» as a band (a layer covers part of the map); a layer near every cell reads one band short
+    n = max((cardinality - 1) if cardinality else 4, i)
+    if i >= n:
+        return "найбільше" if n > 1 else "є"
+    if i == 1:
+        return "мало"
+    return "середньо" if n == 3 else "нижче середнього" if i == 2 else "вище середнього"
+
+
+DRIVER_SKEW = re.compile(r"^\[(.+?)\] heavily skewed to '(.*)' \(JS: [0-9.]+\)$")
+DRIVER_HIDDEN = re.compile(r"^\[(.+?)\] hidden shift \(([+-][0-9.]+) robust sigma\)$")
+
+
+def driver_words(driver: str, glossary: Mapping[str, str], geo: bool) -> str:
+    """One of the EDA's drivers (stored in English: embedded and signed) in words: the value a categorical the cohort leans
+    to, or another metric's hidden shift; any other text as written."""
+    if m := DRIVER_SKEW.match(driver):
+        column = m.group(1).removesuffix("_mode") if geo else m.group(1)
+        return f"{column_words(column, glossary, False)}: переважає «{m.group(2)}»"
+    if m := DRIVER_HIDDEN.match(driver):
+        return f"{column_words(m.group(1), glossary, geo)}: прихований зсув {m.group(2)} sd"
+    return driver
+
+
 def disk_words(ring: int) -> str:
     """The disk a context band counts its layer over (the upload's ``context_ring``: 0, 1 or 2 rings), in the locative."""
     return ("у самій комірці", "у комірці та шести сусідніх", "у комірці та сусідніх у межах двох кілець")[ring]
@@ -400,7 +428,7 @@ def condition_words(condition: Condition, glossary: Mapping[str, str], geo: bool
         if value == "none nearby":
             return f"немає {_layer(attribute)} {disk_words(ring)}"
         if value[:1] == "q" and value[1:].isdigit():
-            return f"{column_words(attribute, {}, geo, ring)} — у {_ORDINAL[int(value[1:]) - 1]} чверті (від найменшої кількості)"
+            return f"{column_words(attribute, {}, geo, ring)}: {layer_band_words(int(value[1:]), bands.get(attribute))}"
     if geo and attribute.startswith("neighbours_") and attribute.endswith("_band") and value in QUARTERS:
         counter = attribute.removeprefix("neighbours_").removesuffix("_band")
         return f"сусідні комірки {QUARTERS[value]} ({column_words(counter, glossary, geo)})"  # a cell has one band per counter
@@ -434,10 +462,12 @@ def _shift_head(s: Shift, glossary: Mapping[str, str], geo: bool) -> str:
     return f"{column_words(s.metric, glossary, geo)}: {shift_words(s.robust_z)}"
 
 
-def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool, means: Collection[str] = ()) -> str:
+def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool, means: Collection[str] = (), zoned: bool = False) -> str:
     """A shift with its numbers: the medians, or the means of a counter read by its mean (``means``: the insight's
-    ``provenance["means"]``, discovery.means_of)."""
-    overall, location = " загалом" if first else "", "у середньому" if s.metric in means else "медіана"
+    ``provenance["means"]``, discovery.means_of), or, under a zone baseline, the values against their zone (a count's
+    ``log(1 + n)``, a share's fraction, minus the zone's median), never read as counts."""
+    overall = " загалом" if first else ""
+    location = "відносно своєї зони" if zoned else "у середньому" if s.metric in means else "медіана"
     return f"{_shift_head(s, glossary, geo)}, {location} {format_value(s.local_median)} проти {format_value(s.global_median)}{overall} ({s.robust_z:+.2f} sd)"
 
 
@@ -472,7 +502,8 @@ def reading(
     else:
         shifts = thresholds.phenomenon_shifts(ins)[:2]
         headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
-        what = "; ".join(_shift(s, glossary, geo, first=i == 0, means=ins.provenance.get("means", ())) for i, s in enumerate(shifts))
+        zoned = ins.provenance.get("spatial", {}).get("baseline") == "zone"
+        what = "; ".join(_shift(s, glossary, geo, first=i == 0, means=ins.provenance.get("means", ()), zoned=zoned) for i, s in enumerate(shifts))
         gist = "; ".join(_shift_head(s, glossary, geo) for s in shifts)
     where = " і ".join(condition_words(c, glossary, geo, bands or {}, ring) for c in ins.conditions)
     return {"where": where, "what": what, "headline": headline, "gist": gist}

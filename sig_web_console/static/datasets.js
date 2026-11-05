@@ -52,7 +52,7 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (!b.cross && S.batches.some((x) => x.hidden_by && x.upload_id === b.upload_id) ? `<div class="ds-note">Інсайти базового шару не залежать від контекстного: «без шару» — це вони.</div>` : "") +
       refusals(b) +
-      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
+      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : "");
   } else if (neutral) {  // a normal result, not an error: the other levels stand, or the pair found nothing
     body = `<div class="ds-note">${verdict(b) ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${refused}${refusals(b)}${timeNotes(b)}` +
       `<div class="ds-note mono" data-dev>${esc(b.error.message)}</div>`;  // the codes' dict: the developer's

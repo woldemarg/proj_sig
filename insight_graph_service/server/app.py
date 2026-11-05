@@ -31,7 +31,7 @@ from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, cross_state, hidden_datasets, rejection_words
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
-from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
+from insight_graph_service.server.views import cytoscape_elements, dimension_words, node_details, sphere_points
 
 log = logging.getLogger(__name__)
 STATUS = {
@@ -202,7 +202,10 @@ def create_app(engine: Engine) -> FastAPI:
         listed = engine.ws.list_batches()
         state = cross_state(listed)  # a run whose layer's upload is gone, a layer's runs: read off the registry
         timed = lambda b: {"time_words": words} if (words := wording.layer_time_words(b.get("context") or ())) else {}  # noqa: E731 — its layers' time, in words
-        return [engine.polled(b) | state.get(b["batch_id"], {}) | timed(b) for b in reversed(listed) if upload_id in (None, b.get("upload_id"))]
+        named = lambda b: {"dimension_words": dimension_words(b)} if (b.get("profile") or {}).get("selected_dimensions") else {}  # noqa: E731
+        return [
+            engine.polled(b) | state.get(b["batch_id"], {}) | timed(b) | named(b) for b in reversed(listed) if upload_id in (None, b.get("upload_id"))
+        ]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
