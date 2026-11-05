@@ -309,7 +309,7 @@ def test_context_conditions_read_the_uploads_disk_in_plain_ukrainian_and_hold_no
     disk = disk_words(ring)  # the cell alone, with its six neighbours, or within two rings: never one phrase for all
     assert disk == ["у самій комірці", "у комірці та шести сусідніх", "у комірці та сусідніх у межах двох кілець"][ring]
     phrase = condition_words(q4, {}, True, {}, ring)
-    assert "schools" in phrase and disk in phrase and "четвертій чверті" in phrase
+    assert "schools" in phrase and disk in phrase and phrase.endswith(": найбільше")  # the top band in the concept's words
     assert condition_words(none, {}, True, {}, ring) == f"немає schools {disk}" and disk in column_words(BAND, {}, True, ring)
     assert source_column(BAND, {"schools", "lat"}) is None  # a declared column named like the layer is not its source
     assert " " in NONE_NEARBY  # two words: a bare word would ground onto unrelated question words (question._values)

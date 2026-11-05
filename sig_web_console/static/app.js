@@ -1,7 +1,7 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, hidden: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -415,6 +415,11 @@ function init() {
   const sources = ["link-layer", "link-sample", "link-file"];  // the layer comes from one of them: picking one clears the others
   sources.forEach((id) => $(id).addEventListener("change", () => sources.forEach((other) => { if (other !== id) $(other).value = ""; })));
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
+  on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
+    e.stopImmediatePropagation();
+    S.openVariants.has(el.dataset.var) ? S.openVariants.delete(el.dataset.var) : S.openVariants.add(el.dataset.var);
+    renderTable();
+  });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
   on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer
   on($("time-levels"), ".tl-level", (b) => Timeline.setLevel(b.dataset.level));

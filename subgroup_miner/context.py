@@ -71,6 +71,15 @@ def context_layer(source: ContextSource, target_cells: np.ndarray, resolution: i
     return ContextLayer(source.name, counts, codes, ptr, idx, fit_edges(np.add.reduceat(counts[idx], ptr[:-1])), source.key)
 
 
+def points_near(source: ContextSource, cells: np.ndarray, ring: int, cap: int) -> np.ndarray:
+    """The rows of ``source`` within ``ring`` of ``cells`` (at their resolution), at most ``cap``: the layer drawn beside a
+    focused insight."""
+    resolution = h3.get_resolution(str(cells[0]))
+    around = {n for cell in cells for n in h3.grid_disk(str(cell), ring)}
+    ok = np.flatnonzero(np.isfinite(source.lat) & np.isfinite(source.lon))
+    return np.array([i for i in ok if h3.latlng_to_cell(source.lat[i], source.lon[i], resolution) in around][:cap], dtype=int)
+
+
 def disk_sums(layer: ContextLayer, counts: np.ndarray | None = None) -> np.ndarray:
     """Per target cell, the layer's points in its disk (absent cells count 0); ``counts`` stands in for the layer's own."""
     counts = layer.counts if counts is None else counts

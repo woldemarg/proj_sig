@@ -104,6 +104,7 @@ const GeoMap = {
     G.map.getSource("focus").setData(empty()); G.focus = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
     G.map.getSource("pts").setData(empty());
+    G.map.getSource("layer-pts").setData(empty());
     $("map-card").hidden = true;
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.remove("on"));
   },
@@ -129,6 +130,9 @@ const GeoMap = {
         if (fit && rings.features.length) G.map.fitBounds(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
       }
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
+      const lp = (pts.layer_points || [])[0];  // the run's layer beside its insight, in the layer's colour
+      G.map.getSource("layer-pts").setData({ type: "FeatureCollection", features: (lp ? lp.points : []).map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
+      if (lp) G.map.setPaintProperty("layer-pts", "circle-color", layerColor(lp.name));
       renderCard(p, item, pts);
     } catch (e) { /* the card stays without the point count */ }
   },
@@ -273,6 +277,7 @@ function ensureMap() {
     m.addSource("focus", cellSource());  // the focused insight's cells
     m.addSource("zone", cellSource());  // the selected zone's cells
     m.addSource("pts", { type: "geojson", data: empty() });
+    m.addSource("layer-pts", { type: "geojson", data: empty() });  // a focused run insight's layer: its points around it
     m.addSource("regions", { type: "geojson", data: empty() });
     m.addSource("region-labels", { type: "geojson", data: empty() });  // a point per region, its count as an icon
     const layer = (id, type, source, paint, filter, extra = {}) => m.addLayer({ id, type, source, paint, ...(filter ? { filter } : {}), ...extra });
@@ -296,6 +301,7 @@ function ensureMap() {
     layer("regions-n", "symbol", "region-labels", {}, ["==", ["get", "resolution"], -1], { layout: { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true } });
     layer("zone-line", "line", "zone", { "line-color": "#eef3ff", "line-width": 2, "line-dasharray": [2, 1] });
     layer("pts-halo", "circle", "pts", { "circle-color": "#ff4d6d", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 8], "circle-blur": 1, "circle-opacity": 0.45 });
+    layer("layer-pts", "circle", "layer-pts", { "circle-color": C.amber, "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 1.5, 11, 4.5], "circle-stroke-color": "#05080d", "circle-stroke-width": 0.8 });
     layer("pts-core", "circle", "pts", { "circle-color": "#ffe0e6", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4] });
     // each pulse step redraws the whole map: ~15 steps a second, none while it moves (until it is idle again) or is out of sight
     let rest = true, still = true, last = 0;
