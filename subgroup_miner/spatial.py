@@ -93,6 +93,7 @@ class SpatialContext:
     baseline: str | None = None  # zone: every metric read against its parent cell's median; None: the map
     events: np.ndarray | None = None  # per cell its events as counted: a share's test weighs them (never the zoned ``points``)
     type_counters: list[str] = field(default_factory=list)  # the per-type counters asked (``count_<column>_<value>``)
+    levels: dict[str, tuple[str, str]] = field(default_factory=dict)  # a share or a per-type counter -> (its column, its value)
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -463,6 +464,7 @@ def build_cells(
         out[f"{col}_mode"] = np.where(total > 0, table.columns.to_numpy()[table.to_numpy().argmax(axis=1)], "missing")
         glossary[f"{col}_mode"] = f"the most frequent {_words(col)} among the cell's events"
     asked = {tuple(spec.partition("=")[::2]) for spec in count_values}  # a counted value's share is written too, whatever its rarity
+    levels: dict[str, tuple[str, str]] = {}  # each share and per-type counter's column and value: their points' series
     for col in share_cols:
         table = _level_counts(profile.codes[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
@@ -473,6 +475,7 @@ def build_cells(
                 share = np.where(dense & (total > 0), table[level].to_numpy(float) / total, np.nan)
             if np.nanmean((share > 0) & (share < 1)) >= MIN_MIXED_SHARE:
                 out[f"share_{col}_{level}"] = share
+                levels[f"share_{col}_{level}"] = (col, str(level))
                 glossary[f"share_{col}_{level}"] = f"share of the cell's events whose {_words(col)} is {level}" + _kind_of(profile, col, level)
     counted: dict[str, list[str]] = {}  # source column -> its per-type counters
     for spec in count_values:
@@ -482,6 +485,7 @@ def build_cells(
             continue
         level = profile.codes[col][0] == profile.codes[col][1].get_loc(value)
         out[f"count_{col}_{value}"] = np.bincount(codes[level], minlength=len(cells)).astype(float)
+        levels[f"count_{col}_{value}"] = (col, value)
         glossary[f"count_{col}_{value}"] = f"number of the cell's events whose {_words(col)} is {value}"
         counted.setdefault(col, []).append(f"count_{col}_{value}")
     exposure = {}
@@ -552,6 +556,7 @@ def build_cells(
         baseline=baseline,
         events=counts,  # the frame copies its columns; the zone rebinds them, never writes into these
         type_counters=[c for cs in counted.values() for c in cs],
+        levels=levels,
     )
     return table, ctx, warnings
 
