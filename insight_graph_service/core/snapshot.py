@@ -100,6 +100,7 @@ def _schema_plane(
                 "integrity": integrity[bid],
                 **{k: b[k] for k in ("upload_id", "level", "supersedes", "context_ring", "cross") if k in b},
                 **({"cross_layers": [c["name"] for c in b["context"]]} if b.get("cross") else {}),  # a run names its layers
+                **({"layer_time": timed} if (timed := layer_time(b)) else {}),  # its event layers' time against the target's span
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
                 **({"count_values": b["count_values"]} if b.get("count_values") else {}),  # the per-type counters asked, each with its status
@@ -637,3 +638,10 @@ def build_snapshot(
             "as_of": max(spans, key=datetime.fromisoformat, default=None),  # the latest data: the reference date of an answer (§7.2)
         },
     }
+
+
+def layer_time(batch: dict[str, Any]) -> list[dict[str, Any]]:
+    """A run's event layers as their entries record them (``uploads.cross_runs``): the name, the span, the share of the
+    target's span it covers and the window an aligned run counted in."""
+    keys = ("name", "span", "overlap", "window", "target_span")
+    return [{k: e[k] for k in keys if k in e} for e in batch.get("context") or () if e.get("time_rule") == "events"] if batch.get("cross") else []

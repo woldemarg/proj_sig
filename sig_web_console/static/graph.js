@@ -635,6 +635,7 @@ function linkCard(p, d) {
   return `<div class="link-card">${layerChip(ds.dataset_id)}<h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
     `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
     (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
+    (d.link.time ? kv([[term("layer_time"), esc(d.link.time)]]) : "") +
     (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
       same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
         (S.hidden.has(it.dataset_id) ? " · у відповідях шар вимкнено" : ""))).join("") : "") + `</div>`;

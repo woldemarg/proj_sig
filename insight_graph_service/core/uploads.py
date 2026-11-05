@@ -15,13 +15,14 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
-from insight_contracts import Insight, Rejection
+from insight_contracts import Condition, Insight, Rejection, wording
 from insight_contracts.text import RELIABILITY
 from insight_contracts.wording import source_column
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.workspace import TERMINAL, Workspace, new_batch_id, utc_now
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.discovery import selector_conditions
 from subgroup_miner.ingestion import (
     IngestionError,
     check_counts,
@@ -566,10 +567,20 @@ def cross_runs(
     for entry, rule in zip(context, rules):
         entry.update(rule)
     target_span = next((b["temporal"]["span"] for b in picked if b.get("temporal")), None)
+    for entry in context:  # the share of the target's span an event layer covers: every insight of the run says it
+        if entry["time_rule"] == "events" and entry.get("span") and target_span:
+            entry |= {"overlap": round(overlap_share(target_span, entry["span"]), 3), "target_span": list(target_span)}
     if align:
         if not target_span or context[0]["time_rule"] != "events":
             discard_context(context)
             raise PipelineError("invalid_options", "align=span needs a target with a time record and a layer with a time column")
+        if context[0].get("overlap") == 0:  # nothing to count: refused here, never a run failing on its empty layer
+            discard_context(context)
+            (lo, hi), (t0, t1) = context[0]["span"], target_span
+            raise PipelineError(
+                "invalid_options",
+                f"align=span: no event of {context[0]['name']} falls within the target's span {t0}..{t1}; the layer spans {lo}..{hi}",
+            )
         context[0]["window"], warnings = list(target_span), []
     else:
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
@@ -674,3 +685,15 @@ def cross_type_only(insights: Sequence[Insight]) -> tuple[list[Insight], list[Re
     return on, [
         Rejection(i.expression, "outside_cross_type", "no layer in the scope: the target's own levels hold it") for i in insights if i.id not in kept
     ]
+
+
+def rejection_words(rows: list[dict[str, Any]], record: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """A dataset's refusals with their conditions (``where``) and metric (``metric_words``) in the console's words, as an
+    insight's reading words them: its record's declared names and disk."""
+    glossary, ring, geo = declared_glossary(record or {}), (record or {}).get("context_ring", 1), bool((record or {}).get("geo"))
+    out = []
+    for r in rows:
+        conditions = selector_conditions(r["expression"]) or []
+        where = " і ".join(wording.condition_words(Condition(a, v), glossary, geo, {}, ring) for a, v in conditions)
+        out.append(r | {"where": where} | ({"metric_words": wording.column_words(r["metric"], glossary, geo)} if r.get("metric") else {}))
+    return out

@@ -8,11 +8,24 @@ function datasetName(b) {
   return (b.status === "LAYER" ? `${b.filename} · шар` : res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename) + layers;
 }
 
-const PRUNED_SHOWN = ["context_confounded", "outside_cross_type"];  // the layer's verdict; the other reasons stay in the total
+const PRUNED_SHOWN = ["context_confounded", "context_family", "outside_cross_type"];  // the layer's verdict; the other reasons stay in the total
 const prunedBy = (pruned = {}) => {
   const shown = PRUNED_SHOWN.filter((k) => pruned[k]).map((k) => `${term(k)}: ${num(pruned[k], 0)}`);
   return shown.length ? ` (${shown.join(", ")})` : "";
 };
+
+const timeNotes = (b) => (b.time_words || []).map((w) => `<div class="ds-note">⏱ ${esc(w)}</div>`).join("");  // an event layer's time, in words
+const warningsOf = (b) =>  // the record's warnings but an event layer's own, which ``timeNotes`` words
+  (b.warnings || []).filter((w) => !(b.time_words || []).length || !(b.context || []).some((c) => w.startsWith(`${c.name}: an event layer`)));
+const refusals = (b) => (b.cross && b.dataset_id ? `<details class="ds-refused" data-rej="${esc(b.dataset_id)}"><summary>${esc(word("context_layer"))}: які когорти відсіяно</summary><div class="hint">…</div></details>` : "");
+
+async function showRefusals(box) {
+  /* a run's refused layer cohorts in words (``GET /api/datasets/{id}/rejections``): the metric, where, why */
+  const rows = (await api(`/api/datasets/${encodeURIComponent(box.dataset.rej)}/rejections`)).filter((r) => ["context_confounded", "context_family"].includes(r.reason));
+  box.querySelector(".hint").innerHTML = rows.length
+    ? rows.map((r) => `<div>${esc(r.metric_words || r.metric || "")} — ${esc(r.where)}: <i>${esc(word(r.reason))}</i></div>`).join("")
+    : "немає";
+}
 
 const crossChips = (b) =>  // a run whose layer's upload is gone, a layer's runs (uploads.cross_state, read off the registry)
   (b.stale ? ` ${chip("bad", b.stale.reason === "superseded" ? "шар замінено" : "шар видалено", "Завантаження шару цього прогону вже немає; прогін тримає копію шару й лишається відтворюваним. Новий шар — новий прогін.")}` : "") +
@@ -36,11 +49,13 @@ function datasetCard(b, busy, neutral = false) {  // neutral: an empty level bes
       `<div class="stat" title="Теми, вперше знайдені в цьому датасеті"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>${form(m.attractors_new ?? m.attractors_total, "тема", "теми", "тем")}</span></div>` +
       `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>${form(m.input_rows, "рядок", "рядки", "рядків")}</span></div></div>` +
       `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · <a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
-      (b.warnings || []).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
+      timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
       (!b.cross && S.batches.some((x) => x.hidden_by && x.upload_id === b.upload_id) ? `<div class="ds-note">Інсайти базового шару не залежать від контекстного: «без шару» — це вони.</div>` : "") +
+      refusals(b) +
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc(human(d))}</span>`).join("")}</div>` : "");
   } else if (neutral) {  // a normal result, not an error: the other levels stand, or the pair found nothing
-    body = `<div class="ds-note">${verdict(b) ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${refused}<div class="ds-note mono">${esc(b.error.message)}</div>`;
+    body = `<div class="ds-note">${verdict(b) ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${refused}${refusals(b)}${timeNotes(b)}` +
+      `<div class="ds-note mono" data-dev>${esc(b.error.message)}</div>`;  // the codes' dict: the developer's
   } else if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +

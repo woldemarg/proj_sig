@@ -186,6 +186,7 @@ def node_details(graph: DualGraph, node_id: str, thresholds: PhenomenonThreshold
         if ds.get("cross"):  # a layer link's card (docs/08_interface.md §8.2): its disk, what a count is per, its base's other links
             out["link"] = {"disk": wording.disk_words(ds.get("context_ring", 1)), "exposure": wording.exposure_words(ds.get("exposure"))}
             out["link"]["pair"] = link_pair(graph, node_id)
+            out["link"]["time"] = "; ".join(wording.layer_time_words(ds.get("layer_time", ())))  # the layer's time against the base's
             for item in neighbors.get("CO_LOCATED", []) + neighbors.get("CO_LOCATED (in)", []):
                 other = graph.nodes.get(dataset_node_id(graph.nodes[item["id"]]["props"]["dataset_id"]), {"props": {}})["props"]
                 if other.get("cross") and other.get("upload_id") == ds.get("upload_id") and other["dataset_id"] != ds["dataset_id"]:

@@ -174,6 +174,16 @@ class Evidence:
             read = (" baseline=zone (every metric minus its zone's median)" if d.get("baseline") == "zone" else "") + (
                 " weights=events" if d.get("weight_by_events") else ""
             )
+            read += "".join(  # an event layer's time against the run's base: a link without a coincidence in time says so
+                f" layer_time={e['name']}:"
+                + (
+                    "counted within the target's span"
+                    if e.get("window")
+                    else f"read as static, covers {round(100 * e['overlap'])}% of the target's span"
+                )
+                for e in d.get("layer_time", ())
+                if e.get("window") or e.get("overlap") is not None
+            )
             lines.append(f"- {d['dataset_id']} file={d['filename']}{layers}{read} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
@@ -709,7 +719,17 @@ def _quoted(text: str) -> str:
     return json.dumps(text if len(text) <= CONTEXT_VALUE_MAX else text[: CONTEXT_VALUE_MAX - 1] + "…", ensure_ascii=False)
 
 
-DECLARED = ("source", "reliability", "integrity", "glossary", "user_glossary", "cross_layers", "baseline", "weight_by_events")  # a dataset's line
+DECLARED = (
+    "source",
+    "reliability",
+    "integrity",
+    "glossary",
+    "user_glossary",
+    "cross_layers",
+    "baseline",
+    "weight_by_events",
+    "layer_time",
+)  # a dataset's line
 
 
 def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
