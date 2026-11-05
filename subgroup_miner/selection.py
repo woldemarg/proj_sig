@@ -115,10 +115,17 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
             ins = _as_covariance(ins)
         ins = with_weight(ins, config)
         if ins.support < config.min_support_rows:  # R1
-            rejections.append(Rejection(ins.expression, "min_support", f"support={ins.support}"))
+            rejections.append(Rejection(ins.expression, "min_support", f"support={ins.support}", ins.target))
         elif not (shift_ok or emm_ok):  # R2 / R3
             if covariance:
                 reason, detail = "weak_effect", f"emm={ins.emm_score:.2f}"
+            elif marginal and confounded and p_context <= config.max_p_adjusted:  # rarely reproduced, not rarely enough
+                family = spatial.get("context_family", 1)
+                reason, detail = (
+                    "context_family",
+                    f"p_context={p_context:.2g} × {family} cohorts = {min(1.0, p_context * family):.2g}: the dealt layer rarely reproduces the shift, "
+                    f"but not rarely enough once multiplied by the run's {family} layer cohorts",
+                )
             elif marginal and confounded:
                 reason, detail = (
                     "context_confounded",
@@ -130,7 +137,7 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
                 reason, detail = "not_significant", f"|z|={abs(ins.effect_size):.2f} p_adj={ins.p_adjusted:.2g}"
             else:
                 reason, detail = "weak_effect", f"|z|={abs(ins.effect_size):.2f} p_adj={ins.p_adjusted:.2g} emm={ins.emm_score:.2f}"
-            rejections.append(Rejection(ins.expression, reason, detail))
+            rejections.append(Rejection(ins.expression, reason, detail, ins.target))
         else:
             survivors.append(ins)
     return SelectionResult(sorted(survivors, key=lambda i: (-i.weight, i.expression)), rejections)

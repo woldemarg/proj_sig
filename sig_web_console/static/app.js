@@ -80,6 +80,8 @@ const TERMS = {
   "p_adjusted": ["скоригована p", "результат тесту медіани з поправкою на кількість перевірок; поріг відбору, а не точна ймовірність"],
   "p_context": ["нуль шару", "частка перестановок шару в межах батьківських комірок, за яких зсув не слабший за знайдений, помножена на кількість когорт зі смугою шару; інсайт зі смугою шару допущено, лише коли вона не більша за поріг відбору: розклад шару всередині батька зсуву не відтворює"],
   "context_confounded": ["пояснюється фоном зони", "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар"],
+  "context_family": ["замало свідчень після поправки", "когорти зі смугою шару, чий зсув перестановка шару відтворює рідко, але не досить рідко після поправки на кількість когорт шару, перевірених у прогоні"],
+  "layer_time": ["час шару", "коли сталися події контекстного шару порівняно з періодом базового; без вирівнювання шар із подіями читається як незмінний за весь свій період"],
   "outside_cross_type": ["без умови шару", "знахідки прогону зв'язку шарів без смуги шару: це знахідки самого базового шару, вони лишаються на його власних рівнях"],
   "base_layer": ["базовий шар", "набір подій, чиї метрики й склад аналізуємо"],
   "context_layer": ["контекстний шар", "точки іншого набору як умова для подій базового шару: скільки їх у комірці й поруч; сам шар не аналізується"],
@@ -401,6 +403,11 @@ function init() {
     setView("graph"); reveal(p.id);
   });
   on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
+  on($("batches"), ".ds-refused summary", (el, e) => {  // a run's refused layer cohorts, read once on the first opening
+    e.stopImmediatePropagation();
+    const box = el.parentElement;
+    if (!box.dataset.loaded) { box.dataset.loaded = "1"; showRefusals(box).catch(() => { box.dataset.loaded = ""; }); }
+  });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
   on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
   $("link-form").addEventListener("submit", runLink);

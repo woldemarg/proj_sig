@@ -159,6 +159,7 @@ class Rejection:
     expression: str
     reason: str
     detail: str = ""
+    metric: str = ""  # the metric the refused cohort was tested on (a selection's refusal), empty where none was
 
 
 @dataclass(frozen=True)

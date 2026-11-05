@@ -10,7 +10,7 @@ console keeps a copy of ``TERMS`` (``TERMS`` in ``app.js``) that ``tests/test_wo
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
@@ -37,6 +37,14 @@ TERMS: dict[str, tuple[str, str]] = {
     "context_confounded": (
         "пояснюється фоном зони",
         "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар",
+    ),
+    "context_family": (
+        "замало свідчень після поправки",
+        "когорти зі смугою шару, чий зсув перестановка шару відтворює рідко, але не досить рідко після поправки на кількість когорт шару, перевірених у прогоні",
+    ),
+    "layer_time": (
+        "час шару",
+        "коли сталися події контекстного шару порівняно з періодом базового; без вирівнювання шар із подіями читається як незмінний за весь свій період",
     ),
     "outside_cross_type": (
         "без умови шару",
@@ -318,6 +326,32 @@ def exposure_words(exposure: Mapping[str, Any] | None) -> str:
         return ""
     km2 = exposure["cell_km2"]
     return f"на комірку ≈ {f'{km2:.2g}' if km2 < 1 else f'{km2:.1f}'.rstrip('0').rstrip('.')} км²".replace(".", ",")
+
+
+def layer_time_words(entries: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Each event layer of a run in words (its context entries, ``uploads.cross_runs``): counted within the target's
+    period (``window``, ``align=span``), or read as unchanging over its own span with the share of the target's period it
+    covers — a link without a coincidence in time when the share is small —, or its span not compared. A static layer
+    (no time) says nothing."""
+    out = []
+    for e in entries:
+        if e.get("time_rule", "events") != "events" or not e.get("name"):
+            continue
+        name, span = humanize(e["name"]), e.get("span")
+        if e.get("window"):
+            out.append(f"{name}: враховано лише події шару в межах періоду базового ({_day(e['window'][0])} — {_day(e['window'][1])})")
+        elif span and e.get("overlap") is not None:
+            out.append(
+                f"{name}: події шару за {_day(span[0])} — {_day(span[1])} перекривають {round(100 * e['overlap'])} % періоду базового; "
+                "шар читається як незмінний за весь свій період, збіг у часі не перевірявся"
+            )
+        else:
+            out.append(f"{name}: шар із часом подій, але його період не порівняно з періодом базового; шар читається як незмінний")
+    return out
+
+
+def _day(stamp: str) -> str:
+    return str(stamp)[:10]
 
 
 def disk_words(ring: int) -> str:

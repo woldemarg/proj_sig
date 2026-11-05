@@ -551,7 +551,8 @@ def read_context(
         inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
         lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
-        raise IngestionError("invalid_options", f"context layer {name!r}: No valid point in {path.name}")
+        inside = f"no event of it falls within {window[2]}..{window[3]}" if window else f"No valid point in {path.name}"
+        raise IngestionError("invalid_options", f"context layer {name!r}: {inside}")
     window_part = f":{window[0]}@{window[2]}..{window[3]}" if window else ""
     key = f"{sha[:12]}:{locator}{window_part}" + (f":{where}" if where else "")
     return ContextSource(name, lat, lon, key), f"{name}:{key}"

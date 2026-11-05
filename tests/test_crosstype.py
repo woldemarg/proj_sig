@@ -286,7 +286,7 @@ def test_selection_refuses_a_shift_the_dealt_layer_reproduces_and_any_correlatio
     assert not refused.kept and [r.reason for r in refused.rejections] == ["context_confounded"] and "0.3" in refused.rejections[0].detail
     assert select_insights([context_insight(0.01)], config).kept and select_insights([context_insight(None)], config).kept
     many = select_insights([context_insight(0.01, family=10)], config)  # 0.01 × 10 cohorts: adjusted as p_adjusted is
-    assert not many.kept and [r.reason for r in many.rejections] == ["context_confounded"] and "10 cohorts" in many.rejections[0].detail
+    assert not many.kept and [r.reason for r in many.rejections] == ["context_family"] and "10 cohorts" in many.rejections[0].detail
     pair = {"pair": ["points", "load_median"], "local_corr": 0.6, "global_corr": -0.1, "delta": 0.7}
     unstable = context_insight(0.01, stability=0.2, emm_score=0.3, covariance=pair)  # no shift; a strong correlation change
     assert not select_insights([unstable], config).kept  # never retargeted to a covariance insight
@@ -817,6 +817,10 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         assert "target.csv · + schools" in page.text_content("#drawer")  # its provenance names the run with its layer
         assert "шар у 1 прогоні" in page.locator(".ds", has_text="schools.csv · шар").inner_text()  # a layer's runs
         assert card.locator("a[href$='/rejections']").count() == 1  # the refusals one click away
+        card.locator(".ds-refused summary").click()  # and the layer's refused cohorts in words on the card
+        page.wait_for_function(
+            f"!document.querySelector(\".ds[data-ds='{run['dataset_id']}'] .ds-refused .hint\").textContent.startsWith('…')", timeout=20000
+        )
         client.delete(f"/api/datasets/{next(r['batch_id'] for r in engine.ws.list_batches() if r['upload_id'] == b)}")
         page.evaluate("refreshBatches()")
         page.wait_for_function(f"document.querySelector(\".ds[data-ds='{run['dataset_id']}']\").textContent.includes('шар видалено')", timeout=20000)
