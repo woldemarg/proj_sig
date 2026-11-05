@@ -32,6 +32,9 @@ class SeedMatch:
     matched: dict[str, Any]
 
 
+SCOPE_EXTRA_PENALTY = 0.2  # a scope's conditions the question does not name: the exact scope outranks its specialisations
+
+
 def score_pattern(
     ins: Insight,
     query: ParsedQuery,
@@ -71,7 +74,9 @@ def score_pattern(
     conds = {(c.attribute, c.value) for c in ins.conditions}
     hits = len(conds & exact) + sum(any(v == cv for _, cv in conds) for a, v in wanted if a == "*")  # a wildcard matches any column
     conflicts = len({a for a, v in conds if a in wanted_attrs and (a, v) not in exact})
-    scope = (hits / len(wanted) if wanted else 0.0) - 0.5 * conflicts
+    named = {(a, v) for a, v in conds if (a, v) in exact or ("*", v) in wanted}
+    extra = (len(conds) - len(named)) / len(conds) if wanted and conds else 0.0  # conditions the question does not name
+    scope = (hits / len(wanted) if wanted else 0.0) - 0.5 * conflicts - SCOPE_EXTRA_PENALTY * extra
     semantic = float(vec @ qvec) if vec is not None and qvec is not None else 0.0
     if query.is_lexical:
         score = 0.35 * target + 0.25 * scope + 0.15 * direction + 0.15 * semantic + 0.10 * ins.weight

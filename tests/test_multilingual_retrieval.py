@@ -15,7 +15,7 @@ from test_traversal import pattern
 
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.question import LiteralCatalog, build_catalog, parse_query
-from graph_query_engine.seeds import resolve_seeds, score_pattern
+from graph_query_engine.seeds import SCOPE_EXTRA_PENALTY, resolve_seeds, score_pattern
 from insight_graph_service.core.demo import generate_retail_dataset
 
 
@@ -155,7 +155,8 @@ def test_shared_value_binds_the_named_column_or_a_wildcard(tmp_path):
     for p in (ask("Чому маржа нижча для США?"), parse_query("Why is margin lower in the US?", g)):
         assert ("*", "US") in p.conditions and len(p.conditions) == 1  # US lives under region and origin: any column
         s = score_pattern(g.insight("P1"), p, np.zeros(1), None, make_config(tmp_path).query)
-        assert s.matched["scope"] == 1.0 and s.matched["scope_conflicts"] == 0
+        # the wildcard is matched, never a conflict; category=phones, which the question does not name, costs its share
+        assert s.matched["scope"] == 1.0 - SCOPE_EXTRA_PENALTY / 2 and s.matched["scope_conflicts"] == 0
     for p in (ask("Чому маржа нижча для США за region?"), parse_query("Why is margin lower for US by region?", g)):
         assert p.conditions == [("region", "US")]
 

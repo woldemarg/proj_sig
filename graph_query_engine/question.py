@@ -21,9 +21,10 @@ from typing import Any
 import numpy as np
 
 from graph_query_engine.config import QueryConfig
-from graph_query_engine.graph import DualGraph
+from graph_query_engine.graph import DualGraph, declared_words
 from graph_query_engine.ports import Embedder
 from graph_query_engine.temporal import period_interval, strip_periods
+from insight_contracts import wording
 from insight_contracts.text import covariance_label, humanize
 
 NEG_WORDS = frozenset(
@@ -51,8 +52,11 @@ DRIVER_VERBS = ("пов'яз", "associat", "linked", "related")
 DRIVER_PREPOSITIONS = {"з", "із", "зі", "with", "to"}
 STOPWORDS = frozenset(
     "why what where which when how does do is are the a an for in on at of to about tell me show and or with by from than there their this that it its "
-    "чому що де який яка які коли як для у в на і та з із зі при про від до це чи має є також там їх цей ця ці ніж між розкажи скажи покажи поясни".split()
+    "чому що де який яка які коли як для у в на і та з із зі при про від до це чи має є також там їх цей ця ці ніж між розкажи скажи покажи поясни "
+    # a question's frame, «what is special there»: never a metric (the model put особливого on points, 0.43)
+    "special notable unusual interesting remarkable anything something особливого особливе особливі особливий цікавого цікаве цікаві".split()
 )
+PHRASE_MIN_COVER = 0.75  # a condition named in words: the share of its phrase's words a question holds (two words at least)
 CHAR_MIN = 0.30  # char_wb (3–5) TF-IDF cosine floor (measured: inflections >= 0.33, typos >= 0.36, distractors <= 0.23)
 CHAR_MAX_LEN_DIFF = 3  # a same-script surface variant stays about as long as the literal (marginally -> margin is 0.89 but 4 letters longer)
 MARGIN_MIN, MARGIN_K, LOWE_MAX = 0.15, 5, 0.85  # dense gates: local margin over the catalog, Lowe's ratio
@@ -121,6 +125,45 @@ def _values(graph: DualGraph) -> dict[str, list[str]]:
         for c in ins.conditions:
             values.setdefault(c.value, set()).add(c.attribute)
     return {v: sorted(a) for v, a in values.items()}
+
+
+def _phrases(graph: DualGraph) -> dict[tuple[str, str], tuple[list[str], int]]:
+    """Each condition the graph holds in the console's words (``wording.condition_words`` with its dataset's declared
+    words, as the drawer reads it): the phrase's words of three letters or more and its length in tokens. A question
+    that reads the drawer's words names the condition — its column too, which a band value (``q4``, ``none nearby``)
+    shared by many columns does not. Derived once per graph."""
+
+    def build() -> dict[tuple[str, str], tuple[list[str], int]]:
+        out: dict[tuple[str, str], tuple[list[str], int]] = {}
+        for pid, ins in graph.insights.items():
+            words = None
+            for c in ins.conditions:
+                if (c.attribute, c.value) not in out:
+                    words = words or declared_words(graph, pid)
+                    tokens = _TOKEN.findall(wording.condition_words(c, words[0], bool(ins.provenance.get("spatial")), words[1], words[2]).lower())
+                    out[(c.attribute, c.value)] = ([w for w in tokens if len(w) >= 3], len(tokens))
+        return out
+
+    return graph.memoised(("phrases", ""), build)
+
+
+def _named_conditions(q: ParsedQuery, graph: DualGraph, tokens: list[str], claimed: set[int]) -> None:
+    """The conditions a question names in the drawer's words (``_phrases``): per column the value whose phrase it holds
+    best within a run of the phrase's length, at least ``PHRASE_MIN_COVER`` of its words, bound to that column — a value
+    the lexical pass bound to any column (``*``) is replaced by it, and the run's words are no intent words."""
+    stems = set(tokens) | {t[:5] for t in tokens if len(t) >= 5}
+    best: dict[str, tuple[float, int, str, set[int]]] = {}
+    for (attr, value), (words, span) in _phrases(graph).items():
+        if len(words) < 2 or sum(w in stems or w[:5] in stems for w in words) < PHRASE_MIN_COVER * len(words):
+            continue  # cheap: too few of its words anywhere in the question
+        hits = [{k for k, w in enumerate(words) if _stem_match(w, t)} for t in tokens]
+        for i in range(max(len(tokens) - span + 1, 1)):
+            cover = len(set().union(*hits[i : i + span])) / len(words)
+            if cover >= PHRASE_MIN_COVER and (cover, len(words)) > best.get(attr, (0.0, 0))[:2]:
+                best[attr] = (cover, len(words), value, {j for j in range(i, i + span) if j < len(tokens) and hits[j]})
+    for attr, (_, _, value, held) in best.items():
+        claimed |= held
+        q.conditions[:] = [c for c in q.conditions if c != ("*", value)] + ([] if (attr, value) in q.conditions else [(attr, value)])
 
 
 def _vocabulary(graph: DualGraph) -> tuple[list[str], dict[str, list[str]]]:
@@ -345,12 +388,15 @@ def parse_query(text: str, graph: DualGraph, config: QueryConfig | None = None, 
         if len(value) <= ACRONYM_MAX_LEN and value.isupper():  # an acronym matches as typed: "us" is not "US"
             pos = {i for i, t in enumerate(raw_tokens) if t == value}
         else:  # every word of the value, inflected or not
-            found = [{i for i, t in enumerate(tokens) if _stem_match(v, t)} for v in value.lower().split()]
+            found = [
+                {i for i, t in enumerate(tokens) if _stem_match(v, t)} for v in _TOKEN.findall(value.lower())
+            ]  # "8x Information & investigation": its words, not "&"
             pos = set().union(*found) if all(found) else set()
         if pos:
             claimed |= pos
             _bind(q, value, attrs, pos, tokens)
 
+    _named_conditions(q, graph, tokens, claimed)  # a condition in the drawer's words: its column named too
     free = ["" if i in claimed else t for i, t in enumerate(tokens)]  # a literal's words are not intent words ("delivery delay")
     q.direction = _direction(free)
     q.covariance = any(t.startswith(COVARIANCE_WORDS) for t in free) and not _directed_driver(free)
