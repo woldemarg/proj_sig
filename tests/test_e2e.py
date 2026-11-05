@@ -444,8 +444,10 @@ def test_the_crosstype_controls_script_runs_each_control_as_the_console_runs_a_l
     upload["frame"].sample(8000, random_state=1).to_csv(target, index=False)
     upload["layers"]["schools"].to_csv(layer, index=False)
     result = controls(target, {"geo": f"lat,lon@{RES}"}, layer, "road_type", 1, 0, tmp_path / "work")
-    assert set(result["rates"]) == {"shuffled", "fine", "coarse", "uniform", "half a", "half b"}
-    assert all(r["runs"] == 1 and 0 <= r["admitting"] <= 1 for r in result["rates"].values()) and "admitting_a_share" in result["rates"]["shuffled"]
+    assert set(result["rates"]) == {"real", "shuffled", "fine", "coarse", "uniform", "half a", "half b", "replicated"}
+    rates = [r for k, r in result["rates"].items() if k != "replicated"]
+    assert all(r["runs"] == 1 and 0 <= r["admitting"] <= 1 for r in rates) and "admitting_a_share" in result["rates"]["shuffled"]
+    assert len(result["rates"]["replicated"]["on both halves"]) == 1 and result["rates"]["replicated"]["real"] >= 0
     assert all(r["status"] in {"READY", "FAILED"} and r["seconds"] > 0 and r["seed"] == 1 for r in result["runs"])
 
 
