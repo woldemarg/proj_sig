@@ -22,7 +22,7 @@ from scipy import sparse
 from scipy.stats import false_discovery_control, norm
 
 from insight_contracts import Insight
-from subgroup_miner.context import ContextLayer, ContextSource, context_bands
+from subgroup_miner.context import DEFAULT_RING, ContextLayer, ContextSource, context_bands
 
 POINT_PARSE_SHARE = 0.95  # share of non-null values that must parse as points for a column to be the location
 LAT_NAMES = frozenset({"lat", "latitude"})
@@ -92,6 +92,7 @@ class SpatialContext:
     exposure: dict[str, Any] = field(default_factory=dict)  # per-type counters' denominator words: {kind: area, cell_km2}; empty without them
     baseline: str | None = None  # zone: every metric read against its parent cell's median; None: the map
     events: np.ndarray | None = None  # per cell its events as counted: a share's test weighs them (never the zoned ``points``)
+    type_counters: list[str] = field(default_factory=list)  # the per-type counters asked (``count_<column>_<value>``)
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -402,7 +403,7 @@ def build_cells(
     min_cell_points: int,
     profile_key: object = None,
     context: Sequence[ContextSource] = (),
-    context_ring: int = 1,
+    context_ring: int = DEFAULT_RING,
     count_values: Sequence[str] = (),
     baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
@@ -550,6 +551,7 @@ def build_cells(
         exposure=exposure,
         baseline=baseline,
         events=counts,  # the frame copies its columns; the zone rebinds them, never writes into these
+        type_counters=[c for cs in counted.values() for c in cs],
     )
     return table, ctx, warnings
 

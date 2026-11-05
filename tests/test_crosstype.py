@@ -54,7 +54,7 @@ def test_the_band_sums_the_disk_including_cells_without_target_points():
     e = next(c for c in h3.grid_ring(b, 1) if c not in h3.grid_disk(a, 1))  # a neighbour of b, not of a; no target points
     far = h3.grid_ring(a, 5)[0]
     frame = points_at([a, b, far], 10, load=1.0)
-    table, ctx, warnings = build_cells(frame, "lat,lon", RES, min_cell_points=5, context=[layer_at("schools", [a, a, a, e])])
+    table, ctx, warnings = build_cells(frame, "lat,lon", RES, min_cell_points=5, context=[layer_at("schools", [a, a, a, e])], context_ring=1)
     assert dict(zip(ctx.cells, disk_sums(ctx.context["schools"]))) == {a: 3.0, b: 4.0, far: 0.0}  # e counts for b, though e has no target point
     band = dict(zip(ctx.cells, table[BAND]))
     assert band[far] == NONE_NEARBY and NONE_NEARBY not in (band[a], band[b]) and band[a] != band[b]
@@ -146,11 +146,13 @@ def test_load_dataset_reads_a_context_file_and_refuses_one_without_points(tmp_pa
 
 
 def test_the_disk_radius_is_the_uploads_own_and_names_the_dataset(tmp_path):
+    """The cell alone by default (``DEFAULT_RING``), the cell and its six neighbours when asked: two readings of the same
+    files, two datasets."""
     target, context = planted(tmp_path)
     layer = [("schools", context, "auto")]
-    disk = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer)
-    cell = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=0)
-    assert disk.dataset_id == load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=1).dataset_id
+    cell = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer)
+    disk = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=1)
+    assert cell.dataset_id == load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=layer, context_ring=0).dataset_id
     assert cell.dataset_id != disk.dataset_id  # another reading of the same files: another dataset
     schools = {h3.latlng_to_cell(lat, lon, RES) for lat, lon in pd.read_csv(context)[["lat", "lon"]].itertuples(index=False)}
     near = {n for s in schools for n in h3.grid_disk(s, 1)}
@@ -165,7 +167,7 @@ def test_the_disk_radius_is_the_uploads_own_and_names_the_dataset(tmp_path):
 def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_the_same(tmp_path):
     target, context = planted(tmp_path)
     config = MinerConfig(context_permutations=99)
-    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1)
     insights, result = mined(loaded, config)
     found = [i for i in cross(insights) if i.target in ("points", "load_median") and i.effect_size > 0]
     family = sum(any(c.attribute == BAND for c in i.conditions) for i in insights)  # the upload's context cohorts
@@ -191,7 +193,7 @@ def test_a_planted_dependence_beats_the_dealt_layer_and_the_recomputation_draws_
 def test_without_draws_there_is_no_context_test(tmp_path):
     target, context = planted(tmp_path)
     config = MinerConfig(context_permutations=0)
-    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1)
     insights, _ = mined(loaded, config)
     assert cross(insights) and all("p_context" not in i.provenance["spatial"] for i in insights)
     assert all(r.reason != "context_confounded" for r in select_insights(insights, config).rejections)
@@ -221,7 +223,7 @@ def test_a_shared_density_passes_the_median_test_and_fails_the_dealt_layer(tmp_p
     marginal = tested = 0
     for seed in range(8):
         target, context = confounded(tmp_path, seed)
-        loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+        loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1)
         higher = [
             i for i in cross(mined(loaded, config)[0]) if i.target == "load_median" and i.effect_size > 0 and i.p_adjusted <= config.max_p_adjusted
         ]
@@ -252,7 +254,7 @@ def test_a_refused_cohort_stops_drawing_once_no_draw_left_could_pass_the_gate(tm
 
     config = MinerConfig(context_permutations=99)
     target, context = confounded(tmp_path, 0)
-    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1)
     insights, result = mined(loaded, config)
     weak = max(cross(insights), key=lambda i: i.provenance["spatial"]["p_context"])
     assert weak.provenance["spatial"]["p_context"] >= 0.2  # refused at any family
@@ -322,7 +324,7 @@ def post_upload(client, target, *layers, geo=f"lat,lon@{RES}", **data):
 def test_an_upload_with_a_context_file_mines_its_band_and_verifies(engine, tmp_path):
     target, context = planted(tmp_path)
     with TestClient(create_app(engine)) as client:
-        accepted = post_upload(client, target, ("Chicago Schools.csv", context))
+        accepted = post_upload(client, target, ("Chicago Schools.csv", context), context_ring="1")  # the plant's disk
         assert accepted.status_code == 202, accepted.text
         record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
         overlay = client.get(f"/api/geo/{record['dataset_id']}/overlay").json()["patterns"]  # what the map card reads
@@ -377,17 +379,19 @@ def test_context_files_are_refused_before_any_batch_and_leave_with_their_upload(
 def test_an_upload_reads_its_layers_on_its_own_disk(engine, tmp_path):
     target, context = planted(tmp_path)
     with TestClient(create_app(engine)) as client:
-        sent = [post_upload(client, target, ("schools.csv", context), **ring) for ring in ({}, {"context_ring": "0"})]
+        sent = [post_upload(client, target, ("schools.csv", context), **ring) for ring in ({"context_ring": "1"}, {})]
         records = [wait_batch(client, r.json()["batch_id"], timeout=300) for r in sent]
     layer = [("schools", Path(records[1]["context"][0]["path"]), "auto")]
     expected = [load_dataset(target, engine.settings.miner, geo=f"lat,lon@{RES}", context=layer, context_ring=r).dataset_id for r in (1, 0)]
-    assert [r.get("context_ring") for r in records] == [1, 0]
+    assert [r.get("context_ring") for r in records] == [1, 0]  # the second asked for none: the cell alone, the default
     # each read on its own disk, as a re-check reads it (the cell alone keeps no insight of this disk-wide plant)
     assert [r["dataset_id"] for r in records] == expected and [r["status"] for r in records] == ["READY", "FAILED"]
 
 
 def upload_file(client, name: str, path: Path, geo: str, **data) -> dict:
-    """``POST /api/upload`` of one file with its geo option, once every batch it made has finished."""
+    """``POST /api/upload`` of one file with its geo option, once every batch it made has finished; a context file is
+    counted over the planted fixture's disk (the cell and its six neighbours) unless the call names one."""
+    data = ({"context_ring": "1"} if "context" in data or "context_demo" in data else {}) | data
     response = client.post("/api/upload", files=[("file", (name, path.read_bytes(), "text/csv"))], data={"geo": geo, **data})
     assert response.status_code == 202, response.text
     body = response.json()
@@ -398,8 +402,10 @@ def upload_file(client, name: str, path: Path, geo: str, **data) -> dict:
 
 def cross_run(client, target: str, *layers: str, **options):
     """``POST /api/crosstype`` of ``target`` with ``layers``; the response, its batches finished when accepted. The planted
-    target is read at r7, coarser than the product's gate, so the runs say ``allow_coarse`` as the scripts do."""
-    response = client.post("/api/crosstype", json={"target": target, "layers": list(layers), "allow_coarse": True, **options})
+    target is read at r7, coarser than the product's gate, so the runs say ``allow_coarse`` as the scripts do, and its
+    dependence fills a school's disk, so they count the layer over the cell and its six neighbours (``ring`` 1) unless
+    the call names a disk."""
+    response = client.post("/api/crosstype", json={"target": target, "layers": list(layers), "allow_coarse": True, "ring": 1, **options})
     if response.status_code == 202:
         for batch in response.json()["levels"].values():
             wait_batch(client, batch, timeout=300)
@@ -694,7 +700,7 @@ def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypat
     monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
     monkeypatch.setattr(app_module, "demo_datasets", lambda: [entry])
     with TestClient(create_app(engine)) as client:
-        accepted = post_upload(client, target, context_demo="schools", context_geo="lat,lon")
+        accepted = post_upload(client, target, context_demo="schools", context_geo="lat,lon", context_ring="1")
         record = wait_batch(client, accepted.json()["batch_id"], timeout=300)
         unknown = post_upload(client, target, context_demo="nowhere")
         kept = client.post("/api/upload", data={"demo": "schools", "layer": "true", "geo": "lat,lon"})  # what the console sends
@@ -903,9 +909,10 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
     """The M18 acceptance case (docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md §12)
     from an empty workspace, on the shipped tables: the crimes picked in the console and read with their manifest's
     options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes from their
-    card's *+ контекстний шар* at its defaults — the crimes' finest level, the default disk. The verdict is the one measured
-    (§12a): the bars' run admits nothing and its card counts the cohorts the bars' arrangement reproduces; the stations'
-    admits one finding, whose drawer reads the layer's verdict."""
+    card's *+ контекстний шар* at its defaults — the crimes' finest level, the cell alone, shares per event. The verdict is
+    the one measured on these defaults (the cross-layer experiments of 2026-11-05): the stations' run admits nothing and its
+    card counts the cohorts the stations' arrangement reproduces (the fraud share M17–M19 admitted at the old disk was a
+    small-cell artefact, gone per event); the bars' admits a finding, whose drawer reads the layer's verdict."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
     from conftest import make_engine, serve, stack
@@ -954,18 +961,21 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
             page.select_option("#link-layer", layers[name])
             page.click("#link-go")
             runs[name] = finished(cross=[layers[name]])
-            assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 1)
+            assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 0)  # the cell alone: the default disk
         page.evaluate("refreshBatches()")
         bars, stations = runs["chicago_bars.csv"], runs["chicago_l_stations.csv"]
-        # the bars: nothing admitted, the cohorts their arrangement within parent cells reproduces counted on the card
-        assert (bars["status"], bars["error"]["code"]) == ("FAILED", "no_viable_insights") and bars["metrics"]["pruned"]["context_confounded"] > 0
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_bars')", timeout=20000)
-        card = page.locator(".ds", has_text="+ chicago_bars").inner_text()
-        assert f"пояснюється фоном зони: {bars['metrics']['pruned']['context_confounded']}" in card
-        # the stations: one finding, its drawer reading the layer's verdict
-        (found,) = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == stations["dataset_id"]]
-        page.evaluate(f"inspect('{found}')")
-        assert stations["status"] == "READY" and "нуль шару" in page.text_content("#drawer")
+        # the stations: nothing admitted, the cohorts their arrangement within parent cells reproduces counted on the card
+        assert (stations["status"], stations["error"]["code"]) == ("FAILED", "no_viable_insights")
+        assert stations["metrics"]["pruned"]["context_confounded"] > 0
+        page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_l_stations')", timeout=20000)
+        card = page.locator(".ds", has_text="+ chicago_l_stations").inner_text()
+        assert f"пояснюється фоном зони: {stations['metrics']['pruned']['context_confounded']}" in card
+        # the bars: a finding, its drawer reading the layer's verdict
+        found = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == bars["dataset_id"]]
+        assert bars["status"] == "READY" and found
+        page.evaluate(f"inspect('{found[0]}')")
+        page.wait_for_selector("#drawer .link-card", timeout=10000)
+        assert "нуль шару" in page.text_content("#drawer")
         # the literature's frequency question as the walkthrough asks it (docs 10 §10.2): one class of the crimes as a
         # reading of its own, crossed with the bars over the cell alone; the verdict is the data's, never an error
         page.select_option("#sample", "chicago_crimes")

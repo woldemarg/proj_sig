@@ -71,7 +71,7 @@
           <label class="small" for="context-geo">Колонки точок шару</label>
           <input class="field" id="context-geo" placeholder="напр. lat,lon · geometry; порожньо — auto">
           <label class="small" for="context-ring">Що рахувати поруч</label>
-          <select class="field" id="context-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+          <select class="field" id="context-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
           <div class="hint">До двох шарів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Зв'язок у самій комірці сусіди розмивають — тоді «лише саму комірку». Шар ставить питання про склад подій біля об'єктів; частоту одного типу подій біля них він не перевіряє. Потрібен просторовий аналіз.</div>
           <label class="small" for="time">Колонка часу</label>
           <input class="field" id="time" placeholder="напр. order_date">
@@ -307,7 +307,7 @@
     <div class="hint">Типи базового шару, якщо їх обрано; порожньо — питаємо лише про склад.</div>
     <details class="adv"><summary><span>Додатково</span></summary>
       <label class="small" for="link-ring">Що рахувати поруч</label>
-      <select class="field" id="link-ring"><option value="1">комірку й шість сусідніх</option><option value="0">лише саму комірку</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+      <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
     </details>
     <div class="msg" id="link-msg"></div>
     <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button><button type="submit" class="btn" id="link-go">Запустити</button></div>

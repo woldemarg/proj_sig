@@ -16,7 +16,7 @@ import pandas as pd
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.context import RINGS, ContextSource
+from subgroup_miner.context import DEFAULT_RING, RINGS, ContextSource
 from subgroup_miner.spatial import (
     GEO_MODE_MAX_LEVELS,
     SpatialContext,
@@ -113,7 +113,7 @@ def dataset_fingerprint(
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
     file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
     order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
-    only when it is not the default (an upload made before the option keeps its id); ``where`` a reading's row filter,
+    only when it is not 1 (the disk of every upload before the option, which keeps its id; the default is now 0); ``where`` a reading's row filter,
     and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id); ``weights`` the
     event-weighted median of the shares (``WEIGHT_BY_EVENTS``), mixed in only when on; ``baseline`` the zone baseline,
     mixed in only when it is not the map."""
@@ -295,9 +295,9 @@ def parse_tz(tz: str | None) -> str | None:
 
 
 def parse_ring(ring: int | str | None) -> int:
-    """A context layer's disk (``RINGS``): the cell alone (0), with its six neighbours (1, the default: None or empty),
-    two rings (2). Another value is ``invalid_options``."""
-    text = str(1 if ring is None else ring).strip() or "1"
+    """A context layer's disk (``RINGS``): the cell alone (0, ``DEFAULT_RING``: None or empty), with its six
+    neighbours (1), two rings (2). Another value is ``invalid_options``."""
+    text = str(DEFAULT_RING if ring is None else ring).strip() or str(DEFAULT_RING)
     if text not in map(str, RINGS):
         raise IngestionError(
             "invalid_options", f"context_ring {ring!r}: one of {', '.join(map(str, RINGS))} — the rings around a cell its layers are counted over"
@@ -399,7 +399,7 @@ def load_dataset(
     grid: str | None = None,
     tz: str | None = None,
     context: Sequence[tuple] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
-    context_ring: int | str | None = 1,
+    context_ring: int | str | None = DEFAULT_RING,
     where: str | None = None,
     count_values: Sequence[str] = (),
     baseline: str | None = None,
@@ -553,7 +553,8 @@ def read_context(
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
         raise IngestionError("invalid_options", f"context layer {name!r}: No valid point in {path.name}")
     window_part = f":{window[0]}@{window[2]}..{window[3]}" if window else ""
-    return ContextSource(name, lat, lon), f"{name}:{sha[:12]}:{locator}{window_part}" + (f":{where}" if where else "")
+    key = f"{sha[:12]}:{locator}{window_part}" + (f":{where}" if where else "")
+    return ContextSource(name, lat, lon, key), f"{name}:{key}"
 
 
 @functools.lru_cache(maxsize=4)  # ponytail: the layers of the upload running now (at most two); keyed by the file's stamp
@@ -572,7 +573,7 @@ def _to_cells(
     config: MinerConfig,
     profile_key: object = None,
     context: Sequence[ContextSource] = (),
-    context_ring: int = 1,
+    context_ring: int = DEFAULT_RING,
     count_values: Sequence[str] = (),
     baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:

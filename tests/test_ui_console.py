@@ -158,7 +158,12 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.goto(f"{url}/")
         page.wait_for_selector(".ds-link", timeout=20000)
         page.click(".ds-link")
-        assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == ("kind=a", "1")  # the base's types, the default disk
+        assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == (
+            "kind=a",
+            "0",
+        )  # the base's types, the default disk: the cell alone
+        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
         page.select_option("#link-sample", "schools")
         page.click("#link-go")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
@@ -168,11 +173,15 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
         page.select_option("#link-layer", layer)  # the same layer again: the run exists
+        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        page.select_option("#link-ring", "1")  # the same disk as the run
         page.click("#link-go")
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
         page.click(".ds-link")
         page.select_option("#link-sample", "patrols")
         page.fill("#link-counts", "")  # no types: the composition alone
+        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        page.select_option("#link-ring", "1")
         page.click("#link-go")
         page.wait_for_function("document.getElementById('batches').textContent.includes('+ patrols')", timeout=20000)
         batches = settled()

@@ -6,6 +6,8 @@ reads, and the layer's null on them."""
 from __future__ import annotations
 
 import math
+import re
+from pathlib import Path
 
 import h3
 import numpy as np
@@ -16,14 +18,16 @@ from fastapi.testclient import TestClient
 from test_crosstype import BAND, ORIGIN, RES, cross, cross_run, mined, planted, points_at, schools_of, upload_file
 from test_spatial import cells_of
 
-from insight_contracts import Shift
+from insight_contracts import PhenomenonThresholds, Shift, wording
 from insight_contracts.graph import dataset_node_id
 from insight_graph_service.core.engine import PipelineError
 from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY
-from subgroup_miner.discovery import _event_weights, _median_z, _per_event, _weighted_median, _weighted_stats, recompute_statistics
-from subgroup_miner.ingestion import load_dataset
+from subgroup_miner.discovery import _event_weights, _median_z, _per_event, _weighted_median, _weighted_stats, recompute_statistics, run_discovery
+from subgroup_miner.ingestion import load_dataset, parse_ring
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def mixed(tmp_path):
@@ -89,14 +93,22 @@ def test_the_layer_null_reads_a_share_cohort_with_the_same_weights(tmp_path):
     times the Moran factor —; the recomputation reproduces every number, and the dataset id names the weighting."""
     target, context = mixed(tmp_path)
     on = MinerConfig(context_permutations=99, weight_by_events=True)
-    loaded = load_dataset(target, on, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    loaded = load_dataset(target, on, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1)
     assert (
         loaded.dataset_id
-        != load_dataset(target, MinerConfig(context_permutations=99), geo=f"lat,lon@{RES}", context=[("schools", context, "auto")]).dataset_id
+        != load_dataset(
+            target,
+            MinerConfig(context_permutations=99, weight_by_events=False),
+            geo=f"lat,lon@{RES}",
+            context=[("schools", context, "auto")],
+            context_ring=1,
+        ).dataset_id
     )
     table = tmp_path / "table.csv"
     pd.DataFrame({"x": np.random.default_rng(3).normal(size=300), "k": np.resize(["a", "b", "c"], 300)}).to_csv(table, index=False)
-    assert load_dataset(table, on).dataset_id == load_dataset(table, MinerConfig()).dataset_id  # no cells, no shares: the weights apply to nothing
+    assert (
+        load_dataset(table, on).dataset_id == load_dataset(table, MinerConfig(weight_by_events=False)).dataset_id
+    )  # no cells, no shares: the weights apply to nothing
     insights, result = mined(loaded, on)
     assert result.profile.weight_by_events
     family = sum(any(c.attribute == BAND for c in i.conditions) for i in insights)
@@ -337,3 +349,94 @@ def test_a_pair_is_the_same_insights_other_question_never_a_second_insight(engin
     assert "share_kind_a" in pairs and pairs["share_kind_a"]["target"] == "count_kind_a", sorted(pairs)  # the share's cohort carries its count
     assert pairs["share_kind_a"]["local"] > pairs["share_kind_a"]["baseline"] >= 1
     assert all(p["target"] in {"count_kind_a", "share_kind_a"} for t, p in pairs.items() if p and t in ("count_kind_a", "share_kind_a"))
+
+
+def rare(tmp_path):
+    """The schools of ``planted`` with a rare type's frequency planted: eight events in every cell, of kinds b and c
+    evenly but one in a hundred of kind r away from the schools and six in a hundred in a school's disk — so a cell's count of r is 0 in most cells
+    near a school too (its median 0 everywhere), while its mean there is six times the map's."""
+    rng = np.random.default_rng(11)
+    cells, schools, near = schools_of(rng)
+    parts = []
+    for c in cells:
+        lat, lon = h3.cell_to_latlng(c)
+        kind = np.where(rng.random(8) < (0.06 if c in near else 0.01), "r", rng.choice(["b", "c"], 8))  # three kinds: shares, as a type column
+        parts.append(
+            pd.DataFrame({"lat": lat + rng.normal(0, 1e-4, 8), "lon": lon + rng.normal(0, 1e-4, 8), "load": rng.normal(10, 2, 8), "kind": kind})
+        )
+    target, context = tmp_path / "target.csv", tmp_path / "schools.csv"
+    pd.concat(parts, ignore_index=True).to_csv(target, index=False)
+    points_at(schools, 1).to_csv(context, index=False)
+    return target, context
+
+
+def test_a_rare_types_count_is_read_by_its_mean_where_its_median_is_zero(tmp_path):
+    """A counted type whose map median is 0 (more than half the cells hold none) says nothing through a median: the
+    cohort near the schools holds six times its rate and still a median 0. Such a counter is read by its mean —
+    in the screen, the confirmation and the layer's null alike —, the insight names it among its ``means``, and its
+    words say *у середньому*; a counter with a positive median stays a median (docs/02_discovery.md §2.9)."""
+    target, context = rare(tmp_path)
+    config = MinerConfig(context_permutations=99)
+    loaded = load_dataset(
+        target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1, count_values=["kind=r", "kind=b"]
+    )
+    counts = loaded.frame["count_kind_r"]
+    assert counts.median() == 0 and counts[loaded.frame[BAND] != NONE_NEARBY].median() == 0  # the median sees nothing
+    insights, result = mined(loaded, config)
+    assert result.profile.means == ["count_kind_r"]  # count_kind_b's median is positive: it stays a median
+    (found, *_) = [i for i in cross(insights) if i.target == "count_kind_r"]
+    assert found.local > 2 * found.baseline and found.provenance["means"] == ["count_kind_r"]  # the map holds the near cells too
+    family = sum(any(c.attribute == BAND for c in i.conditions) for i in insights)
+    fresh = recompute_statistics(
+        loaded.frame,
+        [(c.attribute, c.value) for c in found.conditions],
+        found.expression,
+        ["count_kind_r"],
+        loaded.spatial,
+        result.n_tests,
+        config,
+        family,
+    )
+    assert (fresh["shifts"][0]["local_median"], fresh["p_value"]) == (found.local, found.p_value)  # a re-check reads the same mean
+    assert found.provenance["spatial"]["p_context"] * family <= 0.05  # past the layer's null, read by the same mean
+    assert "у середньому" in wording.reading(found, PhenomenonThresholds())["what"]
+
+
+def test_the_layers_null_draws_from_its_points_not_its_name(tmp_path):
+    """The null's draws are seeded from the scope with each layer named by its content (the file's hash), so the same
+    points under another file name give the same ``p_context``: a renamed copy is the same evidence."""
+    target, context = mixed(tmp_path)
+    config = MinerConfig(context_permutations=99)
+    renamed = tmp_path / "clinics.csv"
+    renamed.write_bytes(context.read_bytes())
+    drawn = []
+    for name, path in (("schools", context), ("clinics", renamed)):
+        loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[(name, path, "auto")], context_ring=1)
+        band = f"context_{name}_band"
+        fresh = recompute_statistics(loaded.frame, [(band, "q1")], f"{band}=='q1'", ["load_median"], loaded.spatial, 10, config, 5)
+        drawn.append(fresh["spatial"]["p_context"])
+    assert drawn[0] == drawn[1] and 0.05 < drawn[0] < 1  # a mid-range p: the draws decide it, and they are the same
+
+
+def test_event_weights_are_on_and_the_link_reads_the_cell_alone_by_default():
+    """Two defaults the cross-layer experiments measured (review 2026-11-04, X-1 and X-2): a share is confirmed per
+    event unless switched off, and a layer is counted in the cell itself unless a wider disk is asked — at the old
+    default disk the layer's within-parent null kept 88 % of the cells near a point near it and refused every
+    same-cell effect. The console offers the cell alone first."""
+    assert MinerConfig().weight_by_events and parse_ring(None) == parse_ring("") == 0
+    page = (ROOT / "sig_web_console" / "static" / "index.html").read_text(encoding="utf-8")
+    for select in ("link-ring", "context-ring"):
+        assert re.search(rf'id="{select}"><option value="0">', page), select
+
+
+def test_an_asked_counter_is_mined_even_where_its_share_ranks_with_it(tmp_path):
+    """A rare type is 0 in most cells by count and by share, so the two rank together (0.99 on the Chicago crimes'
+    robbery): the profile's redundancy rule kept the share and dropped the counter the run asked for, silently. The
+    counters a run asks for and their shares are its question: never dropped as redundant."""
+    target, context = rare(tmp_path)
+    config = MinerConfig(context_permutations=0)
+    loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], context_ring=1, count_values=["kind=r"])
+    frame = loaded.frame
+    assert frame[["count_kind_r", "share_kind_r"]].rank().corr().iloc[0, 1] > 0.95  # the redundancy rule's threshold
+    result = run_discovery(frame, config, spatial=loaded.spatial)
+    assert {"count_kind_r", "share_kind_r"} <= set(result.profile.numerics)

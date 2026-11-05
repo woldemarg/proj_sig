@@ -400,9 +400,11 @@ def _shift_head(s: Shift, glossary: Mapping[str, str], geo: bool) -> str:
     return f"{column_words(s.metric, glossary, geo)}: {shift_words(s.robust_z)}"
 
 
-def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool) -> str:
-    overall = " загалом" if first else ""
-    return f"{_shift_head(s, glossary, geo)}, медіана {format_value(s.local_median)} проти {format_value(s.global_median)}{overall} ({s.robust_z:+.2f} sd)"
+def _shift(s: Shift, glossary: Mapping[str, str], geo: bool, first: bool, means: Collection[str] = ()) -> str:
+    """A shift with its numbers: the medians, or the means of a counter read by its mean (``means``: the insight's
+    ``provenance["means"]``, discovery.means_of)."""
+    overall, location = " загалом" if first else "", "у середньому" if s.metric in means else "медіана"
+    return f"{_shift_head(s, glossary, geo)}, {location} {format_value(s.local_median)} проти {format_value(s.global_median)}{overall} ({s.robust_z:+.2f} sd)"
 
 
 def _covariance_head(cov: Mapping[str, Any], glossary: Mapping[str, str], geo: bool) -> str:
@@ -436,7 +438,7 @@ def reading(
     else:
         shifts = thresholds.phenomenon_shifts(ins)[:2]
         headline = _shift_head(shifts[0], glossary, geo) if shifts else ""
-        what = "; ".join(_shift(s, glossary, geo, first=i == 0) for i, s in enumerate(shifts))
+        what = "; ".join(_shift(s, glossary, geo, first=i == 0, means=ins.provenance.get("means", ())) for i, s in enumerate(shifts))
         gist = "; ".join(_shift_head(s, glossary, geo) for s in shifts)
     where = " і ".join(condition_words(c, glossary, geo, bands or {}, ring) for c in ins.conditions)
     return {"where": where, "what": what, "headline": headline, "gist": gist}

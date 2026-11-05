@@ -43,6 +43,7 @@ from insight_graph_service.core.neo4j_mirror import Mirror
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
 from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, new_batch_id, utc_now
+from subgroup_miner.context import DEFAULT_RING
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import (
     IngestionError,
@@ -465,7 +466,7 @@ class Engine:
         grid: str | None = None,
         tz: str | None = None,
         context: list[dict[str, str]] | None = None,
-        context_ring: int = 1,
+        context_ring: int = DEFAULT_RING,
         inherited: dict[str, Any] | None = None,
         warnings: Sequence[str] = (),
         where: str | None = None,

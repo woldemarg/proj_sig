@@ -95,7 +95,13 @@ def test_one_file_crosses_itself_under_two_filters_read_in_place(engine, tmp_pat
     assert np.isfinite(located.lat).sum() == len(schools)  # the layer's rows only, not the target's beside them
     layer = [("mixed_s", Path(entry["path"]), "lat,lon", None, "kind=s")]
     direct = load_dataset(
-        Path(record["source_path"]), engine.settings.miner, filename=record["filename"], geo=record["geo"], where="kind=a", context=layer
+        Path(record["source_path"]),
+        engine.settings.miner,
+        filename=record["filename"],
+        geo=record["geo"],
+        where="kind=a",
+        context=layer,
+        context_ring=record["context_ring"],
     )
     assert record["dataset_id"] == direct.dataset_id  # both filters, the run's own load included
     assert any(
