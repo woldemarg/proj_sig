@@ -107,8 +107,8 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .ds.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .ds.off .ds-name, .ds.off .ds-count, .ds.off .ds-glyph { opacity: .45; }
 .ds-kids { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--line); }
-.ds-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
-.ds-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }  /* two lines, then an ellipsis */
+.ds-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 26px; }  /* chips wrap below a name, never squeeze it */
+.ds-name { flex: 1 1 7em; min-width: 0; font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }  /* two lines, then an ellipsis */
 .ds.layer .ds-name { font-weight: 500; }
 .ds-pick { background: none; border: 0; padding: 0; font-family: inherit; font-size: inherit; color: inherit; text-align: left; cursor: pointer; }  /* a READY row's name: its keyboard handle */
 .ds-glyph { display: inline-flex; color: var(--muted); }
@@ -128,7 +128,7 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .link-opt { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .link-opt:hover { border-color: var(--accent); background: var(--accent-soft); } .link-opt:disabled { opacity: .5; cursor: progress; }
 .link-opt .muted { font-size: 12px; white-space: nowrap; }
-.link-dev { margin-top: 4px; }
+.link-dev { margin-bottom: 6px; } .link-opts { margin-top: 8px; }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 99px; font-size: 11.5px; font-weight: 620; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.bad { background: var(--bad-soft); color: var(--bad); }
@@ -142,7 +142,7 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .ds-error b { color: var(--bad); } .ds-error .why { color: var(--ink-2); margin-top: 3px; font-size: 12.5px; } .ds-error .tip { margin-top: 5px; color: var(--ink); font-size: 12.5px; }
 .ds-note { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
 .ds-dims { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-.ds-more { padding-left: 2px; } .ds-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ds-more { padding-left: 2px; } .ds-more > summary { font-size: 12px; color: var(--muted); cursor: pointer; margin-top: 2px; } .ds-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .empty-rail { text-align: center; color: var(--muted); padding: 26px 10px; font-size: 13px; }
 table.ins .tag, table.ins th { white-space: normal; }  /* long conditions wrap: the metric and shift columns stay in sight */
 
@@ -153,7 +153,7 @@ table.ins .tag, table.ins th { white-space: normal; }  /* long conditions wrap: 
 .tabs button { height: 28px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); cursor: pointer; font-weight: 580; display: inline-flex; align-items: center; gap: 6px; }
 .tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 .tabs .count { font-size: 11.5px; color: var(--muted); font-weight: 600; }
-.canvas-bar select.field { width: auto; min-width: 150px; height: 32px; }
+.canvas-bar select.field { width: auto; min-width: 150px; max-width: 220px; height: 32px; }  /* a long dataset name never wraps the bar */
 .view { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 #cy { position: absolute; inset: 0; background: var(--graph-bg); }
 #sphere { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--sunken); color: var(--muted); font-size: 14px; }

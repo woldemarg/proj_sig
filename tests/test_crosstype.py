@@ -733,7 +733,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
     a card shows its record's warnings."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
-    from conftest import make_engine, serve, stack
+    from conftest import make_engine, pick_dataset, serve, stack
     from dev import chromium
 
     exe = chromium()
@@ -760,6 +760,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
+        page.evaluate("document.querySelectorAll('.ds-more').forEach((d) => (d.open = true))")  # every row's folded record opened
         card = page.locator(f".ds[data-ds='{run['dataset_id']}']")
         refused = card.locator(".term", has_text="без умови шару")
         assert refused.get_attribute("title") and f"без умови шару: {run['metrics']['pruned']['outside_cross_type']}" in card.inner_text()
@@ -783,7 +784,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         client.delete(f"/api/datasets/{next(r['batch_id'] for r in engine.ws.list_batches() if r['upload_id'] == b)}")
         page.evaluate("refreshBatches()")
         page.wait_for_function(f"document.querySelector(\".ds[data-ds='{run['dataset_id']}']\").textContent.includes('шар видалено')", timeout=20000)
-        page.select_option("#dataset-filter", run["dataset_id"])
+        pick_dataset(page, run["dataset_id"])
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{run['dataset_id']}' && G.map.loaded() && G.data", timeout=60000)
         page.evaluate(f"GeoMap.focusPattern('{crossed}')")
@@ -933,7 +934,9 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         # the stations: nothing admitted, the cohorts their arrangement within parent cells reproduces counted on the card
         assert (stations["status"], stations["error"]["code"]) == ("FAILED", "no_viable_insights")
         assert stations["metrics"]["pruned"]["context_confounded"] > 0
-        card = page.wait_for_selector(".ds.layer:has-text('Станції')", timeout=20000).inner_text()
+        page.wait_for_selector(".ds.layer:has-text('Станції')", timeout=20000)
+        page.evaluate("document.querySelectorAll('.ds-more').forEach((d) => (d.open = true))")  # every row's folded record opened
+        card = page.inner_text(".ds.layer:has-text('Станції')")
         assert f"пояснюється фоном зони: {stations['metrics']['pruned']['context_confounded']}" in card
         # the bars: a finding, its drawer reading the layer's verdict
         found = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == bars["dataset_id"]]

@@ -45,6 +45,9 @@ const ICON = {
   layer: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg>',
 };
 
+const more = (b, html) =>  // a row's record for the developer, folded: the tree stays one line a dataset
+  `<details class="ds-more" data-dev data-b="${esc(b.batch_id)}"><summary>подробиці</summary>${html}</details>`;
+
 function rowBody(b, neutral) {
   /* under a row's head: progress, an error, a verdict for everyone; the record's details for the developer */
   const m = b.metrics || {}, p = b.profile || {};
@@ -57,14 +60,14 @@ function rowBody(b, neutral) {
       ((b.stage_times || {})[b.status] ? ` · <span class="ds-elapsed" data-since="${esc(b.stage_times[b.status])}"></span>` : "") + `</span></div>`;
   }
   if (b.status === "READY") {
-    return `<div class="ds-more" data-dev><div class="ds-sub">${esc(when)}</div>` + datasetTrust(S.datasets[b.dataset_id]) +
+    return more(b, `<div class="ds-sub">${esc(when)}</div>` + datasetTrust(S.datasets[b.dataset_id]) +
       `<div class="ds-note">${plural(m.attractors_new ?? m.attractors_total, "нова тема", "нові теми", "нових тем")} · ${plural(m.input_rows, "рядок", "рядки", "рядків")} · ` +
       `${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · ` +
       `<a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
       timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") + refusals(b) +
-      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : "") + `</div>`;
+      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : ""));
   }
-  if (neutral) return `<div class="ds-note">${b.cross ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div><div class="ds-more" data-dev>${refused}${refusals(b)}${timeNotes(b)}<div class="ds-note mono">${esc(b.error.message)}</div></div>`;  // the codes' dict: the developer's
+  if (neutral) return `<div class="ds-note">${b.cross ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${more(b, `${refused}${refusals(b)}${timeNotes(b)}<div class="ds-note mono">${esc(b.error.message)}</div>`)}`;  // the codes' dict: the developer's
   if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     return `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` + (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") +
@@ -85,7 +88,7 @@ function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
   const level = !layer && levelOf(b) ? `<span class="ds-lvl" data-dev>${esc(levelOf(b))}</span>` : "";
   const hide = layer ? `<button type="button" class="ds-hide ds-icon" data-hide="${esc(layer)}" data-on="${off ? "" : "1"}"${busy ? " disabled" : ""} ` +
     `aria-label="${off ? "Показати шар" : "Сховати шар"}" title="${busy ? "Іде обробка: зачекайте" : off ? "Показати шар" : "Сховати шар (з усіх датасетів, де він є)"}">${off ? ICON.eyeOff : ICON.eye}</button>` : "";
-  const del = running ? "" : `<button type="button" class="ds-del ds-icon" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(datasetName(b))}" aria-label="Видалити" ` +
+  const del = running ? "" : `<button type="button" class="ds-del ds-icon" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(b.cross ? label : datasetName(b))}"${b.cross ? ` data-layer="${esc(layer)}"` : ""} aria-label="Видалити" ` +
     `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : layer ? "Прибрати шар із цього датасету" : "Прибрати з бази знань"}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
   return `<div class="ds${ready ? " clickable" : ""}${active ? " active" : ""}${layer ? " layer" : ""}${off ? " off" : ""}" data-ds="${esc(ready ? b.dataset_id : "")}">` +
     `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}${hide}${del}</div>` +
@@ -139,10 +142,18 @@ function datasetTrust(t) {
   return chips ? `<div class="ds-src">${chips}</div>` : "";
 }
 
-async function deleteDataset(id, name) {
-  if (!confirm(`Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.`)) return;
-  try { await api(`/api/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }); setUploadMsg(`Видалено «${name}».`); }
-  catch (err) { setUploadMsg(err.message, true); }
+async function deleteDataset(id, name, layer = "") {
+  /* a dataset out of the knowledge base; a layer's run (``layer``) takes its layer along when no other dataset reads it */
+  const ask = layer ? `Прибрати шар «${name}»?\n\nЙого знахідки зникнуть; сам шар — теж, якщо його не використовує інший датасет.`
+    : `Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.`;
+  if (!confirm(ask)) return;
+  const kept = layer && S.batches.find((b) => b.upload_id === layer && b.status === "LAYER");  // a layer-only upload, never another dataset
+  const shared = S.batches.some((b) => (b.cross || []).includes(layer) && b.dataset_id !== id && b.status !== "SKIPPED");
+  try {
+    await api(`/api/datasets/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (kept && !shared) await api(`/api/datasets/${encodeURIComponent(kept.batch_id)}`, { method: "DELETE" });
+    setUploadMsg("");
+  } catch (err) { setUploadMsg(err.message, true); }
   if ($("dataset-filter").value === id) $("dataset-filter").value = "";
   S.lastReady = null;  // force the views to reload
   refreshBatches();
@@ -164,6 +175,7 @@ function renderRail(html) {
   const box = $("batches"), next = document.createElement("div");
   next.innerHTML = html;
   tick(box); tick(next);  // the same clock on both sides: a running row's time is no change
+  box.querySelectorAll(".ds-more[open]").forEach((d) => next.querySelector(`.ds-more[data-b="${CSS.escape(d.dataset.b)}"]`)?.setAttribute("open", ""));  // an opened record stays open
   const fresh = [...next.children], picked = box.contains(document.activeElement) && document.activeElement.closest(".ds")?.dataset.ds;
   if (box.children.length !== fresh.length) box.replaceChildren(...fresh);
   else [...box.children].forEach((el, i) => swapChanged(el, fresh[i]));
@@ -235,6 +247,7 @@ function setRole(r, layerOnly = false) {
   $("roles").disabled = !r;
   for (const v of ["events", "table", "layer"]) { const el = $(`role-${v}`); el.checked = v === r; el.disabled = layerOnly && v !== "layer"; }
   $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
+  $("count-box").hidden = r !== "events";  // per-type counters: the map's cells only
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
   syncTable();

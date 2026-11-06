@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from conftest import make_engine, serve, stack
+from conftest import make_engine, pick_dataset, serve, stack
 from dev import chromium
 
 from insight_contracts.wording import TERMS, name
@@ -139,10 +139,10 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert len(page.evaluate(chips)) == 8 and {"Чому margin нижчий для phones у US?", "Де median_house_value вищий?"} <= set(
             page.evaluate(chips)
         )  # both demos' questions
-        page.select_option("#dataset-filter", housing["dataset_id"])  # the filter narrows the welcome card to one dataset
+        pick_dataset(page, housing["dataset_id"])  # the filter narrows the welcome card to one dataset
         page.wait_for_function(f"({chips}).length === 4", timeout=10000)
         assert page.evaluate(chips)[0] == "Чому median house value нижчий у зонах INLAND?"
-        page.select_option("#dataset-filter", "")
+        pick_dataset(page, "")
         page.wait_for_function(f"({chips}).length === 8", timeout=10000)
         options = page.evaluate("[...document.querySelectorAll('#dataset-filter option')].map((o) => o.textContent)")
         assert any(o.endswith(" · H3 r5") for o in options)  # a geo dataset names its level, as the levels of one upload must
@@ -352,7 +352,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         retail = page.evaluate(
             f"[...document.querySelectorAll('#dataset-filter option')].map((o) => o.value).find((v) => v && v !== '{housing['dataset_id']}')"
         )
-        page.select_option("#dataset-filter", retail)  # a filter the next answer's evidence does not live in
+        pick_dataset(page, retail)  # a filter the next answer's evidence does not live in
         page.wait_for_selector(f".ds.active[data-ds='{retail}']")
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("ask('Де median_house_value вищий?')")  # an answer paints nothing on the map until a citation is clicked
@@ -514,9 +514,9 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         settled = "__net.pending === 0 && !G.refreshing"
         # the filter changed twice in a row: the first one's graph answers last
         page.evaluate(f"__net.slow = ['/api/graph?dataset={table}']")
-        page.select_option("#dataset-filter", table)
+        pick_dataset(page, table)
         page.wait_for_function("__net.pending === 1")
-        page.select_option("#dataset-filter", geo)
+        pick_dataset(page, geo)
         page.wait_for_function(settled, timeout=10000)
         assert {n["id"] for n in page.evaluate("S.nodes")} == {pid for pid, ins in graph.insights.items() if ins.dataset_id == geo}
         # the regions switched on while the plain graph loads, their own request answering first: the graph keeps them

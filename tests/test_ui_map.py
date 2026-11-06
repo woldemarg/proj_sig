@@ -8,7 +8,7 @@ import re
 
 import httpx
 import pytest
-from conftest import make_engine, serve, stack, upload_levels
+from conftest import make_engine, pick_dataset, serve, stack, upload_levels
 from dev import chromium
 
 from insight_graph_service.core.settings import PROJECT_ROOT
@@ -124,7 +124,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
-        assert page.locator(chips).all_inner_texts()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]
+        assert page.locator(chips).all_text_contents()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]  # under the folded record
         # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
         patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)
         assert patched.status_code == 200
@@ -266,7 +266,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
-        page.select_option("#dataset-filter", fine["dataset_id"])
+        pick_dataset(page, fine["dataset_id"])
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
         page.evaluate("if (W.folded) $('mw-fold').click()")
@@ -430,12 +430,12 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         assert page.evaluate("[G.ds, G.others]") == [full["dataset_id"], []]
         page.evaluate(f"loadDataset({other['dataset_id']!r})")  # its anchor again: «Усі датасети» for the filter to leave
         assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
-        page.select_option("#dataset-filter", full["dataset_id"])
+        pick_dataset(page, full["dataset_id"])
         page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
         assert page.inner_text("#map-title") == "Житло Каліфорнії (мапа)"  # a shipped set by its title
-        page.select_option("#dataset-filter", other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
+        pick_dataset(page, other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
         page.wait_for_function(f"G.ds === {other['dataset_id']!r} && G.others.length === 0 && !G.loading", timeout=20000)
-        page.select_option("#dataset-filter", "")
+        pick_dataset(page, "")
         page.wait_for_function("G.others.length === 1 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'none'", timeout=20000)
         assert page.inner_text("#map-title") == "Усі датасети"
         browser.close()
@@ -480,9 +480,9 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
         served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
         assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
-        page.select_option("#dataset-filter", other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
+        pick_dataset(page, other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
         page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
-        page.select_option("#dataset-filter", "")
+        pick_dataset(page, "")
         page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
         page.evaluate("W.all = true; renderWindow()")
         assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span

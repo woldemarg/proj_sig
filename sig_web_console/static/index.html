@@ -46,13 +46,13 @@
         <button type="button" data-view="time" role="tab" aria-selected="false" id="time-tab" hidden>Час</button>
       </div>
       <div class="spacer"></div>
-      <select class="field" id="dataset-filter" aria-label="Датасет" data-dev><option value="">Усі датасети</option></select>
+      <select class="field" id="dataset-filter" aria-label="Датасет" hidden><option value="">Усі датасети</option></select>
       <select class="field graph-only" id="layout" aria-label="Розкладка" data-dev>
         <option value="dual">Дві площини</option>
         <option value="force">Силове розміщення</option>
       </select>
-      <button class="btn ghost sm" id="fit-btn" title="Показати весь граф у вікні / повернути камеру сфери">Показати все</button>
-      <button class="btn ghost sm" id="legend-btn" data-dev title="Показати чи сховати легенду" aria-pressed="true">Легенда</button>
+      <button class="icon-btn" id="fit-btn" title="Показати все: весь граф у вікні / камера сфери на місце" aria-label="Показати все"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      <button class="icon-btn" id="legend-btn" data-dev title="Легенда: показати чи сховати" aria-label="Легенда" aria-pressed="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="4.5" cy="18" r="1.5"/></svg></button>
       <button class="btn ghost sm" id="clear-btn" title="Прибрати виділення відповіді" hidden>Прибрати виділення</button>
     </div>
 
@@ -212,15 +212,16 @@
 <dialog id="link-dialog" aria-labelledby="link-title">
   <form id="link-form">
     <h3 id="link-title">Додати шар</h3>
-    <div class="link-opts" id="link-opts"></div>
-    <label class="link-opt" for="link-file">Файл точок…<span class="muted">CSV, TSV, Parquet</span></label>
-    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet" hidden>
+    <label class="small" for="link-counts">Типи для «більше подій»</label>
+    <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
+    <div class="hint">Які типи подій датасету рахувати біля шару; порожньо — лише склад подій. Задайте до вибору шару: клік його запускає.</div>
     <div class="link-dev" data-dev>
-      <label class="small" for="link-counts">Типи для «більше подій»</label>
-      <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
       <label class="small" for="link-ring">Що рахувати поруч</label>
       <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
     </div>
+    <div class="link-opts" id="link-opts"></div>
+    <label class="link-opt" for="link-file">Файл точок…<span class="muted">CSV, TSV, Parquet</span></label>
+    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet" hidden>
     <div class="msg" id="link-msg"></div>
     <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button></div>
   </form>
@@ -244,6 +245,11 @@
       <label class="role-card" title="Інсайти рядків таблиці"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця</b></label>
       <label class="role-card" title="Контекстний шар: точки, що лише стоять поруч із подіями датасету"><input type="radio" name="role" id="role-layer" value="layer"><b>Шар</b></label>
     </fieldset>
+    <div id="count-box" hidden>
+      <label class="small" for="count-values">Типи для «більше подій»</label>
+      <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
+      <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
+    </div>
     <details class="adv" data-dev>
       <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>
       <p class="adv-h">Простір</p>
@@ -253,9 +259,6 @@
       <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
       <label class="small" for="baseline">Порівнювати комірки</label>
       <select class="field" id="baseline"><option value="">з усією мапою</option><option value="zone">зі своєю зоною (батьківською коміркою)</option></select>
-      <label class="small" for="count-values">Типи для «більше подій»</label>
-      <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
-      <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
       <label class="small" for="where">Лише рядки</label>
       <input class="field" id="where" placeholder="колонка=значення">
       <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>

@@ -404,7 +404,7 @@ function init() {
     if (sel.value && sel.value !== p.dataset_id) { sel.value = ""; await refreshBatches(); }
     setView("graph"); reveal(p.id);
   });
-  on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
+  on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name, el.dataset.layer); });
   on($("batches"), ".ds-refused summary", (el, e) => {  // a run's refused layer cohorts, read once on the first opening
     e.stopImmediatePropagation();
     const box = el.parentElement;
@@ -418,7 +418,10 @@ function init() {
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
   $("add-btn").addEventListener("click", () => { setUploadNote(""); $("upload-dialog").showModal(); });
   $("upload-cancel").addEventListener("click", () => $("upload-dialog").close());
-  on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
+  on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
+    if (e.target.closest(".ds-more")) return;
+    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches();
+  });
   on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
     e.stopImmediatePropagation();
     S.openVariants.has(el.dataset.var) ? S.openVariants.delete(el.dataset.var) : S.openVariants.add(el.dataset.var);
