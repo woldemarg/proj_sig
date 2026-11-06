@@ -413,7 +413,9 @@ def test_the_layers_null_draws_from_its_points_not_its_name(tmp_path):
     for name, path in (("schools", context), ("clinics", renamed)):
         loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[(name, path, "auto")], context_ring=1)
         band = f"context_{name}_band"
-        fresh = recompute_statistics(loaded.frame, [(band, "q1")], f"{band}=='q1'", ["load_median"], loaded.spatial, 10, config, 5)
+        fresh = recompute_statistics(
+            loaded.frame, [(band, "q1")], f"{band}=='q1'", ["load_median"], loaded.spatial, 10, config
+        )  # family 1: a wider family stops at its first hits
         drawn.append(fresh["spatial"]["p_context"])
     assert drawn[0] == drawn[1] and 0.05 < drawn[0] < 1  # a mid-range p: the draws decide it, and they are the same
 
