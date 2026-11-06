@@ -1,8 +1,8 @@
-# ADS for the demo: the orchestrator and what it needs to run a job (minio, postgres, executor, llm), with Phoenix for its
-# traces (http://127.0.0.1:6006). Copilot, its UI and auth, MLflow and monitoring start only with `--profile ads-full`.
+# ADS for the demo: the orchestrator and what it needs to run a job (minio, postgres, executor, llm), with MLflow for its
+# traces as ADS has it (http://localhost:5050, workspace and experiment agentic-data-science). Copilot, its UI and auth,
+# Phoenix and monitoring start only with `--profile ads-full`.
 services:
-  mlflow: { profiles: [ads-full] }
-  mlflow-init: { profiles: [ads-full] }
+  phoenix: { profiles: [ads-full] }
   ads-a2a: { profiles: [ads-full] }
   delta-ai-copilot: { profiles: [ads-full] }
   local-auth: { profiles: [ads-full] }
@@ -10,13 +10,17 @@ services:
   prometheus: { profiles: [ads-full] }
   grafana: { profiles: [ads-full] }
   orchestrator:
-    environment: { TRACING_BACKEND: phoenix }  # ADS sets "phoenix,mlflow"; MLflow is not started here, so Phoenix alone
+    environment: { TRACING_BACKEND: mlflow }  # ADS sets "phoenix,mlflow"; Phoenix is not started here
+    depends_on: !override  # ADS's own list without phoenix, and after mlflow-init: the orchestrator sets MLflow tracing up
+      minio: { condition: service_healthy }  # once at start, in a workspace mlflow-init creates
+      postgres: { condition: service_healthy }
+      executor: { condition: service_started }
+      llm: { condition: service_started }
+      mlflow-init: { condition: service_completed_successfully }
 
 volumes:
-  # The demo's Phoenix on the standalone ADS Phoenix's database: one set of users and API keys for both stacks, so the
-  # one PHOENIX_API_KEY in ADS's .env serves either. Phoenix (latest) needs a login and, for span export, a System API key
-  # (without it every export is 401). External: this project neither creates nor removes it, so `docker compose down -v`
-  # here keeps it; the standalone ADS stack is stopped while the demo runs.
-  phoenix_data:
-    name: agentic-data-science_phoenix_data
+  # MLflow on the standalone ADS stack's database: the traces of both stacks in one place. External: this project neither
+  # creates nor removes it, so `docker compose down -v` here keeps it; the standalone ADS stack is stopped while the demo runs.
+  mlflow_data:
+    name: agentic-data-science_mlflow_data
     external: true
