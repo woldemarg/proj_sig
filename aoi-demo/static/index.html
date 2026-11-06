@@ -104,6 +104,7 @@
     <h3>1 · Дані</h3>
     <div class="row">
       <button id="btn-data">Демо-дані</button>
+      <label class="hint">рахувати типи <select id="count-values" multiple size="3" title="типи подій, які SIG рахує в кожній комірці (count_values); рідкісні вимкнено"></select></label>
       <span class="hint">SIG: шари → крос-прогін → граф</span>
     </div>
     <div class="status" id="st-data">Натисніть «Демо-дані».</div>
@@ -394,7 +395,8 @@ function drawZone(z) {  // the polygon, the map cells it selects for SIG, and th
 
 $("btn-data").onclick = async () => {
   $("btn-data").disabled = true;
-  await fetch("/datasets", { method: "POST" });
+  const count_values = [...$("count-values").selectedOptions].map((o) => o.value);  // SIG counts these types per cell
+  await fetch("/datasets", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count_values }) });
   startPolling();
 };
 
@@ -429,7 +431,10 @@ async function poll() {
     if (d.stage === "ready") {
       $("st-data").className = "status";
       const cross = d.cross_note ? "крос-прогін без знахідок" : `крос-прогін: ${d.cross_insights} інсайт(и)`;
-      $("st-data").textContent = `SIG готовий за ${d.seconds} с: ${d.rows.base} подій, ${d.rows.context} барів, ${d.rows.cells} комірок мапи, ${cross}. Обведіть зону на мапі.`;
+      const levels = `H3 r${d.resolution} і батьки ${d.levels.slice(1).map((l) => "r" + l).join(", ")}`;
+      const counted = d.counted.length ? `лічильники ${d.counted.map((c) => c.replace(/^count_/, "")).join(", ")}` : "без лічильників типів";
+      const warn = d.h3_mismatch ? ` Увага: ${d.h3_mismatch} комірок не збігаються з комірками SIG.` : "";
+      $("st-data").textContent = `SIG готовий за ${d.seconds} с: ${d.rows.base} подій, ${d.rows.context} барів, ${d.rows.cells} комірок мапи, ${levels}, ${counted}, ${cross}.${warn} Обведіть зону на мапі.`;
     } else if (d.stage === "error") {
       $("st-data").className = "status err"; $("st-data").textContent = d.error; $("btn-data").disabled = false;
     } else {
@@ -560,6 +565,8 @@ function renderInsights(items) {
 
 (async () => {
   previewQuery();
+  const o = await (await fetch("/datasets/options")).json();  // the base file's types: the countable ones selectable
+  $("count-values").innerHTML = o.values.map((v) => `<option value="${esc(v.value)}"${v.status === "ok" ? "" : " disabled"}${o.default.includes(v.value) ? " selected" : ""}>${esc(v.value)} (${v.rows}${v.status === "ok" ? "" : ", замало"})</option>`).join("");
   const h = await (await fetch("/health")).json();
   for (const k of ["sig", "ads", "llm"]) { const p = $("pill-" + k); p.className = "pill " + (h[k] === "ok" ? "ok" : "down"); p.title = h[k]; }
   const s = await (await fetch("/state")).json();
