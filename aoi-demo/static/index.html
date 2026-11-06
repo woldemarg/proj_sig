@@ -467,7 +467,7 @@ function renderAsk(a) {
       $("result").hidden = false;
       $("joint").innerHTML = a.joint_report ? marked.parse(a.joint_report) : `<p class="hint">${a.joint_error || "спільний звіт відсутній"}</p>`;
       $("ads").innerHTML = a.ads_report ? marked.parse(a.ads_report) : "<p class='hint'>порожньо</p>";
-      $("files").textContent = `# Запит до ADS\n\n${a.ads_query || ""}\n\n${a.aoi_md || ""}\n${a.insights_md || ""}`;
+      $("files").textContent = `# Запит до ADS\n\n${a.ads_query || ""}\n\n# aoi.md\n\n${a.aoi_md || ""}`;
     }
   }
 }
@@ -479,8 +479,8 @@ const kv = (o) => `<div class="kv">${Object.entries(o).map(([k, v]) => `<span cl
 const fold = (title, body, lazy = "") => `<details${lazy ? ` data-lazy="${lazy}"` : ""}><summary>${esc(title)}</summary>${body}</details>`;
 const chars = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, `${v} симв.`]));
 // the ADS task part by part: the user's words highlighted, each deterministic addition tagged
-const QUERY_PART = { frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані й колонка in_aoi", sig: "+ розрізи зі знахідок SIG у зоні («--- insights.md ---»)" };
-const queryParts = (parts, pending) => parts.map((p) => `<div class="qp${p.kind === "user" ? " user" : ""}"><span class="qtag">${QUERY_PART[p.kind] || p.kind}${pending && p.kind === "sig" ? " (додається, якщо SIG знайде знахідки в зоні)" : ""}</span>${esc(p.text.trim()) || "<i>порожньо</i>"}</div>`).join("");
+const QUERY_PART = { frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані, колонки H3, in_aoi і aoi_zone, лічильники зони", sig_answer: "+ відповідь SIG на це питання, дослівно", observations: "+ знахідки SIG як рядки O#", guidance: "+ настанови: зона проти оточення, зрізи SIG, гіпотези як твердження" };
+const queryParts = (parts, pending) => parts.map((p) => `<div class="qp${p.kind === "user" ? " user" : ""}"><span class="qtag">${QUERY_PART[p.kind] || p.kind}${pending && ["sig_answer", "observations"].includes(p.kind) ? " (після запиту)" : ""}</span>${esc(p.text.trim()) || "<i>порожньо</i>"}</div>`).join("");
 
 let previewTimer = null, sentShown = false;
 function previewQuery() {  // what the ADS task will be for the typed question, from the same function the run uses
