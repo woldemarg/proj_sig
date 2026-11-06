@@ -2,7 +2,8 @@
 # SIG runs from this repo (../compose.yaml), ADS from its own repo (path in .env: ADS_DIR); nothing of them is copied here.
 # Their compose files are included into this project, so their containers, volumes and networks are this project's. Only
 # what the demo calls starts (sig.profiles.yaml, ads.profiles.yaml): SIG's graph service, narrator and LLM broker, with a
-# workspace of the demo's own and no host port; ADS's orchestrator, executor, gateway, minio and postgres. ADS publishes
+# workspace of the demo's own and no host port; ADS's orchestrator, executor, gateway, minio, postgres and Phoenix (its
+# traces, http://127.0.0.1:6006). ADS publishes
 # its usual host ports and fixes its container names, so stop the standalone `agentic-data-science` project first
 # (`docker compose down` there, volumes kept); your own `sig` stack can keep running.
 name: aoi-demo
