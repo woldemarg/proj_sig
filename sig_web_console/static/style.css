@@ -366,8 +366,8 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .ramp { display: flex; height: 7px; border-radius: 2px; overflow: hidden; } .ramp i { flex: 1; }
 .ramp-lbl { display: flex; justify-content: space-between; color: #6f7c95; font-size: 9.5px; margin: 3px 0 8px; }
 .hud-layers { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; padding-top: 6px; border-top: 1px solid #1a2333; }
-.hud-layers label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: #b8c3d9; }
-.hud-layers input { accent-color: #ffb000; margin: 0; }
+.hud-layers label { display: block; white-space: nowrap; cursor: pointer; color: #b8c3d9; } .hud-layers label:has(#lyr-lisa) { grid-column: 1 / -1; }  /* one line a switch */
+.hud-layers input { accent-color: #ffb000; margin: 0 5px 0 0; vertical-align: -2px; }
 .hud-keys { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; color: #8592ab; font-size: 10.5px; }
 .hud-keys i, .hud-layers i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .lg-up { background: #ff8a3d; box-shadow: 0 0 6px #ff8a3d; } .lg-down { background: #36d6ff; box-shadow: 0 0 6px #36d6ff; }
@@ -432,3 +432,8 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .link-card h4 { margin-top: 0; }
 .tag.layer { border: 1px solid var(--lc); color: var(--ink); background: color-mix(in srgb, var(--lc) 14%, transparent); }
 .answer-fold > summary { cursor: pointer; color: var(--accent); font-size: 13px; margin: 6px 0; }
+.tp-box { display: grid; gap: 6px; max-height: 180px; overflow-y: auto; }
+.tp-col { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; } .tp-name { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.tp { padding: 2px 9px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: 12.5px; cursor: pointer; }
+.tp[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+body:not(.dev) .types.has-types > .field { display: none; }  /* picked from the list; the developer may still type */

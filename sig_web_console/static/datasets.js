@@ -248,9 +248,49 @@ function setRole(r, layerOnly = false) {
   for (const v of ["events", "table", "layer"]) { const el = $(`role-${v}`); el.checked = v === r; el.disabled = layerOnly && v !== "layer"; }
   $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
   $("count-box").hidden = r !== "events";  // per-type counters: the map's cells only
+  fileTypes($("file").files[0]).then((t) => renderTypes($("count-types"), $("count-values"), t));  // a shipped set's file is the server's: typed
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
   syncTable();
+}
+
+// the types a dataset holds for *більше подій* (docs/08_interface.md §8.2): column -> values, picked as toggles
+function profileTypes(b) {
+  /* a mined geo level's shares, share_<column>_<value>: the column read off the share's glossary words */
+  const p = b.profile || {}, words = (p.geo || {}).glossary || {}, out = {};
+  for (const key of p.numerics || []) {
+    const m = key.startsWith("share_") && /whose (.+?) is /.exec(words[key] || "");
+    const head = m && `share_${m[1].replace(/ /g, "_")}_`;
+    if (head && key.startsWith(head)) (out[head.slice(6, -1)] ||= []).push(key.slice(head.length));
+  }
+  return out;
+}
+
+async function fileTypes(f) {
+  /* a CSV's or TSV's text columns of 2 to 20 values in its first rows */
+  // ponytail: a naive split of the first 256 KB, a quoted delimiter breaks its row; the server's read decides
+  if (!f || /\.parquet$/i.test(f.name)) return {};
+  const lines = (await f.slice(0, 262144).text()).split(/\r?\n/).filter(Boolean).slice(0, 2001);
+  const sep = [",", "\t", ";"].sort((a, b) => lines[0].split(b).length - lines[0].split(a).length)[0];
+  const cell = (v) => v.trim().replace(/^"|"$/g, ""), head = lines[0].split(sep).map(cell), seen = head.map(() => new Set());
+  for (const line of lines.slice(1, -1)) line.split(sep).forEach((v, i) => seen[i]?.add(cell(v)));
+  return Object.fromEntries(head.map((h, i) => [h, [...seen[i]].filter(Boolean)])
+    .filter(([h, vs]) => !POINT_COLUMNS.test(h) && vs.length >= 2 && vs.length <= 20 && vs.some((v) => Number.isNaN(Number(v)))));
+}
+
+const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
+function renderTypes(box, input, types) {
+  /* a toggle per value, grouped by column, kept in ``input`` as column=value, …; without types the field is typed by hand */
+  const chosen = new Set(typesOf(input));
+  box.innerHTML = Object.entries(types).map(([col, values]) => `<div class="tp-col"><span class="tp-name">${esc(human(col))}</span>` +
+    values.map((v) => `<button type="button" class="tp" data-v="${esc(`${col}=${v}`)}" aria-pressed="${chosen.has(`${col}=${v}`)}">${esc(human(v))}</button>`).join("") + `</div>`).join("");
+  box.parentElement.classList.toggle("has-types", box.children.length > 0);
+}
+
+function toggleType(btn, input) {
+  const on = btn.getAttribute("aria-pressed") !== "true", picked = typesOf(input).filter((t) => t !== btn.dataset.v);
+  input.value = (on ? [...picked, btn.dataset.v] : picked).join(", ");
+  btn.setAttribute("aria-pressed", String(on));
 }
 
 // *+ Додати шар* (docs/08_interface.md §8.2): one layer, one run of the base layer's finest level — the API's two calls
@@ -271,6 +311,7 @@ function openLink(batchId) {
     Object.values(S.samples || {}).filter((d) => (d.options || {}).geo && !kept.has(stem(d.file)))
       .map((d) => opt("sample", d.key, titleOf(d.file), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
+  renderTypes($("link-types"), $("link-counts"), profileTypes(b));
   $("link-dialog").showModal();
 }
 

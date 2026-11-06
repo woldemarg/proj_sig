@@ -84,6 +84,8 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.set_input_files("#file", str(tmp_path / "points.csv"))
         page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
+        page.click("#count-types .tp[data-v='kind=b']")  # the file's types as toggles, read off its first rows
+        assert page.input_value("#count-values") == "kind=b"
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
         for field, value in {"#time": "when", "#where": "kind=a", "#count-values": "kind=a"}.items():
             page.fill(field, value)
@@ -168,6 +170,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
             "kind=a",
             "0",
         )  # the base's types, the default disk: the cell alone
+        assert page.get_attribute(".tp[data-v='kind=a']", "aria-pressed") == "true"  # its toggle, from the base's shares
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
         page.click(".link-opt[data-sample='schools']")  # one click runs it
         kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"

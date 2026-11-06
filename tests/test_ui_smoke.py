@@ -951,7 +951,7 @@ def test_the_time_axis_draws_each_insight_in_time_with_its_events_and_the_as_of_
         ticks = page.evaluate("[...document.querySelectorAll('#time-body .tl-tick')].map((t) => t.textContent)")
         assert ticks == sorted(ticks) and len(ticks) == page.evaluate('S.cy.nodes(\'[kind="TemporalNode"][granularity="month"]\').length')
         page.click('#time-levels [data-level="week"]')
-        page.click('#time-body .tl-tick:has-text("2031-W13")')
+        page.click("#time-body .tl-tick[title^='2031-W13:']")  # a narrow tick reads W13, its full name in the tooltip
         page.wait_for_function("document.getElementById('drawer-title').textContent === '2031-W13'", timeout=10000)
         page.focus("#time-body .tl-row")
         page.keyboard.press("Enter")

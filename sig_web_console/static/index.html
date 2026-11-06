@@ -212,9 +212,12 @@
 <dialog id="link-dialog" aria-labelledby="link-title">
   <form id="link-form">
     <h3 id="link-title">Додати шар</h3>
-    <label class="small" for="link-counts">Типи для «більше подій»</label>
-    <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
-    <div class="hint">Які типи подій датасету рахувати біля шару; порожньо — лише склад подій. Задайте до вибору шару: клік його запускає.</div>
+    <div class="types">
+      <label class="small" for="link-counts">Типи для «більше подій»</label>
+      <div class="tp-box" id="link-types"></div>
+      <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
+      <div class="hint">Які типи подій рахувати біля шару; жодного — лише склад подій. Оберіть до шару: клік по шару запускає.</div>
+    </div>
     <div class="link-dev" data-dev>
       <label class="small" for="link-ring">Що рахувати поруч</label>
       <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
@@ -245,10 +248,11 @@
       <label class="role-card" title="Інсайти рядків таблиці"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця</b></label>
       <label class="role-card" title="Контекстний шар: точки, що лише стоять поруч із подіями датасету"><input type="radio" name="role" id="role-layer" value="layer"><b>Шар</b></label>
     </fieldset>
-    <div id="count-box" hidden>
+    <div id="count-box" class="types" hidden>
       <label class="small" for="count-values">Типи для «більше подій»</label>
+      <div class="tp-box" id="count-types"></div>
       <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
-      <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
+      <div class="hint">Для кожного обраного типу рахуємо, де таких подій більше; кожен додає перевірку.</div>
     </div>
     <details class="adv" data-dev>
       <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>

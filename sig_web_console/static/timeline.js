@@ -57,15 +57,16 @@ const Timeline = (() => {
   function render() {
     const body = $("time-body"), levels = TIME_LEVELS.filter((l) => T.hubs.some((h) => h.granularity === l));
     if (!levels.length) { body.innerHTML = ""; return; }
-    const count = (l) => T.hubs.filter((h) => h.granularity === l).length, room = Math.max(body.clientWidth - 240, 200);
-    if (!levels.includes(T.level)) T.level = levels.find((l) => room / count(l) >= 56) || levels[levels.length - 1];  // the finest whose labels fit
-    const now = S.asOf ? ms(S.asOf) : null;
+    const room = Math.max(body.clientWidth - 240, 200), now = S.asOf ? ms(S.asOf) : null;
     const t0 = Math.min(...T.hubs.map((h) => ms(h.t_start)), now ?? Infinity), t1 = Math.max(...T.hubs.map((h) => ms(h.t_end)), now ?? -Infinity);
+    const px = (h) => (room * (ms(h.t_end) - ms(h.t_start))) / (t1 - t0 || 1);  // a period's width on the ruler
+    const narrowest = (l) => Math.min(...T.hubs.filter((h) => h.granularity === l).map(px));
+    if (!levels.includes(T.level)) T.level = levels.find((l) => narrowest(l) >= 56) || levels[levels.length - 1];  // the finest whose labels fit
     const at = (t) => ((100 * (t - t0)) / (t1 - t0 || 1)).toFixed(2), span = (a, b) => `left:${at(a)}%;width:${(at(b) - at(a)).toFixed(2)}%`;
     $("time-levels").innerHTML = TIME_LEVELS.map((l) =>
       `<button type="button" class="tl-level${l === T.level ? " active" : ""}" data-level="${l}" aria-pressed="${l === T.level}"${levels.includes(l) ? "" : " disabled"}>${TIME_LEVEL_NAMES[l]}</button>`).join("");
     const ticks = T.hubs.filter((h) => h.granularity === T.level).map((h) =>
-      `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(h.period)}</button>`).join("");
+      `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.period)}: ${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(px(h) >= 56 ? h.period : px(h) >= 20 ? h.period.split("-").pop() : "")}</button>`).join("");  // 2025-03, else 03, else none
     const [lo, hi] = S.period ? [T.plo, T.phi] : [-Infinity, Infinity];
     const cut = (a, b) => {  // a core's part outside the stretch dark: where the stretch starts and ends along the bar
       if (!S.period) return "";
