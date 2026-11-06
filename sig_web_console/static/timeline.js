@@ -75,8 +75,9 @@ const Timeline = (() => {
     const rows = T.rows.map((r) => {
       const c = r.core;
       const marks = r.events.map((e) => `<b class="tl-ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" style="left:${at((ms(e.hub.t_start) + ms(e.hub.t_end)) / 2)}%" title="${esc(word(e.kind))} ${esc(e.hub.period)}">${e.kind === "PEAKED_AT" ? "▲" : "▼"}</b>`).join("");
-      return `<div class="tl-row" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(r.full_label)}">` +
-        `<span class="tl-name">${esc(r.full_label)}</span><span class="tl-track">${c ? `<i class="tl-core${S.period ? " cut" : ""}" style="${span(ms(c.t_start), ms(c.t_end))}${cut(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
+      const name = (r.words || []).join(" · ") || r.full_label;  // the conditions in words, as the insights table reads them
+      return `<div class="tl-row" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(name)}">` +
+        `<span class="tl-name">${esc(name)}</span><span class="tl-track">${c ? `<i class="tl-core${S.period ? " cut" : ""}" style="${span(ms(c.t_start), ms(c.t_end))}${cut(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
     }).join("");
     const line = now !== null ? `<i class="tl-asof" style="left:calc(var(--tl-gutter) + (100% - var(--tl-gutter)) * ${at(now) / 100})" title="${esc(word("as_of"))} ${esc(S.asOf.slice(0, 10))}"></i>` : "";
     body.innerHTML = `<div class="tl-head"><span class="tl-name muted">${esc(cap(TIME_LEVEL_NAMES[T.level]))}</span><span class="tl-track">${ticks}</span></div>${rows}${line}`;

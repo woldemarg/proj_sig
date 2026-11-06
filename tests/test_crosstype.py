@@ -710,48 +710,6 @@ def test_a_shipped_dataset_serves_as_a_context_layer(engine, tmp_path, monkeypat
     assert (layer["filename"], layer["points"]) == (context.name, 12)  # a shipped layer kept on its own, no file of the user's
 
 
-@pytest.mark.browser
-def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_path, monkeypatch):
-    sync_api = pytest.importorskip("playwright.sync_api")
-    from conftest import make_engine, serve, stack
-    from dev import chromium
-
-    import insight_graph_service.server.app as app_module
-
-    exe = chromium()
-    if exe is None:
-        pytest.skip("no local Chromium for Playwright")
-    target, context = planted(tmp_path)
-    (tmp_path / "shops.csv").write_bytes(context.read_bytes())
-    entries = [{"key": k, "file": f"{k}.csv", "title": k, "context_only": True, "options": {"geo": "lat,lon"}} for k in ("schools", "shops")]
-    monkeypatch.setattr(app_module, "DEMO_DIR", tmp_path)
-    monkeypatch.setattr(app_module, "demo_datasets", lambda: entries)
-    engine = make_engine(cfg)
-    port, app = stack(engine)
-    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
-        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
-        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(f"{url}/")
-        page.wait_for_function("document.querySelectorAll('#context-sample option[value]').length >= 2", timeout=20000)
-        page.click("#add-btn")
-        page.set_input_files("#file", str(target))
-        page.evaluate("document.querySelector('#geo').closest('details').open = true")
-        page.fill("#geo", f"lat,lon@{RES}")
-        page.select_option("#context-sample", ["schools", "shops"])
-        page.fill("#context-geo", "lat,lon")
-        page.select_option("#context-ring", "0")
-        page.click("#upload-btn")
-        deadline = time.time() + 300
-        while not (done := [b for b in engine.ws.list_batches() if b.get("context") and b["status"] in {"READY", "FAILED"}]):
-            assert time.time() < deadline, "the upload did not finish"
-            time.sleep(0.5)
-    (record,) = done
-    assert [(c["name"], c["geo"]) for c in record["context"]] == [("schools", "lat,lon"), ("shops", "lat,lon")] and record["context_ring"] == 0
-    assert not errors, errors
-
-
 def test_a_run_that_admits_nothing_still_counts_its_refusals_by_reason(engine, tmp_path):
     """A layer whose points lie in no target cell's disk leaves one band and is left out, so every finding of the run is
     the target's own (``outside_cross_type``): the run fails as ``no_viable_insights`` and its record counts the refusals

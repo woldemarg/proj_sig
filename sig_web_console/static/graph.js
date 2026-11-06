@@ -565,6 +565,11 @@ function trustRows(p, ds, labels) {
   ]) + (others.length ? `<details class="nb-group"><summary>Підстава <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "підтверджує" : "")).join("")}</details>` : "");
 }
 
+const trustLine = (p, ds) => {  // the person's one line of trust: confirmed or not, and a broken record named
+  const [cls, words] = cred(p.credibility), broken = p.integrity === "mismatch" || ds.integrity === "mismatch";
+  return `<p class="trust-line" data-user>${chip(cls, words, TERMS.credibility[1])}${broken ? ` ${chip("bad", word("integrity_mismatch"), TERMS.integrity_mismatch[1])}` : ""}</p>`;
+};
+
 const SHOWN = 3;  // rows of a long list shown before the rest folds under «Решта»
 const folded = (rows) => rows.slice(0, SHOWN).join("") + (rows.length > SHOWN ? `<details class="nb-group"><summary>Решта <span class="muted">(${rows.length - SHOWN})</span></summary>${rows.slice(SHOWN).join("")}</details>` : "");
 
@@ -679,13 +684,13 @@ async function inspect(id, note = "") {
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
       `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])
         .concat(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : [])) + `</details>` +  // a cohort on a layer's band: the layer's p
-      kv([
+      dev(`<div>${kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
         [term("drivers"), esc((d.drivers || p.drivers || []).join("; ") || "не виявлено")],  // in words (wording.driver_words)
-      ]);
-    html += `<h4>Довіра</h4>${trustRows(p, ds, d.labels)}`;
-    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
+      ])}</div>`);
+    html += dev(`<div><h4>Довіра</h4>${trustRows(p, ds, d.labels)}</div>`) + trustLine(p, ds);
+    html += `<div class="verify" data-dev><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
     if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
@@ -730,9 +735,9 @@ async function inspect(id, note = "") {
   }
   const groups = Object.entries(merged).filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)", ...shown].includes(t));
   if (groups.length) {
-    html += `<h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
+    html += `<div data-dev><h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
       `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${count > items.length ? `${items.length} з ${num(count, 0)}` : items.length})</span></summary>` +
-      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
+      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("") + `</div>`;
   }
   $("inspector").innerHTML = html + tail;
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));

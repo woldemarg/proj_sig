@@ -247,8 +247,8 @@ function openLink(batchId) {
   const linked = new Set(S.batches.filter((x) => x.upload_id === b.upload_id && x.cross && x.status !== "SKIPPED").flatMap((x) => x.cross));
   const stored = new Map(S.batches.filter((x) => x.upload_id !== b.upload_id && !x.cross && (x.status === "LAYER" || (x.status === "READY" && geoLevel(x)))).map((x) => [x.upload_id, x]));
   const kept = new Set([...stored.values()].map((x) => stem(x.filename)));
-  const opt = (attr, value, label, note, done = false, dev = false) =>
-    `<button type="button" class="link-opt" data-${attr}="${esc(value)}"${dev ? " data-dev" : ""}>${esc(label)}<span class="muted">${esc(done ? "уже додано" : note)}</span></button>`;  // a repeat ends SKIPPED
+  const opt = (attr, value, label, note, done = false, devOnly = false) =>
+    `<button type="button" class="link-opt" data-${attr}="${esc(value)}"${devOnly ? " data-dev" : ""}>${esc(label)}<span class="muted">${esc(done ? "уже додано" : note)}</span></button>`;  // a repeat ends SKIPPED
   $("link-dialog").dataset.batch = batchId;
   $("link-dialog").dataset.target = b.dataset_id || b.upload_id;  // the reading the row stands for
   $("link-title").textContent = `Додати шар · ${datasetName(b)}`;
@@ -300,10 +300,6 @@ async function upload() {
   if ($("role-layer").checked) fd.append("layer", "true");  // kept as another type's points: none of the mining options
   else {
     if (geo.trim() && $("table").checked) fd.append("table", "true");
-    for (const c of $("context").files) fd.append("context", c);  // another type of points: one band of the cells each
-    const layers = [...$("context-sample").selectedOptions].map((o) => o.value);  // shipped layers: the server reads its own copies
-    for (const key of layers) fd.append("context_demo", key);
-    if ($("context").files.length || layers.length) { fd.append("context_geo", $("context-geo").value); fd.append("context_ring", $("context-ring").value); }
     if ($("time").value.trim()) fd.append("grid", $("grid").value);
     if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
     if (geo.trim()) { fd.append("count_values", $("count-values").value); fd.append("baseline", $("baseline").value); }  // the geo cells'
@@ -316,7 +312,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadNote(""); $("upload-dialog").close();
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("where").value = ""; $("count-values").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("where").value = ""; $("count-values").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadNote(err.message, true); $("upload-btn").disabled = false; }
 }

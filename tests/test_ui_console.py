@@ -71,6 +71,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # *Додатково* is the developer's
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -87,7 +88,6 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         for field, value in {"#time": "when", "#where": "kind=a", "#count-values": "kind=a"}.items():
             page.fill(field, value)
         page.select_option("#baseline", "zone")
-        page.set_input_files("#context", str(tmp_path / "points.csv"))
         page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
         sent: list[bytes] = []
         page.route("**/api/upload", lambda route: (sent.append(route.request.post_data_buffer), route.abort()))
@@ -100,7 +100,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.set_input_files("#metadata", [])
         assert {m.decode() for m in re.findall(rb'; name="([^"]+)"', sent[0])} == {
             *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "count_values", "baseline"),
-            *("context", "context_geo", "context_ring", "source", "reliability", "indicators", "glossary", "metadata"),
+            *("source", "reliability", "indicators", "glossary", "metadata"),
         }
         page.check("#role-layer")  # changed by hand: the points kept as a layer
         assert page.text_content("#upload-btn") == "Зберегти шар"

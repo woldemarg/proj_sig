@@ -228,13 +228,13 @@ function paintMode() {
     const files = [...new Map([G.ds, ...G.others].map((ds) => G.datasets.find((d) => d.dataset_id === ds) || { dataset_id: ds })
       .map((d) => [uploadOf(d), d.filename || d.dataset_id])).values()];  // one per upload: two files of one name are two
     $("map-title").textContent = "Усі датасети";
-    $("map-meta").textContent = `${plural(files.length, "файл", "файли", "файлів")}: ${files.join(", ")}`;
+    $("map-meta").textContent = files.map(titleOf).join(", ");
     return;
   }
   const info = G.datasets.find((d) => d.dataset_id === G.ds) || {}, sac = info.sac || {};
-  $("map-title").textContent = info.filename || G.ds;
-  $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
-    (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
+  $("map-title").textContent = info.filename ? titleOf(info.filename) : G.ds;
+  $("map-meta").innerHTML = `<span data-dev>H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · </span>${plural(info.points, "подія", "події", "подій")}` +
+    (sac.validated ? `<span data-dev><br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}</span>` : "");
 }
 
 function boundsOf(rows) {  // the cells' boxes, each moved next to the first one: cells across ±180° stay one box

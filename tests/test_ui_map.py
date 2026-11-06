@@ -398,7 +398,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
         assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
-        assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")
+        assert page.inner_text("#map-title") == "Усі датасети" and "half" in page.inner_text("#map-meta")
         assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
         rows = "W.data.themes.flatMap((t) => t.insights)"
         assert {i["dataset_id"] for i in page.evaluate(rows)} == {full["dataset_id"], other["dataset_id"]}
@@ -432,7 +432,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
         page.select_option("#dataset-filter", full["dataset_id"])
         page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
-        assert page.inner_text("#map-title") == "california_housing.csv"
+        assert page.inner_text("#map-title") == "Житло Каліфорнії (мапа)"  # a shipped set by its title
         page.select_option("#dataset-filter", other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
         page.wait_for_function(f"G.ds === {other['dataset_id']!r} && G.others.length === 0 && !G.loading", timeout=20000)
         page.select_option("#dataset-filter", "")

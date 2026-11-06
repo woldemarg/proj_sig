@@ -72,12 +72,12 @@ function botCard(turn) {
   const model = String(llm.model || "").split("/").pop();
   const when = ev.parsed && ev.parsed.when;  // a period in the question or on the bar: [start, end), ISO
   const meta = [
-    qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення"),
-    cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат"),
-    cross ? chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1]) : "",
-    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by
-      : ev.as_of ? chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1]) : "",  // the date the answer judged freshness from
-    said ? chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`) : "",
+    dev(qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення")),
+    dev(cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат")),
+    cross ? dev(chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1])) : "",
+    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by: everyone's
+      : ev.as_of ? dev(chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1])) : "",  // the date the answer judged freshness from
+    said ? dev(chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`)) : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
@@ -101,14 +101,17 @@ function botCard(turn) {
   const panes = [
     items.length ? ["Свідчення і як їх знайдено", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Натисніть на свідчення, щоб виділити його шлях у графі чи на сфері.</p>${hypo}${zones}${notes}${evid}`] : null,
     ["Джерела", "", `<div class="muted" style="font-size:12.5px">${esc(qa.provenance_footer || "")}</div>`],
-    qa.prompt ? ["Промпт", "", `<p class="ev-prefix">Точні свідчення, які бачила модель.</p><pre class="canon">${esc(qa.prompt)}</pre>`] : null,
+    qa.prompt ? ["Промпт", "", `<p class="ev-prefix">Точні свідчення, які бачила модель.</p><pre class="canon">${esc(qa.prompt)}</pre>`, true] : null,
   ].filter(Boolean);
-  return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
+  return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}${fold(qa.answer_mode === "fallback", `<div class="answer-box">${md(answer, keyTo)}</div>`)}` +
     `<div class="bot-meta">${meta}</div>${understood}` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c, , only], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}${only ? " data-dev" : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}"${String(i) === turn.pane ? "" : " hidden"}>${body}</div>`).join("") +
     `</div>`;
 }
+
+const fold = (on, html) =>  // an evidence-only answer folded for the person, open for the developer
+  on ? `<details class="answer-fold"${document.body.classList.contains("dev") ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];

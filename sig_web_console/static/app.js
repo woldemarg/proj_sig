@@ -223,6 +223,7 @@ const plural = (n, one, few, many) => `${num(n, 0)} ${form(n, one, few, many)}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+const dev = (html) => html.replace(/^<(\w+)/, "<$1 data-dev");  // one element the developer mode alone shows
 const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
 const MOTION = matchMedia("(prefers-reduced-motion: reduce)");
 const calm = () => MOTION.matches;  // no camera flights or pulses then
@@ -256,9 +257,9 @@ async function refreshHealth() {
     const cpu = h.embedding_device === "cpu";  // amber: on a Mac, Docker sees no GPU (README, Mac: GPU)
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `модель · ${h.embedding_device}`;
     $("health").innerHTML =
-      `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
-      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
-      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}"><i class="dot"></i>${esc(emb)}</span>`;
+      `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"${llmCls === "ok" ? " data-dev" : ""}><i class="dot"></i>${esc(llmTxt)}</span>` +  // the person sees it only when it fails
+      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j" data-dev><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
+      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}" data-dev><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `пояснення ${model}`;
     $("reset-btn").hidden = !h.problem;  // a degraded workspace: only a reset makes it usable again
     if (h.problem) setUploadMsg(`Робочим простором користуватися не можна: ${h.problem}`, true);
@@ -279,6 +280,7 @@ function setDev(on) {
   $("dev-btn").setAttribute("aria-pressed", String(on));
   try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
   if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+  if (!on) $("use-llm").checked = true;  // the switch is the developer's: the person always gets the explanation
 }
 
 function initResize() {
@@ -337,7 +339,6 @@ function init() {
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
     $("sample").insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));  // every shipped set: its role proposed when picked
-    $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(sampleItem).join(""));
     refreshBatches();  // the rail names the shipped sets by their titles
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
@@ -460,9 +461,9 @@ function init() {
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
-  let dev = false;
-  try { dev = localStorage.getItem("sig-dev") === "on"; } catch (e) { /* private mode: off */ }
-  setDev(dev);
+  let devOn = false;
+  try { devOn = localStorage.getItem("sig-dev") === "on"; } catch (e) { /* private mode: off */ }
+  setDev(devOn);
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
   setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders
