@@ -1,0 +1,11 @@
+# The ADS full stack's services the demo does not need (copilot, its UI and auth, tracing and monitoring) start only
+# with `--profile ads-full`. The orchestrator and what it depends on (minio, postgres, executor, llm, phoenix) start always.
+services:
+  mlflow: { profiles: [ads-full] }
+  mlflow-init: { profiles: [ads-full] }
+  ads-a2a: { profiles: [ads-full] }
+  delta-ai-copilot: { profiles: [ads-full] }
+  local-auth: { profiles: [ads-full] }
+  extension-spectr: { profiles: [ads-full] }
+  prometheus: { profiles: [ads-full] }
+  grafana: { profiles: [ads-full] }
