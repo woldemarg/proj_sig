@@ -64,11 +64,10 @@ SAMPLE_POINTS = 3000
 http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 
 # ponytail: single-user in-memory state; a second browser tab shares it, per-session state when a second user needs their
-# own zone. DATA holds the frames as the build left them, FILES the zone's tables taken when the polygon closed (what the
-# ask uploads, so a redraw cannot change a running ask), STATE what the page polls (JSON only)
+# own zone. DATA holds the frames as the build left them; STATE what the page polls (JSON, except the zone's "files": the
+# tables' bytes taken when the polygon closed, which the ask uploads and /state leaves out)
 STATE: dict[str, Any] = {"datasets": None, "zone": None, "ask": None}
 DATA: dict[str, pd.DataFrame] = {}
-FILES: dict[str, bytes] = {}
 GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres, and SIG's resolution
 
 
@@ -177,12 +176,9 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     area = evidence.get("area") or {}
     source = {p["key"]: p for p in evidence.get("provenance") or []}  # key -> dataset_id, filename
     layer_of = {it["key"]: next((c for c in it.get("scope") or [] if c.startswith("context_")), "") for it in evidence.get("items", [])}
-    # the zone's own first; among them the cross-layer ones (a context_<layer>_band condition: the base layer's events read
-    # against the context layer, what the cross run exists for) before the rest; then SIG's credibility order
-    items = sorted(
-        evidence.get("items", []),
-        key=lambda it: (-((area.get(it["key"]) or 0) > 0), -bool(layer_of[it["key"]]), CRED_RANK.get(it.get("credibility"), 9)),
-    )
+    # the zone's own first, then SIG's credibility order; a cross-layer finding (a context_<layer>_band condition: the base
+    # layer's events read against the context layer) is tagged for the task and the joint prompt, not promoted
+    items = sorted(evidence.get("items", []), key=lambda it: (-((area.get(it["key"]) or 0) > 0), CRED_RANK.get(it.get("credibility"), 9)))
     out = []
     for it in items[:MAX_INSIGHTS]:  # SIG's own text, in its own language, as is
         dataset_id = (source.get(it["key"]) or {}).get("dataset_id", "")
@@ -317,13 +313,19 @@ def observation_lines(items: list[dict[str, Any]]) -> list[str]:
     return out
 
 
+def zone_facts(zone: dict[str, Any]) -> tuple[int, str, str, dict[str, Any], dict[str, Any]]:
+    """What both markdowns say about the zone: its vertex count, the lon and lat spans, the two layers' counts."""
+    coords = zone["polygon"]["coordinates"][0]
+    lons, lats = [c[0] for c in coords], [c[1] for c in coords]
+    return len(coords) - 1, f"{min(lons):.4f}…{max(lons):.4f}", f"{min(lats):.4f}…{max(lats):.4f}", zone["base"], zone["context"]
+
+
 def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str]]) -> str:
     """ADS's domain knowledge for the zone: a short English dictionary of the tables and columns, declarative. ADS's
     guardrail reads every uploaded .md and its grounder keeps 800 tokens of them, so nothing that belongs in the task
     (the question, SIG's answer, the findings, the guidance) goes here."""
-    coords = zone["polygon"]["coordinates"][0]
-    lons, lats = [c[0] for c in coords], [c[1] for c in coords]
-    b, c, r = zone["base"], zone["context"], data["resolution"]
+    vertices, lon_span, lat_span, b, c = zone_facts(zone)
+    r = data["resolution"]
     cols = h3_columns(r)
     levels = "; ".join(
         f"{col}: resolution {r - k} (≈ {h3.average_hexagon_area(r - k, unit='km^2'):.2f} km² a cell)" for col, k in zip(cols, H3_LEVELS, strict=True)
@@ -332,7 +334,7 @@ def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str
     return "\n".join(
         [
             "# Area of interest: tables and columns",
-            f"- Zone: the user's polygon on the map, {len(coords) - 1} vertices, lon {min(lons):.4f}…{max(lons):.4f}, lat {min(lats):.4f}…{max(lats):.4f}. "
+            f"- Zone: the user's polygon on the map, {vertices} vertices, lon {lon_span}, lat {lat_span}. "
             f"Base events: {b['inside']} of {b['total']} inside; context points: {c['inside']} of {c['total']} inside.",
             f"- base_aoi.csv ({BASE['file']}, {BASE['label']}): the events. context_aoi.csv ({CONTEXT['file']}, {CONTEXT['label']}): the context points. "
             f"Both carry {', '.join(cols)}, in_aoi, aoi_zone.",
@@ -354,9 +356,7 @@ def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str
 def domain_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -> str:
     """The joint prompt's domain knowledge, in the report's language: how the zone was applied to the data, where the
     findings come from, and the SIG glossary."""
-    coords = zone["polygon"]["coordinates"][0]
-    lons, lats = [c[0] for c in coords], [c[1] for c in coords]
-    b, c = zone["base"], zone["context"]
+    vertices, lon_span, lat_span, b, c = zone_facts(zone)
     by_file = [
         f"- {name}: {', '.join(keys)}, "
         + ("базовий шар цього аналізу." if name == BASE["file"] else "інший датасет графа, не базовий шар; його числа описують інші дані.")
@@ -375,8 +375,7 @@ def domain_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -
         [
             "# Зона інтересу (AOI): методика",
             "",
-            f"- Зона задана користувачем як полігон на мапі: {len(coords) - 1} вершин, "
-            f"довгота {min(lons):.4f}…{max(lons):.4f}, широта {min(lats):.4f}…{max(lats):.4f}.",
+            f"- Зона задана користувачем як полігон на мапі: {vertices} вершин, довгота {lon_span}, широта {lat_span}.",
             f"- Файл base_aoi.csv: базовий шар подій, файл {BASE['file']} ({BASE['label']}), {b['total']} рядків, з них {b['inside']} у зоні.",
             f"- Файл context_aoi.csv: контекстний шар, файл {CONTEXT['file']} ({CONTEXT['label']}), {c['total']} рядків, з них {c['inside']} у зоні.",
             "- Колонка in_aoi в обох файлах: 1 означає, що точка лежить усередині полігона, 0 поза ним. "
@@ -427,16 +426,20 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
             "\n\nSIG findings (O#; 'in zone' says whether the finding's cells lie in the AOI — check each that concerns the question on the data):\n"
             + ("\n".join(lines) or "SIG has no findings for this zone.")
         )
+    cross = (  # only when a finding links the layers: the join is work ADS should not do for a question about a count trend
+        f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
+        f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
+        "few and no context points, inside the zone and around it — and report it under its O#.\n"
+        if sig and any(it.get("layer") for it in sig.get("insights") or [])
+        else ""
+    )
     guidance = (
         "\n\nGuidance:\n"
         f"- Where the question or SIG's answer points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, "
         f"shares for categories) and check on {coarser} whether the difference holds.\n"
         "- Treat SIG's conditions as extra cuts of the same computation and SIG's hypotheses as claims to test: confirmed / not confirmed / "
-        "not testable with these columns. Do not re-mine spatial clusters.\n"
-        f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
-        f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
-        "few and no context points, inside the zone and around it — and report it under its O#.\n"
-        "- Describe differences as shifts and ratios, not causes; proximity is not causation; label O# explicitly in the report."
+        "not testable with these columns. Do not re-mine spatial clusters.\n" + cross + "- Describe differences as shifts and ratios, not causes; "
+        "proximity is not causation; label O# explicitly in the report."
     )
     return [
         {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
@@ -636,7 +639,10 @@ def run_ask(question: str) -> None:
         a["ads_session"] = sid
         parts = ads_query_parts(question, zone, STATE["datasets"], chosen)
         a["ads_query"] = "".join(p["text"] for p in parts)
-        files = {**FILES, "aoi.md": a["aoi_md"].encode("utf-8")}  # the zone's tables as taken when the polygon closed, and the column dictionary
+        files = {
+            **zone["files"],
+            "aoi.md": a["aoi_md"].encode("utf-8"),
+        }  # this zone's tables as taken when its polygon closed, and the column dictionary
         trace["ads"] = {
             "call": f"POST {ADS_URL}/sessions/{sid}/jobs",
             "files": {name: len(data) for name, data in files.items()},
@@ -700,7 +706,8 @@ def health() -> dict[str, Any]:
 
 @app.get("/state")
 def state() -> dict[str, Any]:
-    return STATE
+    zone = STATE["zone"]
+    return {**STATE, "zone": {k: v for k, v in zone.items() if k != "files"} if zone else None}  # the tables' bytes are not for the page
 
 
 @app.get("/ads-query")
@@ -745,6 +752,8 @@ def datasets(body: dict[str, Any] | None = None) -> dict[str, Any]:
 def zone(body: dict[str, Any]) -> dict[str, Any]:
     if "base" not in DATA:
         raise HTTPException(409, "датасети ще не готові")
+    if STATE["ask"] and STATE["ask"]["stage"] not in ("done", "error"):  # the running ask keeps its zone; a new one waits
+        raise HTTPException(409, "питання ще виконується: зону можна перемалювати після відповіді")
     polygon = body.get("polygon") or {}
     if polygon.get("type") != "Polygon" or len((polygon.get("coordinates") or [[]])[0]) < 4:
         raise HTTPException(400, "polygon: GeoJSON Polygon з щонайменше трьома вершинами")
@@ -752,8 +761,6 @@ def zone(body: dict[str, Any]) -> dict[str, Any]:
     if not cells:
         raise HTTPException(400, "у полігоні немає жодної комірки мапи SIG: обведіть ділянку з подіями")
     frames, counts = zone_frames(polygon, cells, h3_columns(GRID["resolution"])[0])
-    FILES.clear()
-    FILES.update({f"{name}_aoi.csv": f.to_csv(index=False).encode("utf-8") for name, f in frames.items()})
     samples = {}
     for name, f in frames.items():  # the points in the zone the map draws, at most SAMPLE_POINTS a layer
         hit = f[f["in_aoi"] == 1]
@@ -766,6 +773,7 @@ def zone(body: dict[str, Any]) -> dict[str, Any]:
         "cell_rings": [ring_of[c] for c in cells],
         "sample": samples["base"],
         "sample_context": samples["context"],
+        "files": {f"{name}_aoi.csv": f.to_csv(index=False).encode("utf-8") for name, f in frames.items()},  # what the ask uploads
         "sig": {"stage": "mining"},  # the preview starts now, before any question
     }
     STATE["ask"] = None
@@ -829,6 +837,8 @@ def check() -> None:
         in q
     ), q
     assert "\nO2 [P2] G" in q and "A finding marked cross-layer" in q and "joining the two tables on the cell id" in q, q
+    plain = ads_query("q", zone_fx, data_fx, {"sig_answer": "A", "insights": [{**sig_fx["insights"][1], "inside": True}]})
+    assert "A finding marked cross-layer" not in plain and "proximity is not causation" in plain  # the join bullet only with a layer finding
     assert "(other file, context only)" in q and "Спостереження: A [P1]" in q and "proximity is not causation" in q and "h3_r8 whether" in q, q
     assert "(after the ask)" in ads_query("q", None, None, None) and "(after the ask)" not in q
     md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
@@ -861,22 +871,34 @@ def check() -> None:
     assert grid["rings"][0] == [[0, 0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0, 0]], grid["rings"]
     # SIG's credibility order (1 confirmed, 2 unconfirmed, 6 no other source, 5 contradicted), the zone's items first
     items = [{"key": f"P{i}", "pattern_id": "x", "credibility": c, "scope": []} for i, c in enumerate((5, 6, 2, 1, 1), 1)]
-    items[1]["scope"] = ["context_bars_band=q2", "lisa_points=no cluster"]  # a cross-layer finding: first among the zone's
+    items[1]["scope"] = ["context_bars_band=q2", "lisa_points=no cluster"]  # a cross-layer finding: tagged, not promoted
     found = sig_findings({"view": {"evidence": {"items": items, "area": {"P1": 0.4, "P2": 0.4, "P3": 0.4, "P4": 0.4}, "provenance": []}}})
-    assert [it["key"] for it in found] == ["P2", "P4", "P3", "P1", "P5"], [it["key"] for it in found]
-    assert found[0]["layer"] == "context_bars_band=q2" and found[1]["layer"] == ""
+    assert [it["key"] for it in found] == ["P4", "P3", "P2", "P1", "P5"], [it["key"] for it in found]
+    assert found[2]["layer"] == "context_bars_band=q2" and found[0]["layer"] == ""
     # geo.py: SIG's own indexing, parents consistent, a cell's own boundary polygon is exactly that cell, the rows' place
-    import h3
-
     cell = h3.latlng_to_cell(41.885, -87.625, 9)
     e = enrich_h3(pd.DataFrame({"lon": [-87.625, -87.6251, None], "lat": [41.885, 41.885, 41.9]}), 9)
     assert e["h3_r9"].tolist() == [cell, cell, ""] and e["h3_r7"].tolist()[2] == "", e
     assert all(h3.cell_to_parent(c, 8) == p for c, p in zip(e["h3_r9"][:2], e["h3_r8"][:2], strict=True)), e
     ring = [[lng, lat] for lat, lng in h3.cell_to_boundary(cell)]
     assert zone_h3_cells({"type": "Polygon", "coordinates": [ring + ring[:1]]}, 9, [cell, h3.grid_ring(cell, 1)[0]]) == [cell]
+    assert zone_h3_cells({"type": "Polygon", "coordinates": [[[-87.625, 41.885]] * 4]}, 9, [cell]) == []  # H3 refuses it: no cells, 400
+    wrapped = [[lng + 360 if lng < 0 else lng, lat] for lng, lat in ring]  # a longitude past 180: folded back as SIG folds it
+    assert zone_h3_cells({"type": "Polygon", "coordinates": [wrapped + wrapped[:1]]}, 9, [cell]) == [cell]
     nb, far = h3.grid_ring(cell, 1)[0], h3.latlng_to_cell(41.95, -87.70, 9)
     rows = pd.DataFrame({"in_aoi": [1, 0, 0, 0, 0], "h3_r9": [cell, cell, nb, far, ""]})
     assert aoi_zone(rows, [cell], "h3_r9").tolist() == ["inside", "adjacent", "adjacent", "far", "far"]  # the same cell is not inside
+    # a zone's tables are copies: the build's frames stay as they were, and a second zone cannot touch the first's bytes
+    DATA.update({"base": e, "context": e})
+    first = {
+        n: f.to_csv(index=False).encode() for n, f in zone_frames({"type": "Polygon", "coordinates": [ring + ring[:1]]}, [cell], "h3_r9")[0].items()
+    }
+    zone_frames(square, [], "h3_r9")
+    assert (
+        "in_aoi" not in DATA["base"].columns
+        and first["base"] == DATA["base"].assign(in_aoi=[1, 1, 0], aoi_zone=["inside", "inside", "far"]).to_csv(index=False).encode()
+    )
+    DATA.clear()
     assert base_spec(["theft", "assault"])["count_values"] == "crime=theft,crime=assault" and "category" not in base_spec([])
     print("ok")
 

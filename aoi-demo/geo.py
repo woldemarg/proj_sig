@@ -36,11 +36,16 @@ def enrich_h3(df: pd.DataFrame, resolution: int, lat: str = "lat", lon: str = "l
 
 
 def zone_h3_cells(polygon: dict[str, Any], resolution: int, occupied: list[str]) -> list[str]:
-    """The zone as SIG reads a geometry (subgroup_miner.spatial_plane.geometry_to_cells): the cells whose centre lies in
-    the GeoJSON polygon, or the cells under its vertices when it holds no centre; of those, the map's occupied cells."""
-    cells = set(h3.geo_to_cells(polygon, resolution))
-    if not cells:
-        cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in polygon["coordinates"] for lon, lat, *_ in ring}
+    """The zone as SIG reads a geometry (subgroup_miner.spatial_plane.geometry_to_cells): a longitude past ±180 folded back
+    in range, the cells whose centre lies in the GeoJSON polygon, or the cells under its vertices when it holds no centre;
+    of those, the map's occupied cells. A ring H3 refuses (degenerate, self-crossing) gives no cells, as SIG's 400."""
+    rings = [[[x if -180 <= x <= 180 else (x + 180) % 360 - 180, y] for x, y, *_ in ring] for ring in polygon["coordinates"]]
+    try:
+        cells = set(h3.geo_to_cells({"type": "Polygon", "coordinates": rings}, resolution))
+        if not cells:
+            cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
+    except (ValueError, h3.H3BaseException):
+        return []
     return sorted(cells & set(occupied))
 
 
