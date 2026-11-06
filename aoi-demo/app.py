@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2"]
+# dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2", "h3>=4,<5"]
 # ///
 """AOI demo: polygon on a map -> SIG insights in the zone + ADS analysis of the in_aoi tables -> one joint report
 rendered through Copilot's final_response.jinja. One process, one user, state in memory (see README.md).
@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ import pandas as pd
 import shapely
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
+from geo import aoi_zone, enrich_h3, h3_columns, zone_h3_cells
 from jinja2 import Template
 from shapely.geometry import shape
 
@@ -41,9 +43,21 @@ DEMO_DIR = Path(os.environ.get("DEMO_DIR", HERE.parent / "data" / "demo"))  # th
 JOINT_TEMPLATE = Path(os.environ.get("JOINT_TEMPLATE", HERE / "prompts/joint_response.jinja"))
 
 # the happy path is Chicago: the shipped SIG datasets, with the options data/demo/datasets.json reads them with
-BASE = {"file": "chicago_crimes_2024.csv", "label": "злочини 2024", "geo": "lat,lon@auto", "time": "crime_date", "source": "City of Chicago, Crimes"}
+BASE = {
+    "file": "chicago_crimes_2024.csv",
+    "label": "злочини 2024",
+    "geo": "lat,lon@auto",
+    "time": "crime_date",
+    "source": "City of Chicago, Crimes",
+    "category": "crime",
+}
 CONTEXT = {"file": "chicago_bars.csv", "label": "бари", "geo": "lat,lon", "layer": "true"}
 RING = 0  # the layer counted in the cell alone: SIG's default since 2026-11-05; an older image defaults to 1 and the bars admit nothing
+# BASE["category"]: the column whose values the page offers to count per cell (SIG's count_values -> count_<column>_<value>,
+# the counters a cross run with the layer reads); SIG counts a value with at least COUNT_MIN located rows and marks a
+# rarer one `sparse` without a counter (insight_graph_service/core/uploads.py)
+COUNT_MIN = 250
+COUNT_DEFAULT = ("theft", "assault")  # the demo's preselected types
 MAX_INSIGHTS = 10  # findings drawn on the map, the zone's own first: SIG's evidence holds about ten
 SAMPLE_POINTS = 3000
 
@@ -52,7 +66,25 @@ http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 # ponytail: single-user in-memory state; a second browser tab shares it. DATA holds the frames, STATE what the page polls
 STATE: dict[str, Any] = {"datasets": None, "zone": None, "ask": None}
 DATA: dict[str, pd.DataFrame] = {}
-GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres
+GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres, and SIG's resolution
+
+
+@lru_cache(maxsize=1)
+def category_options() -> list[dict[str, Any]]:
+    """The base file's category values with their located rows (valid coordinates): the ones SIG would count per cell
+    and the rarer ones it marks `sparse` and leaves uncounted."""
+    df = pd.read_csv(DEMO_DIR / BASE["file"], usecols=[BASE["category"], "lat", "lon"])
+    located = df[df["lat"].between(-90, 90) & df["lon"].between(-180, 180)]
+    counts = located[BASE["category"]].astype(str).value_counts()
+    return [{"value": v, "rows": int(n), "status": "ok" if n >= COUNT_MIN else "sparse"} for v, n in counts.items()]
+
+
+def base_spec(count_values: list[str]) -> dict[str, str]:
+    """The base layer's SIG upload options: the manifest's, plus count_values=<column>=v1,v2 for the chosen types."""
+    spec = {k: v for k, v in BASE.items() if k != "category"}
+    if count_values:
+        spec["count_values"] = f"{BASE['category']}={','.join(count_values)}"
+    return spec
 
 
 # ----------------------------------------------------------------------------- SIG
@@ -95,10 +127,19 @@ def sig_crosstype(target: str, layer: str) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else [data]
 
 
+def sig_resolution(dataset_id: str) -> int:
+    """The H3 resolution SIG chose for a geo dataset (GET /api/geo lists every geo dataset with its resolution): the one
+    the demo's h3_r* columns are built at, never chosen here."""
+    r = http.get(f"{SIG_URL}/api/geo")
+    if r.status_code >= 300:
+        raise RuntimeError(f"SIG geo: {r.status_code} {r.text[:300]}")
+    return int(next(g["resolution"] for g in r.json() if g.get("dataset_id") == dataset_id))
+
+
 def cell_grid(pack: dict[str, Any]) -> dict[str, Any]:
     """The map's cells from SIG's cell package (geo_views.geo_cells_pack): each ring is its first vertex and integer
     offsets in 10**-scale degrees; a cell's centre is the mean of its vertices."""
-    step = 10.0**-pack["scale"]
+    step = 10.0 ** -pack["scale"]
     rings = []
     for r in pack["rings"]:
         x0, y0 = r[0], r[1]
@@ -408,12 +449,12 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
 # ----------------------------------------------------------------------------- the flows
 
 
-def run_datasets() -> None:
+def run_datasets(count_values: list[str]) -> None:
     d = STATE["datasets"]
     t0 = time.time()
     try:
         d["stage"] = "uploading"
-        base = sig_upload(BASE)
+        base = sig_upload(base_spec(count_values))
         ctx = sig_upload(CONTEXT)
         d["base"] = {"upload_id": base["upload_id"], "batches": list(base.get("levels", {}).values()) or [base["batch_id"]]}
         d["context"] = {"upload_id": ctx["upload_id"], "batches": list(ctx.get("levels", {}).values()) or [ctx["batch_id"]]}
@@ -430,10 +471,16 @@ def run_datasets() -> None:
         pack = http.get(f"{SIG_URL}/api/geo/{d['base']['dataset_id']}/cells")
         if pack.status_code >= 300:
             raise RuntimeError(f"SIG cells of {d['base']['dataset_id']}: {pack.status_code} {pack.text[:300]}")
-        GRID.update(cell_grid(pack.json()))
-        DATA["base"] = pd.read_csv(DEMO_DIR / BASE["file"])
-        DATA["context"] = pd.read_csv(DEMO_DIR / CONTEXT["file"])
+        cells = pack.json()
+        GRID.update(cell_grid(cells))
+        GRID["resolution"] = sig_resolution(d["base"]["dataset_id"])
+        cols = h3_columns(GRID["resolution"])  # h3_r{R}, h3_r{R-1}, h3_r{R-2}: SIG's own cells and their parents, on both layers
+        DATA["base"] = enrich_h3(pd.read_csv(DEMO_DIR / BASE["file"]), GRID["resolution"])
+        DATA["context"] = enrich_h3(pd.read_csv(DEMO_DIR / CONTEXT["file"]), GRID["resolution"])
         d["rows"] = {"base": int(len(DATA["base"])), "context": int(len(DATA["context"])), "cells": len(GRID["h3"])}
+        d["resolution"], d["levels"] = GRID["resolution"], [int(c[4:]) for c in cols]
+        d["counted"] = sorted(c for c in cells["columns"] if c.startswith("count_"))  # the counters SIG really built
+        d["h3_mismatch"] = len((set(DATA["base"][cols[0]]) - {""}) ^ set(GRID["h3"]))  # the demo's cells vs SIG's: a warning, never a stop
         d["seconds"] = round(time.time() - t0, 1)
         d["stage"] = "ready"
     except Exception as exc:  # the happy path shows the text and stops
@@ -576,13 +623,22 @@ def trace_prompt() -> PlainTextResponse:
     return PlainTextResponse(PROMPTS.get("joint", ""))
 
 
+@app.get("/datasets/options")
+def datasets_options() -> dict[str, Any]:
+    """The base file's category column and its values with located rows: what the page offers to count per cell."""
+    return {"column": BASE["category"], "values": category_options(), "min_rows": COUNT_MIN, "default": list(COUNT_DEFAULT)}
+
+
 @app.post("/datasets")
-def datasets() -> dict[str, Any]:
+def datasets(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The build: the chosen category values go to SIG as count_values with the base layer; none means no counters."""
     if STATE["datasets"] and STATE["datasets"]["stage"] not in ("ready", "error"):
         return STATE["datasets"]
-    STATE["datasets"] = {"stage": "starting", "base": None, "context": None, "cross": [], "error": None}
+    countable = {o["value"] for o in category_options() if o["status"] == "ok"}
+    count_values = [v for v in (body or {}).get("count_values") or [] if v in countable]
+    STATE["datasets"] = {"stage": "starting", "base": None, "context": None, "cross": [], "error": None, "count_values": count_values}
     STATE["zone"], STATE["ask"] = None, None
-    threading.Thread(target=run_datasets, daemon=True).start()
+    threading.Thread(target=run_datasets, args=(count_values,), daemon=True).start()
     return STATE["datasets"]
 
 
@@ -659,6 +715,19 @@ def check() -> None:
     # a cell package of two cells, offsets in 10**-1 degrees: a unit square at (0, 0) and one at (5, 5)
     grid = cell_grid({"scale": 1, "columns": {"h3": ["a", "b"]}, "rings": [[0, 0, 10, 0, 10, 10, 0, 10], [5, 5, 10, 0, 10, 10, 0, 10]]})
     assert [grid["h3"][i] for i in zone_cells(grid, square)] == ["a"], grid["centres"]
+    # geo.py: SIG's own indexing, parents consistent, a cell's own boundary polygon is exactly that cell, the rows' place
+    import h3
+
+    cell = h3.latlng_to_cell(41.885, -87.625, 9)
+    e = enrich_h3(pd.DataFrame({"lon": [-87.625, -87.6251, None], "lat": [41.885, 41.885, 41.9]}), 9)
+    assert e["h3_r9"].tolist() == [cell, cell, ""] and e["h3_r7"].tolist()[2] == "", e
+    assert all(h3.cell_to_parent(c, 8) == p for c, p in zip(e["h3_r9"][:2], e["h3_r8"][:2], strict=True)), e
+    ring = [[lng, lat] for lat, lng in h3.cell_to_boundary(cell)]
+    assert zone_h3_cells({"type": "Polygon", "coordinates": [ring + ring[:1]]}, 9, [cell, h3.grid_ring(cell, 1)[0]]) == [cell]
+    nb, far = h3.grid_ring(cell, 1)[0], h3.latlng_to_cell(41.95, -87.70, 9)
+    rows = pd.DataFrame({"in_aoi": [1, 0, 0, 0, 0], "h3_r9": [cell, cell, nb, far, ""]})
+    assert aoi_zone(rows, [cell], "h3_r9").tolist() == ["inside", "adjacent", "adjacent", "far", "far"]  # the same cell is not inside
+    assert base_spec(["theft", "assault"])["count_values"] == "crime=theft,assault" and "category" not in base_spec([])
     print("ok")
 
 
