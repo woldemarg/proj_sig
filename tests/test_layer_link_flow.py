@@ -22,7 +22,7 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
     the table with its layer's chip and in the graph with its ring; its drawer's card naming the layer, the level and the
     disk and answering *інший склад*; the stations hidden from their card — the insight leaves the table and
     ``POST /api/search`` cites it no more — and shown again — it is cited again —; the bars added by the same action, a
-    second run of its own. No cross-type panel, no joint run, every run of one layer."""
+    second run of its own; the crimes deleted with both layers. No cross-type panel, no joint run, every run of one layer."""
     sync_api = pytest.importorskip("playwright.sync_api")
     import httpx
     from conftest import make_engine, serve, stack
@@ -88,8 +88,14 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
         second = finished(cross=[stations["upload_id"]])
         assert second["level"] == "9" and second["status"] in TERMINAL
         assert page.locator("#cross-panel, #cross-btn").count() == 0
-    runs = [b for b in engine.ws.list_batches() if b.get("cross")]
-    assert len(runs) == 2 and all(len(b["cross"]) == 1 for b in runs)
+        runs = [b for b in engine.ws.list_batches() if b.get("cross")]
+        assert len(runs) == 2 and all(len(b["cross"]) == 1 for b in runs)
+        page.evaluate("refreshBatches()")
+        page.once("dialog", lambda d: d.accept())  # the crimes deleted: their two layers go with them, nothing stays apart
+        page.hover(".ds:not(.layer) >> nth=0")
+        page.click(".ds:not(.layer) .ds-del >> nth=0")
+        page.wait_for_function("S.batches.length === 0", timeout=60000)
+        assert not engine.ws.list_batches() and page.locator(".ds-loose").count() == 0
     console = [
         *(ROOT / "sig_web_console" / "static").glob("*.js"),
         ROOT / "sig_web_console" / "static" / "index.html",

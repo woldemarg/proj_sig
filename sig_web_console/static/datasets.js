@@ -143,18 +143,23 @@ function datasetTrust(t) {
 }
 
 async function deleteDataset(id, name, layer = "") {
-  /* a dataset out of the knowledge base; a layer's run (``layer``) takes its layer along when no other dataset reads it */
+  /* a dataset out of the knowledge base with its layer runs, then each layer-only upload no run left reads; a layer's
+     row (``layer``) removes that one run */
+  const key = (x) => x.dataset_id || x.batch_id, target = S.batches.find((x) => key(x) === id) || {};
+  const runs = layer || target.cross ? [] : [...new Set(S.batches.filter((x) => x.cross && x.upload_id === target.upload_id && x.level === target.level && x.status !== "SKIPPED").map(key))];
+  const gone = new Set([id, ...runs]);
+  const read = (u) => S.batches.some((x) => (x.cross || []).includes(u) && !gone.has(key(x)) && x.status !== "SKIPPED");
+  const layers = [...new Set(S.batches.filter((x) => gone.has(key(x))).flatMap((x) => x.cross || []))]
+    .map((u) => S.batches.find((x) => x.upload_id === u && x.status === "LAYER")).filter((x) => x && !read(x.upload_id));
   const ask = layer ? `Прибрати шар «${name}»?\n\nЙого знахідки зникнуть; сам шар — теж, якщо його не використовує інший датасет.`
-    : `Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.`;
+    : `Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.` +
+      (runs.length ? ` Разом з ним — ${plural(runs.length, "його шар", "його шари", "його шарів")}.` : "");
   if (!confirm(ask)) return;
-  const kept = layer && S.batches.find((b) => b.upload_id === layer && b.status === "LAYER");  // a layer-only upload, never another dataset
-  const shared = S.batches.some((b) => (b.cross || []).includes(layer) && b.dataset_id !== id && b.status !== "SKIPPED");
   try {
-    await api(`/api/datasets/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (kept && !shared) await api(`/api/datasets/${encodeURIComponent(kept.batch_id)}`, { method: "DELETE" });
+    for (const d of [...runs, id, ...layers.map((x) => x.batch_id)]) await api(`/api/datasets/${encodeURIComponent(d)}`, { method: "DELETE" });
     setUploadMsg("");
   } catch (err) { setUploadMsg(err.message, true); }
-  if ($("dataset-filter").value === id) $("dataset-filter").value = "";
+  if (gone.has($("dataset-filter").value)) $("dataset-filter").value = "";
   S.lastReady = null;  // force the views to reload
   refreshBatches();
 }
@@ -212,7 +217,7 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  renderRail(cards.length ? renderTree(cards, busy) : `<div class="empty-rail">Даних ще немає.<br>Натисніть «+ Додати».</div>`);  // after the graph: the rows read its trust
+  renderRail(cards.length ? renderTree(cards, busy) : `<div class="empty-rail">Даних ще немає.<br>Натисніть «+» вгорі.</div>`);  // after the graph: the rows read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
   // a caller that acts on the map afterwards (ask) awaits its load too, or the pass a poll began for this key; the poll does not
