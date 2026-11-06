@@ -1,6 +1,6 @@
 # Geospatial harness: SIG + ADS end-to-end — research and the POC plan
 
-Status: research complete (three repos read); plan approved by the owner on 2026-11-06; nothing implemented yet — no code, no PR, no issues until the owner says go. The relocated harness is committed (d6c0ff7); this document is the remaining untracked file. Roadmap §12 then starts with H1 on branch `feat/aoi-geo-harness`.
+Status: implemented 2026-11-06 — milestone #25, epic #316, issues #317–#321 (four harness PRs against `develop`, ADS on its experimental branch `exp-geo-h3-tool`); the sections below are the plan as approved, with §11 experiments still deferred to their triggers.
 Date: 2026-11-06. Repos: `sig` (develop, HEAD d6c0ff7; the harness is `sig/aoi-demo/`); `agentic-data-science` (ADS, master @ 7e422a9).
 Owner's rules: SIG is not changed outside `sig/aoi-demo/`; ADS is changed only on one experimental branch and only for the geo tool + the `h3` package (plus the docs/tests ADS's own `AGENTS.md` demands for that change). The POC is the existing page with three pipes changed; experiments run later, off the happy path, when a real run shows a default is wrong.
 

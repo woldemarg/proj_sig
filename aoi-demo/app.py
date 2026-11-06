@@ -176,7 +176,13 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     evidence = (qa.get("view") or {}).get("evidence") or {}
     area = evidence.get("area") or {}
     source = {p["key"]: p for p in evidence.get("provenance") or []}  # key -> dataset_id, filename
-    items = sorted(evidence.get("items", []), key=lambda it: (-((area.get(it["key"]) or 0) > 0), CRED_RANK.get(it.get("credibility"), 9)))
+    layer_of = {it["key"]: next((c for c in it.get("scope") or [] if c.startswith("context_")), "") for it in evidence.get("items", [])}
+    # the zone's own first; among them the cross-layer ones (a context_<layer>_band condition: the base layer's events read
+    # against the context layer, what the cross run exists for) before the rest; then SIG's credibility order
+    items = sorted(
+        evidence.get("items", []),
+        key=lambda it: (-((area.get(it["key"]) or 0) > 0), -bool(layer_of[it["key"]]), CRED_RANK.get(it.get("credibility"), 9)),
+    )
     out = []
     for it in items[:MAX_INSIGHTS]:  # SIG's own text, in its own language, as is
         dataset_id = (source.get(it["key"]) or {}).get("dataset_id", "")
@@ -188,6 +194,7 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
                 "filename": (source.get(it["key"]) or {}).get("filename", ""),
                 "role": it.get("role", ""),
                 "inside": (area.get(it["key"]) or 0) > 0,
+                "layer": layer_of[it["key"]],  # the cross-layer condition, e.g. context_chicago_bars_band=q2, else ""
                 "headline": it.get("headline", ""),
                 "scope": it.get("scope_text", ""),
                 "shift": it.get("shift_text") or [],
@@ -301,10 +308,11 @@ def observation_lines(items: list[dict[str, Any]]) -> list[str]:
     out = []
     for n, it in enumerate(items, 1):
         other = "" if it["filename"] == BASE["file"] else " (other file, context only)"
+        layer = f" · cross-layer: {it['layer']} (the context layer's points in the cell)" if it.get("layer") else ""
         out.append(
             f"O{n} [{it['key']}] {it['headline']} · where: {it['scope'] or '—'} · shift: {'; '.join(it['shift']) or '—'} · "
             f"in zone: {'yes' if it['inside'] else 'no'} · credibility: {CREDIBILITY_WORDS.get(it['credibility'], 'not rated')} · "
-            f"file: {it['filename'] or '?'}{other}"
+            f"file: {it['filename'] or '?'}{other}{layer}"
         )
     return out
 
@@ -404,10 +412,10 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
             f"Zone (base rows): inside={b['inside']}, adjacent={b['adjacent']}, far={b['far']}; {cols[0]} cells in the zone: {len(zone['cells'])}. "
             f"SIG counted these types per cell: {', '.join(data.get('counted') or []) or 'none'}."
         )
-        coarser = f"h3_r{r - 1}"
+        cell, coarser = cols[0], f"h3_r{r - 1}"
     else:
         geo = "\n\nData: base_aoi.csv → df_base_aoi and context_aoi.csv → df_context_aoi with the H3 columns h3_r*, in_aoi and aoi_zone (the figures appear once the zone is drawn)."
-        coarser = "the coarser h3_r column"
+        cell, coarser = "the finest h3_r", "the coarser h3_r column"
     if sig is None:
         answer = "\n\nSIG's answer for this zone (verbatim): (after the ask: SIG reads the zone with this question)"
         obs = "\n\nSIG findings (O#): (after the ask)"
@@ -425,6 +433,9 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
         f"shares for categories) and check on {coarser} whether the difference holds.\n"
         "- Treat SIG's conditions as extra cuts of the same computation and SIG's hypotheses as claims to test: confirmed / not confirmed / "
         "not testable with these columns. Do not re-mine spatial clusters.\n"
+        f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
+        f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
+        "few and no context points, inside the zone and around it — and report it under its O#.\n"
         "- Describe differences as shifts and ratios, not causes; proximity is not causation; label O# explicitly in the report."
     )
     return [
@@ -708,7 +719,13 @@ def trace_prompt() -> PlainTextResponse:
 @app.get("/datasets/options")
 def datasets_options() -> dict[str, Any]:
     """The base file's category column and its values with located rows: what the page offers to count per cell."""
-    return {"column": BASE["category"], "values": category_options(), "min_rows": COUNT_MIN, "default": list(COUNT_DEFAULT)}
+    return {
+        "column": BASE["category"],
+        "values": category_options(),
+        "min_rows": COUNT_MIN,
+        "default": list(COUNT_DEFAULT),
+        "labels": {"base": BASE["label"], "context": CONTEXT["label"]},  # the page's words for the layers
+    }
 
 
 @app.post("/datasets")
@@ -790,15 +807,28 @@ def check() -> None:
     sig_fx = {
         "sig_answer": "Спостереження: A [P1]",
         "insights": [
-            {"key": "P1", "headline": "H", "scope": "s", "shift": ["m: up"], "inside": True, "credibility": 6, "filename": BASE["file"]},
-            {"key": "P2", "headline": "G", "scope": "", "shift": [], "inside": False, "credibility": None, "filename": "other.csv"},
+            {
+                "key": "P1",
+                "headline": "H",
+                "scope": "s",
+                "shift": ["m: up"],
+                "inside": True,
+                "credibility": 6,
+                "filename": BASE["file"],
+                "layer": "context_x_band=q2",
+            },
+            {"key": "P2", "headline": "G", "scope": "", "shift": [], "inside": False, "credibility": None, "filename": "other.csv", "layer": ""},
         ],
     }
     parts = ads_query_parts("як змінювалась кількість?", zone_fx, data_fx, sig_fx)
     assert [p["kind"] for p in parts] == ["frame", "user", "data", "sig_answer", "observations", "guidance"], parts
     q = "".join(p["text"] for p in parts)
     assert q.startswith("Analyse the area of interest (AOI): як змінювалась") and "h3_r9, h3_r8, h3_r7" in q and "inside=1, adjacent=1, far=0" in q, q
-    assert f"O1 [P1] H · where: s · shift: m: up · in zone: yes · credibility: no other source · file: {BASE['file']}\nO2 [P2] G" in q, q
+    assert (
+        f"O1 [P1] H · where: s · shift: m: up · in zone: yes · credibility: no other source · file: {BASE['file']} · cross-layer: context_x_band=q2"
+        in q
+    ), q
+    assert "\nO2 [P2] G" in q and "A finding marked cross-layer" in q and "joining the two tables on the cell id" in q, q
     assert "(other file, context only)" in q and "Спостереження: A [P1]" in q and "proximity is not causation" in q and "h3_r8 whether" in q, q
     assert "(after the ask)" in ads_query("q", None, None, None) and "(after the ask)" not in q
     md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
@@ -830,9 +860,11 @@ def check() -> None:
     grid = cell_grid({"scale": 1, "columns": {"h3": ["a", "b"]}, "rings": [[0, 0, 10, 0, 10, 10, 0, 10], [5, 5, 10, 0, 10, 10, 0, 10]]})
     assert grid["rings"][0] == [[0, 0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0, 0]], grid["rings"]
     # SIG's credibility order (1 confirmed, 2 unconfirmed, 6 no other source, 5 contradicted), the zone's items first
-    items = [{"key": f"P{i}", "pattern_id": "x", "credibility": c} for i, c in enumerate((5, 6, 2, 1, 1), 1)]
+    items = [{"key": f"P{i}", "pattern_id": "x", "credibility": c, "scope": []} for i, c in enumerate((5, 6, 2, 1, 1), 1)]
+    items[1]["scope"] = ["context_bars_band=q2", "lisa_points=no cluster"]  # a cross-layer finding: first among the zone's
     found = sig_findings({"view": {"evidence": {"items": items, "area": {"P1": 0.4, "P2": 0.4, "P3": 0.4, "P4": 0.4}, "provenance": []}}})
-    assert [it["key"] for it in found] == ["P4", "P3", "P2", "P1", "P5"], [it["key"] for it in found]
+    assert [it["key"] for it in found] == ["P2", "P4", "P3", "P1", "P5"], [it["key"] for it in found]
+    assert found[0]["layer"] == "context_bars_band=q2" and found[1]["layer"] == ""
     # geo.py: SIG's own indexing, parents consistent, a cell's own boundary polygon is exactly that cell, the rows' place
     import h3
 
