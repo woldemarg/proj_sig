@@ -506,7 +506,7 @@ function traceHtml(stage, a) {
   const t = (a.trace || {})[stage];
   if (!t) return "";
   if (stage === "search") {  // the short statistics of what SIG found
-    return `<div class="hint">У SIG пішли лише ${t.cells_count} комірок зони, без питання користувача.</div>`
+    return `<div class="hint">У SIG пішли ${t.cells_count} комірок зони${t.question ? " і питання користувача" : ", без питання користувача"}${t.entry === "preview" ? "; відповідь із питанням не мала знахідок у зоні, узято попередній перегляд" : ""}.</div>`
       + (t.result ? kv(t.result) : "<div class='hint'>виконується…</div>")
       + (a.sig_evidence ? fold(`Свідчення графа, яке читала модель SIG (${a.sig_evidence.length} симв.)`, `<pre>${esc(a.sig_evidence)}</pre>`) : "");
   }
