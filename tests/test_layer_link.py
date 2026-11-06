@@ -453,9 +453,11 @@ def test_the_prompts_band_words_follow_the_layers_band_count():
         return ContextLayer("bars", np.zeros(1), np.zeros(1, int), np.zeros(2, int), np.zeros(0, int), np.asarray(edges, float))
 
     two = glossary(layer([1, 3, 43]), 0)
-    assert two["context_bars_band=q2"] == "the cell and itself only hold the most bars points (of the cells that have any)"
+    assert two["context_bars_band=q2"] == "the cell itself holds the most bars points (of the cells that have any)"
     assert "the fewest" in two["context_bars_band=q1"] and "q3" not in str(two) and "2 bands" in two["context_bars_band"]
+    assert two["context_bars_band=none nearby"] == "no bars point in the cell itself"  # the disk in words, as ``wording.disk_words``
     four = glossary(layer([1, 2, 3, 5, 43]), 1)
-    assert "fewer than the middle" in four["context_bars_band=q2"] and "quarters" in four["context_bars_band"]
+    assert four["context_bars_band=q2"] == "the cell and its six neighbours hold fewer than the middle bars points (of the cells that have any)"
+    assert "quarters" in four["context_bars_band"]
     for k in (1, 2, 3, 4):  # the top band is the top band in both languages
         assert band_words(k, k) in ("the most", "some") and wording.layer_band_words(k, k + 1) in ("найбільше", "є")
