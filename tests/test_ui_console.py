@@ -348,3 +348,63 @@ def test_a_runs_insights_are_highlighted_in_every_block_and_the_base_layers_are_
     assert {pid for pid, has in ringed.items() if has} == own
     assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and stayed == "table"
     assert not errors, errors
+
+
+# the rail's functions on records of their shape: an upload u read twice at r9, one layer run on it, the layer L
+TREE = """() => {
+  const row = (id, extra) => ({ batch_id: `B-${id}`, dataset_id: id, upload_id: "u", filename: "f.csv", level: "9", status: "READY", metrics: {}, ...extra });
+  window.__twin = [row("dA", { linkable: true }), row("dB"), row("dR", { cross: ["L"], context: [{ name: "l" }] }),
+                   { batch_id: "B-L", upload_id: "L", filename: "l.csv", level: "layer", status: "LAYER", layer_of: 1 }];
+  window.__real = api; window.__deleted = [];
+  window.api = (path, opts = {}) => {
+    if (opts.method === "DELETE") return (window.__deleted.push(path), window.__fail && __deleted.length === 2 ? Promise.reject(new Error("busy")) : Promise.resolve({}));
+    if (path === "/api/crosstype") return Promise.reject(new Error("refused"));
+    return path === "/api/batches" ? Promise.resolve(S.batches) : __real(path, opts);
+  };
+  window.confirm = () => true;
+}"""
+
+
+@pytest.mark.browser
+def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_with_care(cfg):
+    """The tree's guards (docs/08_interface.md §8.2): an upload whose finest map is coarser than r8 says why no layer can
+    be added; two readings of one level show its runs once and keep them when one of the readings is deleted, one
+    reading alone takes them and their layer along, and a failure midway says what is left; a failed run keeps the
+    types and the disk picked for it; a share's column with a space or an *is* is split where its glossary says."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    port, app = stack(make_engine(cfg))
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the dialog's disk
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.batches", timeout=20000)
+        page.evaluate(TREE)
+        coarse = page.evaluate("uploadGroup([{ batch_id: 'g', upload_id: 'c', filename: 'c.csv', level: '6', status: 'READY', metrics: {} }], false)")
+        assert "рівня 8" in coarse and "ds-link" not in coarse
+        assert page.evaluate("(uploadGroup(__twin.slice(0, 3), false).match(/ds-glyph/g) || []).length") == 1  # under one reading
+        delete = "async (rows) => { S.batches = rows; __deleted.length = 0; await deleteDataset('dB', 'x'); return __deleted; }"
+        assert page.evaluate(f"({delete})(__twin)") == ["/api/datasets/dB"]  # the other reading keeps the runs
+        alone = page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
+        assert alone == ["/api/datasets/dR", "/api/datasets/dB", "/api/datasets/B-L"]  # the runs, the reading, the layer
+        page.evaluate("window.__fail = true")
+        page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
+        assert page.inner_text("#upload-msg").startswith("Видалено не все: busy")
+        page.evaluate(
+            "() => { window.__fail = false; S.batches = __twin; openLink('B-dA'); $('link-counts').value = 'kind=a'; $('link-ring').value = '1'; }"
+        )
+        page.evaluate("runLink({ layer: 'L' })")
+        page.wait_for_function("$('link-msg').textContent === 'refused'", timeout=10000)
+        assert page.evaluate("[$('link-counts').value, $('link-ring').value]") == ["kind=a", "1"]  # as picked
+        shares = """profileTypes({ profile: { numerics: ["share_Primary Type_THEFT", "share_this_is_x_yes"], geo: { glossary: {
+          "share_Primary Type_THEFT": "share of the cell's events whose Primary Type is THEFT",
+          "share_this_is_x_yes": "share of the cell's events whose this is x is yes (every such event also has: a b)" } } } })"""
+        assert page.evaluate(shares) == {"Primary Type": ["THEFT"], "this_is_x": ["yes"]}
+    assert not errors, errors

@@ -216,7 +216,7 @@ function applyVisibility() {
 
 // the latent sphere (docs/08_interface.md §8.4): /api/sphere gives the projected points and the edges between them;
 // the traces are drawn here in the graph's visual language and restyled in place (layers, spotlight), never re-fetched
-// for a highlight or a theme change. Every trace a legend entry explains carries the entry's key as `meta`.
+// for a highlight. Every trace a legend entry explains carries the entry's key as `meta`.
 const HOVER = "%{hovertext}<extra></extra>";
 const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, dash
   ["latent", "RELATED_TO", "Theme links", "anchor", 4, null],

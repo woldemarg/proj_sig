@@ -127,13 +127,14 @@ function uploadGroup(cards, busy) {
   const lead = levels[0] || runs[0], host = levels.find((b) => b.linkable), finest = levels.find(geoLevel);  // finest first
   const coarse = !host && finest && finest.status === "READY" && Number(finest.level) < LINK_MIN_LEVEL;
   const layer = (r) => dsRow(r, runLayers(r), busy, { neutral: verdict(r), layer: r.cross[0] });
+  const owner = (r) => levels.find((b) => b.level === r.level && b.status === "READY") || levels.find((b) => b.level === r.level);  // two readings of one level: the first READY one shows its runs
   const under = (b) => {
-    const kids = runs.filter((r) => r.level === b.level).map(layer).join("") +
+    const kids = runs.filter((r) => owner(r) === b).map(layer).join("") +
       (b === host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "") +  // uploads.cross_state
       (coarse && b === finest ? `<div class="ds-note ds-why">Шар додається до мапи рівня ${LINK_MIN_LEVEL} і детальнішої; найдетальніший рівень цього файлу — ${b.level}.</div>` : "");
     return kids ? `<div class="ds-kids">${kids}</div>` : "";
   };
-  const astray = runs.filter((r) => !levels.some((b) => b.level === r.level)).map(layer).join("");  // a run whose level is gone
+  const astray = runs.filter((r) => !owner(r)).map(layer).join("");  // a run whose level is gone
   const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy) + under(levels[0])
     : `<div class="ds-group-head"><span class="ds-name">${esc(titleOf(lead) + (lead.where ? ` · ${lead.where}` : ""))}</span></div>` +
       (levels.length ? `<div class="ds-kids">${levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) }) + under(b)).join("")}</div>` : "");
