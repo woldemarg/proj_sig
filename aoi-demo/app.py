@@ -83,7 +83,7 @@ def base_spec(count_values: list[str]) -> dict[str, str]:
     """The base layer's SIG upload options: the manifest's, plus count_values=<column>=v1,v2 for the chosen types."""
     spec = {k: v for k, v in BASE.items() if k != "category"}
     if count_values:
-        spec["count_values"] = f"{BASE['category']}={','.join(count_values)}"
+        spec["count_values"] = ",".join(f"{BASE['category']}={v}" for v in count_values)  # one column=value per type
     return spec
 
 
@@ -727,7 +727,7 @@ def check() -> None:
     nb, far = h3.grid_ring(cell, 1)[0], h3.latlng_to_cell(41.95, -87.70, 9)
     rows = pd.DataFrame({"in_aoi": [1, 0, 0, 0, 0], "h3_r9": [cell, cell, nb, far, ""]})
     assert aoi_zone(rows, [cell], "h3_r9").tolist() == ["inside", "adjacent", "adjacent", "far", "far"]  # the same cell is not inside
-    assert base_spec(["theft", "assault"])["count_values"] == "crime=theft,assault" and "category" not in base_spec([])
+    assert base_spec(["theft", "assault"])["count_values"] == "crime=theft,crime=assault" and "category" not in base_spec([])
     print("ok")
 
 
