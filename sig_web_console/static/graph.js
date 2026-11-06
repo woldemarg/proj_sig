@@ -548,7 +548,12 @@ async function verifyPattern(id) {
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
-const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
+const metricWords = (name) =>  // a metric as the insights read it (their metric_words), by its column or its spaced name
+  (S.nodes.find((d) => d.target === name || human(d.target) === name) || {}).metric_words || human(name);
+const nodeLabel = (id, labels = {}) => {  // an insight the graph holds in words, as the table reads it; else its stored label
+  const n = S.nodes.find((d) => d.id === id);
+  return n && n.words ? `${n.words.join(" · ")}: ${n.metric_words} ${n.ptype === "covariance" ? word("covariance") : `${signed(n.effect)} sd`}` : labels[id] || (n || {}).full_label || id;
+};
 
 function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
@@ -703,14 +708,14 @@ async function inspect(id, note = "") {
       ["Модель опису", esc(`${p.embedding.model_id} · ${p.embedding.dim}d · ${p.embedding.representation_version}`)],
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
-    $("drawer-title").textContent = n.label;
+    $("drawer-title").textContent = n.label.split(" · ").map((part) => part.replace(/^(.*?)( [↑↓])?$/, (_, m, arrow = "") => metricWords(m) + arrow)).join(" · ");
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
-    html += `<h4>Подробиці</h4>` + kv([
+    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(metricWords(s.component))}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
+    html += dev(`<div><h4>Подробиці</h4>` + kv([
       ["Колонки", esc(p.dimensions.map(human).join(", "))], ["Метрики", esc(p.targets.map(human).join(", "))],
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
-    ]);
+    ]) + `</div>`);
   } else if (n.kind === "TemporalNode") {  // who lives in the period or moved in it, at any level (views.node_details' members)
     $("drawer-title").textContent = p.period;
     const m = d.members || {}, list = (key, items) =>

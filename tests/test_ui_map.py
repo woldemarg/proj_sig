@@ -419,7 +419,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.evaluate(
             f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
         )
-        assert all(name in page.inner_text(".sig-pop") for name in ("california_housing.csv", "half.csv"))
+        assert all(name in page.inner_text(".sig-pop") for name in ("Житло Каліфорнії (мапа)", "half"))  # the datasets by their titles
         assert page.evaluate(f"GeoMap.placeOf({theirs!r})") == []  # unfocused, it carries no zone the map does not show
         busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         page.evaluate(f"GeoMap.closePopup(); G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")

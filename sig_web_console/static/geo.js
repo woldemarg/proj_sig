@@ -573,7 +573,7 @@ function renderCard(p, item, pts) {
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by every cell holding one of its located events
       ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
-      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness), true], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
       .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
     (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
@@ -589,6 +589,8 @@ function trustTags(pid) {
   return `<i class="pp-tag ${cls}">${TERMS[`credibility_${t.credibility}`] ? term(`credibility_${t.credibility}`) : esc(words)}</i>` + (t.scale ? `<i class="pp-tag">${term(`scale_${t.scale}`)}</i>` : "");
 }
 
+const LISA_WORDS = { "hot spot": "гаряча точка", "cold spot": "холодна точка" };
+
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row, level = G.level ?? regionLevel();
   const skip = new Set(["row", "h3"]);
@@ -596,16 +598,18 @@ function cellPopup(f, lngLat) {
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const region = level != null && G.overlay ? G.overlay.features.find((r) => r.properties.resolution === level && r.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div><div class="pp-list"></div>` : "";
-  const popup = openPopup(`<div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${reg}<div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div>`, lngLat, p.h3);
+  const spot = LISA_WORDS[p.lisa_points];  // the person reads a hot or cold spot in words, the developer every label
+  const popup = openPopup(`<div class="pp-head"><span data-dev>${esc(p.h3)}</span><span data-user>${esc(cap(word("cell")))} · ${esc(plural(p.points ?? 0, "подія", "події", "подій"))}</span>` +
+    `<span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}"${spot ? "" : " data-dev"}>${esc(spot || p.lisa_points)}</span></div>` +
+    `<div class="pp-scroll">${reg}<div data-dev><div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div></div>`, lngLat, p.h3);
   if (region && region.properties.n) cellInsights(popup, row, level);
 }
 
 function regionPopup(id, lngLat) {
   /* «Усі датасети»: a hex's count and what each dataset brings to it; the zone and the question take its H3 */
   const f = ((G.overlay || empty()).features).find((r) => r.properties.id === id); if (!f) return;
-  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(fileOf(ds))}</th><td>${num(n, 0)}</td></tr>`).join("");
-  openPopup(`<div class="pp-head"><span>${esc(id)}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
+  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(titleOf(fileOf(ds)))}</th><td>${num(n, 0)}</td></tr>`).join("");
+  openPopup(`<div class="pp-head"><span data-dev>${esc(id)}</span><span data-user>${esc(cap(word("region")))}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat, id.split(":")[2]);
 }
 

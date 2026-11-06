@@ -123,7 +123,7 @@ function followUps(turn) {
   const cross = items.find((i) => i.transversal_only);
   if (cross) out.push(`Розкажи про ${cross.target} для ${cross.scope.map((c) => c.split("=")[1]).join(" ")}`);
   const seed = items[0];
-  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.join(" і ")}?`);
+  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.map(human).join(" і ")}?`);  // as askAbout names them
   return out.slice(0, 3);
 }
 
@@ -149,7 +149,7 @@ const WALK = Object.fromEntries(["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "
 async function pickInsight(pid, view) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
-  S.chat.push({ question: d.node.label, picked: true, insight: d, view });
+  S.chat.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
   renderThread();
 }
 
@@ -172,7 +172,7 @@ function insightCard(turn) {
     `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
-    (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
+    (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.props ? nodeLabel(it.id, { [it.id]: it.label }) : it.label, it.word)).join("")}` : "") +
     `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph" data-dev>Показати в графі</button></div></div>`;
 }
 

@@ -295,7 +295,7 @@ svg.spark line.zero { stroke: var(--line-2); stroke-dasharray: 3 3; } svg.spark 
 .answer-box p { margin: 0 0 8px; } .answer-box p:last-child { margin-bottom: 0; }
 .answer-box h4 { margin: 12px 0 4px; font-size: 13px; } .answer-box h4:first-child { margin-top: 0; }
 .answer-box ul, .answer-box ol { margin: 4px 0 8px; padding-left: 20px; } .answer-box li { margin: 3px 0; }
-.answer-box code { font-family: var(--mono); font-size: 12.5px; background: var(--sunken); padding: 0 4px; border-radius: 4px; }
+.answer-box code { font-family: inherit; font-size: inherit; font-weight: 600; background: none; padding: 0; }  /* a data literal: as the data holds it, not boxed */
 .notice { margin: 10px 14px 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--warn-soft); color: var(--ink-2); font-size: 13px; }
 a.cite { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; margin: 0 1px; border-radius: 6px; font-size: 11.5px; font-weight: 680; background: var(--accent-soft); color: var(--accent); text-decoration: none; cursor: pointer; vertical-align: 1px; }
 a.cite:hover { background: var(--accent); color: var(--accent-ink); }
