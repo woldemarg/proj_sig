@@ -11,3 +11,12 @@ services:
   grafana: { profiles: [ads-full] }
   orchestrator:
     environment: { TRACING_BACKEND: phoenix }  # ADS sets "phoenix,mlflow"; MLflow is not started here, so Phoenix alone
+
+volumes:
+  # The demo's Phoenix on the standalone ADS Phoenix's database: one set of users and API keys for both stacks, so the
+  # one PHOENIX_API_KEY in ADS's .env serves either. Phoenix (latest) needs a login and, for span export, a System API key
+  # (without it every export is 401). External: this project neither creates nor removes it, so `docker compose down -v`
+  # here keeps it; the standalone ADS stack is stopped while the demo runs.
+  phoenix_data:
+    name: agentic-data-science_phoenix_data
+    external: true
