@@ -24,96 +24,14 @@
 
 <main class="app">
   <!-- ------------------------------------------------ datasets -->
-  <aside class="rail" aria-label="Датасети">
-    <div class="rail-top">
-      <p class="section-title">Додати дані</p>
-      <form id="upload-form">
-        <label class="drop" id="drop">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-          <span class="big">Перетягніть таблицю сюди</span>
-          <span class="muted">або натисніть, щоб вибрати · CSV, TSV, Parquet</span>
-          <span class="file" id="file-name"></span>
-          <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
-        </label>
-        <label class="small" for="sample">Або готовий датасет</label>
-        <select class="field" id="sample"><option value="">— не обрано —</option></select>
-        <div class="hint" id="sample-hint"></div>
-        <fieldset class="roles" id="roles" disabled>
-          <legend class="small">Що це</legend>
-          <label class="role-card"><input type="radio" name="role" id="role-events" value="events"><b>Події з координатами</b><span>базовий шар: комірки мапи та їхні інсайти</span></label>
-          <label class="role-card"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця без координат</b><span>інсайти рядків таблиці</span></label>
-          <label class="role-card"><input type="radio" name="role" id="role-layer" value="layer"><b>Лише шар</b><span>контекстний шар: точки, що лише стоять поруч із подіями базового</span></label>
-        </fieldset>
-        <details class="adv">
-          <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>
-          <label class="small" for="where">Лише рядки</label>
-          <input class="field" id="where" placeholder="колонка=значення">
-          <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>
-          <label class="small" for="count-values">Типи для «більше подій»</label>
-          <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
-          <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
-          <label class="small" for="baseline">Порівнювати комірки</label>
-          <select class="field" id="baseline"><option value="">з усією мапою</option><option value="zone">зі своєю зоною (батьківською коміркою)</option></select>
-          <label class="small" for="categories">Вважати категоріями</label>
-          <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
-          <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
-          <label class="small" for="bins">Розбити числа на смуги</label>
-          <input class="field" id="bins" placeholder="напр. median_income:4">
-          <div class="hint">Квантильні смуги стають колонкою для групування; вихідна колонка перестає бути метрикою.</div>
-          <label class="small" for="geo">Просторовий аналіз (комірки H3)</label>
-          <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
-          <div class="hint"><span class="mono">auto</span> знайде координати; <span class="mono">@7</span> — рівень H3, <span class="mono">@7,5</span> — кілька, <span class="mono">@auto</span> — за точками.</div>
-          <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
-          <label class="small" for="context">Контекстний шар — точки іншого типу</label>
-          <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
-          <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>
-          <select class="field" id="context-sample" multiple size="3"></select>
-          <label class="small" for="context-geo">Колонки точок шару</label>
-          <input class="field" id="context-geo" placeholder="напр. lat,lon · geometry; порожньо — auto">
-          <label class="small" for="context-ring">Що рахувати поруч</label>
-          <select class="field" id="context-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
-          <div class="hint">До двох шарів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Зв'язок у самій комірці сусіди розмивають — тоді «лише саму комірку». Шар ставить питання про склад подій біля об'єктів; частоту одного типу подій біля них він не перевіряє. Потрібен просторовий аналіз.</div>
-          <label class="small" for="time">Колонка часу</label>
-          <input class="field" id="time" placeholder="напр. order_date">
-          <label class="small" for="tz">Часовий пояс</label>
-          <input class="field" id="tz" placeholder="напр. Europe/Kyiv; порожньо — UTC">
-          <label class="small" for="grid">Сітка часу</label>
-          <select class="field" id="grid"><option value="auto">за проміжком даних</option><option value="week">тиждень</option><option value="day">день</option><option value="month">місяць</option><option value="quarter">квартал</option></select>
-          <div class="hint">Дає інсайтам динаміку: тренд, піки й спади.</div>
-          <label class="small" for="indicators">Що вимірюють метрики</label>
-          <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
-          <div class="hint"><span class="mono">метрика:показник[:одиниця]</span> — щоб порівнювати датасети.</div>
-          <label class="small" for="glossary">Що означають колонки</label>
-          <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
-          <div class="hint">JSON: колонка чи <span class="mono">колонка=значення</span> → як її називати.</div>
-          <label class="small" for="metadata">Документ метаданих</label>
-          <div><label class="btn ghost sm" for="metadata">Обрати файл</label> <span class="file" id="metadata-name"></span></div>
-          <input type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown" hidden>
-          <div class="hint">Текстовий опис колонок — довідка для моделі.</div>
-          <label class="small" for="source">Джерело</label>
-          <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
-          <label class="small" for="reliability">Надійність джерела</label>
-          <select class="field" id="reliability">
-            <option value="">Не вказано (F)</option>
-            <option value="A">A — цілком надійне</option>
-            <option value="B">B — здебільшого надійне</option>
-            <option value="C">C — досить надійне</option>
-            <option value="D">D — переважно ненадійне</option>
-            <option value="E">E — ненадійне</option>
-          </select>
-          <div class="hint">Довіра до даних за шкалою Адміралтейства; бачить лише модель.</div>
-        </details>
-        <div class="rail-actions">
-          <button type="submit" class="btn" id="upload-btn" disabled>Аналізувати</button>
-        </div>
-      </form>
-      <div id="upload-msg" class="msg"></div>
-      <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
+  <aside class="rail" aria-label="Дані">
+    <div class="rail-head">
+      <p class="section-title">Дані</p>
+      <button type="button" class="btn sm" id="add-btn">+ Додати</button>
     </div>
-    <div class="rail-list">
-      <p class="section-title">Датасети <span class="muted">— натисніть на датасет, щоб показати лише його</span></p>
-      <div id="batches"></div>
-    </div>
+    <div id="upload-msg" class="msg"></div>
+    <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
+    <div class="rail-list" id="batches"></div>
     <div class="col-resize" data-col="rail" title="Тягніть, щоб змінити ширину · подвійний клік — скинути"></div>
   </aside>
 
@@ -134,7 +52,7 @@
         <option value="force">Силове розміщення</option>
       </select>
       <button class="btn ghost sm" id="fit-btn" title="Показати весь граф у вікні / повернути камеру сфери">Показати все</button>
-      <button class="btn ghost sm" id="legend-btn" title="Показати чи сховати легенду" aria-pressed="true">Легенда</button>
+      <button class="btn ghost sm" id="legend-btn" data-dev title="Показати чи сховати легенду" aria-pressed="true">Легенда</button>
       <button class="btn ghost sm" id="clear-btn" title="Прибрати виділення відповіді" hidden>Прибрати виділення</button>
     </div>
 
@@ -161,7 +79,7 @@
 
     <div class="canvas-body">
     <!-- one legend for the graph, the sphere and the table; the link entries are the layer toggles of both views -->
-    <aside class="legend-col" id="legend" aria-label="Легенда і шари">
+    <aside class="legend-col" id="legend" aria-label="Легенда і шари" data-dev>
       <div class="lg-caption" id="view-caption"></div>
       <section class="lg"><h5>Вузли графа</h5>
         <div class="key" data-key="anchor"><i class="sw anchor"></i><span>Тема</span><b data-n="anchor"></b></div>
@@ -252,7 +170,7 @@
         <div class="inner">
           <div class="art"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7M7.2 8.3l3.6 7.4M16.8 9.3 13.3 15.7"/></svg></div>
           <h3>Інсайтів ще немає</h3>
-          <p>Додайте таблицю ліворуч — або оберіть там готовий датасет: продажі, житло Каліфорнії, пожежні виклики, ДТП, лісові пожежі, — і SIG знайде статистично перевірені інсайти, згрупує їх у теми й намалює граф тут.</p>
+          <p>Натисніть «+ Додати» ліворуч і оберіть файл або готовий датасет.</p>
         </div>
       </div>
 
@@ -293,24 +211,103 @@
 </main>
 <dialog id="link-dialog" aria-labelledby="link-title">
   <form id="link-form">
-    <h3 id="link-title">+ контекстний шар</h3>
-    <div class="hint">Окремий прогін базового шару з одним контекстним: найдрібніший рівень базового, одне оточення. Другий шар — ще одна дія й ще один прогін.</div>
-    <label class="small" for="link-layer">Збережений шар</label>
-    <select class="field" id="link-layer"><option value="">—</option></select>
-    <label class="small" for="link-sample">Або готовий набір</label>
-    <select class="field" id="link-sample"><option value="">—</option></select>
-    <label class="small" for="link-file">Або файл точок</label>
-    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet">
-    <div class="hint">Готовий набір чи файл спершу збережеться як «лише шар».</div>
-    <label class="small" for="link-counts">Типи для «більше подій»</label>
-    <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
-    <div class="hint">Типи базового шару, якщо їх обрано; порожньо — питаємо лише про склад.</div>
-    <details class="adv"><summary><span>Додатково</span></summary>
+    <h3 id="link-title">Додати шар</h3>
+    <div class="link-opts" id="link-opts"></div>
+    <label class="link-opt" for="link-file">Файл точок…<span class="muted">CSV, TSV, Parquet</span></label>
+    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet" hidden>
+    <div class="link-dev" data-dev>
+      <label class="small" for="link-counts">Типи для «більше подій»</label>
+      <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
       <label class="small" for="link-ring">Що рахувати поруч</label>
       <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
-    </details>
+    </div>
     <div class="msg" id="link-msg"></div>
-    <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button><button type="submit" class="btn" id="link-go">Запустити</button></div>
+    <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button></div>
+  </form>
+</dialog>
+<dialog id="upload-dialog" aria-labelledby="upload-title">
+  <h3 id="upload-title">Додати дані</h3>
+  <form id="upload-form">
+    <label class="drop" id="drop">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <span class="big">Перетягніть таблицю сюди</span>
+      <span class="muted">або натисніть, щоб вибрати · CSV, TSV, Parquet</span>
+      <span class="file" id="file-name"></span>
+      <input type="file" id="file" accept=".csv,.tsv,.txt,.parquet" hidden>
+    </label>
+    <label class="small" for="sample">Або готовий датасет</label>
+    <select class="field" id="sample"><option value="">— не обрано —</option></select>
+    <div class="hint" id="sample-hint"></div>
+    <fieldset class="roles" id="roles" disabled>
+      <legend class="small">Що це</legend>
+      <label class="role-card"><input type="radio" name="role" id="role-events" value="events"><b>Події з координатами</b><span>базовий шар: комірки мапи та їхні інсайти</span></label>
+      <label class="role-card"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця без координат</b><span>інсайти рядків таблиці</span></label>
+      <label class="role-card"><input type="radio" name="role" id="role-layer" value="layer"><b>Лише шар</b><span>контекстний шар: точки, що лише стоять поруч із подіями базового</span></label>
+    </fieldset>
+    <details class="adv">
+      <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Додатково</span></summary>
+      <label class="small" for="where">Лише рядки</label>
+      <input class="field" id="where" placeholder="колонка=значення">
+      <div class="hint">Окреме читання файлу: лише рядки з цим значенням категорійної колонки — частота одного типу подій.</div>
+      <label class="small" for="count-values">Типи для «більше подій»</label>
+      <input class="field" id="count-values" placeholder="колонка=значення, колонка=значення">
+      <div class="hint">Лічильник подій кожного типу в комірці — поруч із часткою; лише обрані типи (кожен додає перевірку).</div>
+      <label class="small" for="baseline">Порівнювати комірки</label>
+      <select class="field" id="baseline"><option value="">з усією мапою</option><option value="zone">зі своєю зоною (батьківською коміркою)</option></select>
+      <label class="small" for="categories">Вважати категоріями</label>
+      <input class="field" id="categories" placeholder="напр. Store, Holiday_Flag">
+      <div class="hint">Колонки з числовими кодами, за якими групувати (ID, прапорці).</div>
+      <label class="small" for="bins">Розбити числа на смуги</label>
+      <input class="field" id="bins" placeholder="напр. median_income:4">
+      <div class="hint">Квантильні смуги стають колонкою для групування; вихідна колонка перестає бути метрикою.</div>
+      <label class="small" for="geo">Просторовий аналіз (комірки H3)</label>
+      <input class="field" id="geo" placeholder="напр. auto@auto · geometry · lat,lon">
+      <div class="hint"><span class="mono">auto</span> знайде координати; <span class="mono">@7</span> — рівень H3, <span class="mono">@7,5</span> — кілька, <span class="mono">@auto</span> — за точками.</div>
+      <label class="small chk"><input type="checkbox" id="table" checked disabled> + базовий рівень без географії</label>
+      <label class="small" for="context">Контекстний шар — точки іншого типу</label>
+      <input class="field" type="file" id="context" multiple accept=".csv,.tsv,.txt,.parquet">
+      <label class="small" for="context-sample">Або готові шари (Ctrl — кілька)</label>
+      <select class="field" id="context-sample" multiple size="3"></select>
+      <label class="small" for="context-geo">Колонки точок шару</label>
+      <input class="field" id="context-geo" placeholder="напр. lat,lon · geometry; порожньо — auto">
+      <label class="small" for="context-ring">Що рахувати поруч</label>
+      <select class="field" id="context-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
+      <div class="hint">До двох шарів (напр. школи до ДТП): кожна комірка отримає умову «скільки їх у комірці й поруч». Зв'язок у самій комірці сусіди розмивають — тоді «лише саму комірку». Шар ставить питання про склад подій біля об'єктів; частоту одного типу подій біля них він не перевіряє. Потрібен просторовий аналіз.</div>
+      <label class="small" for="time">Колонка часу</label>
+      <input class="field" id="time" placeholder="напр. order_date">
+      <label class="small" for="tz">Часовий пояс</label>
+      <input class="field" id="tz" placeholder="напр. Europe/Kyiv; порожньо — UTC">
+      <label class="small" for="grid">Сітка часу</label>
+      <select class="field" id="grid"><option value="auto">за проміжком даних</option><option value="week">тиждень</option><option value="day">день</option><option value="month">місяць</option><option value="quarter">квартал</option></select>
+      <div class="hint">Дає інсайтам динаміку: тренд, піки й спади.</div>
+      <label class="small" for="indicators">Що вимірюють метрики</label>
+      <input class="field" id="indicators" placeholder="напр. price:retail_price:UAH, qty:units_sold">
+      <div class="hint"><span class="mono">метрика:показник[:одиниця]</span> — щоб порівнювати датасети.</div>
+      <label class="small" for="glossary">Що означають колонки</label>
+      <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
+      <div class="hint">JSON: колонка чи <span class="mono">колонка=значення</span> → як її називати.</div>
+      <label class="small" for="metadata">Документ метаданих</label>
+      <div><label class="btn ghost sm" for="metadata">Обрати файл</label> <span class="file" id="metadata-name"></span></div>
+      <input type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown" hidden>
+      <div class="hint">Текстовий опис колонок — довідка для моделі.</div>
+      <label class="small" for="source">Джерело</label>
+      <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
+      <label class="small" for="reliability">Надійність джерела</label>
+      <select class="field" id="reliability">
+        <option value="">Не вказано (F)</option>
+        <option value="A">A — цілком надійне</option>
+        <option value="B">B — здебільшого надійне</option>
+        <option value="C">C — досить надійне</option>
+        <option value="D">D — переважно ненадійне</option>
+        <option value="E">E — ненадійне</option>
+      </select>
+      <div class="hint">Довіра до даних за шкалою Адміралтейства; бачить лише модель.</div>
+    </details>
+    <div class="msg" id="upload-note"></div>
+    <div class="rail-actions">
+      <button type="button" class="btn ghost" id="upload-cancel">Скасувати</button>
+      <button type="submit" class="btn" id="upload-btn" disabled>Аналізувати</button>
+    </div>
   </form>
 </dialog>
 <script src="/vendor/cytoscape.min.js"></script>

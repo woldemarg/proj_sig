@@ -75,6 +75,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.click("#add-btn")
         assert page.is_disabled("#role-events")  # nothing picked: no role to confirm
         page.set_input_files("#file", str(tmp_path / "rows.csv"))
         page.wait_for_function("document.getElementById('role-table').checked", timeout=5000)
@@ -91,7 +92,9 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         sent: list[bytes] = []
         page.route("**/api/upload", lambda route: (sent.append(route.request.post_data_buffer), route.abort()))
         page.click("#upload-btn")
-        page.wait_for_function("document.getElementById('upload-msg').classList.contains('err')", timeout=5000)
+        page.wait_for_function(
+            "document.getElementById('upload-note').classList.contains('err')", timeout=5000
+        )  # said in the dialog, which stays open
         page.unroute("**/api/upload")
         page.fill("#time", "")  # the layer below: its points alone
         page.set_input_files("#metadata", [])
@@ -102,7 +105,9 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.check("#role-layer")  # changed by hand: the points kept as a layer
         assert page.text_content("#upload-btn") == "Зберегти шар"
         page.click("#upload-btn")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('points.csv · шар')", timeout=20000)
+        page.wait_for_function(
+            "document.querySelector('#batches .ds-loose')?.textContent.includes('points')", timeout=20000
+        )  # a layer no run reads, apart
         assert page.is_disabled("#role-events") and not page.is_checked("#role-layer")  # the form reset
     (layer,) = engine.ws.list_batches()
     assert (layer["status"], layer["geo"]) == ("LAYER", "auto")
@@ -111,7 +116,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
 
 @pytest.mark.browser
 def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_one_level_and_one_ring(cfg, tmp_path, monkeypatch):
-    """*+ контекстний шар* on a base layer's card (docs/08_interface.md §8.2): a shipped set picked in its dialog is kept
+    """*+ Додати шар* under a base layer (docs/08_interface.md §8.2): a shipped set picked in its dialog is kept
     as a layer with its time column and run with the base at its finest level, one layer, the default disk, the base's
     types confirmed; the same layer again is no new run and says so; another layer with no types is a second run of its
     own, without counters. Only the base's finest mined level offers the action, never a run or a layer."""
@@ -153,6 +158,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the dialog's types and disk
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -162,28 +168,24 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
             "kind=a",
             "0",
         )  # the base's types, the default disk: the cell alone
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
-        page.select_option("#link-sample", "schools")
-        page.click("#link-go")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        page.click(".link-opt[data-sample='schools']")  # one click runs it
+        kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"
+        page.wait_for_function(kids % "schools", timeout=20000)  # the run under its base, named by its layer
         settled()
         page.evaluate("refreshBatches()")
         assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
-        page.select_option("#link-layer", layer)  # the same layer again: the run exists
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        assert "уже додано" in page.inner_text(f".link-opt[data-layer='{layer}']")
         page.select_option("#link-ring", "1")  # the same disk as the run
-        page.click("#link-go")
+        page.click(f".link-opt[data-layer='{layer}']")  # the same layer again: the run exists
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
         page.click(".ds-link")
-        page.select_option("#link-sample", "patrols")
         page.fill("#link-counts", "")  # no types: the composition alone
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
         page.select_option("#link-ring", "1")
-        page.click("#link-go")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ patrols')", timeout=20000)
+        page.click(".link-opt[data-sample='patrols']")
+        page.wait_for_function(kids % "patrols", timeout=20000)
         batches = settled()
     runs = sorted((b for b in batches if b.get("cross") and b["status"] != "SKIPPED"), key=lambda b: b["created_at"])
     patrols = next(b for b in batches if b["status"] == "LAYER" and b["filename"] == "patrols.csv")

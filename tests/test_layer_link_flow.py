@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.mark.browser
 def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_mode(cfg):
-    """The crimes picked, their role proposed (events) and read at r9; *+ контекстний шар* on their card with the shipped
+    """The crimes picked, their role proposed (events) and read at r9; *+ Додати шар* under them with the shipped
     'L' stations — kept as a layer, one run at the crimes' finest level and the default disk —; the run's insight in
     the table with its layer's chip and in the graph with its ring; its drawer's card naming the layer, the level and the
     disk and answering *інший склад*; the stations hidden from their card — the insight leaves the table and
@@ -41,10 +41,9 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
             time.sleep(0.5)
         return done[-1]
 
-    def link(page, key: str) -> None:  # *+ контекстний шар* on the crimes' card with a shipped set
+    def link(page, key: str) -> None:  # *+ Додати шар* under the crimes with a shipped set: one click runs it
         page.click(".ds-link")
-        page.select_option("#link-sample", key)
-        page.click("#link-go")
+        page.click(f".link-opt[data-sample='{key}']")
 
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
@@ -53,6 +52,7 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
         page.goto(f"{url}/")
         page.wait_for_function("document.querySelector('#sample option[value=chicago_crimes]')", timeout=20000)
         assert not page.locator("#view-switch button[data-view='graph']").is_visible()  # no developer mode
+        page.click("#add-btn")
         page.select_option("#sample", "chicago_crimes")
         assert page.is_checked("#role-events")  # step 2: the role proposed
         page.click("#upload-btn")  # step 3
@@ -77,10 +77,10 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
         question = engine.graph().nodes[found]["label"]
         cited = lambda: {c["pattern_id"] for c in client.post("/api/search", json={"question": question}).json()["citations"].values()}  # noqa: E731
         assert found in cited()
-        page.click(".ds:has-text('chicago_bars.csv · шар') .ds-hide")
+        page.click(".ds.layer:has-text('Бари') .ds-hide")
         page.wait_for_function(f"!S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         assert found not in cited() and "приховано" in page.inner_text("#ins-table")
-        page.click(".ds:has-text('chicago_bars.csv · шар') .ds-hide")
+        page.click(".ds.layer:has-text('Бари') .ds-hide")
         page.wait_for_function(f"S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         assert found in cited()
         link(page, "chicago_l_stations")  # the second layer: the same action, a run of its own

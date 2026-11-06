@@ -610,7 +610,7 @@ def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_
     baseline only where its record holds them; an empty ``count_values`` asks for none. A level coarser than
     ``LINK_MIN_LEVEL`` is refused — the console's gate is the API's — unless ``allow_coarse`` (scripts and eval), then
     named in the run's warnings; the registry offers a link only on an upload's finest mined level not coarser than it
-    (``linkable``: the console's *+ контекстний шар*) — READY, or none of its findings admitted alone —, never on a
+    (``linkable``: the console's *+ Додати шар*) — READY, or none of its findings admitted alone —, never on a
     run."""
     target, context = planted(tmp_path)
     plain = tmp_path / "plain.csv"
@@ -735,6 +735,7 @@ def test_the_console_sends_two_shipped_layers_their_locator_and_disk(cfg, tmp_pa
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("document.querySelectorAll('#context-sample option[value]').length >= 2", timeout=20000)
+        page.click("#add-btn")
         page.set_input_files("#file", str(target))
         page.evaluate("document.querySelector('#geo').closest('details').open = true")
         page.fill("#geo", f"lat,lon@{RES}")
@@ -806,7 +807,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         assert refused.get_attribute("title") and f"без умови шару: {run['metrics']['pruned']['outside_cross_type']}" in card.inner_text()
         warned = page.locator(f".ds[data-ds='{own['dataset_id']}']")  # the target's own level dropped the indicator it lacks
         assert "indicators: no metric named" in warned.inner_text()  # the record's warning on its card
-        nothing = page.locator(".ds", has_text="+ far")  # a run that admitted none: its refusals by reason all the same
+        nothing = page.locator(".ds.layer", has_text="far")  # a run that admitted none: its refusals by reason all the same
         assert f"без умови шару: {empty['metrics']['pruned']['outside_cross_type']}" in nothing.inner_text()
         page.evaluate(f"inspect('{crossed}')")
         drawer = page.text_content("#drawer")  # its title (the scope) and its folded evidence too
@@ -815,7 +816,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         assert "нуль шару" not in page.text_content("#drawer")  # no layer, no verdict
         page.evaluate(f"inspect('{crossed}')")
         assert "target.csv · + schools" in page.text_content("#drawer")  # its provenance names the run with its layer
-        assert "шар у 1 прогоні" in page.locator(".ds", has_text="schools.csv · шар").inner_text()  # a layer's runs
+        assert page.locator(f".ds-kids .ds.layer[data-ds='{run['dataset_id']}']").count() == 1  # the run under its base, as its layer
         assert card.locator("a[href$='/rejections']").count() == 1  # the refusals one click away
         card.locator(".ds-refused summary").click()  # and the layer's refused cohorts in words on the card
         page.wait_for_function(
@@ -834,7 +835,7 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         for gone in (own["dataset_id"], run["dataset_id"]):
             client.delete(f"/api/datasets/{gone}")
         page.evaluate("refreshBatches()")
-        page.wait_for_function("document.querySelectorAll('#batches .ds').length === 2", timeout=20000)  # the far run and the far layer
+        page.wait_for_function("document.querySelectorAll('#batches .ds').length === 1", timeout=20000)  # the far run; its layer lives under it
         alone = nothing.inner_text()
         assert "Без знахідок" in alone and "Знахідок з умовою на шар немає" in alone and "Помилка" not in alone and "Спробуйте" not in alone
     assert not errors, errors
@@ -882,12 +883,13 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
         page.wait_for_function(f"{offered}.length === 4", timeout=20000)
         assert page.evaluate(offered) == ["plain", "target", "schools", "patrols"]  # every shipped set, its role proposed
         assert page.locator("#cross-panel, #cross-btn").count() == 0  # runs are queued through the API alone
+        page.click("#add-btn")
         page.select_option("#sample", "target")
         assert page.is_checked("#role-events") and page.text_content("#upload-btn") == "Аналізувати"
         page.evaluate("document.querySelector('#where').closest('details').open = true")
         page.fill("#where", "kind=zzz")  # its own reading under a filter: a value no row holds, refused with the values listed
         page.click("#upload-btn")
-        page.wait_for_function("document.getElementById('upload-msg').textContent.includes('the values of kind')", timeout=20000)
+        page.wait_for_function("document.getElementById('upload-note').textContent.includes('the values of kind')", timeout=20000)  # in the dialog
         page.fill("#where", "")
         page.select_option("#sample", "plain")  # no points: a table, no geo sent
         assert page.is_checked("#role-table") and page.is_disabled("#geo")  # held, not sent
@@ -895,15 +897,16 @@ def test_the_console_keeps_a_shipped_layer_with_its_time_and_shows_its_run(cfg, 
         assert page.is_checked("#role-layer") and page.is_disabled("#role-events") and page.is_disabled("#role-table")
         assert page.text_content("#upload-btn") == "Зберегти шар"
         for key in ("schools", "patrols"):  # the shipped schools and the timed patrols, kept as layers through the form
+            page.evaluate("$('upload-dialog').open || $('add-btn').click()")  # a sent upload closes it
             page.select_option("#sample", key)
             page.click("#upload-btn")
-            page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
+            page.wait_for_function(f"document.querySelector('#batches .ds-loose')?.textContent.includes('{key}')", timeout=20000)
         layer, patrols = sorted((r for r in engine.ws.list_batches() if r["status"] == "LAYER"), key=lambda r: r["filename"] != "schools.csv")
         assert (patrols.get("time"), "span" in patrols) == ("when", True)  # the form sent the layer's time column
         assert page.is_disabled("#role-events") and not page.is_checked("#role-layer") and page.input_value("#sample") == ""  # the form reset
         run = engine.ws.load_batch(cross_run(client, a, layer["upload_id"]).json()["batch_id"])
         page.evaluate("refreshBatches()")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        page.wait_for_function("document.querySelector('#batches .ds-kids')?.textContent.includes('schools')", timeout=20000)
     assert (run["status"], run["level"], run["upload_id"], run["cross"]) == ("READY", str(RES), a, [layer["upload_id"]])
     assert not errors, errors
 
@@ -913,7 +916,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
     """The M18 acceptance case (docs/extra_funcs/spatial_analytics_multi_type/cross_dataset_analysis_architecture.md §12)
     from an empty workspace, on the shipped tables: the crimes picked in the console and read with their manifest's
     options, the bars and the 'L' stations kept as layers from the same list, each crossed with the crimes from their
-    card's *+ контекстний шар* at its defaults — the crimes' finest level, the cell alone, shares per event. The verdict is
+    *+ Додати шар* at its defaults — the crimes' finest level, the cell alone, shares per event. The verdict is
     the one measured on these defaults (the cross-layer experiments of 2026-11-05): the stations' run admits nothing and its
     card counts the cohorts the stations' arrangement reproduces (the fraud share M17–M19 admitted at the old disk was a
     small-cell artefact, gone per event); the bars' admits a finding, whose drawer reads the layer's verdict."""
@@ -942,6 +945,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("document.querySelector('#sample option[value=chicago_crimes]')", timeout=20000)
+        page.click("#add-btn")
         page.select_option("#sample", "chicago_crimes")  # the options it is meant to be read with fill the form
         # the crimes have no number of their own beyond the point: no base level to tick, so the defaults cannot fail;
         # a set that has one gets it back, and a file of one's own frees the box again
@@ -953,17 +957,17 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         page.click("#upload-btn")
         crimes = finished(filename="chicago_crimes.csv")
         assert (crimes["status"], crimes["level"]) == ("READY", "9")
-        for key in ("chicago_bars", "chicago_l_stations"):  # kept as layers from the shipped list: the role proposed
+        for key, title in (("chicago_bars", "Бари"), ("chicago_l_stations", "Станції")):  # kept as layers from the shipped list: the role proposed
+            page.click("#add-btn")
             page.select_option("#sample", key)
             assert page.is_checked("#role-layer")
             page.click("#upload-btn")
-            page.wait_for_function(f"document.getElementById('batches').textContent.includes('{key}.csv · шар')", timeout=20000)
+            page.wait_for_function(f"document.querySelector('#batches .ds-loose')?.textContent.includes('{title}')", timeout=20000)
         layers = {b["filename"]: b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"}
         runs = {}
-        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # from the crimes' card: their finest level, the default disk
+        for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # under the crimes: their finest level, the default disk
             page.click(".ds-link")
-            page.select_option("#link-layer", layers[name])
-            page.click("#link-go")
+            page.click(f".link-opt[data-layer='{layers[name]}']")
             runs[name] = finished(cross=[layers[name]])
             assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 0)  # the cell alone: the default disk
         page.evaluate("refreshBatches()")
@@ -971,8 +975,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         # the stations: nothing admitted, the cohorts their arrangement within parent cells reproduces counted on the card
         assert (stations["status"], stations["error"]["code"]) == ("FAILED", "no_viable_insights")
         assert stations["metrics"]["pruned"]["context_confounded"] > 0
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ chicago_l_stations')", timeout=20000)
-        card = page.locator(".ds", has_text="+ chicago_l_stations").inner_text()
+        card = page.wait_for_selector(".ds.layer:has-text('Станції')", timeout=20000).inner_text()
         assert f"пояснюється фоном зони: {stations['metrics']['pruned']['context_confounded']}" in card
         # the bars: a finding, its drawer reading the layer's verdict
         found = [x["id"] for x in engine.ws.patterns() if x["dataset_id"] == bars["dataset_id"]]
@@ -982,6 +985,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         assert "нуль шару" in page.text_content("#drawer")
         # the literature's frequency question as the walkthrough asks it (docs 10 §10.2): one class of the crimes as a
         # reading of its own, crossed with the bars over the cell alone; the verdict is the data's, never an error
+        page.click("#add-btn")
         page.select_option("#sample", "chicago_crimes")
         page.evaluate("document.querySelector('#where').closest('details').open = true")
         page.fill("#where", "crime=robbery")
@@ -991,7 +995,6 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         cross_run(client, robbery["upload_id"], layers["chicago_bars.csv"], ring=0)
         frequency = finished(cross=[layers["chicago_bars.csv"]], upload_id=robbery["upload_id"])
         page.evaluate("refreshBatches()")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('crime=robbery · + chicago_bars')", timeout=20000)
-        card = page.locator(".ds", has_text="crime=robbery · + chicago_bars").inner_text()
+        card = page.wait_for_selector(".ds-group:has-text('crime=robbery') .ds.layer", timeout=20000).inner_text()  # under the robbery reading
         assert frequency["status"] in TERMINAL and "Помилка" not in card and "Спробуйте" not in card
     assert not errors, errors

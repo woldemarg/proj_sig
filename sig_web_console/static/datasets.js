@@ -1,11 +1,19 @@
-/* SIG UI — the datasets rail: upload, the batch cards and their polling, deletion (docs/08_interface.md §8.2). */
+/* SIG UI — the data rail: the datasets with their layers as a tree, upload, polling, deletion (docs/08_interface.md §8.2). */
 "use strict";
 
-function datasetName(b) {
-  /* the file and its level: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9) */
-  const res = /^\d+$/.test(b.level || "") ? b.level : ((b.profile || {}).geo || {}).resolution;
-  const layers = (b.where ? ` · ${b.where}` : "") + (b.context ? ` · + ${b.context.map((c) => c.name).join(", ")}` : "");  // its filter, the other types beside it
-  return (b.status === "LAYER" ? `${b.filename} · шар` : res != null ? `${b.filename} · H3 r${res}` : b.locator ? `${b.filename} · таблиця` : b.filename) + layers;
+const stem = (file) => String(file || "").replace(/\.[^.]+$/, "");
+function titleOf(file) {
+  /* a shipped set's title, else the file's name without its extension */
+  const d = Object.values(S.samples || {}).find((x) => stem(x.file) === stem(file));
+  return d ? d.title.replace(/\s*\(контекстний шар\)$/, "") : stem(file);
+}
+const geoLevel = (b) => /^\d+$/.test(b.level || "");
+function levelOf(b) {  // the level a dataset reads its upload at: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9)
+  const res = geoLevel(b) ? b.level : ((b.profile || {}).geo || {}).resolution;
+  return b.status === "LAYER" ? "шар" : res != null ? `H3 r${res}` : b.locator ? "таблиця" : "";
+}
+function datasetName(b) {  // its title, its filter, the layers beside it
+  return titleOf(b.filename) + (b.where ? ` · ${b.where}` : "") + (b.context ? ` + ${b.context.map((c) => titleOf(c.name)).join(", ")}` : "");
 }
 
 const PRUNED_SHOWN = ["context_confounded", "context_family", "outside_cross_type"];  // the layer's verdict; the other reasons stay in the total
@@ -27,81 +35,101 @@ async function showRefusals(box) {
     : "немає";
 }
 
-const crossChips = (b) =>  // a run whose layer's upload is gone, a layer's runs (uploads.cross_state, read off the registry)
-  (b.stale ? ` ${chip("bad", b.stale.reason === "superseded" ? "шар замінено" : "шар видалено", "Завантаження шару цього прогону вже немає; прогін тримає копію шару й лишається відтворюваним. Новий шар — новий прогін.")}` : "") +
-  (b.hidden ? ` ${chip("warn", "приховано", "Прогони цього шару не показуються й не беруть участі у відповідях; інсайти базового шару від нього не залежать")}` : "") +
-  (b.layer_of ? ` ${chip("", `шар у ${plural(b.layer_of, "прогоні", "прогонах", "прогонах")}`, `Скільки прогонів (${word("layer_link")}) читають це завантаження як ${word("context_layer")}`)}` : "");
+const staleChip = (b) =>  // a run whose layer's upload is gone (uploads.cross_state, read off the registry)
+  b.stale ? chip("bad", b.stale.reason === "superseded" ? "шар замінено" : "шар видалено", "Завантаження шару цього прогону вже немає; прогін тримає копію шару й лишається відтворюваним. Новий шар — новий прогін.") : "";
 
-function datasetCard(b, busy, neutral = false) {  // neutral: an empty level beside a READY one
-  const running = !TERMINAL.has(b.status);
+const ICON = {
+  eye: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.6 5-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  bin: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  layer: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg>',
+};
+
+function rowBody(b, neutral) {
+  /* under a row's head: progress, an error, a verdict for everyone; the record's details for the developer */
   const m = b.metrics || {}, p = b.profile || {};
-  const active = b.status === "READY" && $("dataset-filter").value === b.dataset_id, name = datasetName(b);
-  let body = "";
   const refused = m.pruned_total ? `<div class="ds-note">відсіяно: ${num(m.pruned_total, 0)}${prunedBy(m.pruned)}</div>` : "";  // a level that admitted none
-  if (running) {
+  const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
+  if (!TERMINAL.has(b.status)) {
     const i = Math.max(0, STAGES.indexOf(b.status));
-    body = `<div class="progress"><i style="width:${Math.round(((i + 1) / STAGES.length) * 100)}%"></i></div>` +
+    return `<div class="progress"><i style="width:${Math.round(((i + 1) / STAGES.length) * 100)}%"></i></div>` +
       `<div class="ds-step">${esc(STAGE_TEXT[b.status] || b.status)}… <span class="muted">крок ${i + 1} з ${STAGES.length}` +
       ((b.stage_times || {})[b.status] ? ` · <span class="ds-elapsed" data-since="${esc(b.stage_times[b.status])}"></span>` : "") + `</span></div>`;
-  } else if (b.status === "READY") {
-    body = `<div class="ds-stats">` +
-      `<div class="stat"><b>${num(m.validated_insights, 0)}</b><span>${form(m.validated_insights, "інсайт", "інсайти", "інсайтів")}</span></div>` +
-      `<div class="stat" title="Теми, вперше знайдені в цьому датасеті"><b>${num(m.attractors_new ?? m.attractors_total, 0)}</b><span>${form(m.attractors_new ?? m.attractors_total, "тема", "теми", "тем")}</span></div>` +
-      `<div class="stat"><b>${num(m.input_rows, 0)}</b><span>${form(m.input_rows, "рядок", "рядки", "рядків")}</span></div></div>` +
-      `<div class="ds-note">${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · <a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
-      timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") +  // what the record says of its reading
-      (!b.cross && S.batches.some((x) => x.hidden_by && x.upload_id === b.upload_id) ? `<div class="ds-note">Інсайти базового шару не залежать від контекстного: «без шару» — це вони.</div>` : "") +
-      refusals(b) +
-      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : "");
-  } else if (neutral) {  // a normal result, not an error: the other levels stand, or the pair found nothing
-    body = `<div class="ds-note">${verdict(b) ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${refused}${refusals(b)}${timeNotes(b)}` +
-      `<div class="ds-note mono" data-dev>${esc(b.error.message)}</div>`;  // the codes' dict: the developer's
-  } else if (b.status === "FAILED" && b.error) {
-    const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
-    body = `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` +
-      (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") + `<div class="why mono" style="margin-top:6px">${esc(b.error.message)}</div></div>${refused}`;
-  } else if (b.status === "SKIPPED") {
-    body = `<div class="ds-note">Уже проаналізовано — нового немає.</div>`;
-  } else if (b.status === "LAYER") {
-    body = `<div class="ds-note">${plural(b.points, "точка", "точки", "точок")} іншого типу.</div>`;
   }
-  const status = running ? chip("run", "Обробка") : b.status === "READY" ? chip("ok", "Готово") : neutral ? chip("", "Без знахідок") : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? chip("", "Шар") : chip("", "Пропущено");
-  const when = b.created_at ? new Date(b.created_at).toLocaleString("uk", { dateStyle: "medium", timeStyle: "short" }) : "";
-  const link = b.linkable ? `<button type="button" class="ds-link" data-link="${esc(b.batch_id)}" title="Окремий прогін цього рівня з одним контекстним шаром">+ ${esc(word("context_layer"))}</button>` : "";  // uploads.cross_state
-  const hide = b.status === "LAYER" || b.layer_of ? `<button type="button" class="ds-hide" data-hide="${esc(b.upload_id)}" data-on="${b.hidden ? "" : "1"}"${busy ? " disabled title=\"Іде обробка: зачекайте\"" : ""}>${b.hidden ? "Показати шар" : "Сховати шар"}</button>` : "";
-  const del = running ? "" : `<div class="ds-foot">${link}${hide}<button type="button" class="ds-del" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(name)}" ` +
-    (busy ? `disabled title="Іде обробка: видалення відхиляється, доки вона не скінчиться">` : `title="Прибрати цей датасет і його інсайти з бази знань">`) +
-    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Видалити</button></div>`;
-  return `<div class="ds ${b.status === "READY" ? "clickable" : ""} ${active ? "active" : ""}" data-ds="${esc(b.status === "READY" ? b.dataset_id : "")}">` +
-    `<div class="ds-head">${b.status === "READY" ? `<button type="button" class="ds-name ds-pick" title="${esc(name)}" aria-pressed="${active}">${esc(name)}</button>` : `<span class="ds-name" title="${esc(name)}">${esc(name)}</span>`}${status}</div>` +
-    `<div class="ds-sub">${esc(when)}${crossChips(b)}</div>` +
-    datasetTrust(b.status === "READY" ? S.datasets[b.dataset_id] : null) +
-    `${body}${del}</div>`;
+  if (b.status === "READY") {
+    return `<div class="ds-more" data-dev><div class="ds-sub">${esc(when)}</div>` + datasetTrust(S.datasets[b.dataset_id]) +
+      `<div class="ds-note">${plural(m.attractors_new ?? m.attractors_total, "нова тема", "нові теми", "нових тем")} · ${plural(m.input_rows, "рядок", "рядки", "рядків")} · ` +
+      `${plural(p.columns ?? (p.numerics || []).length + (p.categoricals || []).length, "колонка", "колонки", "колонок")} · перевірено сегментів: ${num(m.candidate_patterns, 0)} · ` +
+      `<a href="/api/datasets/${esc(b.dataset_id)}/rejections" target="_blank" rel="noopener" title="Список відсіяних з причинами">відсіяно: ${num(m.pruned_total, 0)}</a>${prunedBy(m.pruned)} · ${num(m.processing_duration_s, 1)} с</div>` +
+      timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") + refusals(b) +
+      (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : "") + `</div>`;
+  }
+  if (neutral) return `<div class="ds-note">${b.cross ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div><div class="ds-more" data-dev>${refused}${refusals(b)}${timeNotes(b)}<div class="ds-note mono">${esc(b.error.message)}</div></div>`;  // the codes' dict: the developer's
+  if (b.status === "FAILED" && b.error) {
+    const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
+    return `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` + (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") +
+      `<div class="why mono" data-dev style="margin-top:6px">${esc(b.error.message)}</div></div><div data-dev>${refused}</div>`;
+  }
+  return "";
 }
 
-const geoLevel = (b) => /^\d+$/.test(b.level || "");
+function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
+  /* one dataset of the tree: a click shows it alone; a layer's row hides or shows its layer (PATCH /api/uploads/{id}) */
+  const ready = b.status === "READY", running = !TERMINAL.has(b.status), active = ready && $("dataset-filter").value === b.dataset_id;
+  const off = !!layer && (b.status === "LAYER" ? !!b.hidden : (b.hidden_by || []).includes(layer));
+  const m = b.metrics || {};
+  const state = running ? chip("run", "Обробка") : ready ? `<span class="ds-count">${plural(m.validated_insights ?? 0, "інсайт", "інсайти", "інсайтів")}</span>`
+    : neutral ? chip("", "Без знахідок")
+    : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? `<span class="ds-count">${plural(b.points, "точка", "точки", "точок")}</span>` : chip("", "Пропущено", "Уже проаналізовано — нового немає.");
+  const name = ready ? `<button type="button" class="ds-name ds-pick" title="${esc(label)}" aria-pressed="${active}">${esc(label)}</button>` : `<span class="ds-name" title="${esc(label)}">${esc(label)}</span>`;
+  const level = !layer && levelOf(b) ? `<span class="ds-lvl" data-dev>${esc(levelOf(b))}</span>` : "";
+  const hide = layer ? `<button type="button" class="ds-hide ds-icon" data-hide="${esc(layer)}" data-on="${off ? "" : "1"}"${busy ? " disabled" : ""} ` +
+    `aria-label="${off ? "Показати шар" : "Сховати шар"}" title="${busy ? "Іде обробка: зачекайте" : off ? "Показати шар" : "Сховати шар (з усіх датасетів, де він є)"}">${off ? ICON.eyeOff : ICON.eye}</button>` : "";
+  const del = running ? "" : `<button type="button" class="ds-del ds-icon" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(datasetName(b))}" aria-label="Видалити" ` +
+    `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : layer ? "Прибрати шар із цього датасету" : "Прибрати з бази знань"}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
+  return `<div class="ds${ready ? " clickable" : ""}${active ? " active" : ""}${layer ? " layer" : ""}${off ? " off" : ""}" data-ds="${esc(ready ? b.dataset_id : "")}">` +
+    `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}${hide}${del}</div>` +
+    `${rowBody(b, neutral)}</div>`;
+}
+
 const EMPTY_LEVEL = new Set(["invalid_schema", "no_numeric_targets", "no_candidates", "no_viable_insights"]);  // uploads.EMPTY_LEVEL
 const emptyLevel = (b) => b.status === "FAILED" && b.error && EMPTY_LEVEL.has(b.error.code) && geoLevel(b);  // a geo level with nothing to mine
 const verdict = (b) => emptyLevel(b) && !!b.cross;  // a run between stored uploads that found nothing: the pair's result, not an error
 const levelRank = (b) => (geoLevel(b) ? -Number(b.level) : 99);  // finest first, the table last: the queue's order
 
 function uploadGroups(cards) {
-  /* the cards of one file's levels together (its newest card's place), in the order the levels run; a plain upload of
+  /* the datasets of one upload together (its newest card's place): its levels, then its layer runs; a plain upload of
      the same bytes is no level of it (docs/02_discovery.md §2.9) */
   const groups = Map.groupBy(cards, (b) => ((geoLevel(b) || b.locator) && b.upload_id) || b.batch_id);
   return [...groups.values()].map((g) => g.sort((a, b) => levelRank(a) - levelRank(b)));
 }
 
 function uploadGroup(cards, busy) {
-  if (cards.length === 1) return datasetCard(cards[0], busy, verdict(cards[0]));  // a level alone that finds nothing failed, as its upload did; a run is a result either way
-  const ready = cards.filter((b) => b.status === "READY").length, neutral = (b) => (ready > 0 && emptyLevel(b)) || verdict(b), empty = cards.filter(neutral).length;
-  const failed = cards.filter((b) => b.status === "FAILED").length - empty;
-  return `<div class="ds-group" data-upload="${esc(cards[0].upload_id)}"><div class="ds-group-head">${esc(cards[0].filename)} · готово рівнів: ${ready} з ${cards.length}` +
-    (empty ? ` · без знахідок: ${empty}` : "") + (failed ? ` · <b>з помилкою: ${failed}</b>, інші рівні чинні` : "") + `</div>${cards.map((b) => datasetCard(b, busy, neutral(b))).join("")}</div>`;
+  const levels = cards.filter((b) => !b.cross), runs = cards.filter((b) => b.cross);
+  const ready = levels.filter((b) => b.status === "READY").length, neutral = (b) => ready > 0 && emptyLevel(b);
+  const lead = levels[0] || runs[0];
+  let head;
+  if (levels.length === 1) head = dsRow(levels[0], datasetName(levels[0]), busy);
+  else {
+    head = `<div class="ds-group-head"><span class="ds-name">${esc(titleOf(lead.filename) + (lead.where ? ` · ${lead.where}` : ""))}</span></div>` +
+      levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) })).join("");
+  }
+  const kids = runs.map((r) => dsRow(r, r.context.map((c) => titleOf(c.name)).join(", "), busy, { neutral: verdict(r), layer: r.cross[0] })).join("");
+  const host = levels.find((b) => b.linkable);
+  const add = host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "";  // uploads.cross_state
+  return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${head}${kids || add ? `<div class="ds-kids">${kids}${add}</div>` : ""}</div>`;
+}
+
+function renderTree(cards, busy) {
+  /* the uploads with their layer runs; a layer no run reads stands apart, a layer that runs read lives under them */
+  const loose = cards.filter((b) => b.status === "LAYER" && !b.layer_of);
+  const groups = uploadGroups(cards.filter((b) => b.status !== "LAYER")).map((g) => uploadGroup(g, busy)).join("");
+  return groups + (loose.length ? `<div class="ds-group ds-loose"><div class="ds-group-head"><span class="ds-name">Шари без датасету</span></div>` +
+    loose.map((b) => dsRow(b, titleOf(b.filename), busy, { layer: b.hidden ? b.upload_id : null })).join("") + `</div>` : "");
 }
 
 function datasetTrust(t) {
-  /* a dataset card's trust chips, from its Dataset node */
+  /* a dataset's trust chips, from its Dataset node */
   if (!t) return "";
   if (t.integrity === "mismatch") return `<div class="ds-src">${chip("bad", "метадані не пройшли перевірку", `Запис датасету більше не збігається з відбитком своїх метаданих: його ${DECLARED} ігноруються`)}</div>`;
   const chips = (t.source || t.reliability !== "F" ? chip("", `${t.source || "джерело"} · ${t.reliability}`, `${word("reliability")} (шкала Адміралтейства): ${word(`reliability_${t.reliability}`)}`) : "") +
@@ -123,23 +151,23 @@ async function deleteDataset(id, name) {
 const elapsed = (iso) => { const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? `${s} с` : `${Math.floor(s / 60)} хв ${s % 60} с`; };
 const tick = (root) => root.querySelectorAll("[data-since]").forEach((el) => { el.textContent = elapsed(el.dataset.since); });
 
-function swapChanged(el, to) {  // a group of levels swaps its changed cards one by one
+function swapChanged(el, to) {  // a group swaps its changed rows one by one
   if (el.isEqualNode(to)) return;
-  if (el.matches(".ds-group") && el.dataset.upload === to.dataset.upload && el.children.length === to.children.length) {
+  if ((el.matches(".ds-group") && el.dataset.upload === to.dataset.upload || el.matches(".ds-kids")) && el.children.length === to.children.length) {
     const fresh = [...to.children];
     [...el.children].forEach((c, i) => swapChanged(c, fresh[i]));
   } else el.replaceWith(to);
 }
 
 function renderRail(html) {
-  /* a card whose markup is unchanged keeps its nodes: a click on it survives the poll */
+  /* a row whose markup is unchanged keeps its nodes: a click on it survives the poll */
   const box = $("batches"), next = document.createElement("div");
   next.innerHTML = html;
-  tick(box); tick(next);  // the same clock on both sides: a running card's time is no change
+  tick(box); tick(next);  // the same clock on both sides: a running row's time is no change
   const fresh = [...next.children], picked = box.contains(document.activeElement) && document.activeElement.closest(".ds")?.dataset.ds;
   if (box.children.length !== fresh.length) box.replaceChildren(...fresh);
   else [...box.children].forEach((el, i) => swapChanged(el, fresh[i]));
-  if (picked && !box.contains(document.activeElement)) box.querySelector(`.ds[data-ds="${CSS.escape(picked)}"] .ds-pick`)?.focus();  // a replaced card keeps the focus
+  if (picked && !box.contains(document.activeElement)) box.querySelector(`.ds[data-ds="${CSS.escape(picked)}"] .ds-pick`)?.focus();  // a replaced row keeps the focus
 }
 
 async function refreshBatches() {
@@ -157,7 +185,7 @@ async function refreshBatches() {
   const cards = [...byDataset.values()];
   const ready = [...new Map(batches.filter((b) => b.status === "READY").map((b) => [b.dataset_id, b])).values()];
   const sel = $("dataset-filter"), cur = sel.value, options = `<option value="">Усі датасети</option>` +
-    ready.map((b) => `<option value="${esc(b.dataset_id)}" data-file="${esc(b.filename)}">${esc(datasetName(b))}</option>`).join("");
+    ready.map((b) => `<option value="${esc(b.dataset_id)}" data-file="${esc(b.filename)}">${esc(datasetName(b) + (levelOf(b) ? ` · ${levelOf(b)}` : ""))}</option>`).join("");
   if (options !== S.options) {  // rewritten only when the READY set changes: an open list stays open
     S.options = sel.innerHTML = options;
     sel.value = ready.some((b) => b.dataset_id === cur) ? cur : "";
@@ -172,7 +200,7 @@ async function refreshBatches() {
     if (!S.chat.length) renderThread();  // the welcome card's questions follow the datasets and the filter
   }
   const busy = batches.some((b) => !TERMINAL.has(b.status));
-  renderRail(cards.length ? uploadGroups(cards).map((g) => uploadGroup(g, busy)).join("") : `<div class="empty-rail">Датасетів ще немає.<br>Завантажте таблицю або оберіть готовий датасет.</div>`);  // after the graph: the cards read its trust
+  renderRail(cards.length ? renderTree(cards, busy) : `<div class="empty-rail">Даних ще немає.<br>Натисніть «+ Додати».</div>`);  // after the graph: the rows read its trust
   clearTimeout(S.poll);
   if (busy) S.poll = setTimeout(refreshBatches, 2500);
   // a caller that acts on the map afterwards (ask) awaits its load too, or the pass a poll began for this key; the poll does not
@@ -180,6 +208,7 @@ async function refreshBatches() {
 }
 
 function setUploadMsg(text, err = false) { const el = $("upload-msg"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
+function setUploadNote(text, err = false) { const el = $("upload-note"); el.className = "msg" + (err ? " err" : ""); el.textContent = text; }
 
 function syncTable() {  // a table's geo is held, not sent: its field disabled
   /* the base level is one of a geo upload's — none for a shipped set whose manifest says it has no number of its own
@@ -211,43 +240,49 @@ function setRole(r, layerOnly = false) {
   syncTable();
 }
 
-// *+ контекстний шар* (docs/08_interface.md §8.2): one layer, one run of the base layer's finest level — the API's two calls
+// *+ Додати шар* (docs/08_interface.md §8.2): one layer, one run of the base layer's finest level — the API's two calls
 function openLink(batchId) {
-  const b = S.batches.find((x) => x.batch_id === batchId);  // a card's button: rendered from the batches stored with it
+  /* the layers this upload can take: the stored ones, then the shipped layer sets not stored yet (every geo set for the developer) */
+  const b = S.batches.find((x) => x.batch_id === batchId);  // a row's button: rendered from the batches stored with it
+  const linked = new Set(S.batches.filter((x) => x.upload_id === b.upload_id && x.cross && x.status !== "SKIPPED").flatMap((x) => x.cross));
   const stored = new Map(S.batches.filter((x) => x.upload_id !== b.upload_id && !x.cross && (x.status === "LAYER" || (x.status === "READY" && geoLevel(x)))).map((x) => [x.upload_id, x]));
-  $("link-dialog").dataset.target = b.dataset_id || b.upload_id;  // the reading the card stands for
-  $("link-title").textContent = `+ ${word("context_layer")} · ${datasetName(b)}`;
+  const kept = new Set([...stored.values()].map((x) => stem(x.filename)));
+  const opt = (attr, value, label, note, done = false, dev = false) =>
+    `<button type="button" class="link-opt" data-${attr}="${esc(value)}"${dev ? " data-dev" : ""}>${esc(label)}<span class="muted">${esc(done ? "уже додано" : note)}</span></button>`;  // a repeat ends SKIPPED
+  $("link-dialog").dataset.batch = batchId;
+  $("link-dialog").dataset.target = b.dataset_id || b.upload_id;  // the reading the row stands for
+  $("link-title").textContent = `Додати шар · ${datasetName(b)}`;
   $("link-form").reset(); $("link-msg").textContent = "";
-  $("link-layer").length = 1;
-  $("link-layer").insertAdjacentHTML("beforeend", [...stored.values()].map((x) => `<option value="${esc(x.upload_id)}">${esc(x.filename + (x.where ? ` · ${x.where}` : ""))}</option>`).join(""));
-  $("link-sample").length = 1;
-  $("link-sample").insertAdjacentHTML("beforeend", Object.values(S.samples || {}).filter((d) => (d.options || {}).geo).map(sampleItem).join(""));
+  $("link-opts").innerHTML =
+    [...stored.values()].map((x) => opt("layer", x.upload_id, titleOf(x.filename) + (x.where ? ` · ${x.where}` : ""), x.status === "LAYER" ? plural(x.points, "точка", "точки", "точок") : "датасет", linked.has(x.upload_id))).join("") +
+    Object.values(S.samples || {}).filter((d) => (d.options || {}).geo && !kept.has(stem(d.file)))
+      .map((d) => opt("sample", d.key, titleOf(d.file), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
   $("link-dialog").showModal();
 }
 
-async function runLink(e) {
-  e.preventDefault();
-  const f = $("link-file").files[0], key = $("link-sample").value, o = key ? S.samples[key].options || {} : {};
-  let layer = $("link-layer").value;
-  $("link-go").disabled = true;
+async function runLink(src) {
+  /* ``src``: a stored upload (layer), a shipped set (sample) or a file; one not stored is kept as *Лише шар* first */
+  const o = src.sample ? S.samples[src.sample].options || {} : {}, batchId = $("link-dialog").dataset.batch;
+  $("link-dialog").querySelectorAll(".link-opt").forEach((el) => { el.disabled = true; });  // one click, one run
+  $("link-msg").className = "msg"; $("link-msg").textContent = "Запускаю…";
   try {
-    if (!layer && !f && !key) throw new Error("Оберіть збережений шар, готовий набір або файл.");
-    if (!layer) {  // kept as a layer first: the upload's own call with *Лише шар*
+    let layer = src.layer;
+    if (!layer) {
       const fd = new FormData();
-      if (f) fd.append("file", f); else fd.append("demo", key);
+      if (src.file) fd.append("file", src.file); else fd.append("demo", src.sample);
       fd.append("layer", "true"); fd.append("geo", o.geo || "auto"); fd.append("time", o.time || ""); fd.append("tz", o.tz || "");
       layer = (await api("/api/upload", { method: "POST", body: fd })).upload_id;
-      $("link-layer").insertAdjacentHTML("beforeend", `<option value="${esc(layer)}">${esc(f ? f.name : S.samples[key].file)}</option>`);  // kept: a retry reads it
-      $("link-layer").value = layer; $("link-sample").value = ""; $("link-file").value = "";
     }
     const body = { target: $("link-dialog").dataset.target, layers: [layer], ring: $("link-ring").value, count_values: $("link-counts").value };  // empty: no types
     const run = await api("/api/crosstype", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     $("link-dialog").close();
-    S.linkRun = run.batch_id; setUploadMsg("Прогін у черзі — поступ видно нижче.");
+    S.linkRun = run.batch_id;
     refreshBatches();
-  } catch (err) { $("link-msg").className = "msg err"; $("link-msg").textContent = err.message; }
-  finally { $("link-go").disabled = false; }
+  } catch (err) {
+    await refreshBatches(); openLink(batchId);  // a layer kept before the failure is offered as stored
+    $("link-msg").className = "msg err"; $("link-msg").textContent = err.message;
+  }
 }
 
 async function hideLayer(upload, on) {  // PATCH /api/uploads/{id}: the server holds the state, every view reads it back
@@ -276,12 +311,12 @@ async function upload() {
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
   if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
-  setUploadMsg(`Завантажую ${f ? f.name : $("file-name").textContent}…`);
+  setUploadNote(`Завантажую ${f ? f.name : $("file-name").textContent}…`);
   $("upload-btn").disabled = true;
   try {
-    await api("/api/upload", { method: "POST", body: fd }); setUploadMsg("У черзі — поступ видно нижче.");
+    await api("/api/upload", { method: "POST", body: fd }); setUploadNote(""); $("upload-dialog").close();
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
     $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("context").value = ""; $("context-sample").selectedIndex = -1; $("context-geo").value = ""; $("context-ring").value = "1"; $("where").value = ""; $("count-values").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
   }
-  catch (err) { setUploadMsg(err.message, true); $("upload-btn").disabled = false; }
+  catch (err) { setUploadNote(err.message, true); $("upload-btn").disabled = false; }
 }

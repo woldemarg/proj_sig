@@ -338,6 +338,7 @@ function init() {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
     $("sample").insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));  // every shipped set: its role proposed when picked
     $("context-sample").insertAdjacentHTML("beforeend", list.filter((d) => d.options && d.options.geo).map(sampleItem).join(""));
+    refreshBatches();  // the rail names the shipped sets by their titles
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];
@@ -410,10 +411,12 @@ function init() {
   });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
   on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
-  $("link-form").addEventListener("submit", runLink);
+  $("link-form").addEventListener("submit", (e) => e.preventDefault());
+  on($("link-opts"), ".link-opt", (el) => runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample }));
+  $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) runLink({ file: $("link-file").files[0] }); });
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
-  const sources = ["link-layer", "link-sample", "link-file"];  // the layer comes from one of them: picking one clears the others
-  sources.forEach((id) => $(id).addEventListener("change", () => sources.forEach((other) => { if (other !== id) $(other).value = ""; })));
+  $("add-btn").addEventListener("click", () => { setUploadNote(""); $("upload-dialog").showModal(); });
+  $("upload-cancel").addEventListener("click", () => $("upload-dialog").close());
   on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
   on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
     e.stopImmediatePropagation();

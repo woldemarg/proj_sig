@@ -75,8 +75,9 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0", timeout=60000)
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
+        page.click("#add-btn")
         page.click(".adv summary")
-        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in the rail, not the page
+        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in its dialog, not the page
         assert page.is_disabled("#table")
         page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
@@ -87,12 +88,14 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.is_enabled("#table")
         grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
+        page.click("#upload-cancel")  # the form keeps its fields for the upload below
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
         held = "G.overlay.features.reduce((a, f) => a + f.properties.n, 0)"
         before = page.evaluate(held)
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
+        page.click("#add-btn")
         page.set_input_files("#file", str(housing))
         page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
         page.set_input_files(
@@ -115,13 +118,9 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
-        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · готово рівнів: 2 з 2"
-        assert page.evaluate(
+        assert page.evaluate(  # the upload by its shipped set's title, its levels under it
             f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
-        ) == [
-            "california_housing.csv · H3 r5",
-            "california_housing.csv · таблиця",
-        ]
+        ) == ["Житло Каліфорнії (мапа)", "мапа · рівень 5", "таблиця"]
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
@@ -165,8 +164,8 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
         assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
         group = f".ds-group[data-upload='{fine['upload_id']}']"
-        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · готово рівнів: 2 з 3 · без знахідок: 1"
-        card = page.locator(f"{group} .ds", has_text="H3 r5")
+        assert page.inner_text(f"{group} .ds-group-head") == "points"
+        card = page.locator(f"{group} .ds", has_text="рівень 5")
         assert card.locator(".chip").inner_text() == "Без знахідок" and not card.locator(".chip.bad, .ds-error").count()
         # without a READY level the upload failed, as the backend reads it; a table level that finds nothing failed too
         level = "(lv, st, code) => ({ batch_id: lv, upload_id: 'u', filename: 'f.csv', level: lv, status: st, locator: lv === 'table' ? 'auto' : null, error: code && { code, message: code } })"

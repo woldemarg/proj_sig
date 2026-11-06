@@ -133,7 +133,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=20000)
-        page.wait_for_selector(".ds .chip.ok", timeout=10000)  # dataset card shows "Ready"
+        page.wait_for_selector(".ds .ds-count", timeout=10000)  # a READY dataset's row shows its insight count
         assert page.inner_text("#health").strip()  # health pills rendered
         chips = "[...document.querySelectorAll('.chip-q')].map((c) => c.textContent)"
         assert len(page.evaluate(chips)) == 8 and {"Чому margin нижчий для phones у US?", "Де median_house_value вищий?"} <= set(
@@ -145,7 +145,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.select_option("#dataset-filter", "")
         page.wait_for_function(f"({chips}).length === 8", timeout=10000)
         options = page.evaluate("[...document.querySelectorAll('#dataset-filter option')].map((o) => o.textContent)")
-        assert "california_housing.csv · H3 r5" in options  # a geo dataset names its level, as the levels of one upload must
+        assert any(o.endswith(" · H3 r5") for o in options)  # a geo dataset names its level, as the levels of one upload must
         # insights table view lists every pattern node
         page.click("#view-switch button[data-view='table']")
         page.wait_for_selector("#ins-table tbody tr[data-id]")
@@ -464,9 +464,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
         page.screenshot(path=str(tmp_path / "ui.png"))
         # deleting the datasets from their cards empties the views, through the backend
-        assert page.is_visible(".ds .ds-del")  # always visible, not only on hover
         for left in (1, 0):
             page.once("dialog", lambda d: d.accept())
+            page.hover(".ds >> nth=0")  # the bin shows on the row under the pointer
             page.click(".ds .ds-del >> nth=0")
             page.wait_for_function(f"document.querySelectorAll('.ds').length === {left}", timeout=20000)
         page.wait_for_selector(".empty-rail", timeout=20000)
@@ -753,6 +753,7 @@ def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tm
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.click("#add-btn")
         page.set_input_files("#file", str(path))
         page.evaluate("document.querySelector('#time').closest('details').open = true")  # the form's further options
         page.fill("#time", "when")
