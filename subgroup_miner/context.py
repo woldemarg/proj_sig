@@ -145,12 +145,10 @@ def band_words(i: int, k: int) -> str:
 def glossary(layer: ContextLayer, ring: int) -> dict[str, str]:
     """The plain English of the layer's column and values (``SpatialContext.glossary``, the evidence prompt's words)."""
     name = layer.name.replace("_", " ")
-    around = "itself only" if ring == 0 else "its six neighbours" if ring == 1 else f"its neighbours within {ring} rings"
+    where = "the cell itself" if ring == 0 else "the cell and its six neighbours" if ring == 1 else f"the cell and its neighbours within {ring} rings"
     k = max(len(layer.edges) - 1, 1)  # the bands the layer has, as ``band`` names them
-    words = {
-        layer.column: f"number of {name} points in the cell and {around}, in {'quarters' if k == 4 else f'{k} bands'} of the cells that have any"
-    }
-    words[f"{layer.column}={NONE_NEARBY}"] = f"no {name} point in the cell or {around}"
+    words = {layer.column: f"number of {name} points in {where}, in {'quarters' if k == 4 else f'{k} bands'} of the cells that have any"}
+    words[f"{layer.column}={NONE_NEARBY}"] = f"no {name} point in {where}"
     for i in range(1, k + 1):
-        words[f"{layer.column}=q{i}"] = f"the cell and {around} hold {band_words(i, k)} {name} points (of the cells that have any)"
+        words[f"{layer.column}=q{i}"] = f"{where} {'holds' if ring == 0 else 'hold'} {band_words(i, k)} {name} points (of the cells that have any)"
     return words
