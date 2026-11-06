@@ -98,7 +98,7 @@ def sig_crosstype(target: str, layer: str) -> list[dict[str, Any]]:
 def cell_grid(pack: dict[str, Any]) -> dict[str, Any]:
     """The map's cells from SIG's cell package (geo_views.geo_cells_pack): each ring is its first vertex and integer
     offsets in 10**-scale degrees; a cell's centre is the mean of its vertices."""
-    step = 10.0**-pack["scale"]
+    step = 10.0 ** -pack["scale"]
     rings = []
     for r in pack["rings"]:
         x0, y0 = r[0], r[1]
