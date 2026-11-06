@@ -216,7 +216,7 @@ function applyVisibility() {
 
 // the latent sphere (docs/08_interface.md §8.4): /api/sphere gives the projected points and the edges between them;
 // the traces are drawn here in the graph's visual language and restyled in place (layers, spotlight), never re-fetched
-// for a highlight or a theme change. Every trace a legend entry explains carries the entry's key as `meta`.
+// for a highlight. Every trace a legend entry explains carries the entry's key as `meta`.
 const HOVER = "%{hovertext}<extra></extra>";
 const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, dash
   ["latent", "RELATED_TO", "Theme links", "anchor", 4, null],
@@ -354,7 +354,7 @@ async function loadGraph() {
   }
   const shown = [...new Set(S.nodes.flatMap((d) => layersOf(d.dataset)))].sort();  // the layers of the insights in view
   $("lg-layers").hidden = !shown.length;
-  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(l)}</span></div>`).join("");
+  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(layerName(l))}</span></div>`).join("");
   countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);
@@ -548,7 +548,12 @@ async function verifyPattern(id) {
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
-const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
+const metricWords = (name) =>  // a metric as the insights read it (their metric_words), by its column or its spaced name
+  (S.nodes.find((d) => d.target === name || human(d.target) === name) || {}).metric_words || human(name);
+const nodeLabel = (id, labels = {}) => {  // an insight the graph holds in words, as the table reads it; else its stored label
+  const n = S.nodes.find((d) => d.id === id);
+  return n && n.words ? `${n.words.join(" · ")}: ${n.metric_words} ${n.ptype === "covariance" ? word("covariance") : `${signed(n.effect)} sd`}` : labels[id] || (n || {}).full_label || id;
+};
 
 function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
@@ -564,6 +569,11 @@ function trustRows(p, ds, labels) {
     [term("integrity"), `${chip(INTEGRITY[integrity] ?? "warn", integrity)} ${esc(word(`integrity_${integrity}`))}`],
   ]) + (others.length ? `<details class="nb-group"><summary>Підстава <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "підтверджує" : "")).join("")}</details>` : "");
 }
+
+const trustLine = (p, ds) => {  // the person's one line of trust: confirmed or not, and a broken record named
+  const [cls, words] = cred(p.credibility), broken = p.integrity === "mismatch" || ds.integrity === "mismatch";
+  return `<p class="trust-line" data-user>${chip(cls, words, TERMS.credibility[1])}${broken ? ` ${chip("bad", word("integrity_mismatch"), TERMS.integrity_mismatch[1])}` : ""}</p>`;
+};
 
 const SHOWN = 3;  // rows of a long list shown before the rest folds under «Решта»
 const folded = (rows) => rows.slice(0, SHOWN).join("") + (rows.length > SHOWN ? `<details class="nb-group"><summary>Решта <span class="muted">(${rows.length - SHOWN})</span></summary>${rows.slice(SHOWN).join("")}</details>` : "");
@@ -679,13 +689,13 @@ async function inspect(id, note = "") {
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
       `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])
         .concat(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : [])) + `</details>` +  // a cohort on a layer's band: the layer's p
-      kv([
+      dev(`<div>${kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
         [term("drivers"), esc((d.drivers || p.drivers || []).join("; ") || "не виявлено")],  // in words (wording.driver_words)
-      ]);
-    html += `<h4>Довіра</h4>${trustRows(p, ds, d.labels)}`;
-    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
+      ])}</div>`);
+    html += dev(`<div><h4>Довіра</h4>${trustRows(p, ds, d.labels)}</div>`) + trustLine(p, ds);
+    html += `<div class="verify" data-dev><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
     if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
@@ -698,14 +708,14 @@ async function inspect(id, note = "") {
       ["Модель опису", esc(`${p.embedding.model_id} · ${p.embedding.dim}d · ${p.embedding.representation_version}`)],
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
-    $("drawer-title").textContent = n.label;
+    $("drawer-title").textContent = n.label.split(" · ").map((part) => part.replace(/^(.*?)( [↑↓])?$/, (_, m, arrow = "") => metricWords(m) + arrow)).join(" · ");
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
-    html += `<h4>Подробиці</h4>` + kv([
+    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(metricWords(s.component))}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
+    html += dev(`<div><h4>Подробиці</h4>` + kv([
       ["Колонки", esc(p.dimensions.map(human).join(", "))], ["Метрики", esc(p.targets.map(human).join(", "))],
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
-    ]);
+    ]) + `</div>`);
   } else if (n.kind === "TemporalNode") {  // who lives in the period or moved in it, at any level (views.node_details' members)
     $("drawer-title").textContent = p.period;
     const m = d.members || {}, list = (key, items) =>
@@ -730,9 +740,9 @@ async function inspect(id, note = "") {
   }
   const groups = Object.entries(merged).filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)", ...shown].includes(t));
   if (groups.length) {
-    html += `<h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
+    html += `<div data-dev><h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
       `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${count > items.length ? `${items.length} з ${num(count, 0)}` : items.length})</span></summary>` +
-      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
+      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("") + `</div>`;
   }
   $("inspector").innerHTML = html + tail;
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));

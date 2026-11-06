@@ -60,7 +60,7 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.wait_for_function(
             f"$('dataset-filter').value === {json.dumps(picked)} && document.activeElement.matches('.ds-pick[aria-pressed=\"true\"]')", timeout=10000
         )
-        assert page.evaluate("document.activeElement.closest('.ds').dataset.ds") == picked  # the replaced card keeps the focus
+        assert page.evaluate("document.activeElement.closest('.ds').dataset.ds") == picked  # the replaced row keeps the focus
         page.evaluate("() => { $('dataset-filter').value = ''; return refreshBatches(); }")
         page.focus("#legend .key[data-key='up']")
         assert page.evaluate("S.cy.elements('.lg-dim').length > 0")
@@ -77,12 +77,13 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
             " ? (__sent.push(opts.body.get('demo')), new Promise((r) => { window.__go = () => r({}); })) : __real(path, opts); }"
         )
         page.wait_for_function("$('sample').options.length > 1", timeout=10000)
+        page.click("#add-btn")
         page.select_option("#sample", "retail_synthetic")  # the form takes its options and proposes its role
         assert page.evaluate("$('file-name').textContent === 'retail_synthetic.csv' && $('role-table').checked")
         page.click("#upload-btn")
         assert page.is_disabled("#upload-btn")
         page.evaluate("() => { window.api = __real; __go(); }")
-        page.wait_for_function("$('sample').value === '' && $('upload-msg').textContent.startsWith('У черзі')", timeout=10000)
+        page.wait_for_function("$('sample').value === '' && !$('upload-dialog').open", timeout=10000)  # sent: the dialog closes
         assert page.evaluate("__sent") == ["retail_synthetic"]  # one request, by the dataset's key
         assert not page.evaluate("document.querySelector('#upload-form details.adv').open")  # sent: the options fold away
         page.wait_for_function("!S.cy.animated()", timeout=5000)  # the flight to the evidence card ended

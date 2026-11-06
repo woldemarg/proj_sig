@@ -413,7 +413,9 @@ def test_the_layers_null_draws_from_its_points_not_its_name(tmp_path):
     for name, path in (("schools", context), ("clinics", renamed)):
         loaded = load_dataset(target, config, geo=f"lat,lon@{RES}", context=[(name, path, "auto")], context_ring=1)
         band = f"context_{name}_band"
-        fresh = recompute_statistics(loaded.frame, [(band, "q1")], f"{band}=='q1'", ["load_median"], loaded.spatial, 10, config, 5)
+        fresh = recompute_statistics(
+            loaded.frame, [(band, "q1")], f"{band}=='q1'", ["load_median"], loaded.spatial, 10, config
+        )  # family 1: a wider family stops at its first hits
         drawn.append(fresh["spatial"]["p_context"])
     assert drawn[0] == drawn[1] and 0.05 < drawn[0] < 1  # a mid-range p: the draws decide it, and they are the same
 
@@ -425,8 +427,7 @@ def test_event_weights_are_on_and_the_link_reads_the_cell_alone_by_default():
     same-cell effect. The console offers the cell alone first."""
     assert MinerConfig().weight_by_events and parse_ring(None) == parse_ring("") == 0
     page = (ROOT / "sig_web_console" / "static" / "index.html").read_text(encoding="utf-8")
-    for select in ("link-ring", "context-ring"):
-        assert re.search(rf'id="{select}"><option value="0">', page), select
+    assert re.search(r'id="link-ring"><option value="0">', page)
 
 
 def test_an_asked_counter_is_mined_even_where_its_share_ranks_with_it(tmp_path):

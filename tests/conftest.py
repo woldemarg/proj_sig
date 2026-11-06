@@ -218,6 +218,13 @@ def wait_batch(client, batch_id: str, timeout: float = 60) -> dict:
     return record
 
 
+def pick_dataset(page, dataset_id: str) -> None:
+    """Show one dataset as a person does, by its row in the rail; ``""`` clicks the shown one again: every dataset."""
+    current = page.input_value("#dataset-filter")
+    if dataset_id != current:
+        page.click(f"#batches .ds[data-ds='{dataset_id or current}'] .ds-pick")
+
+
 def stack(engine):
     """The graph service and the narrator with the fake LLM on one local port, as the console reaches them (the browser
     tests); the services are imported here, so a library test never loads them."""

@@ -72,12 +72,12 @@ function botCard(turn) {
   const model = String(llm.model || "").split("/").pop();
   const when = ev.parsed && ev.parsed.when;  // a period in the question or on the bar: [start, end), ISO
   const meta = [
-    qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення"),
-    cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат"),
-    cross ? chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1]) : "",
-    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by
-      : ev.as_of ? chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1]) : "",  // the date the answer judged freshness from
-    said ? chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`) : "",
+    dev(qa.answer_mode === "llm" ? chip("", `✨ ${model} · ${num(llm.latency_s, 1)} с`) : chip("warn", "Лише свідчення")),
+    dev(cit.grounded ? chip("ok", `✓ процитовано джерел: ${(cit.cited || []).length}`) : chip("warn", "Без цитат")),
+    cross ? dev(chip("run", `⤳ ${word("transversal_only")}: ${cross}`, TERMS.transversal_only[1])) : "",
+    when ? chip("", `${word("period")} ${periodWords(Date.parse(when[0]), Date.parse(when[1]))}`, TERMS.period[1])  // the stretch it ranked by: everyone's
+      : ev.as_of ? dev(chip("", `${word("as_of")} ${ev.as_of.date}`, TERMS.as_of[1])) : "",  // the date the answer judged freshness from
+    said ? dev(chip("warn", `жаргон: ${said}`, `Слова для аналітика у відповіді для всіх: ${jargon.map(([w, n]) => `${w} ×${n}`).join(", ")}`)) : "",
   ].join("");
   // literal grounding (docs/07_question_answering.md §7.1.1): which words of the question were read as which data literals
   const grounded = (qa.view.evidence && qa.view.evidence.parsed && qa.view.evidence.parsed.grounding) || [];
@@ -101,14 +101,17 @@ function botCard(turn) {
   const panes = [
     items.length ? ["Свідчення і як їх знайдено", `<span class="count chip">${items.length}</span>`, `<p class="ev-prefix">Натисніть на свідчення, щоб виділити його шлях у графі чи на сфері.</p>${hypo}${zones}${notes}${evid}`] : null,
     ["Джерела", "", `<div class="muted" style="font-size:12.5px">${esc(qa.provenance_footer || "")}</div>`],
-    qa.prompt ? ["Промпт", "", `<p class="ev-prefix">Точні свідчення, які бачила модель.</p><pre class="canon">${esc(qa.prompt)}</pre>`] : null,
+    qa.prompt ? ["Промпт", "", `<p class="ev-prefix">Точні свідчення, які бачила модель.</p><pre class="canon">${esc(qa.prompt)}</pre>`, true] : null,
   ].filter(Boolean);
-  return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}<div class="answer-box">${md(answer, keyTo)}</div>` +
+  return `<div class="bot-card">${forgedNote}${notice ? `<div class="notice">${esc(notice)}</div>` : ""}${fold(qa.answer_mode === "fallback", `<div class="answer-box">${md(answer, keyTo)}</div>`)}` +
     `<div class="bot-meta">${meta}</div>${understood}` +
-    `<div class="bot-tabs" role="tablist">${panes.map(([t, c], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
+    `<div class="bot-tabs" role="tablist">${panes.map(([t, c, , only], i) => `<button type="button" role="tab" data-pane="${i}" aria-selected="${String(i) === turn.pane}"${String(i) === turn.pane ? ' class="active"' : ""}${only ? " data-dev" : ""}>${esc(t)}${c}</button>`).join("")}</div>` +
     panes.map(([, , body], i) => `<div class="bot-pane" data-pane="${i}"${String(i) === turn.pane ? "" : " hidden"}>${body}</div>`).join("") +
     `</div>`;
 }
+
+const fold = (on, html) =>  // an evidence-only answer folded for the person, open for the developer
+  on ? `<details class="answer-fold"${document.body.classList.contains("dev") ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];
@@ -120,7 +123,7 @@ function followUps(turn) {
   const cross = items.find((i) => i.transversal_only);
   if (cross) out.push(`Розкажи про ${cross.target} для ${cross.scope.map((c) => c.split("=")[1]).join(" ")}`);
   const seed = items[0];
-  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.join(" і ")}?`);
+  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.map(human).join(" і ")}?`);  // as askAbout names them
   return out.slice(0, 3);
 }
 
@@ -136,7 +139,7 @@ function suggestions() {
     if (SUGGESTIONS[o.dataset.file]) out.push(...SUGGESTIONS[o.dataset.file]);
     else if (o.value === GeoMap.current()) out.push(...GeoMap.suggestions());
   }
-  return out;
+  return [...new Set(out)];  // the levels of one file share its questions: each once
 }
 
 // an insight picked on the map (GeoMap.pick): its card in the chat, with its place to ask about and its graph links to walk on
@@ -146,7 +149,7 @@ const WALK = Object.fromEntries(["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "
 async function pickInsight(pid, view) {
   let d;
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
-  S.chat.push({ question: d.node.label, picked: true, insight: d, view });
+  S.chat.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
   renderThread();
 }
 
@@ -169,7 +172,7 @@ function insightCard(turn) {
     `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
-    (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
+    (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.props ? nodeLabel(it.id, { [it.id]: it.label }) : it.label, it.word)).join("")}` : "") +
     `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph" data-dev>Показати в графі</button></div></div>`;
 }
 

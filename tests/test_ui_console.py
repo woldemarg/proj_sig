@@ -71,10 +71,12 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # *Додатково* is the developer's
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
+        page.click("#add-btn")
         assert page.is_disabled("#role-events")  # nothing picked: no role to confirm
         page.set_input_files("#file", str(tmp_path / "rows.csv"))
         page.wait_for_function("document.getElementById('role-table').checked", timeout=5000)
@@ -83,26 +85,29 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
-        for field, value in {"#time": "when", "#where": "kind=a", "#count-values": "kind=a"}.items():
+        for field, value in {"#time": "when", "#where": "kind=a"}.items():
             page.fill(field, value)
         page.select_option("#baseline", "zone")
-        page.set_input_files("#context", str(tmp_path / "points.csv"))
         page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
         sent: list[bytes] = []
         page.route("**/api/upload", lambda route: (sent.append(route.request.post_data_buffer), route.abort()))
         page.click("#upload-btn")
-        page.wait_for_function("document.getElementById('upload-msg').classList.contains('err')", timeout=5000)
+        page.wait_for_function(
+            "document.getElementById('upload-note').classList.contains('err')", timeout=5000
+        )  # said in the dialog, which stays open
         page.unroute("**/api/upload")
         page.fill("#time", "")  # the layer below: its points alone
         page.set_input_files("#metadata", [])
         assert {m.decode() for m in re.findall(rb'; name="([^"]+)"', sent[0])} == {
-            *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "count_values", "baseline"),
-            *("context", "context_geo", "context_ring", "source", "reliability", "indicators", "glossary", "metadata"),
+            *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "baseline"),
+            *("source", "reliability", "indicators", "glossary", "metadata"),
         }
         page.check("#role-layer")  # changed by hand: the points kept as a layer
         assert page.text_content("#upload-btn") == "Зберегти шар"
         page.click("#upload-btn")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('points.csv · шар')", timeout=20000)
+        page.wait_for_function(
+            "document.querySelector('#batches .ds-loose')?.textContent.includes('points')", timeout=20000
+        )  # a layer no run reads, apart
         assert page.is_disabled("#role-events") and not page.is_checked("#role-layer")  # the form reset
     (layer,) = engine.ws.list_batches()
     assert (layer["status"], layer["geo"]) == ("LAYER", "auto")
@@ -111,7 +116,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
 
 @pytest.mark.browser
 def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_one_level_and_one_ring(cfg, tmp_path, monkeypatch):
-    """*+ контекстний шар* on a base layer's card (docs/08_interface.md §8.2): a shipped set picked in its dialog is kept
+    """*+ Додати шар* under a base layer (docs/08_interface.md §8.2): a shipped set picked in its dialog is kept
     as a layer with its time column and run with the base at its finest level, one layer, the default disk, the base's
     types confirmed; the same layer again is no new run and says so; another layer with no types is a second run of its
     own, without counters. Only the base's finest mined level offers the action, never a run or a layer."""
@@ -153,6 +158,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the dialog's types and disk
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -162,28 +168,25 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
             "kind=a",
             "0",
         )  # the base's types, the default disk: the cell alone
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        assert page.get_attribute(".tp[data-v='kind=a']", "aria-pressed") == "true"  # its toggle, from the base's shares
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
-        page.select_option("#link-sample", "schools")
-        page.click("#link-go")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ schools')", timeout=20000)
+        page.click(".link-opt[data-sample='schools']")  # one click runs it
+        kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"
+        page.wait_for_function(kids % "schools", timeout=20000)  # the run under its base, named by its layer
         settled()
         page.evaluate("refreshBatches()")
         assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
-        page.select_option("#link-layer", layer)  # the same layer again: the run exists
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
+        assert "уже додано" in page.inner_text(f".link-opt[data-layer='{layer}']")
         page.select_option("#link-ring", "1")  # the same disk as the run
-        page.click("#link-go")
+        page.click(f".link-opt[data-layer='{layer}']")  # the same layer again: the run exists
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
         page.click(".ds-link")
-        page.select_option("#link-sample", "patrols")
         page.fill("#link-counts", "")  # no types: the composition alone
-        page.evaluate("document.querySelector('#link-ring').closest('details').open = true")
         page.select_option("#link-ring", "1")
-        page.click("#link-go")
-        page.wait_for_function("document.getElementById('batches').textContent.includes('+ patrols')", timeout=20000)
+        page.click(".link-opt[data-sample='patrols']")
+        page.wait_for_function(kids % "patrols", timeout=20000)
         batches = settled()
     runs = sorted((b for b in batches if b.get("cross") and b["status"] != "SKIPPED"), key=lambda b: b["created_at"])
     patrols = next(b for b in batches if b["status"] == "LAYER" and b["filename"] == "patrols.csv")
@@ -341,11 +344,67 @@ def test_a_runs_insights_are_highlighted_in_every_block_and_the_base_layers_are_
         page.evaluate(f"reveal('{sorted(own)[0]}')")
         stayed = page.evaluate("S.view")
         page.click("#dev-btn")
-        ring = f"S.cy.getElementById('{sorted(own)[0]}').style('border-color')"
-        before = page.evaluate(ring)
-        page.evaluate("setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark')")  # the colours follow the theme
-        follows = page.evaluate(ring) != before
     assert own and {pid for pid, chip in table.items() if chip} == own and all("schools" in table[pid] for pid in own)
     assert {pid for pid, has in ringed.items() if has} == own
-    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and follows and stayed == "table"
+    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and stayed == "table"
+    assert not errors, errors
+
+
+# the rail's functions on records of their shape: an upload u read twice at r9, one layer run on it, the layer L
+TREE = """() => {
+  const row = (id, extra) => ({ batch_id: `B-${id}`, dataset_id: id, upload_id: "u", filename: "f.csv", level: "9", status: "READY", metrics: {}, ...extra });
+  window.__twin = [row("dA", { linkable: true }), row("dB"), row("dR", { cross: ["L"], context: [{ name: "l" }] }),
+                   { batch_id: "B-L", upload_id: "L", filename: "l.csv", level: "layer", status: "LAYER", layer_of: 1 }];
+  window.__real = api; window.__deleted = [];
+  window.api = (path, opts = {}) => {
+    if (opts.method === "DELETE") return (window.__deleted.push(path), window.__fail && __deleted.length === 2 ? Promise.reject(new Error("busy")) : Promise.resolve({}));
+    if (path === "/api/crosstype") return Promise.reject(new Error("refused"));
+    return path === "/api/batches" ? Promise.resolve(S.batches) : __real(path, opts);
+  };
+  window.confirm = () => true;
+}"""
+
+
+@pytest.mark.browser
+def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_with_care(cfg):
+    """The tree's guards (docs/08_interface.md §8.2): an upload whose finest map is coarser than r8 says why no layer can
+    be added; two readings of one level show its runs once and keep them when one of the readings is deleted, one
+    reading alone takes them and their layer along, and a failure midway says what is left; a failed run keeps the
+    types and the disk picked for it; a share's column with a space or an *is* is split where its glossary says."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from conftest import make_engine, serve, stack
+    from dev import chromium
+
+    exe = chromium()
+    if exe is None:
+        pytest.skip("no local Chromium for Playwright")
+    port, app = stack(make_engine(cfg))
+    with serve(app, port=port) as url, sync_api.sync_playwright() as p:
+        page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the dialog's disk
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{url}/")
+        page.wait_for_function("typeof S !== 'undefined' && S.batches", timeout=20000)
+        page.evaluate(TREE)
+        coarse = page.evaluate("uploadGroup([{ batch_id: 'g', upload_id: 'c', filename: 'c.csv', level: '6', status: 'READY', metrics: {} }], false)")
+        assert "рівня 8" in coarse and "ds-link" not in coarse
+        assert page.evaluate("(uploadGroup(__twin.slice(0, 3), false).match(/ds-glyph/g) || []).length") == 1  # under one reading
+        delete = "async (rows) => { S.batches = rows; __deleted.length = 0; await deleteDataset('dB', 'x'); return __deleted; }"
+        assert page.evaluate(f"({delete})(__twin)") == ["/api/datasets/dB"]  # the other reading keeps the runs
+        alone = page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
+        assert alone == ["/api/datasets/dR", "/api/datasets/dB", "/api/datasets/B-L"]  # the runs, the reading, the layer
+        page.evaluate("window.__fail = true")
+        page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
+        assert page.inner_text("#upload-msg").startswith("Видалено не все: busy")
+        page.evaluate(
+            "() => { window.__fail = false; S.batches = __twin; openLink('B-dA'); $('link-counts').value = 'kind=a'; $('link-ring').value = '1'; }"
+        )
+        page.evaluate("runLink({ layer: 'L' })")
+        page.wait_for_function("$('link-msg').textContent === 'refused'", timeout=10000)
+        assert page.evaluate("[$('link-counts').value, $('link-ring').value]") == ["kind=a", "1"]  # as picked
+        shares = """profileTypes({ profile: { numerics: ["share_Primary Type_THEFT", "share_this_is_x_yes"], geo: { glossary: {
+          "share_Primary Type_THEFT": "share of the cell's events whose Primary Type is THEFT",
+          "share_this_is_x_yes": "share of the cell's events whose this is x is yes (every such event also has: a b)" } } } })"""
+        assert page.evaluate(shares) == {"Primary Type": ["THEFT"], "this_is_x": ["yes"]}
     assert not errors, errors

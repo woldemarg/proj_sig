@@ -620,7 +620,7 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """What the registry says of cross-type runs and their layers, by batch id: a run naming an upload no record holds is
     ``stale`` — ``{layers, reason}``, ``superseded`` when a stored version names that upload, else ``deleted`` —, and
     every record of an upload a run reads as a layer counts those runs (``layer_of``); an upload's finest geo level, mined
-    — READY, or none of its findings admitted alone — and not coarser than ``LINK_MIN_LEVEL``, can take a layer (``linkable``: the console's *+ контекстний шар*, a run of
+    — READY, or none of its findings admitted alone — and not coarser than ``LINK_MIN_LEVEL``, can take a layer (``linkable``: the console's *+ Додати шар*, a run of
     that level, ``cross_runs``'s default); a run reading a hidden layer names it (``hidden_by``). Read off the registry, never
     stored: a deletion rolled back leaves no mark, and the run, which holds copies of its layers, stays whole and
     reproducible (docs/06_graph_and_storage.md §6.8)."""
