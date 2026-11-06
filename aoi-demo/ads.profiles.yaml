@@ -1,6 +1,8 @@
-# The ADS full stack's services the demo does not need (copilot, its UI and auth, tracing and monitoring) start only
-# with `--profile ads-full`. The orchestrator and what it depends on (minio, postgres, executor, llm, phoenix) start always.
+# ADS for the demo: the orchestrator and what it needs to run a job (minio, postgres, executor, llm). Copilot, its UI and
+# auth, tracing (phoenix, mlflow) and monitoring start only with `--profile ads-full`; without them the orchestrator
+# writes its spans to its own stdout (TRACING_BACKEND empty: console only, shared/observability/tracing.py).
 services:
+  phoenix: { profiles: [ads-full] }
   mlflow: { profiles: [ads-full] }
   mlflow-init: { profiles: [ads-full] }
   ads-a2a: { profiles: [ads-full] }
@@ -9,3 +11,10 @@ services:
   extension-spectr: { profiles: [ads-full] }
   prometheus: { profiles: [ads-full] }
   grafana: { profiles: [ads-full] }
+  orchestrator:
+    environment: { TRACING_BACKEND: "" }
+    depends_on: !override  # ADS's own list (docker-compose.full.yml) without phoenix
+      minio: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      executor: { condition: service_started }
+      llm: { condition: service_started }
