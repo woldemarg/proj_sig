@@ -2,7 +2,8 @@
     Source: kvasir-pipelines/kvasir_pipelines/services/delta-ai-copilot/delta-ai-copilot/templates/final_response.jinja
     Changes, all marked "AOI demo": <assistant_role>, <language_contract> rule 2 and <grounding_rules> rule 4 admit
     SIG's <Insight_Analysis> and <Insight_Evidence>; the <insight_integration> section (integration by the query's parts,
-    source marks, findings of other files, hypotheses that join the sources); the two SIG data blocks.
+    source marks, findings of other files, hypotheses that join the sources); the three SIG data blocks, the third being
+    <Insight_Observations>: SIG's findings as the O# lines the ADS task carried (2026-11-06, with the query sent to SIG).
     Everything else is verbatim. -#}
 {%- set is_uk = (query_language | default("en") | lower) == "uk" -%}
 {%- set lang = "Ukrainian" if is_uk else "English" -%}
@@ -126,16 +127,27 @@ Numbers never change. Render Ukrainian temporal words in English («15 серп�
 AOI demo. Two steps came before you, one after the other:
 
 - SIG, <Insight_Analysis> and <Insight_Evidence>: first, what a statistical insight graph built
-  from the uploaded layers found in the area itself. It was given the area only, never the user's
-  query: the user did not know which patterns the place holds. <Insight_Evidence> is what its
-  retrieval found, verbatim, in the graph's own English vocabulary: findings that passed bootstrap
-  and multiple-testing checks, each keyed [P#]. <Insight_Analysis> is SIG's own reading of it:
-  observations, then hypotheses, cited by the same keys. Take its observations as facts only
-  where <Insight_Evidence> states them, and its hypotheses as hypotheses.
+  from the uploaded layers found in the area. It was given the user's query and the area together
+  (or the area alone, when the query found nothing in it): the user did not know which patterns
+  the place holds. <Insight_Evidence> is what its retrieval found, verbatim, in the graph's own
+  English vocabulary: findings that passed bootstrap and multiple-testing checks, each keyed [P#].
+  <Insight_Analysis> is SIG's own reading of it: observations, then hypotheses, cited by the same
+  keys. Take its observations as facts only where <Insight_Evidence> states them, and its
+  hypotheses as hypotheses. <Insight_Observations> lists the same findings as numbered lines O#
+  (headline, where, shift, in zone, credibility, file) — the lines the ADS task carried, so the
+  report may name them O#.
 - ADS, <Analytical_Report>: then, the answer to the user's query computed on the uploaded tables,
-  each row marked inside or outside the area, with the column values of SIG's findings in the area
-  taken as extra slices of the same calculation. Its figures in those slices are what the data
-  show about SIG's findings and hypotheses.
+  each row marked inside / adjacent / far and keyed to H3 cells, with SIG's findings (O#) as extra
+  cuts of the same calculation and SIG's hypotheses as claims to test. Its figures are what the
+  data show about SIG's findings and hypotheses. For each O# that concerns the query, say what ADS
+  showed about it; when ADS compared the area with its surroundings (adjacent, far) or with a
+  coarser level of cells, give that comparison its own paragraph.
+- A finding marked "cross-layer" in <Insight_Observations> links the base layer's events to the
+  context layer (its condition is a band of the context layer's points in the cell). It leads the
+  part of the answer about that layer: open that part with it, in plain words and with its numbers
+  — which type of event, how much more or less, in the cells where the context layer's points are
+  in which band — cited (SIG [P#]); then what ADS computed about the same relation (ADS); then
+  whether the two agree. Its hypothesis is the first one in the hypotheses subsection.
 
 You combine the two: the place's discoveries and the enriched answer to the query.
 
@@ -338,6 +350,12 @@ If the report is empty or missing, ignore all other rules and reply exactly:
 <Insight_Analysis>
 {{ insight_analysis }}
 </Insight_Analysis>
+{% endif %}
+
+{% if observations %}
+<Insight_Observations>
+{{ observations }}
+</Insight_Observations>
 {% endif %}
 
 {% if insight_evidence %}

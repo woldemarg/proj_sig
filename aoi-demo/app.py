@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2"]
+# dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2", "h3>=4,<5"]
 # ///
 """AOI demo: polygon on a map -> SIG insights in the zone + ADS analysis of the in_aoi tables -> one joint report
 rendered through Copilot's final_response.jinja. One process, one user, state in memory (see README.md).
@@ -18,15 +18,17 @@ import re
 import sys
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import h3
 import httpx
-import numpy as np
 import pandas as pd
 import shapely
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
+from geo import H3_LEVELS, aoi_zone, enrich_h3, h3_columns, zone_h3_cells
 from jinja2 import Template
 from shapely.geometry import shape
 
@@ -41,18 +43,51 @@ DEMO_DIR = Path(os.environ.get("DEMO_DIR", HERE.parent / "data" / "demo"))  # th
 JOINT_TEMPLATE = Path(os.environ.get("JOINT_TEMPLATE", HERE / "prompts/joint_response.jinja"))
 
 # the happy path is Chicago: the shipped SIG datasets, with the options data/demo/datasets.json reads them with
-BASE = {"file": "chicago_crimes_2024.csv", "label": "злочини 2024", "geo": "lat,lon@auto", "time": "crime_date", "source": "City of Chicago, Crimes"}
+BASE = {
+    "file": "chicago_crimes_2024.csv",
+    "label": "злочини 2024",
+    "geo": "lat,lon@auto",
+    "time": "crime_date",
+    "source": "City of Chicago, Crimes",
+    "category": "crime",
+}
 CONTEXT = {"file": "chicago_bars.csv", "label": "бари", "geo": "lat,lon", "layer": "true"}
 RING = 0  # the layer counted in the cell alone: SIG's default since 2026-11-05; an older image defaults to 1 and the bars admit nothing
+# BASE["category"]: the column whose values the page offers to count per cell (SIG's count_values -> count_<column>_<value>,
+# the counters a cross run with the layer reads); SIG counts a value with at least COUNT_MIN located rows and marks a
+# rarer one `sparse` without a counter (insight_graph_service/core/uploads.py)
+COUNT_MIN = 250
+COUNT_DEFAULT = ("theft", "assault")  # the demo's preselected types
 MAX_INSIGHTS = 10  # findings drawn on the map, the zone's own first: SIG's evidence holds about ten
 SAMPLE_POINTS = 3000
 
 http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 
-# ponytail: single-user in-memory state; a second browser tab shares it. DATA holds the frames, STATE what the page polls
+# ponytail: single-user in-memory state; a second browser tab shares it, per-session state when a second user needs their
+# own zone. DATA holds the frames as the build left them, FILES the zone's tables taken when the polygon closed (what the
+# ask uploads, so a redraw cannot change a running ask), STATE what the page polls (JSON only)
 STATE: dict[str, Any] = {"datasets": None, "zone": None, "ask": None}
 DATA: dict[str, pd.DataFrame] = {}
-GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres
+FILES: dict[str, bytes] = {}
+GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres, and SIG's resolution
+
+
+@lru_cache(maxsize=1)
+def category_options() -> list[dict[str, Any]]:
+    """The base file's category values with their located rows (valid coordinates): the ones SIG would count per cell
+    and the rarer ones it marks `sparse` and leaves uncounted."""
+    df = pd.read_csv(DEMO_DIR / BASE["file"], usecols=[BASE["category"], "lat", "lon"])
+    located = df[df["lat"].between(-90, 90) & df["lon"].between(-180, 180)]
+    counts = located[BASE["category"]].astype(str).value_counts()
+    return [{"value": v, "rows": int(n), "status": "ok" if n >= COUNT_MIN else "sparse"} for v, n in counts.items()]
+
+
+def base_spec(count_values: list[str]) -> dict[str, str]:
+    """The base layer's SIG upload options: the manifest's, plus count_values=<column>=v1,v2 for the chosen types."""
+    spec = {k: v for k, v in BASE.items() if k != "category"}
+    if count_values:
+        spec["count_values"] = ",".join(f"{BASE['category']}={v}" for v in count_values)  # one column=value per type
+    return spec
 
 
 # ----------------------------------------------------------------------------- SIG
@@ -95,35 +130,32 @@ def sig_crosstype(target: str, layer: str) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else [data]
 
 
+def sig_resolution(dataset_id: str) -> int:
+    """The H3 resolution SIG chose for a geo dataset (GET /api/geo lists every geo dataset with its resolution): the one
+    the demo's h3_r* columns are built at, never chosen here."""
+    r = http.get(f"{SIG_URL}/api/geo")
+    if r.status_code >= 300:
+        raise RuntimeError(f"SIG geo: {r.status_code} {r.text[:300]}")
+    return int(next(g["resolution"] for g in r.json() if g.get("dataset_id") == dataset_id))
+
+
 def cell_grid(pack: dict[str, Any]) -> dict[str, Any]:
-    """The map's cells from SIG's cell package (geo_views.geo_cells_pack): each ring is its first vertex and integer
-    offsets in 10**-scale degrees; a cell's centre is the mean of its vertices."""
+    """The map's cells from SIG's cell package (geo_views.geo_cells_pack), for drawing: each ring is its first vertex and
+    integer offsets in 10**-scale degrees. Which cells a polygon selects is geo.zone_h3_cells, SIG's own rule."""
     step = 10.0 ** -pack["scale"]
     rings = []
     for r in pack["rings"]:
         x0, y0 = r[0], r[1]
         ring = [[x0, y0]] + [[round(x0 + dx * step, 6), round(y0 + dy * step, 6)] for dx, dy in zip(r[2::2], r[3::2], strict=True)]
         rings.append(ring + [ring[0]])
-    centres = np.array([np.mean(ring[:-1], axis=0) for ring in rings])
-    return {"h3": pack["columns"]["h3"], "rings": rings, "centres": centres}
+    return {"h3": pack["columns"]["h3"], "rings": rings}
 
 
-def zone_cells(grid: dict[str, Any], polygon: dict[str, Any]) -> list[int]:
-    """The rows of the map's cells whose centres lie in the polygon: the cells a console user would Shift-click."""
-    inside = shapely.contains_xy(shape(polygon), grid["centres"][:, 0], grid["centres"][:, 1])
-    return [int(i) for i in np.flatnonzero(inside)]
-
-
-# SIG is asked about the area itself, not the user's question: the console's zone-only ask (static/chat.js ``ask``: "with a
-# map zone ({cells}) the text may be empty"), read by its evidence as "no text: the map area below is the question". A
-# question in other words than the graph's would steer its seeds to metrics it may not hold; the joint report relates.
-SIG_ZONE_QUESTION = ""
-
-
-def sig_chat(cells: list[str], question: str = SIG_ZONE_QUESTION) -> dict[str, Any]:
-    """SIG's own reading of the area exactly as its console's chat asks it: the selected map cells as the zone. The
-    graph service enters the graph there, walks it (seeds, latent anchors, the area's weights) and its LLM reads the
-    evidence by the project's rules: observations, then hypotheses."""
+def sig_chat(cells: list[str], question: str) -> dict[str, Any]:
+    """SIG's reading of the area exactly as its console's chat asks it: the selected map cells as the zone, with the
+    user's question or without one (the console's zone-only ask: "no text: the map area below is the question"). With
+    both, the graph scores its seeds by the text and the place together; its LLM then reads the evidence by the
+    project's rules: observations, then hypotheses."""
     r = http.post(f"{SIG_URL}/api/chat/query", json={"question": question, "cells": cells, "use_llm": True})
     if r.status_code >= 300:
         raise RuntimeError(f"SIG chat: {r.status_code} {r.text[:300]}")
@@ -135,13 +167,22 @@ def sig_rings(dataset_id: str, pattern_id: str) -> list[list[list[float]]]:
     return r.json().get("rings", []) if r.status_code < 300 else []
 
 
+CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # SIG's credibility, best first: confirmed, unconfirmed, no other source, contradicted
+
+
 def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     """The chat's evidence items with their cells' rings for the map: the ones the zone weighed as inside (place > 0)
     first, the most credible first, then the ones outside it that SIG's answer also tells; at most MAX_INSIGHTS."""
     evidence = (qa.get("view") or {}).get("evidence") or {}
     area = evidence.get("area") or {}
     source = {p["key"]: p for p in evidence.get("provenance") or []}  # key -> dataset_id, filename
-    items = sorted(evidence.get("items", []), key=lambda it: (-((area.get(it["key"]) or 0) > 0), -(it.get("credibility") or 0)))
+    layer_of = {it["key"]: next((c for c in it.get("scope") or [] if c.startswith("context_")), "") for it in evidence.get("items", [])}
+    # the zone's own first; among them the cross-layer ones (a context_<layer>_band condition: the base layer's events read
+    # against the context layer, what the cross run exists for) before the rest; then SIG's credibility order
+    items = sorted(
+        evidence.get("items", []),
+        key=lambda it: (-((area.get(it["key"]) or 0) > 0), -bool(layer_of[it["key"]]), CRED_RANK.get(it.get("credibility"), 9)),
+    )
     out = []
     for it in items[:MAX_INSIGHTS]:  # SIG's own text, in its own language, as is
         dataset_id = (source.get(it["key"]) or {}).get("dataset_id", "")
@@ -153,6 +194,7 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
                 "filename": (source.get(it["key"]) or {}).get("filename", ""),
                 "role": it.get("role", ""),
                 "inside": (area.get(it["key"]) or 0) > 0,
+                "layer": layer_of[it["key"]],  # the cross-layer condition, e.g. context_chicago_bars_band=q2, else ""
                 "headline": it.get("headline", ""),
                 "scope": it.get("scope_text", ""),
                 "shift": it.get("shift_text") or [],
@@ -166,6 +208,39 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
+    """One SIG reading of the zone, with the user's question or without it: the findings for the map, SIG's answer, the
+    evidence its model read, the files the findings come from, and the call's trace — the same shape for the preview on
+    polygon close (no question) and for the ask (the question), so the ask can fall back on the preview."""
+    t0 = time.time()
+    trace = {"call": f"POST {SIG_URL}/api/chat/query", "question": question, "cells_count": len(cells)}
+    qa = sig_chat(cells, question)
+    insights = sig_findings(qa)
+    metrics, mode, model = qa.get("metrics") or {}, qa.get("answer_mode"), (qa.get("llm") or {}).get("model")
+    trace["result"] = {
+        "відповідь": f"{mode} · {model or 'без LLM'} · {(qa.get('llm') or {}).get('latency_s')} с LLM",
+        "граф": f"точок входу {metrics.get('seed_count')} · обійдено станів {metrics.get('visited_states')} · глибина "
+        f"{metrics.get('traversal_depth')} · якорів {metrics.get('anchors_visited')} · свідчень {metrics.get('retrieved_evidence')}",
+        "знахідки": f"у зоні {sum(it['inside'] for it in insights)} · поза зоною {sum(not it['inside'] for it in insights)}",
+        "свідчення графа": f"{len(qa.get('prompt', ''))} символів",
+    }
+    return {
+        "insights": insights,
+        "sig_answer": qa.get("answer", ""),
+        "sig_evidence": qa.get("prompt", ""),
+        "sig_mode": mode,
+        "sig_model": model,
+        "sig_sources": qa.get("provenance_footer", ""),
+        "files": finding_files(qa),
+        "trace": trace,
+        "seconds": round(time.time() - t0, 1),
+    }
+
+
+def in_zone(reading: dict[str, Any]) -> bool:
+    return any(it["inside"] for it in reading.get("insights") or [])
+
+
 # ----------------------------------------------------------------------------- the zone and the files
 
 
@@ -174,6 +249,18 @@ def flag_in_aoi(df: pd.DataFrame, polygon: dict[str, Any]) -> pd.Series:
     poly = shape(polygon)
     inside = shapely.contains_xy(poly, df["lon"].to_numpy(dtype=float), df["lat"].to_numpy(dtype=float))
     return pd.Series(inside.astype(int), index=df.index, name="in_aoi")
+
+
+def zone_frames(polygon: dict[str, Any], cells: list[str], cell_col: str) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, int]]]:
+    """Copies of the layers with in_aoi and aoi_zone for this polygon and its cells, and the rows per class; the layers
+    themselves stay as the build left them."""
+    frames, counts = {}, {}
+    for name, df in DATA.items():
+        f = df.assign(in_aoi=flag_in_aoi(df, polygon))
+        f["aoi_zone"] = aoi_zone(f, cells, cell_col)
+        frames[name] = f
+        counts[name] = {"total": int(len(f)), **{k: int((f["aoi_zone"] == k).sum()) for k in ("inside", "adjacent", "far")}}
+    return frames, counts
 
 
 # What SIG's own words mean (subgroup_miner/spatial.py LISA_WORDS, insight_contracts/wording.py), for ADS and the joint prompt
@@ -212,7 +299,61 @@ def finding_files(qa: dict[str, Any]) -> dict[str, list[str]]:
     return out
 
 
-def aoi_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -> str:
+CREDIBILITY_WORDS = {1: "confirmed by another source", 2: "not confirmed", 5: "contradicted by another source", 6: "no other source"}
+
+
+def observation_lines(items: list[dict[str, Any]]) -> list[str]:
+    """SIG's findings as O# lines for the ADS task and the joint prompt, SIG's fields verbatim, in sig_findings' order
+    (the zone's first, the most credible first); a finding from another file of the graph is context only."""
+    out = []
+    for n, it in enumerate(items, 1):
+        other = "" if it["filename"] == BASE["file"] else " (other file, context only)"
+        layer = f" · cross-layer: {it['layer']} (the context layer's points in the cell)" if it.get("layer") else ""
+        out.append(
+            f"O{n} [{it['key']}] {it['headline']} · where: {it['scope'] or '—'} · shift: {'; '.join(it['shift']) or '—'} · "
+            f"in zone: {'yes' if it['inside'] else 'no'} · credibility: {CREDIBILITY_WORDS.get(it['credibility'], 'not rated')} · "
+            f"file: {it['filename'] or '?'}{other}{layer}"
+        )
+    return out
+
+
+def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str]]) -> str:
+    """ADS's domain knowledge for the zone: a short English dictionary of the tables and columns, declarative. ADS's
+    guardrail reads every uploaded .md and its grounder keeps 800 tokens of them, so nothing that belongs in the task
+    (the question, SIG's answer, the findings, the guidance) goes here."""
+    coords = zone["polygon"]["coordinates"][0]
+    lons, lats = [c[0] for c in coords], [c[1] for c in coords]
+    b, c, r = zone["base"], zone["context"], data["resolution"]
+    cols = h3_columns(r)
+    levels = "; ".join(
+        f"{col}: resolution {r - k} (≈ {h3.average_hexagon_area(r - k, unit='km^2'):.2f} km² a cell)" for col, k in zip(cols, H3_LEVELS, strict=True)
+    )
+    sources = "; ".join(f"{name}: {', '.join(keys)}" for name, keys in files.items()) or "none in this answer"
+    return "\n".join(
+        [
+            "# Area of interest: tables and columns",
+            f"- Zone: the user's polygon on the map, {len(coords) - 1} vertices, lon {min(lons):.4f}…{max(lons):.4f}, lat {min(lats):.4f}…{max(lats):.4f}. "
+            f"Base events: {b['inside']} of {b['total']} inside; context points: {c['inside']} of {c['total']} inside.",
+            f"- base_aoi.csv ({BASE['file']}, {BASE['label']}): the events. context_aoi.csv ({CONTEXT['file']}, {CONTEXT['label']}): the context points. "
+            f"Both carry {', '.join(cols)}, in_aoi, aoi_zone.",
+            f"- H3 columns: {levels}; a coarser id is the parent of the finer one; the finest is the level SIG analysed.",
+            "- in_aoi: 1 = the point lies inside the polygon (exact point-in-polygon), 0 = outside.",
+            "- aoi_zone: inside (in_aoi 1) | adjacent (outside the polygon, in a zone cell or one of its six neighbours) | far.",
+            f"- SIG's cells: one row of SIG's table = one {cols[0]} cell with its events; shares and medians per cell exist for cells with 5 or more events; "
+            f"per-type counters SIG built: {', '.join(data.get('counted') or []) or 'none'}.",
+            "- SIG's terms: points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
+            "their number; <column>_mode = the cell's most frequent value; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
+            "neighbours; lisa_points = local Moran class of event counts (hot spot, cold spot, high outlier, low outlier, no cluster); "
+            "context_<layer>_band = none nearby, or the quantile of context points in the cell; shift = the subgroup's median against the map's median "
+            "in robust sd; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
+            f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
+        ]
+    )
+
+
+def domain_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -> str:
+    """The joint prompt's domain knowledge, in the report's language: how the zone was applied to the data, where the
+    findings come from, and the SIG glossary."""
     coords = zone["polygon"]["coordinates"][0]
     lons, lats = [c[0] for c in coords], [c[1] for c in coords]
     b, c = zone["base"], zone["context"]
@@ -239,14 +380,13 @@ def aoi_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -> s
             f"- Файл base_aoi.csv: базовий шар подій, файл {BASE['file']} ({BASE['label']}), {b['total']} рядків, з них {b['inside']} у зоні.",
             f"- Файл context_aoi.csv: контекстний шар, файл {CONTEXT['file']} ({CONTEXT['label']}), {c['total']} рядків, з них {c['inside']} у зоні.",
             "- Колонка in_aoi в обох файлах: 1 означає, що точка лежить усередині полігона, 0 поза ним. "
-            "Обчислено детерміновано (point-in-polygon), без моделі.",
-            "- Рядки з in_aoi = 0 є базовою лінією для порівняння з зоною.",
+            "Обчислено детерміновано (point-in-polygon), без моделі. Колонка aoi_zone: inside у полігоні, adjacent поза ним у комірках "
+            "зони чи їх шести сусідах, far решта.",
             f"- Граф інсайтів SIG побудовано з тих самих шарів: базовий шар розбито на комірки H3, контекстний шар {CONTEXT['label']} "
             "враховано як окрему ознаку комірки в крос-прогоні.",
-            f"- Зону передано в SIG так, як її задає виділення комірок у консолі SIG: {len(zone.get('cells') or [])} комірок H3 "
-            "базового шару, чиї центри лежать у полігоні. Питання користувача в SIG не передавали: SIG описав, що відбувається "
-            "у виділеній зоні загалом. Від цих комірок ретривер SIG увійшов у граф, обійшов його і зібрав знахідки в зоні та "
-            "пов'язані з ними; мовна модель SIG описала спостереження і гіпотези. Ця відповідь у частині «--- insights.md ---».",
+            f"- Зону передано в SIG як {len(zone.get('cells') or [])} комірок H3 базового шару, чиї центри лежать у полігоні, разом із "
+            "питанням користувача (або без нього, якщо відповідь із питанням не мала знахідок у зоні). Від цих комірок ретривер SIG "
+            "увійшов у граф, обійшов його і зібрав знахідки в зоні та пов'язані з ними; мовна модель SIG описала спостереження і гіпотези.",
             "",
             *(sources if by_file else []),
             SIG_GLOSSARY,
@@ -254,68 +394,62 @@ def aoi_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -> s
     )
 
 
-def insights_body(items: list[dict[str, Any]]) -> str:
-    if not items:
-        return "У зоні інтересу граф SIG не має знахідок, які пройшли статистичну перевірку.\n"
-    lines = []  # SIG's fields verbatim; the joint prompt reads them (its <insight_integration> glossary)
-    for n, it in enumerate(items, 1):
-        lines.append(f"{n}. [{it['key']}] {it['headline']}")
-        for label, value in (
-            ("scope", it["scope"]),
-            ("shifts", "; ".join(it["shift"])),
-            ("validation", it["validation"]),
-            ("credibility", "" if it["credibility"] is None else str(it["credibility"])),
-            ("trust", it["trust"]),
-        ):
-            if value:
-                lines.append(f"   - {label}: {value}")
-    return "\n".join(lines) + "\n"
-
-
-def insights_md(sig_answer: str, items: list[dict[str, Any]]) -> str:
-    return (
-        "# Аналіз графа інсайтів SIG для зони інтересу\n\n"
-        "Нижче наведено опис виділеної зони від сервісу інсайтів SIG, якому передали лише комірки зони, без питання: "
-        "спостереження і гіпотези з ключами знахідок [P#], а потім знахідки в зоні дослівно. Кожна знахідка пройшла статистичну перевірку "
-        "(bootstrap, поправка на множинні порівняння). Пояснення термінів наведено в частині «--- aoi.md ---». Це довідник фактів "
-        "про зону: значення колонок у рядках scope знахідок можна брати як розрізи власного аналізу.\n\n"
-        "## Відповідь SIG\n\n" + sig_answer.strip() + "\n\n## Знахідки SIG у зоні, дослівно\n\n" + insights_body([it for it in items if it["inside"]])
-    )
-
-
-def ads_query_parts(question: str, enrich: bool) -> list[dict[str, str]]:
-    """The user's question, framed deterministically, as the parts the page shows apart: the area of interest, the
-    user's own words, the data, and — when SIG found anything in the zone — its findings' values as extra slices.
-    Joined, they are the ADS query."""
-    parts = [
-        {"kind": "frame", "text": "Проаналізуй у зоні інтересу: "},
-        {"kind": "user", "text": question},
-        {
-            "kind": "data",
-            "text": "\n\nДані: base_aoi.csv (базовий шар подій) і context_aoi.csv (контекстний шар). В обох колонка in_aoi "
-            "позначає зону інтересу: 1 всередині полігона, 0 поза ним. Питання стосується рядків in_aoi = 1; решта є базовою "
-            "лінією для порівняння. Методика зони і пояснення термінів наведено в блоці User_Domain_Knowledge, у частині, "
-            "що починається рядком «--- aoi.md ---».",
-        },
-    ]
-    if enrich:
-        # Fixed text, the same for any data and question, keyed to SIG's findings in the zone (not to how its answer is
-        # worded). ADS reads every uploaded .md inside its <User_Domain_Knowledge> block under a "--- <file> ---" line
-        # (profiler_script.py), so the reference names exactly that line and the section of the findings.
-        parts.append(
-            {
-                "kind": "sig",
-                "text": "\n\nДодаткові розрізи. Дай відповідь на питання. Значення колонок зі знахідок SIG у зоні (блок "
-                "User_Domain_Knowledge, частина «--- insights.md ---», розділ «Знахідки SIG у зоні, дослівно», рядки scope) "
-                "візьми як додаткові розрізи цього ж розрахунку: для кожного покажи показник із питання в зоні порівняно з рештою "
-                "даних. Не переказуй знахідки [P#] і не рахуй просторові кластери заново; значення, якого в даних немає, пропусти.",
-            }
+def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None) -> list[dict[str, str]]:
+    """The ADS task, part by part, as the page shows it: the frame, the user's words, the data with its geo columns and
+    zone counts, SIG's answer verbatim, SIG's findings as O# lines, and the guidance. The frame is English (ADS's own
+    prose is English and Cyrillic costs its budgets two to three times more); the question and SIG's text stay verbatim.
+    Before the zone and the ask the figures and the SIG parts are placeholders. Joined, the parts are the query."""
+    if zone and data:
+        r, b, c = data["resolution"], zone["base"], zone["context"]
+        cols = h3_columns(r)
+        geo = (
+            f"\n\nData: base_aoi.csv → df_base_aoi ({BASE['label']}, {b['total']} rows, {b['inside']} inside the AOI); "
+            f"context_aoi.csv → df_context_aoi ({CONTEXT['label']}, {c['total']} rows, {c['inside']} inside).\n"
+            f"Geo columns (both tables): {', '.join(cols)} are H3 cell ids (strings) at resolutions {', '.join(str(r - k) for k in H3_LEVELS)}; "
+            "a coarser id is the parent of the finer one; group by them, never edit them. in_aoi is 1 for points inside the polygon (exact). "
+            "aoi_zone is inside (= in_aoi 1) | adjacent (outside the polygon but in the zone's cells or their ring-1 neighbours) | far. "
+            "A point in the same cell as the zone is not inside the zone.\n"
+            f"Zone (base rows): inside={b['inside']}, adjacent={b['adjacent']}, far={b['far']}; {cols[0]} cells in the zone: {len(zone['cells'])}. "
+            f"SIG counted these types per cell: {', '.join(data.get('counted') or []) or 'none'}."
         )
-    return parts
+        cell, coarser = cols[0], f"h3_r{r - 1}"
+    else:
+        geo = "\n\nData: base_aoi.csv → df_base_aoi and context_aoi.csv → df_context_aoi with the H3 columns h3_r*, in_aoi and aoi_zone (the figures appear once the zone is drawn)."
+        cell, coarser = "the finest h3_r", "the coarser h3_r column"
+    if sig is None:
+        answer = "\n\nSIG's answer for this zone (verbatim): (after the ask: SIG reads the zone with this question)"
+        obs = "\n\nSIG findings (O#): (after the ask)"
+    else:
+        text = (sig.get("sig_answer") or "").strip()
+        answer = "\n\nSIG's answer for this zone (verbatim):\n" + (text or "SIG gave no answer for this zone.")
+        lines = observation_lines(sig.get("insights") or [])
+        obs = (
+            "\n\nSIG findings (O#; 'in zone' says whether the finding's cells lie in the AOI — check each that concerns the question on the data):\n"
+            + ("\n".join(lines) or "SIG has no findings for this zone.")
+        )
+    guidance = (
+        "\n\nGuidance:\n"
+        f"- Where the question or SIG's answer points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, "
+        f"shares for categories) and check on {coarser} whether the difference holds.\n"
+        "- Treat SIG's conditions as extra cuts of the same computation and SIG's hypotheses as claims to test: confirmed / not confirmed / "
+        "not testable with these columns. Do not re-mine spatial clusters.\n"
+        f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
+        f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
+        "few and no context points, inside the zone and around it — and report it under its O#.\n"
+        "- Describe differences as shifts and ratios, not causes; proximity is not causation; label O# explicitly in the report."
+    )
+    return [
+        {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
+        {"kind": "user", "text": question},
+        {"kind": "data", "text": geo},
+        {"kind": "sig_answer", "text": answer},
+        {"kind": "observations", "text": obs},
+        {"kind": "guidance", "text": guidance},
+    ]
 
 
-def ads_query(question: str, enrich: bool) -> str:
-    return "".join(p["text"] for p in ads_query_parts(question, enrich))
+def ads_query(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None) -> str:
+    return "".join(p["text"] for p in ads_query_parts(question, zone, data, sig))
 
 
 # ----------------------------------------------------------------------------- ADS
@@ -374,13 +508,19 @@ def llm_chat(prompt: str) -> dict[str, Any]:
     return r.json()
 
 
-def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str, aoi: str) -> tuple[str, dict[str, Any]]:
+def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str, domain: str, observations: str) -> tuple[str, dict[str, Any]]:
     """Copilot's final response prompt adapted for two sources (prompts/joint_response.jinja): the ADS report, SIG's
-    answer and the graph evidence it read, verbatim; the zone's methodology and the SIG glossary as domain knowledge.
-    -> (the report, "" without its required sections; the call's trace)."""
+    answer, the graph evidence it read and its findings as the O# lines, verbatim; the zone's methodology and the SIG
+    glossary as domain knowledge. -> (the report, "" without its required sections; the call's trace)."""
     template = Template(JOINT_TEMPLATE.read_text(encoding="utf-8"))
     prompt = template.render(
-        user_query=question, report=report, insight_analysis=sig_answer, insight_evidence=sig_evidence, domain_knowledge=aoi, query_language="uk"
+        user_query=question,
+        report=report,
+        insight_analysis=sig_answer,
+        insight_evidence=sig_evidence,
+        observations=observations,
+        domain_knowledge=domain,
+        query_language="uk",
     )
     PROMPTS["joint"] = prompt
     resp = llm_chat(prompt)
@@ -396,7 +536,8 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
             "Analytical_Report: звіт ADS": len(report),
             "Insight_Analysis: відповідь SIG": len(sig_answer),
             "Insight_Evidence: свідчення графа SIG": len(sig_evidence),
-            "User_Domain_Knowledge: aoi.md": len(aoi),
+            "Insight_Observations: рядки O#": len(observations),
+            "User_Domain_Knowledge: методика і словник": len(domain),
         },
         "prompt_chars": len(prompt),
         "usage": resp.get("usage"),
@@ -408,12 +549,12 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
 # ----------------------------------------------------------------------------- the flows
 
 
-def run_datasets() -> None:
+def run_datasets(count_values: list[str]) -> None:
     d = STATE["datasets"]
     t0 = time.time()
     try:
         d["stage"] = "uploading"
-        base = sig_upload(BASE)
+        base = sig_upload(base_spec(count_values))
         ctx = sig_upload(CONTEXT)
         d["base"] = {"upload_id": base["upload_id"], "batches": list(base.get("levels", {}).values()) or [base["batch_id"]]}
         d["context"] = {"upload_id": ctx["upload_id"], "batches": list(ctx.get("levels", {}).values()) or [ctx["batch_id"]]}
@@ -430,10 +571,16 @@ def run_datasets() -> None:
         pack = http.get(f"{SIG_URL}/api/geo/{d['base']['dataset_id']}/cells")
         if pack.status_code >= 300:
             raise RuntimeError(f"SIG cells of {d['base']['dataset_id']}: {pack.status_code} {pack.text[:300]}")
-        GRID.update(cell_grid(pack.json()))
-        DATA["base"] = pd.read_csv(DEMO_DIR / BASE["file"])
-        DATA["context"] = pd.read_csv(DEMO_DIR / CONTEXT["file"])
+        cells = pack.json()
+        GRID.update(cell_grid(cells))
+        GRID["resolution"] = sig_resolution(d["base"]["dataset_id"])
+        cols = h3_columns(GRID["resolution"])  # h3_r{R}, h3_r{R-1}, h3_r{R-2}: SIG's own cells and their parents, on both layers
+        DATA["base"] = enrich_h3(pd.read_csv(DEMO_DIR / BASE["file"]), GRID["resolution"])
+        DATA["context"] = enrich_h3(pd.read_csv(DEMO_DIR / CONTEXT["file"]), GRID["resolution"])
         d["rows"] = {"base": int(len(DATA["base"])), "context": int(len(DATA["context"])), "cells": len(GRID["h3"])}
+        d["resolution"], d["levels"] = GRID["resolution"], [int(c[4:]) for c in cols]
+        d["counted"] = sorted(c for c in cells["columns"] if c.startswith("count_"))  # the counters SIG really built
+        d["h3_mismatch"] = len((set(DATA["base"][cols[0]]) - {""}) ^ set(GRID["h3"]))  # the demo's cells vs SIG's: a warning, never a stop
         d["seconds"] = round(time.time() - t0, 1)
         d["stage"] = "ready"
     except Exception as exc:  # the happy path shows the text and stops
@@ -442,41 +589,23 @@ def run_datasets() -> None:
 
 
 def run_mine(z: dict[str, Any]) -> None:
-    """Step 1, as soon as the zone is drawn: what SIG finds in the place, before the user asks anything — the console's
-    zone-only ask over the zone's cells. The findings, SIG's answer and the files for ADS land on the zone itself."""
-    s, t0 = z["sig"], time.time()
+    """The preview, as soon as the zone is drawn: SIG's reading of the place before any question (the cells alone).
+    The ask repeats the call with the question and falls back on this reading when the text finds nothing in the zone."""
+    s = z["sig"]
     try:
-        cells = z["cells"]
-        s["trace"] = {"call": f"POST {SIG_URL}/api/chat/query", "question": SIG_ZONE_QUESTION, "cells_count": len(cells)}
-        qa = sig_chat(cells)
-        s["insights"] = sig_findings(qa)
-        s["sig_answer"], s["sig_evidence"] = qa.get("answer", ""), qa.get("prompt", "")
-        s["sig_mode"], s["sig_model"] = qa.get("answer_mode"), (qa.get("llm") or {}).get("model")
-        s["sig_sources"] = qa.get("provenance_footer", "")
-        metrics = qa.get("metrics") or {}
-        s["trace"]["result"] = {
-            "відповідь": f"{s['sig_mode']} · {s['sig_model'] or 'без LLM'} · {(qa.get('llm') or {}).get('latency_s')} с LLM",
-            "граф": f"точок входу {metrics.get('seed_count')} · обійдено станів {metrics.get('visited_states')} · глибина "
-            f"{metrics.get('traversal_depth')} · якорів {metrics.get('anchors_visited')} · свідчень {metrics.get('retrieved_evidence')}",
-            "знахідки": f"у зоні {sum(it['inside'] for it in s['insights'])} · поза зоною {sum(not it['inside'] for it in s['insights'])}",
-            "свідчення графа": f"{len(s['sig_evidence'])} символів",
-        }
-        s["aoi_md"], s["insights_md"] = aoi_md(z, finding_files(qa)), insights_md(s["sig_answer"], s["insights"])
-        s["enrich"] = any(it["inside"] for it in s["insights"])  # step 2 is enriched whenever the place has findings
-        s["seconds"] = round(time.time() - t0, 1)
+        s.update(sig_zone_answer(z["cells"], ""))
         s["stage"] = "ready"
-    except Exception as exc:  # the question can still go to ADS, unenriched
-        log.exception("zone mining failed")
-        s["seconds"] = round(time.time() - t0, 1)
+    except Exception as exc:  # the question can still go to ADS, with whatever the ask's own SIG call brings
+        log.exception("zone preview failed")
         s["stage"], s["error"] = "error", f"{type(exc).__name__}: {exc}"
-        s.setdefault("aoi_md", aoi_md(z))
-        s.update({"insights": [], "sig_answer": "", "sig_evidence": "", "insights_md": "", "enrich": False})
+        s.setdefault("seconds", 0)
+        s.update({"insights": [], "sig_answer": "", "sig_evidence": "", "files": {}})
 
 
 def run_ask(question: str) -> None:
     a, zone = STATE["ask"], STATE["zone"]
-    s = zone["sig"]  # step 1, done when the zone was drawn
-    timings: dict[str, float] = {"search": s.get("seconds", 0)}
+    preview = zone["sig"]  # SIG's reading of the place alone, done when the zone was drawn
+    timings: dict[str, float] = {}
     t = time.time()
 
     def mark(stage: str) -> None:
@@ -485,21 +614,29 @@ def run_ask(question: str) -> None:
         t = time.time()
         a["stage"] = stage
 
-    trace = a["trace"] = {"search": s.get("trace", {})}  # per stage: what went to the service and what came back
+    trace = a["trace"] = {}  # per stage: what went to the service and what came back
     try:
-        a["insights"], a["sig_answer"], a["sig_evidence"] = s["insights"], s["sig_answer"], s["sig_evidence"]
-        a["sig_mode"], a["sig_model"], a["sig_sources"] = s.get("sig_mode"), s.get("sig_model"), s.get("sig_sources", "")
-        a["aoi_md"], a["insights_md"] = s["aoi_md"], s["insights_md"]
+        combined = sig_zone_answer(zone["cells"], question)  # the question and the zone together: the graph scores both
+        fallback = not in_zone(combined) and in_zone(preview)  # the text pulled the seeds out of the zone: the preview stands
+        chosen = preview if fallback else combined
+        a["sig_entry"] = "preview" if fallback else "combined"
+        for k in ("insights", "sig_answer", "sig_evidence", "sig_mode", "sig_model", "sig_sources"):
+            a[k] = chosen.get(k)
+        files_of = chosen.get("files") or {}
+        a["aoi_md"], a["domain_md"] = aoi_md(zone, STATE["datasets"], files_of), domain_md(zone, files_of)
+        a["observations"] = "\n".join(observation_lines(a["insights"]))
+        trace["search"] = {
+            **chosen.get("trace", {}),
+            "entry": a["sig_entry"],
+            "combined": combined["trace"].get("result"),
+            "preview": preview.get("trace", {}).get("result"),
+        }
+        mark("ads")
         sid = ads_session()
         a["ads_session"] = sid
-        parts = ads_query_parts(question, s["enrich"])
+        parts = ads_query_parts(question, zone, STATE["datasets"], chosen)
         a["ads_query"] = "".join(p["text"] for p in parts)
-        files = {
-            "base_aoi.csv": DATA["base"].to_csv(index=False).encode("utf-8"),
-            "context_aoi.csv": DATA["context"].to_csv(index=False).encode("utf-8"),
-            "aoi.md": a["aoi_md"].encode("utf-8"),
-            **({"insights.md": a["insights_md"].encode("utf-8")} if a["insights_md"] else {}),
-        }
+        files = {**FILES, "aoi.md": a["aoi_md"].encode("utf-8")}  # the zone's tables as taken when the polygon closed, and the column dictionary
         trace["ads"] = {
             "call": f"POST {ADS_URL}/sessions/{sid}/jobs",
             "files": {name: len(data) for name, data in files.items()},
@@ -513,9 +650,12 @@ def run_ask(question: str) -> None:
         a["ads_report"] = ads_report(status)
         last = (status.get("result") or {}).get("last_execute_response") or {}
         counters = (status.get("result") or {}).get("system_counters") or {}
+        steps = (status.get("result") or {}).get("execution_trace") or []
         trace["ads"]["result"] = {
             "outcome": f"{a['ads_outcome']} · {last.get('completion_status')}",
             "кроків": counters.get("total_steps_taken"),
+            "інструменти": ", ".join(dict.fromkeys(str(s.get("tool_name") or "?") for s in steps)) or "—",
+            "domain_knowledge_blocked": int(counters.get("domain_knowledge_blocked") or 0),  # 1: ADS dropped aoi.md (its guardrail)
             "звіт": f"{len(a['ads_report'])} символів",
             "файли ADS": ", ".join(o.get("filename", "") for o in last.get("outputs") or []) or "—",
         }
@@ -523,7 +663,9 @@ def run_ask(question: str) -> None:
         if not a["ads_report"]:
             raise RuntimeError(f"ADS returned no report (outcome {a['ads_outcome']})")
         mark("joint")
-        a["joint_report"], trace["joint"] = joint_report(question, a["ads_report"], a["sig_answer"], a["sig_evidence"], a["aoi_md"])
+        a["joint_report"], trace["joint"] = joint_report(
+            question, a["ads_report"], a["sig_answer"], a["sig_evidence"], a["domain_md"], a["observations"]
+        )
         if not a["joint_report"]:
             a["joint_error"] = "спільний звіт не зібрано: відповідь без обов'язкових розділів"
         mark("done")
@@ -563,11 +705,9 @@ def state() -> dict[str, Any]:
 
 @app.get("/ads-query")
 def ads_query_preview(question: str = "") -> dict[str, Any]:
-    """The ADS task for this question, part by part, as the run will send it. Exact once SIG has mined the drawn zone;
-    before that the SIG slices are shown as pending (they join when the place has findings)."""
-    s = (STATE["zone"] or {}).get("sig") or {}
-    exact = s.get("stage") in ("ready", "error")
-    return {"parts": ads_query_parts(question.strip(), s.get("enrich", False) if exact else True), "exact": exact}
+    """The ADS task for this question, part by part, as the run will build it: the figures once the zone is drawn, the
+    SIG parts (its answer with this question, the O# lines) only when the ask runs, so the preview is never exact."""
+    return {"parts": ads_query_parts(question.strip(), STATE["zone"], STATE["datasets"], None), "exact": False}
 
 
 @app.get("/trace/prompt")
@@ -576,42 +716,57 @@ def trace_prompt() -> PlainTextResponse:
     return PlainTextResponse(PROMPTS.get("joint", ""))
 
 
+@app.get("/datasets/options")
+def datasets_options() -> dict[str, Any]:
+    """The base file's category column and its values with located rows: what the page offers to count per cell."""
+    return {
+        "column": BASE["category"],
+        "values": category_options(),
+        "min_rows": COUNT_MIN,
+        "default": list(COUNT_DEFAULT),
+        "labels": {"base": BASE["label"], "context": CONTEXT["label"]},  # the page's words for the layers
+    }
+
+
 @app.post("/datasets")
-def datasets() -> dict[str, Any]:
+def datasets(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The build: the chosen category values go to SIG as count_values with the base layer; none means no counters."""
     if STATE["datasets"] and STATE["datasets"]["stage"] not in ("ready", "error"):
         return STATE["datasets"]
-    STATE["datasets"] = {"stage": "starting", "base": None, "context": None, "cross": [], "error": None}
+    countable = {o["value"] for o in category_options() if o["status"] == "ok"}
+    count_values = [v for v in (body or {}).get("count_values") or [] if v in countable]
+    STATE["datasets"] = {"stage": "starting", "base": None, "context": None, "cross": [], "error": None, "count_values": count_values}
     STATE["zone"], STATE["ask"] = None, None
-    threading.Thread(target=run_datasets, daemon=True).start()
+    threading.Thread(target=run_datasets, args=(count_values,), daemon=True).start()
     return STATE["datasets"]
 
 
 @app.post("/zone")
 def zone(body: dict[str, Any]) -> dict[str, Any]:
-    if not DATA:
+    if "base" not in DATA:
         raise HTTPException(409, "датасети ще не готові")
     polygon = body.get("polygon") or {}
     if polygon.get("type") != "Polygon" or len((polygon.get("coordinates") or [[]])[0]) < 4:
         raise HTTPException(400, "polygon: GeoJSON Polygon з щонайменше трьома вершинами")
-    counts = {}
-    for name, df in DATA.items():
-        df["in_aoi"] = flag_in_aoi(df, polygon)
-        counts[name] = {"inside": int(df["in_aoi"].sum()), "total": int(len(df))}
-    rows = zone_cells(GRID, polygon)
-    if not rows:
+    cells = zone_h3_cells(polygon, GRID["resolution"], GRID["h3"])  # the zone as SIG reads a geometry
+    if not cells:
         raise HTTPException(400, "у полігоні немає жодної комірки мапи SIG: обведіть ділянку з подіями")
+    frames, counts = zone_frames(polygon, cells, h3_columns(GRID["resolution"])[0])
+    FILES.clear()
+    FILES.update({f"{name}_aoi.csv": f.to_csv(index=False).encode("utf-8") for name, f in frames.items()})
     samples = {}
-    for name, df in DATA.items():  # the points in the zone the map draws, at most SAMPLE_POINTS a layer
-        hit = df[df["in_aoi"] == 1]
+    for name, f in frames.items():  # the points in the zone the map draws, at most SAMPLE_POINTS a layer
+        hit = f[f["in_aoi"] == 1]
         samples[name] = hit.sample(min(SAMPLE_POINTS, len(hit)), random_state=0)[["lon", "lat"]].round(5).values.tolist()
+    ring_of = dict(zip(GRID["h3"], GRID["rings"], strict=True))
     STATE["zone"] = {
         "polygon": polygon,
         **counts,
-        "cells": [GRID["h3"][i] for i in rows],  # the zone as SIG's console selects it
-        "cell_rings": [GRID["rings"][i] for i in rows],
+        "cells": cells,
+        "cell_rings": [ring_of[c] for c in cells],
         "sample": samples["base"],
         "sample_context": samples["context"],
-        "sig": {"stage": "mining"},  # step 1 starts now, before any question
+        "sig": {"stage": "mining"},  # the preview starts now, before any question
     }
     STATE["ask"] = None
     threading.Thread(target=run_mine, args=(STATE["zone"],), daemon=True).start()
@@ -629,7 +784,7 @@ def ask(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(409, "попереднє питання ще виконується")
     if STATE["zone"]["sig"]["stage"] == "mining":
         raise HTTPException(409, "SIG ще аналізує зону")
-    STATE["ask"] = {"question": question, "stage": "ads", "insights": [], "ads_report": "", "joint_report": "", "error": None}
+    STATE["ask"] = {"question": question, "stage": "search", "insights": [], "ads_report": "", "joint_report": "", "error": None}
     threading.Thread(target=run_ask, args=(question,), daemon=True).start()
     return STATE["ask"]
 
@@ -641,24 +796,88 @@ def check() -> None:
     df = pd.DataFrame({"lon": [0.5, 0.2, 2.0], "lat": [0.5, 0.8, 2.0]})
     square = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
     assert flag_in_aoi(df, square).tolist() == [1, 1, 0], flag_in_aoi(df, square).tolist()
-    q = ads_query("як змінювалась кількість?", enrich=True)
-    assert q.startswith("Проаналізуй у зоні інтересу: як змінювалась") and "in_aoi" in q, q
-    assert "«--- insights.md ---»" in q and "Знахідки SIG у зоні, дослівно" in q and "Не переказуй" in q, q  # slices, not an essay
-    sig_block = ads_query_parts("q", enrich=True)[-1]["text"].lower()
-    assert not any(w in sig_block for w in ("злочин", "бар", "район", "поясн")), "the SIG block: generic, no explaining"
-    assert "insights.md" not in ads_query("q", enrich=False)  # no findings in the place: no enrichment
-    assert "Знахідки SIG у зоні, дослівно" in insights_md("A", []) and "пояснити" not in insights_md("A", [])
+    # the ADS task: English frame, the question and SIG's text verbatim, O# lines, the guidance; placeholders before the ask
+    zone_fx = {
+        "polygon": square,
+        "base": {"total": 2, "inside": 1, "adjacent": 1, "far": 0},
+        "context": {"total": 1, "inside": 0, "adjacent": 0, "far": 1},
+        "cells": ["a"],
+    }
+    data_fx = {"resolution": 9, "counted": ["count_crime_theft"]}
+    sig_fx = {
+        "sig_answer": "Спостереження: A [P1]",
+        "insights": [
+            {
+                "key": "P1",
+                "headline": "H",
+                "scope": "s",
+                "shift": ["m: up"],
+                "inside": True,
+                "credibility": 6,
+                "filename": BASE["file"],
+                "layer": "context_x_band=q2",
+            },
+            {"key": "P2", "headline": "G", "scope": "", "shift": [], "inside": False, "credibility": None, "filename": "other.csv", "layer": ""},
+        ],
+    }
+    parts = ads_query_parts("як змінювалась кількість?", zone_fx, data_fx, sig_fx)
+    assert [p["kind"] for p in parts] == ["frame", "user", "data", "sig_answer", "observations", "guidance"], parts
+    q = "".join(p["text"] for p in parts)
+    assert q.startswith("Analyse the area of interest (AOI): як змінювалась") and "h3_r9, h3_r8, h3_r7" in q and "inside=1, adjacent=1, far=0" in q, q
+    assert (
+        f"O1 [P1] H · where: s · shift: m: up · in zone: yes · credibility: no other source · file: {BASE['file']} · cross-layer: context_x_band=q2"
+        in q
+    ), q
+    assert "\nO2 [P2] G" in q and "A finding marked cross-layer" in q and "joining the two tables on the cell id" in q, q
+    assert "(other file, context only)" in q and "Спостереження: A [P1]" in q and "proximity is not causation" in q and "h3_r8 whether" in q, q
+    assert "(after the ask)" in ads_query("q", None, None, None) and "(after the ask)" not in q
+    md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
+    assert len(md) <= 2000 and "lisa_points" in md and "other.csv: P1" in md and "h3_r9" in md and "count_crime_theft" in md, len(md)
+    assert not any(w in md.lower() for w in ("must", "always", "never", "ignore")), md  # declarative: ADS's guardrail reads it
+    dom = domain_md(zone_fx, {"other.csv": ["P1"]})
+    assert "lisa_points" in dom and "other.csv: P1, інший датасет" in dom and "питанням користувача" in dom, dom
     assert (DEMO_DIR / BASE["file"]).is_file(), f"demo data missing: {DEMO_DIR}"
     prompt = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render(
-        user_query="q", report="R", insight_analysis="A [P1]", insight_evidence="E", domain_knowledge="D", query_language="uk"
+        user_query="q",
+        report="R",
+        insight_analysis="A [P1]",
+        insight_evidence="E",
+        observations="O1 [P1] H",
+        domain_knowledge="D",
+        query_language="uk",
     )
-    for tag in ("<Insight_Analysis>", "<Insight_Evidence>", "<insight_integration>", "<Analytical_Report>", "<User_Domain_Knowledge>"):
+    for tag in (
+        "<Insight_Analysis>",
+        "<Insight_Evidence>",
+        "<Insight_Observations>",
+        "<insight_integration>",
+        "<Analytical_Report>",
+        "<User_Domain_Knowledge>",
+    ):
         assert tag in prompt, tag
-    md = aoi_md({"polygon": square, "base": {"inside": 1, "total": 2}, "context": {"inside": 0, "total": 1}}, {"other.csv": ["P1"]})
-    assert "lisa_points" in md and "other.csv: P1, інший датасет" in md, md
+    assert "O1 [P1] H" in prompt and "area only, never" not in prompt, "the prompt says SIG got the query and the area"
     # a cell package of two cells, offsets in 10**-1 degrees: a unit square at (0, 0) and one at (5, 5)
     grid = cell_grid({"scale": 1, "columns": {"h3": ["a", "b"]}, "rings": [[0, 0, 10, 0, 10, 10, 0, 10], [5, 5, 10, 0, 10, 10, 0, 10]]})
-    assert [grid["h3"][i] for i in zone_cells(grid, square)] == ["a"], grid["centres"]
+    assert grid["rings"][0] == [[0, 0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0, 0]], grid["rings"]
+    # SIG's credibility order (1 confirmed, 2 unconfirmed, 6 no other source, 5 contradicted), the zone's items first
+    items = [{"key": f"P{i}", "pattern_id": "x", "credibility": c, "scope": []} for i, c in enumerate((5, 6, 2, 1, 1), 1)]
+    items[1]["scope"] = ["context_bars_band=q2", "lisa_points=no cluster"]  # a cross-layer finding: first among the zone's
+    found = sig_findings({"view": {"evidence": {"items": items, "area": {"P1": 0.4, "P2": 0.4, "P3": 0.4, "P4": 0.4}, "provenance": []}}})
+    assert [it["key"] for it in found] == ["P2", "P4", "P3", "P1", "P5"], [it["key"] for it in found]
+    assert found[0]["layer"] == "context_bars_band=q2" and found[1]["layer"] == ""
+    # geo.py: SIG's own indexing, parents consistent, a cell's own boundary polygon is exactly that cell, the rows' place
+    import h3
+
+    cell = h3.latlng_to_cell(41.885, -87.625, 9)
+    e = enrich_h3(pd.DataFrame({"lon": [-87.625, -87.6251, None], "lat": [41.885, 41.885, 41.9]}), 9)
+    assert e["h3_r9"].tolist() == [cell, cell, ""] and e["h3_r7"].tolist()[2] == "", e
+    assert all(h3.cell_to_parent(c, 8) == p for c, p in zip(e["h3_r9"][:2], e["h3_r8"][:2], strict=True)), e
+    ring = [[lng, lat] for lat, lng in h3.cell_to_boundary(cell)]
+    assert zone_h3_cells({"type": "Polygon", "coordinates": [ring + ring[:1]]}, 9, [cell, h3.grid_ring(cell, 1)[0]]) == [cell]
+    nb, far = h3.grid_ring(cell, 1)[0], h3.latlng_to_cell(41.95, -87.70, 9)
+    rows = pd.DataFrame({"in_aoi": [1, 0, 0, 0, 0], "h3_r9": [cell, cell, nb, far, ""]})
+    assert aoi_zone(rows, [cell], "h3_r9").tolist() == ["inside", "adjacent", "adjacent", "far", "far"]  # the same cell is not inside
+    assert base_spec(["theft", "assault"])["count_values"] == "crime=theft,crime=assault" and "category" not in base_spec([])
     print("ok")
 
 
