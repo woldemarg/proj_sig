@@ -96,7 +96,7 @@
   <span class="pill" id="pill-sig">SIG</span>
   <span class="pill" id="pill-ads">ADS</span>
   <span class="pill" id="pill-llm">LLM</span>
-  <span class="hint" style="margin-left:auto">Чикаго: злочини 2024 (база) + бари (контекст)</span>
+  <span class="hint" style="margin-left:auto" id="layers-hint"></span>
 </header>
 
 <aside>
@@ -138,8 +138,8 @@
       <button id="btn-ask" disabled>Запитати</button>
     </div>
     <div class="stages" id="stages">
-      <details class="stage" data-stage="search"><summary><span>SIG: що знайдено в зоні (до питання)</span><span class="t"></span></summary><div class="trace"></div></details>
-      <details class="stage" data-stage="ads"><summary><span>ADS: аналіз таблиць із in_aoi</span><span class="t"></span></summary><div class="trace"></div></details>
+      <details class="stage" data-stage="search"><summary><span>SIG: питання + зона</span><span class="t"></span></summary><div class="trace"></div></details>
+      <details class="stage" data-stage="ads"><summary><span>ADS: таблиці з H3, in_aoi і aoi_zone</span><span class="t"></span></summary><div class="trace"></div></details>
       <details class="stage" data-stage="joint"><summary><span>Спільний звіт (промпт Copilot)</span><span class="t"></span></summary><div class="trace"></div></details>
     </div>
     <div class="hint" style="margin-top:4px">Клік по стадії показує, що саме пішло в сервіс і що повернулося.</div>
@@ -159,8 +159,8 @@
 <main>
   <div id="map"></div>
   <div class="legend">
-    <div><i style="background:#80aaff"></i>події в зоні (вибірка)</div>
-    <div><i style="background:#f0a44b"></i>бари в зоні</div>
+    <div><i style="background:#80aaff"></i>події базового шару в зоні (вибірка)</div>
+    <div><i style="background:#f0a44b"></i>точки контекстного шару в зоні</div>
     <div><i class="cell"></i>комірки зони, передані в SIG</div>
     <div><i class="sq" style="background:rgba(229,57,122,.45);border-color:#b0124f"></i>знахідки SIG у зоні</div>
     <div><i class="sq" style="background:rgba(142,108,216,.25);border-color:#6f4fc4;border-style:dashed"></i>знахідки SIG поза зоною</div>
@@ -171,6 +171,7 @@
 const $ = (id) => document.getElementById(id);
 const CHICAGO = [[-87.94, 41.64], [-87.52, 42.02]];
 const EMPTY = { type: "FeatureCollection", features: [] };
+const LABELS = { base: "базовий шар", context: "контекстний шар" };  // the layers' words, from GET /datasets/options
 
 const map = new maplibregl.Map({
   container: "map",
@@ -371,9 +372,9 @@ function renderZoneSig(z) {  // step 1 on the page: what SIG found in the place,
   } else {
     const inside = (s.insights || []).filter((it) => it.inside).length;
     $("st-sig").className = "status";
-    $("st-sig").textContent = `SIG за ${s.seconds} с: ${inside ? `у зоні знахідок ${inside}, їхні розрізи додано до запиту в ADS` : "у зоні знахідок немає, запит піде в ADS без розрізів SIG"}.`;
+    $("st-sig").textContent = `Попередній перегляд SIG за ${s.seconds} с: ${inside ? `у зоні знахідок ${inside}` : "у зоні знахідок немає"}. «Запитати» читає зону ще раз, із питанням; відповідь SIG і знахідки O# підуть у запит до ADS.`;
     $("zone-sig").hidden = false;
-    renderInsights(s.insights || []);
+    renderInsights(s.insights || [], "попередній перегляд, без питання");
     $("sig-answer").innerHTML = s.sig_answer ? marked.parse(s.sig_answer) : "<p class='hint'>порожньо</p>";
     $("sig-sources").textContent = `${s.sig_mode === "llm" ? "модель SIG: " + (s.sig_model || "") : "без LLM SIG"} · ${s.sig_sources || ""}`;
   }
@@ -390,7 +391,8 @@ function drawZone(z) {  // the polygon, the map cells it selects for SIG, and th
   map.getSource("sample").setData(points(z.sample || []));
   map.getSource("sample-context").setData(points(z.sample_context || []));
   $("st-zone").className = "status";
-  $("st-zone").textContent = `У зоні: ${z.base.inside} з ${z.base.total} подій, ${z.context.inside} з ${z.context.total} барів; ${(z.cells || []).length} комірок H3 для SIG.`;
+  const rows = (c) => `inside ${c.inside} · adjacent ${c.adjacent} · far ${c.far} з ${c.total}`;
+  $("st-zone").textContent = `${LABELS.base}: ${rows(z.base)}; ${LABELS.context}: ${rows(z.context)}; ${(z.cells || []).length} комірок H3 для SIG.`;
 }
 
 $("btn-data").onclick = async () => {
@@ -434,7 +436,7 @@ async function poll() {
       const levels = `H3 r${d.resolution} і батьки ${d.levels.slice(1).map((l) => "r" + l).join(", ")}`;
       const counted = d.counted.length ? `лічильники ${d.counted.map((c) => c.replace(/^count_/, "")).join(", ")}` : "без лічильників типів";
       const warn = d.h3_mismatch ? ` Увага: ${d.h3_mismatch} комірок не збігаються з комірками SIG.` : "";
-      $("st-data").textContent = `SIG готовий за ${d.seconds} с: ${d.rows.base} подій, ${d.rows.context} барів, ${d.rows.cells} комірок мапи, ${levels}, ${counted}, ${cross}.${warn} Обведіть зону на мапі.`;
+      $("st-data").textContent = `SIG готовий за ${d.seconds} с: ${d.rows.base} рядків «${LABELS.base}», ${d.rows.context} «${LABELS.context}», ${d.rows.cells} комірок мапи, ${levels}, ${counted}, ${cross}.${warn} Обведіть зону на мапі.`;
     } else if (d.stage === "error") {
       $("st-data").className = "status err"; $("st-data").textContent = d.error; $("btn-data").disabled = false;
     } else {
@@ -461,6 +463,11 @@ function renderAsk(a) {
   renderTrace(a);
   showSentQuery(a);
   if (a.stage === "error") { $("st-ask").textContent = a.error; $("st-ask").className = "status err"; $("btn-ask").disabled = false; }
+  if (a.sig_entry && $("insights").dataset.key !== `ask:${a.sig_entry}`) {  // the findings that went to ADS as O#, once per ask
+    $("insights").dataset.key = `ask:${a.sig_entry}`;
+    renderInsights(a.insights || [], a.sig_entry === "preview" ? "відповідь із питанням не мала знахідок у зоні — узято попередній перегляд" : "відповідь SIG на питання в зоні");
+    $("sig-answer").innerHTML = a.sig_answer ? marked.parse(a.sig_answer) : "<p class='hint'>порожньо</p>";
+  }
   if (a.stage === "done" || a.stage === "error") {
     $("btn-ask").disabled = false; $("btn-ask").dataset.running = "";
     if (a.ads_report) {
@@ -489,7 +496,7 @@ function previewQuery() {  // what the ADS task will be for the typed question, 
     if (sentShown) return;
     const q = await (await fetch(`/ads-query?question=${encodeURIComponent($("question").value)}`)).json();
     $("qparts").innerHTML = queryParts(q.parts, !q.exact);
-    $("qcard-note").textContent = q.exact ? "так питання піде в ADS" : "попередній перегляд: SIG ще не проаналізував зону";
+    $("qcard-note").textContent = "попередній перегляд: відповідь SIG і рядки O# додаються при запиті";
   }, 250);
 }
 $("question").addEventListener("input", () => { sentShown = false; previewQuery(); });
@@ -510,11 +517,11 @@ function traceHtml(stage, a) {
       + (t.result ? kv(t.result) : "<div class='hint'>виконується…</div>")
       + (a.sig_evidence ? fold(`Свідчення графа, яке читала модель SIG (${a.sig_evidence.length} симв.)`, `<pre>${esc(a.sig_evidence)}</pre>`) : "");
   }
-  if (stage === "files") return kv(chars(t)) + fold("aoi.md", `<pre>${esc(a.aoi_md)}</pre>`) + fold("insights.md", `<pre>${esc(a.insights_md)}</pre>`);
   if (stage === "ads") {
     const sizes = Object.fromEntries(Object.entries(t.files).map(([k, v]) => [k, `${(v / 1024).toFixed(1)} КБ`]));
+    const blocked = t.result && t.result.domain_knowledge_blocked ? "<div class='status err'>ADS відкинув aoi.md (guardrail): завдання йшло без словника колонок.</div>" : "";
     return `<code>${esc(t.call)}</code>${kv(sizes)}<div class="hint">Сам запит показано вище, у картці «Запит до ADS».</div>`
-      + (t.result ? kv(t.result) : "<div class='hint'>ADS виконує задачу…</div>");
+      + (t.result ? kv(t.result) + blocked : "<div class='hint'>ADS виконує задачу…</div>");
   }
   if (stage === "joint") {
     const usage = t.usage ? `${t.usage.prompt_tokens} на вході, ${t.usage.completion_tokens} на виході` : "—";
@@ -541,13 +548,13 @@ document.addEventListener("toggle", async (e) => {  // a lazy fold (the full joi
   d.querySelector("pre").textContent = await (await fetch(d.dataset.lazy)).text();
 }, true);
 
-function renderInsights(items) {
-  $("insights").dataset.key = "1";
+function renderInsights(items, source) {  // the findings as the O# lines the ADS task carries: the zone's first, the most credible first
+  if (!$("insights").dataset.key) $("insights").dataset.key = "1";
   const inside = items.filter((it) => it.inside).length;
-  const head = `<p class="hint">${inside ? `У зоні: ${inside}` : "У зоні знахідок SIG немає"}; поза зоною: ${items.length - inside}. Клік по знахідці показує її на мапі.</p>`;
+  const head = `<p class="hint">${source}. ${inside ? `У зоні: ${inside}` : "У зоні знахідок SIG немає"}; поза зоною: ${items.length - inside}. Клік по знахідці показує її на мапі.</p>`;
   $("insights").innerHTML = head + items.map((it, i) => `
     <div class="insight${it.inside ? "" : " out"}" data-i="${i}">
-      <b><span class="tag ${it.inside ? "in" : "out"}">${it.inside ? `у зоні ${Math.round(it.place * 100)}%` : "поза зоною"}</span>[${it.key}] ${it.headline}</b>
+      <b><span class="tag ${it.inside ? "in" : "out"}">${it.inside ? `у зоні ${Math.round(it.place * 100)}%` : "поза зоною"}</span>O${i + 1} [${it.key}] ${it.headline}</b>
       <small>${it.filename} · ${it.role}</small>
       <small>${it.scope}${it.shift.length ? " · " + it.shift.join("; ") : ""}</small>
       <small>${it.credibility != null ? "довіра " + it.credibility + " · " : ""}${it.validation}</small>
@@ -565,8 +572,10 @@ function renderInsights(items) {
 
 (async () => {
   previewQuery();
-  const o = await (await fetch("/datasets/options")).json();  // the base file's types: the countable ones selectable
+  const o = await (await fetch("/datasets/options")).json();  // the base file's types: the countable ones selectable; the layers' words
   $("count-values").innerHTML = o.values.map((v) => `<option value="${esc(v.value)}"${v.status === "ok" ? "" : " disabled"}${o.default.includes(v.value) ? " selected" : ""}>${esc(v.value)} (${v.rows}${v.status === "ok" ? "" : ", замало"})</option>`).join("");
+  Object.assign(LABELS, o.labels);
+  $("layers-hint").textContent = `${LABELS.base} (база) + ${LABELS.context} (контекст)`;
   const h = await (await fetch("/health")).json();
   for (const k of ["sig", "ads", "llm"]) { const p = $("pill-" + k); p.className = "pill " + (h[k] === "ok" ? "ok" : "down"); p.title = h[k]; }
   const s = await (await fetch("/state")).json();
