@@ -215,7 +215,7 @@ const allLayers = () => [...new Set(Object.values(S.datasets).flatMap((d) => d.c
 const layersOf = (datasetId) => S.datasets[datasetId]?.cross_layers || [];
 const layerVar = (name) => `--layer-${(allLayers().indexOf(name) % 4) + 1}`;  // a palette of its own, the same place in both themes
 const layerColor = (name) => cssVar(layerVar(name));  // read when painted: a theme switch follows
-const layerChip = (datasetId) => layersOf(datasetId).map((l) => `<span class="tag layer" style="--lc:var(${layerVar(l)})" title="${esc(TERMS.layer_link[1])}">${esc(word("context_layer"))}: ${esc(l)}</span>`).join("");
+const layerChip = (datasetId) => layersOf(datasetId).map((l) => `<span class="tag layer" style="--lc:var(${layerVar(l)})" title="${esc(TERMS.layer_link[1])}">${esc(word("context_layer"))}: ${esc(layerName(l))}</span>`).join("");
 const human = (s) => String(s || "").replace(/_/g, " ");
 const PLURAL = new Intl.PluralRules("uk");
 const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+
@@ -237,13 +237,7 @@ async function api(path, opts = {}) {
   return body;
 }
 
-// theme + health
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  try { localStorage.setItem("sig-theme", t); } catch (e) { /* private mode */ }
-  if (S.cy) S.cy.style(graphStyle());
-  renderSphere();  // same palette in 3D
-}
+// health
 
 const CPU_HINT = "Модель опису інсайтів працює на CPU: завантаження повільніші. На Mac запустіть сервіс графа на хості, де він бере GPU (MPS; README, Mac: GPU); з GPU NVIDIA запускайте стек із compose.gpu.yaml.";
 
@@ -319,7 +313,6 @@ function init() {
     const keys = LEGEND_TERMS[el.dataset.key];
     if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
-  $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop
   const drop = $("drop");
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language

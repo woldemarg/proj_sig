@@ -139,7 +139,7 @@ function suggestions() {
     if (SUGGESTIONS[o.dataset.file]) out.push(...SUGGESTIONS[o.dataset.file]);
     else if (o.value === GeoMap.current()) out.push(...GeoMap.suggestions());
   }
-  return out;
+  return [...new Set(out)];  // the levels of one file share its questions: each once
 }
 
 // an insight picked on the map (GeoMap.pick): its card in the chat, with its place to ask about and its graph links to walk on

@@ -1,20 +1,8 @@
-/* SIG — design system: one token set for surfaces, text, accent and data colours (light + dark). */
+/* SIG — design system: one dark token set for surfaces, text, accent and data colours. */
 :root {
+  color-scheme: dark;  /* one theme: the console is dark */
   --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
-  --bg: #f4f4f5; --surface: #ffffff; --surface-2: #f8f8f9; --sunken: #efeff1;
-  --ink: #18181b; --ink-2: #3f3f46; --muted: #71717a; --line: #e4e4e7; --line-2: #d4d4d8;
-  --accent: #2f5fc4; --accent-soft: #eef3fb; --accent-ink: #ffffff;
-  --anchor: #7c4dff; --up: #2f7de1; --down: #e8742a; --cov: #1f9d6b; --path: #f5b301; --region: #0e8f8f; --time: #a0702a;
-  --layer-1: #0e8f8f; --layer-2: #b8327a; --layer-3: #6b7f12; --layer-4: #8a5a2b;  /* context layers: no other meaning */
-  --ok: #1a8f60; --ok-soft: #e3f6ee; --warn: #b87400; --warn-soft: #fff4dc; --bad: #d64545; --bad-soft: #fdecec;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .05);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, .14);
-  --r: 6px; --r-sm: 4px; --r-xs: 3px;
-  --graph-bg: #fafafa;
-  --graph-ink: #3a4050; --graph-edge: #c8cdd8;
-}
-:root[data-theme="dark"] {
   --bg: #111113; --surface: #18181b; --surface-2: #1f1f23; --sunken: #141416;
   --ink: #ececef; --ink-2: #b4b4bb; --muted: #85858f; --line: #27272a; --line-2: #3a3a40;
   --accent: #7aa2f7; --accent-soft: #1a2233; --accent-ink: #111113;
@@ -24,6 +12,8 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, .4);
   --graph-bg: #141416;
   --graph-ink: #c4c9d8; --graph-edge: #394154;
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, .5);
+  --r: 6px; --r-sm: 4px; --r-xs: 3px;
 }
 
 * { box-sizing: border-box; }
@@ -107,7 +97,8 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .ds.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .ds.off .ds-name, .ds.off .ds-count, .ds.off .ds-glyph { opacity: .45; }
 .ds-kids { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--line); }
-.ds-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 26px; }  /* chips wrap below a name, never squeeze it */
+.ds-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.ds-label { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }  /* chips wrap below a name, never squeeze it; the eye and the bin stay right */
 .ds-name { flex: 1 1 7em; min-width: 0; font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }  /* two lines, then an ellipsis */
 .ds.layer .ds-name { font-weight: 500; }
 .ds-pick { background: none; border: 0; padding: 0; font-family: inherit; font-size: inherit; color: inherit; text-align: left; cursor: pointer; }  /* a READY row's name: its keyboard handle */
@@ -171,7 +162,6 @@ table.ins .tag, table.ins th { white-space: normal; }  /* long conditions wrap: 
 .pb-x { height: 100%; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; } .pb-x:hover { color: var(--ink); }
 .pb-pop { position: absolute; top: calc(100% + 6px); left: -1px; z-index: 30; display: grid; grid-template-columns: auto auto; gap: 10px; padding: 12px; width: max-content; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); }
 .pb-pop label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); } .pb-pop .field { width: 150px; height: 30px; }
-:root[data-theme="dark"] .pb-pop .field { color-scheme: dark; }
 .pb-presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .pb-track { position: relative; flex: 1; min-width: 160px; height: 36px; }
 .pb-track::before, .pb-fill { content: ""; position: absolute; top: 9px; height: 4px; border-radius: 99px; }

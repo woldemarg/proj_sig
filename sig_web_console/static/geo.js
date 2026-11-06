@@ -226,13 +226,13 @@ function paintMode() {
   paintZone();  // cells or hexes, as the mode draws them
   if (all) {
     const files = [...new Map([G.ds, ...G.others].map((ds) => G.datasets.find((d) => d.dataset_id === ds) || { dataset_id: ds })
-      .map((d) => [uploadOf(d), d.filename || d.dataset_id])).values()];  // one per upload: two files of one name are two
+      .map((d) => [uploadOf(d), titleOfDataset(d.dataset_id, d.filename)])).values()];  // one per upload: two files of one name are two
     $("map-title").textContent = "Усі датасети";
-    $("map-meta").textContent = files.map(titleOf).join(", ");
+    $("map-meta").textContent = files.join(", ");
     return;
   }
   const info = G.datasets.find((d) => d.dataset_id === G.ds) || {}, sac = info.sac || {};
-  $("map-title").textContent = info.filename ? titleOf(info.filename) : G.ds;
+  $("map-title").textContent = titleOfDataset(G.ds, info.filename);
   $("map-meta").innerHTML = `<span data-dev>H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · </span>${plural(info.points, "подія", "події", "подій")}` +
     (sac.validated ? `<span data-dev><br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}</span>` : "");
 }
@@ -608,7 +608,7 @@ function cellPopup(f, lngLat) {
 function regionPopup(id, lngLat) {
   /* «Усі датасети»: a hex's count and what each dataset brings to it; the zone and the question take its H3 */
   const f = ((G.overlay || empty()).features).find((r) => r.properties.id === id); if (!f) return;
-  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(titleOf(fileOf(ds)))}</th><td>${num(n, 0)}</td></tr>`).join("");
+  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(titleOfDataset(ds, fileOf(ds)))}</th><td>${num(n, 0)}</td></tr>`).join("");
   openPopup(`<div class="pp-head"><span data-dev>${esc(id)}</span><span data-user>${esc(cap(word("region")))}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat, id.split(":")[2]);
 }

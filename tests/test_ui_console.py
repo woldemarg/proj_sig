@@ -344,11 +344,7 @@ def test_a_runs_insights_are_highlighted_in_every_block_and_the_base_layers_are_
         page.evaluate(f"reveal('{sorted(own)[0]}')")
         stayed = page.evaluate("S.view")
         page.click("#dev-btn")
-        ring = f"S.cy.getElementById('{sorted(own)[0]}').style('border-color')"
-        before = page.evaluate(ring)
-        page.evaluate("setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark')")  # the colours follow the theme
-        follows = page.evaluate(ring) != before
     assert own and {pid for pid, chip in table.items() if chip} == own and all("schools" in table[pid] for pid in own)
     assert {pid for pid, has in ringed.items() if has} == own
-    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and follows and stayed == "table"
+    assert legend[0] is False and "schools" in legend[1] and "schools" in chips[0] and chips[1] == "" and stayed == "table"
     assert not errors, errors

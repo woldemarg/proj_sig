@@ -354,7 +354,7 @@ async function loadGraph() {
   }
   const shown = [...new Set(S.nodes.flatMap((d) => layersOf(d.dataset)))].sort();  // the layers of the insights in view
   $("lg-layers").hidden = !shown.length;
-  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(l)}</span></div>`).join("");
+  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(layerName(l))}</span></div>`).join("");
   countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);

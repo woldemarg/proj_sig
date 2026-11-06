@@ -2,18 +2,28 @@
 "use strict";
 
 const stem = (file) => String(file || "").replace(/\.[^.]+$/, "");
-function titleOf(file) {
-  /* a shipped set's title, else the file's name without its extension */
-  const d = Object.values(S.samples || {}).find((x) => stem(x.file) === stem(file));
-  return d ? d.title.replace(/\s*\(контекстний шар\)$/, "") : stem(file);
-}
+const shippedTitle = (d) => d.title.replace(/\s*\(контекстний шар\)$/, "");
+// ponytail: a filtered reading's id mixes in its filter, so it is matched by its file's name: one's own file named as a shipped one reads that title
+const shippedOf = (b) =>  // the shipped set an upload holds, by its bytes (uploads.upload_id: up- and the SHA-256's first twelve hex digits)
+  Object.values(S.samples || {}).find((x) => `up-${String(x.sha256 || "").slice(0, 12)}` === b.upload_id || (b.where && stem(x.file) === stem(b.filename)));
+const titleOf = (b) => { const d = shippedOf(b); return d ? shippedTitle(d) : stem(b.filename); };  // a shipped set's title, else the file's name
+const layerTitle = (upload, name) => {  // a run's layer by its upload; its stored name once the upload is gone
+  const b = upload && (S.batches || []).find((x) => x.upload_id === upload && !x.cross);
+  return b ? titleOf(b) : stem(name);
+};
+const runLayers = (b) => (b.context || []).map((c, i) => layerTitle((b.cross || [])[i], c.name)).join(", ");
+const titleOfDataset = (ds, file) => { const b = (S.batches || []).find((x) => x.dataset_id === ds); return b ? titleOf(b) : stem(file || ds); };
+const layerName = (name) => {  // a context layer named in a dataset's cross_layers, by its upload's title
+  const b = (S.batches || []).find((x) => !x.cross && stem(x.filename) === name && (x.status === "LAYER" || x.layer_of));
+  return b ? titleOf(b) : name;
+};
 const geoLevel = (b) => /^\d+$/.test(b.level || "");
 function levelOf(b) {  // the level a dataset reads its upload at: the levels of one upload are datasets of one file (docs/02_discovery.md §2.9)
   const res = geoLevel(b) ? b.level : ((b.profile || {}).geo || {}).resolution;
   return b.status === "LAYER" ? "шар" : res != null ? `H3 r${res}` : b.locator ? "таблиця" : "";
 }
 function datasetName(b) {  // its title, its filter, the layers beside it
-  return titleOf(b.filename) + (b.where ? ` · ${b.where}` : "") + (b.context ? ` + ${b.context.map((c) => titleOf(c.name)).join(", ")}` : "");
+  return titleOf(b) + (b.where ? ` · ${b.where}` : "") + (b.context ? ` + ${runLayers(b)}` : "");
 }
 
 const PRUNED_SHOWN = ["context_confounded", "context_family", "outside_cross_type"];  // the layer's verdict; the other reasons stay in the total
@@ -89,9 +99,9 @@ function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
   const hide = layer ? `<button type="button" class="ds-hide ds-icon" data-hide="${esc(layer)}" data-on="${off ? "" : "1"}"${busy ? " disabled" : ""} ` +
     `aria-label="${off ? "Показати шар" : "Сховати шар"}" title="${busy ? "Іде обробка: зачекайте" : off ? "Показати шар" : "Сховати шар (з усіх датасетів, де він є)"}">${off ? ICON.eyeOff : ICON.eye}</button>` : "";
   const del = running ? "" : `<button type="button" class="ds-del ds-icon" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(b.cross ? label : datasetName(b))}"${b.cross ? ` data-layer="${esc(layer)}"` : ""} aria-label="Видалити" ` +
-    `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : layer ? "Прибрати шар із цього датасету" : "Прибрати з бази знань"}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
+    `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : b.cross ? "Прибрати шар із цього датасету" : "Прибрати з бази знань"}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
   return `<div class="ds${ready ? " clickable" : ""}${active ? " active" : ""}${layer ? " layer" : ""}${off ? " off" : ""}" data-ds="${esc(ready ? b.dataset_id : "")}">` +
-    `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}${hide}${del}</div>` +
+    `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}<span class="ds-label">${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}</span>${hide}${del}</div>` +
     `${rowBody(b, neutral)}</div>`;
 }
 
@@ -107,20 +117,27 @@ function uploadGroups(cards) {
   return [...groups.values()].map((g) => g.sort((a, b) => levelRank(a) - levelRank(b)));
 }
 
+const LINK_MIN_LEVEL = 8;  // uploads.LINK_MIN_LEVEL: a layer is linked on a map this fine or finer
+
 function uploadGroup(cards, busy) {
+  /* an upload as a tree: its levels under its name (one level is the upload's row), each level's layer runs under it,
+     *+ Додати шар* under the level that can take one, and why none can when its finest map is coarser */
   const levels = cards.filter((b) => !b.cross), runs = cards.filter((b) => b.cross);
   const ready = levels.filter((b) => b.status === "READY").length, neutral = (b) => ready > 0 && emptyLevel(b);
-  const lead = levels[0] || runs[0];
-  let head;
-  if (levels.length === 1) head = dsRow(levels[0], datasetName(levels[0]), busy);
-  else {
-    head = `<div class="ds-group-head"><span class="ds-name">${esc(titleOf(lead.filename) + (lead.where ? ` · ${lead.where}` : ""))}</span></div>` +
-      levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) })).join("");
-  }
-  const kids = runs.map((r) => dsRow(r, r.context.map((c) => titleOf(c.name)).join(", "), busy, { neutral: verdict(r), layer: r.cross[0] })).join("");
-  const host = levels.find((b) => b.linkable);
-  const add = host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "";  // uploads.cross_state
-  return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${head}${kids || add ? `<div class="ds-kids">${kids}${add}</div>` : ""}</div>`;
+  const lead = levels[0] || runs[0], host = levels.find((b) => b.linkable), finest = levels.find(geoLevel);  // finest first
+  const coarse = !host && finest && finest.status === "READY" && Number(finest.level) < LINK_MIN_LEVEL;
+  const layer = (r) => dsRow(r, runLayers(r), busy, { neutral: verdict(r), layer: r.cross[0] });
+  const under = (b) => {
+    const kids = runs.filter((r) => r.level === b.level).map(layer).join("") +
+      (b === host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "") +  // uploads.cross_state
+      (coarse && b === finest ? `<div class="ds-note ds-why">Шар додається до мапи рівня ${LINK_MIN_LEVEL} і детальнішої; найдетальніший рівень цього файлу — ${b.level}.</div>` : "");
+    return kids ? `<div class="ds-kids">${kids}</div>` : "";
+  };
+  const astray = runs.filter((r) => !levels.some((b) => b.level === r.level)).map(layer).join("");  // a run whose level is gone
+  const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy) + under(levels[0])
+    : `<div class="ds-group-head"><span class="ds-name">${esc(titleOf(lead) + (lead.where ? ` · ${lead.where}` : ""))}</span></div>` +
+      (levels.length ? `<div class="ds-kids">${levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) }) + under(b)).join("")}</div>` : "");
+  return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${body}${astray ? `<div class="ds-kids">${astray}</div>` : ""}</div>`;
 }
 
 function renderTree(cards, busy) {
@@ -128,7 +145,7 @@ function renderTree(cards, busy) {
   const loose = cards.filter((b) => b.status === "LAYER" && !b.layer_of);
   const groups = uploadGroups(cards.filter((b) => b.status !== "LAYER")).map((g) => uploadGroup(g, busy)).join("");
   return groups + (loose.length ? `<div class="ds-group ds-loose"><div class="ds-group-head"><span class="ds-name">Шари без датасету</span></div>` +
-    loose.map((b) => dsRow(b, titleOf(b.filename), busy, { layer: b.hidden ? b.upload_id : null })).join("") + `</div>` : "");
+    loose.map((b) => dsRow(b, titleOf(b), busy, { layer: b.hidden ? b.upload_id : null })).join("") + `</div>` : "");
 }
 
 function datasetTrust(t) {
@@ -146,19 +163,22 @@ async function deleteDataset(id, name, layer = "") {
   /* a dataset out of the knowledge base with its layer runs, then each layer-only upload no run left reads; a layer's
      row (``layer``) removes that one run */
   const key = (x) => x.dataset_id || x.batch_id, target = S.batches.find((x) => key(x) === id) || {};
-  const runs = layer || target.cross ? [] : [...new Set(S.batches.filter((x) => x.cross && x.upload_id === target.upload_id && x.level === target.level && x.status !== "SKIPPED").map(key))];
+  const twin = S.batches.some((x) => !x.cross && x.status === "READY" && x.upload_id === target.upload_id && x.level === target.level && key(x) !== id);
+  const runs = layer || target.cross || twin ? [] : [...new Set(S.batches.filter((x) => x.cross && x.upload_id === target.upload_id && x.level === target.level && x.status !== "SKIPPED").map(key))];  // a run names no reading: another one of its level keeps them
   const gone = new Set([id, ...runs]);
   const read = (u) => S.batches.some((x) => (x.cross || []).includes(u) && !gone.has(key(x)) && x.status !== "SKIPPED");
   const layers = [...new Set(S.batches.filter((x) => gone.has(key(x))).flatMap((x) => x.cross || []))]
     .map((u) => S.batches.find((x) => x.upload_id === u && x.status === "LAYER")).filter((x) => x && !read(x.upload_id));
-  const ask = layer ? `Прибрати шар «${name}»?\n\nЙого знахідки зникнуть; сам шар — теж, якщо його не використовує інший датасет.`
+  const files = layers.length ? ` Файли шарів, які більше ніхто не використовує (${layers.map((x) => titleOf(x)).join(", ")}), — теж.` : "";
+  const ask = layer ? `Прибрати шар «${name}»?\n\nЙого знахідки зникнуть.${files}`
     : `Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.` +
-      (runs.length ? ` Разом з ним — ${plural(runs.length, "його шар", "його шари", "його шарів")}.` : "");
+      (runs.length ? ` Разом з ним — ${plural(runs.length, "його шар", "його шари", "його шарів")}.` : "") + files;
   if (!confirm(ask)) return;
+  let done = 0;  // one request each, in order: a failure stops there, and the rail shows what is left to delete again
   try {
-    for (const d of [...runs, id, ...layers.map((x) => x.batch_id)]) await api(`/api/datasets/${encodeURIComponent(d)}`, { method: "DELETE" });
+    for (const d of [...runs, id, ...layers.map((x) => x.batch_id)]) { await api(`/api/datasets/${encodeURIComponent(d)}`, { method: "DELETE" }); done++; }
     setUploadMsg("");
-  } catch (err) { setUploadMsg(err.message, true); }
+  } catch (err) { setUploadMsg(`${done ? "Видалено не все: " : ""}${err.message}${done ? " — решту видно в списку, видаліть ще раз." : ""}`, true); }
   if (gone.has($("dataset-filter").value)) $("dataset-filter").value = "";
   S.lastReady = null;  // force the views to reload
   refreshBatches();
@@ -259,12 +279,15 @@ function setRole(r, layerOnly = false) {
 
 // the types a dataset holds for *більше подій* (docs/08_interface.md §8.2): column -> values, picked as toggles
 function profileTypes(b) {
-  /* a mined geo level's shares, share_<column>_<value>: the column read off the share's glossary words */
+  /* a mined geo level's shares, share_<column>_<value>: the split whose words the share's glossary states exactly
+     (spatial: "share of the cell's events whose <column, _ as space> is <value>"), so a column with a space or an "is" holds */
   const p = b.profile || {}, words = (p.geo || {}).glossary || {}, out = {};
-  for (const key of p.numerics || []) {
-    const m = key.startsWith("share_") && /whose (.+?) is /.exec(words[key] || "");
-    const head = m && `share_${m[1].replace(/ /g, "_")}_`;
-    if (head && key.startsWith(head)) (out[head.slice(6, -1)] ||= []).push(key.slice(head.length));
+  for (const key of (p.numerics || []).filter((k) => k.startsWith("share_"))) {
+    const rest = key.slice(6), text = words[key] || "";
+    for (let i = rest.indexOf("_"); i > 0; i = rest.indexOf("_", i + 1)) {
+      const col = rest.slice(0, i), value = rest.slice(i + 1), said = `share of the cell's events whose ${human(col)} is ${value}`;
+      if (text === said || text.startsWith(`${said} `)) { (out[col] ||= []).push(value); break; }
+    }
   }
   return out;
 }
@@ -298,9 +321,9 @@ function openLink(batchId) {
   $("link-title").textContent = `Додати шар · ${datasetName(b)}`;
   $("link-form").reset(); $("link-msg").textContent = "";
   $("link-opts").innerHTML =
-    [...stored.values()].map((x) => opt("layer", x.upload_id, titleOf(x.filename) + (x.where ? ` · ${x.where}` : ""), x.status === "LAYER" ? plural(x.points, "точка", "точки", "точок") : "датасет", linked.has(x.upload_id))).join("") +
+    [...stored.values()].map((x) => opt("layer", x.upload_id, titleOf(x) + (x.where ? ` · ${x.where}` : ""), x.status === "LAYER" ? plural(x.points, "точка", "точки", "точок") : "датасет", linked.has(x.upload_id))).join("") +
     Object.values(S.samples || {}).filter((d) => (d.options || {}).geo && !kept.has(stem(d.file)))
-      .map((d) => opt("sample", d.key, titleOf(d.file), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
+      .map((d) => opt("sample", d.key, shippedTitle(d), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
   renderTypes($("link-types"), $("link-counts"), profileTypes(b));
   $("link-dialog").showModal();
@@ -325,7 +348,9 @@ async function runLink(src) {
     S.linkRun = run.batch_id;
     refreshBatches();
   } catch (err) {
+    const counts = $("link-counts").value, ring = $("link-ring").value;
     await refreshBatches(); openLink(batchId);  // a layer kept before the failure is offered as stored
+    $("link-counts").value = counts; $("link-ring").value = ring; $("link-counts").dispatchEvent(new Event("input"));  // as picked, not reset
     $("link-msg").className = "msg err"; $("link-msg").textContent = err.message;
   }
 }

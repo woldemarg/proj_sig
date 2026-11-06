@@ -67,7 +67,9 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
         page.evaluate("refreshBatches()")
         page.wait_for_function(f"S.nodes.some((n) => n.id === '{found}')", timeout=30000)
         page.click("#view-switch button[data-view='table']")
-        assert "контекстний шар: chicago_bars" in page.inner_text(f"#ins-table tr[data-id='{found}']")
+        assert "контекстний шар: Бари й заклади з алкоголем у Чикаго" in page.inner_text(
+            f"#ins-table tr[data-id='{found}']"
+        )  # the layer by its title
         assert page.evaluate(f"S.cy.getElementById('{found}').style('border-width')") == "3px"
         page.evaluate(f"inspect('{found}')")
         page.wait_for_selector("#inspector .link-card", timeout=10000)

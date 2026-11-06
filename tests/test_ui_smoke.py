@@ -460,8 +460,6 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.evaluate("S.chat.length") == turns + 1 and page.locator("#map-window .mw-i.on").count() == 0
         page.keyboard.press("Escape")
         page.click("#view-switch button[data-view='graph']")
-        page.click("#theme-btn")
-        assert page.evaluate("document.documentElement.dataset.theme") in {"dark", "light"}
         page.screenshot(path=str(tmp_path / "ui.png"))
         # deleting the datasets from their cards empties the views, through the backend
         for left in (1, 0):
@@ -596,12 +594,14 @@ def test_an_item_reached_by_location_alone_says_so(cfg):
 
 
 def test_the_console_knows_the_empty_level_codes():
-    """The rail's neutral card reads ``uploads.EMPTY_LEVEL``, copied into ``datasets.js``: the two stay one set."""
-    from insight_graph_service.core.uploads import EMPTY_LEVEL
+    """The rail's neutral row reads ``uploads.EMPTY_LEVEL`` and its why-no-layer note ``uploads.LINK_MIN_LEVEL``, both
+    copied into ``datasets.js``: the copies stay the server's."""
+    from insight_graph_service.core.uploads import EMPTY_LEVEL, LINK_MIN_LEVEL
 
     js = (PROJECT_ROOT / "sig_web_console" / "static" / "datasets.js").read_text(encoding="utf-8")
     copied = re.search(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js).group(1)
     assert set(re.findall(r'"(\w+)"', copied)) == EMPTY_LEVEL
+    assert int(re.search(r"const LINK_MIN_LEVEL = (\d+);", js).group(1)) == LINK_MIN_LEVEL
 
 
 # /api/batches with an upload's two levels first, r7 READY and r5 running: its stage and stage_times are what a test sets on window.__run
