@@ -339,7 +339,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Backspace") { e.preventDefault(); verts.pop(); drawDraft(); }
 });
 
-$("btn-draw").onclick = () => { if (drawing) return; clearZone(); setDrawing(true); };
+$("btn-draw").onclick = () => { if (drawing || $("btn-ask").dataset.running === "1") return; clearZone(); setDrawing(true); };  // a running ask keeps its zone
 $("btn-finish").onclick = () => finishPolygon();
 $("btn-clear").onclick = () => { setDrawing(false); clearZone(); };
 
@@ -407,6 +407,7 @@ $("btn-ask").onclick = async () => {
   const r = await fetch("/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question }) });
   if (!r.ok) { const e = await r.json(); $("st-ask").textContent = e.detail || "помилка"; $("st-ask").className = "status err"; return; }
   $("btn-ask").disabled = true; $("btn-ask").dataset.running = "1";
+  $("btn-draw").disabled = $("btn-clear").disabled = true;  // the server answers 409 to /zone meanwhile
   $("result").hidden = true;
   resetStages();
   startPolling();
@@ -470,6 +471,7 @@ function renderAsk(a) {
   }
   if (a.stage === "done" || a.stage === "error") {
     $("btn-ask").disabled = false; $("btn-ask").dataset.running = "";
+    $("btn-draw").disabled = $("btn-clear").disabled = false;
     if (a.ads_report) {
       $("result").hidden = false;
       $("joint").innerHTML = a.joint_report ? marked.parse(a.joint_report) : `<p class="hint">${a.joint_error || "спільний звіт відсутній"}</p>`;
