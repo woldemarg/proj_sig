@@ -170,7 +170,21 @@ class Evidence:
             trust = f" source={json.dumps(d['source'], ensure_ascii=False)}" if d.get("source") else ""  # quoted: free text
             if trust or d.get("reliability", "F") != "F":  # an undeclared dataset adds nothing
                 trust += f" reliability={d['reliability']} ({RELIABILITY.get(d['reliability'], 'unrecognised code')})"
-            lines.append(f"- {d['dataset_id']} file={d['filename']} batch={d['batch_id']} rows={d.get('rows')}{trust}")
+            layers = f" layers={','.join(d['cross_layers'])}" if d.get("cross_layers") else ""  # a cross-type run: its context layers
+            read = (" baseline=zone (every metric minus its zone's median)" if d.get("baseline") == "zone" else "") + (
+                " weights=events" if d.get("weight_by_events") else ""
+            )
+            read += "".join(  # an event layer's time against the run's base: a link without a coincidence in time says so
+                f" layer_time={e['name']}:"
+                + (
+                    "counted within the target's span"
+                    if e.get("window")
+                    else f"read as static, covers {round(100 * e['overlap'])}% of the target's span"
+                )
+                for e in d.get("layer_time", ())
+                if e.get("window") or e.get("overlap") is not None
+            )
+            lines.append(f"- {d['dataset_id']} file={d['filename']}{layers}{read} batch={d['batch_id']} rows={d.get('rows')}{trust}")
         return lines
 
     def _plain_lines(self, plain: list[tuple[str, str]]) -> list[str]:
@@ -545,7 +559,7 @@ def _path_text(path: list[PathStep], role: str) -> str:
     return " ".join(parts)
 
 
-def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool) -> list[dict[str, Any]]:
+def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConfig, trusted: bool, hidden: frozenset[str]) -> list[dict[str, Any]]:
     """The scale chains of the walk's geo items: each item gets its scale label, the vertical patterns join as items
     (``vertical_up`` | ``vertical_down``), and a level of the same upload that corresponds all the way is folded into
     the item it restates, so two levels of one mechanism never stand as two facts. The host is the item the walk ranked
@@ -553,7 +567,7 @@ def _add_vertical(items: list[EvidenceItem], graph: DualGraph, config: QueryConf
     by_id = {it.pattern_id: it for it in items}
     hosts: set[str] = set()
     chains = []
-    for chain in scale_chain(graph, [it.pattern_id for it in items]):
+    for chain in scale_chain(graph, [it.pattern_id for it in items], hidden):
         host = by_id[chain.pattern_id]
         if host.folded_into:
             continue
@@ -705,6 +719,19 @@ def _quoted(text: str) -> str:
     return json.dumps(text if len(text) <= CONTEXT_VALUE_MAX else text[: CONTEXT_VALUE_MAX - 1] + "…", ensure_ascii=False)
 
 
+DECLARED = (
+    "source",
+    "reliability",
+    "integrity",
+    "glossary",
+    "user_glossary",
+    "cross_layers",
+    "baseline",
+    "weight_by_events",
+    "layer_time",
+)  # a dataset's line
+
+
 def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any]]:
     """The items' datasets (``DATASETS``): file, rows, batch, the declared trust, the glossaries, the metadata document
     and the band count of each quantile-band column the items name."""
@@ -715,7 +742,7 @@ def _datasets(items: list[EvidenceItem], graph: DualGraph) -> list[dict[str, Any
         props = dnode["props"]
         datasets.append(
             {"dataset_id": ds, "filename": props.get("filename"), "rows": props.get("rows"), "batch_id": batch}
-            | {k: props[k] for k in ("source", "reliability", "integrity", "glossary", "user_glossary") if props.get(k)}
+            | {k: props[k] for k in DECLARED if props.get(k)}
         )
         mine = [it for it in items if it.provenance["dataset_id"] == ds]
         if bands := band_counts(graph, ds, {c.split("=", 1)[0] for it in mine for c in it.scope}):
@@ -809,6 +836,7 @@ def build_evidence(
     config: QueryConfig,
     place_scores: dict[str, float] | None = None,
     as_of: tuple[datetime, str] | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> Evidence:
     """The walk's patterns as citable evidence: the items (with the vertical zoom's and the trust lines), the anchors
     visited, the datasets and their baselines, the notes, the zones or the asked area; ``as_of``: the reference date and
@@ -819,7 +847,7 @@ def build_evidence(
         _item(graph, config, trusted, f"P{idx}", r.node_id, r.route, r.path, _path_text(r.path, r.route), r.transversal_only, r.located)
         for idx, r in enumerate(chosen, start=1)
     ]
-    chains = _add_vertical(items, graph, config, trusted)
+    chains = _add_vertical(items, graph, config, trusted, hidden)
     if trusted:
         _add_trust(items, graph)
     datasets = _datasets(items, graph)

@@ -3,8 +3,10 @@
 // then one lattice hop (SPECIALIZES either way / CONTRASTS / CO_LOCATED). Best path per target. Replace the seed id.
 // Pattern nodes are the Insight record: weight is `weight`. Nested fields (conditions, shifts,
 // canonical) are stored as <field>_json.
-// Walks every RELATED_TO and CO_OCCURS link and every ACTIVATES except weak (coverage-only) ones; skips integrity mismatches.
+// Walks every RELATED_TO and CO_OCCURS link and every ACTIVATES except weak (coverage-only) ones; skips integrity mismatches
+// and the datasets in $hidden (model A, docs/07 §7.4): the runs of hidden layers, the dataset ids GET /api/batches marks hidden_by.
 :param seed => 'P-bc4657a04746';
+:param hidden => [];
 
 MATCH (seed:Pattern {id: $seed})-[up:ACTIVATES]->(a1:Attractor)
 WHERE NOT coalesce(up.weak, false)
@@ -13,7 +15,9 @@ WITH seed, up, a1, [{a: a1, w: 1.0}] + [x IN collect({a: a2, w: rel.weight}) WHE
 UNWIND hops AS hop
 MATCH (target:Pattern)-[down:ACTIVATES]->(anchor:Attractor)
 WHERE anchor = hop.a AND target <> seed AND NOT coalesce(down.weak, false) AND coalesce(target.integrity, '') <> 'mismatch'
+  AND NOT coalesce(target.dataset_id, '') IN $hidden
 OPTIONAL MATCH (target)-[lat:SPECIALIZES|CONTRASTS|CO_LOCATED]-(nbr:Pattern)
+WHERE NOT coalesce(nbr.dataset_id, '') IN $hidden
 WITH seed, a1, anchor, target, up.weight * hop.w * down.weight * target.weight AS score,
      collect(DISTINCT type(lat) + ' ' + nbr.expression) AS lattice
 ORDER BY score DESC

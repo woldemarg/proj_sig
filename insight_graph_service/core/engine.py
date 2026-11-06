@@ -14,14 +14,12 @@ verbalises (``evidence``).
 from __future__ import annotations
 
 import functools
-import hashlib
 import logging
 import threading
 import time
 import traceback
-import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -38,14 +36,14 @@ from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
 from insight_contracts import EvidencePayload, Insight, Rejection
-from insight_contracts.text import RELIABILITY
 from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, annotate_batch, batch_metrics, check_time, pattern_records, series_times
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.neo4j_mirror import Mirror
 from insight_graph_service.core.settings import Settings
 from insight_graph_service.core.snapshot import build_snapshot, compute_metadata_integrity, metadata_digest
-from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, utc_now
+from insight_graph_service.core.workspace import TERMINAL, RepresentationMismatch, Workspace, acquire_writer_lock, new_batch_id, utc_now
+from subgroup_miner.context import DEFAULT_RING
 from subgroup_miner.discovery import DiscoveryResult, build_insights, covers_of, run_discovery
 from subgroup_miner.ingestion import (
     IngestionError,
@@ -53,10 +51,12 @@ from subgroup_miner.ingestion import (
     auto_levels,
     forget_tables,
     load_dataset,
+    parse_baseline,
     parse_grid,
-    parse_indicators,
+    parse_ring,
     parse_tz,
-    read_file,
+    parse_where,
+    read_rows,
     read_times,
     resolve_grid,
 )
@@ -67,9 +67,6 @@ from subgroup_miner.spatial_plane import GeoDataset, TableDataset, derive_spatia
 log = logging.getLogger(__name__)
 
 BLOCKS = ("scope", "target", "phenomenon")  # tripartite parts persisted beside the composite vector
-
-
-SOURCE_MAX_CHARS = 120
 
 
 @dataclass(frozen=True)
@@ -85,27 +82,6 @@ class _Mined:
     canon: list[CanonicalInsight]
     enc: dict[str, np.ndarray]
     spec: EmbeddingSpec
-
-
-def resolve_dataset_metadata(source: str | None, reliability: str | None, indicators: str | None = None) -> dict[str, Any]:
-    """The given dataset metadata, normalised: ``source`` on one line (whitespace collapsed), ``reliability`` an
-    upper-case Admiralty code A-F, ``indicators`` the parsed registry (``parse_indicators``); an empty value is None
-    (undeclared). A value not given (None) is left out."""
-    options: dict[str, Any] = {}
-    if source is not None:
-        options["source"] = " ".join(source.split()) or None
-        if len(options["source"] or "") > SOURCE_MAX_CHARS:
-            raise PipelineError("invalid_options", f"source longer than {SOURCE_MAX_CHARS} characters")
-    if reliability is not None:
-        options["reliability"] = reliability.strip().upper() or None
-        if options["reliability"] not in (None, *RELIABILITY):
-            raise PipelineError("invalid_options", f"reliability '{reliability}' is not one of {', '.join(RELIABILITY)}")
-    if indicators is not None:
-        try:
-            options["indicators"] = parse_indicators(indicators) or None
-        except IngestionError as exc:
-            raise PipelineError(exc.code, str(exc)) from exc
-    return options
 
 
 def _healthy(method):
@@ -156,8 +132,7 @@ class Engine:
 
     @contextmanager
     def _reading(self) -> Iterator[None]:
-        """A batch reads the parse its upload's levels share (``read_file(shared=True)``); it goes once no batch is left
-        to read it."""
+        """A batch reads the parse its upload's levels share (``read_file(shared=True)``); it goes once no batch is left to read it."""
         try:
             yield
         finally:
@@ -235,6 +210,12 @@ class Engine:
         return LatentOntology(self.settings.topology, self.ws.state_dir)
 
     @_healthy
+    def set_hidden(self, upload_id: str, hidden: bool) -> dict[str, Any]:
+        """A layer hidden from the answers and the views, or shown (``uploads.set_hidden``): one write, nothing re-signed."""
+        with self._writing():
+            return {"upload_id": upload_id, "hidden": hidden, "batches": uploads.set_hidden(self.ws, self.ws.list_batches(), upload_id, hidden)}
+
+    @_healthy
     def search(self, question: str, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any) -> SearchResult:
         """Retrieval only: the evidence for ``question`` over the committed graph (no LLM; docs/07_question_answering.md
         §7.1–7.4); ``as_of``: the reference date (the latest data when None); ``period``: a period asked beside the text;
@@ -253,7 +234,8 @@ class Engine:
     ) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period)
+        hidden = frozenset() if zone.pop("include_hidden", False) else uploads.hidden_datasets(self.ws.list_batches())  # model A
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden)
         found.seconds = time.perf_counter() - start
         return found
 
@@ -283,7 +265,8 @@ class Engine:
                 else None
             )
             if stored is not None:
-                geo.append(GeoDataset(b["dataset_id"], stored["cells"], stored["nbr_ptr"], stored["nbr_idx"], self.ws.load_covers(b["dataset_id"])))
+                arrays = (stored[k] for k in ("cells", "nbr_ptr", "nbr_idx"))
+                geo.append(GeoDataset(b["dataset_id"], *arrays, self.ws.load_covers(b["dataset_id"]), b.get("upload_id") if "cross" in b else None))
         tables = [t for b in batches.values() if (t := self._table_placement(b, batches)) is not None]
         temporal = {}  # every READY dataset's series and the file's digest: the temporal plane is derived, never journaled
         for b in batches.values():
@@ -349,6 +332,13 @@ class Engine:
         time: str | None = None,
         grid: str | None = None,
         tz: str | None = None,
+        context: Sequence[tuple[str, BinaryIO]] = (),
+        context_geo: str | None = None,
+        context_ring: int | str | None = None,
+        layer: bool = False,
+        where: str | None = None,
+        count_values: str | None = None,
+        baseline: str | None = None,
     ) -> list[dict[str, Any]]:
         """Store an uploaded file (at most ``MAX_UPLOAD_MB``) and register one batch per level (UPLOADED), each an ordinary
         dataset with its own id, all with the file's ``upload_id`` (``resolve_levels``); ``<locator>@auto`` reads the
@@ -356,16 +346,30 @@ class Engine:
         READY (``uploads.replaced_by``). ``time`` names a time column, binned by ``grid`` after admission (by default
         ``auto``, kept so on the record: the span's unit, ``resolve_grid``, coarsened until the admitted insights are
         measurable, ``fit_grid``; docs/02_discovery.md §2.10): a column that does not read, spans more than ``TEMPORAL_MAX_BINS`` bins or
-        gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. Processing is a separate call."""
-        resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
+        gives fewer than ``TEMPORAL_MIN_BINS`` measurable ones refuses the upload. ``context``: (filename, stream) of
+        another type's points per layer, ``context_geo`` their locator (``auto``), stored by ``uploads.save_context`` and
+        counted into every geo level's cells over the disk of ``context_ring`` rings (``parse_ring``: 1 by default, 0 the
+        cell alone), kept on the record (docs/02_discovery.md §2.9). ``layer``: the file kept only as another type's points
+        (``uploads.store_layer``), one ``LAYER`` record, nothing to process; its ``time`` and ``tz`` keep the layer's span.
+        ``where`` (``column=value``): the rows holding the value, a reading of its own over the file stored once;
+        ``count_values`` and ``baseline``: the geo levels' per-type counters and what their metrics are read against (§2.9)."""
+        if layer:
+            asked = {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where}
+            asked |= {"count_values": count_values, "baseline": baseline}  # a layer is counted, never mined
+            refused = [k for k, v in asked.items() if v]
+            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
+        uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
             raise PipelineError("invalid_options", "grid or tz without time: name the time column they bin")
         try:
             grid = parse_grid(grid) if time else None
             tz = parse_tz(tz) if time else None
+            ring = parse_ring(context_ring)
+            where, baseline = parse_where(where), parse_baseline(baseline)
         except IngestionError as exc:
             raise PipelineError(exc.code, str(exc)) from exc
+        uploads.check_geo_options(context, geo, context_ring, count_values, baseline)
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         locator, _, res = (geo or "").partition("@")
         auto = res.strip().lower() == "auto"
@@ -373,10 +377,12 @@ class Engine:
         path = self.ws.save_upload(name, stream, self.settings.max_upload_bytes)  # UploadTooLarge past the cap
         selection, refused = None, None
         try:
+            rows = read_rows(path, where) if where or time or count_values else None  # a value no row holds is refused, listed
+            counts = uploads.resolve_counts(rows, count_values, self.settings.miner, geo)
             if auto:
-                selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels)
+                selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels, where)
             if time:
-                times = read_times(read_file(path, shared=True)[0], time, tz)
+                times = read_times(rows, time, tz)
                 s = self.settings  # the file's rows, on the unit their span asks for; a geo level's located points, on theirs, at VALIDATING
                 check_time(times, time, resolve_grid(times, grid), s.temporal_min_bins, s.temporal_max_bins, tz=tz)
         except IngestionError as exc:
@@ -391,12 +397,19 @@ class Engine:
         if selection:
             chosen = ",".join(map(str, selection["chosen"]))
             levels = uploads.resolve_levels(f"{locator}@{chosen}", table, self.settings.region_levels, self.settings.miner.geo_resolution)
-        with path.open("rb") as stored:
-            upload_id = "up-" + hashlib.file_digest(stored, "sha256").hexdigest()[:12]
+        path = uploads.stored_copy(path, self.ws.list_batches()) if where else path
+        upload_id = uploads.upload_id(path, where)
         if supersedes and supersedes in {upload_id, *(b.get("dataset_id") for b in self.ws.list_batches() if b.get("upload_id") == upload_id)}:
             path.unlink(missing_ok=True)  # its upload, or a level of it: the same bytes
             forget_tables()
             raise PipelineError("invalid_options", f"supersedes {supersedes}: the file is the version it replaces")
+        try:  # the upload's own file accepted: its context files now, refused together
+            located = [(n, s, (context_geo or "").strip() or "auto", None) for n, s in context]
+            layers = uploads.save_context(self.ws, located, self.settings.max_upload_bytes)
+        except Exception:
+            path.unlink(missing_ok=True)
+            forget_tables()
+            raise
         options = {
             "filename": name,
             "bins": bins,
@@ -410,6 +423,7 @@ class Engine:
             "time": time,
             "grid": grid,
             "tz": tz,
+            "where": where,
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
@@ -420,6 +434,10 @@ class Engine:
                 upload={"upload_id": upload_id, "level": level},
                 geo_levels=selection if g else None,
                 locator=None if g else locator.strip() or None,
+                context=layers if g else None,  # a table level has no cells, and counts none
+                count_values=counts if g else (),
+                baseline=baseline if g else None,
+                context_ring=ring,
                 **options,
             )
             for g, level in levels
@@ -447,6 +465,13 @@ class Engine:
         time: str | None = None,
         grid: str | None = None,
         tz: str | None = None,
+        context: list[dict[str, str]] | None = None,
+        context_ring: int = DEFAULT_RING,
+        inherited: dict[str, Any] | None = None,
+        warnings: Sequence[str] = (),
+        where: str | None = None,
+        count_values: Sequence[dict[str, Any]] | None = None,
+        baseline: str | None = None,
     ) -> dict[str, Any]:
         """Register an upload (status UPLOADED). Processing is a separate call.
 
@@ -459,15 +484,17 @@ class Engine:
         a batch of ``upload``; ``strict`` = False skips the ``bins`` / ``categories`` columns the dataset lacks (with a warning);
         ``geo_levels`` is the ``@auto`` selection, kept as ``profile.geo.levels`` whatever the batch's end; ``locator`` the point
         columns a table level leaves out; ``supersedes`` a dataset or upload id this one replaces (outside the dataset id too);
-        ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10).
+        ``time``, ``grid`` and ``tz`` a time column, its calendar unit and the zone of its calendar (docs/02_discovery.md §2.10);
+        ``context`` the stored context layers and ``context_ring`` their disk (§2.9); ``inherited`` what a cross-type run
+        keeps of its target's record and ``warnings`` what it already says of the run (its layers' time rule; ``uploads.cross_runs``).
         """
-        trust = {k: v for k, v in resolve_dataset_metadata(source, reliability, indicators).items() if v}
+        trust = {k: v for k, v in uploads.resolve_dataset_metadata(source, reliability, indicators).items() if v}
         trust |= {k: v for k, v in uploads.resolve_declared_metadata(glossary, metadata)[0].items() if v}
         supersedes = uploads.check_target(self.ws.list_batches(), supersedes)
         path = Path(path)
         created = utc_now()
         record = {
-            "batch_id": f"B{created[:19].replace('-', '').replace(':', '')}-{uuid.uuid4().hex[:6]}",
+            "batch_id": new_batch_id(created),
             "dataset_id": None,
             "filename": filename or path.name,
             "source_path": str(path),
@@ -477,19 +504,27 @@ class Engine:
             **(upload or {}),
             **({} if strict else {"strict": False}),
             **({"locator": locator} if locator else {}),
+            **{k: v for k, v in {"where": where, "count_values": list(count_values or ()), "baseline": baseline}.items() if v},
             **({"time": time, "grid": grid, "tz": tz} if time else {}),
+            **({"context": context, "context_ring": context_ring} if context else {}),
             **({"supersedes": supersedes} if supersedes else {}),
             **trust,
+            **(inherited or {}),
             "status": "UPLOADED",
             "stage_times": {"UPLOADED": created},
             "created_at": created,
             "metrics": {},
             "profile": {"geo": {"levels": geo_levels}} if geo_levels else {},
-            "warnings": [],
+            "warnings": list(warnings),
             "error": None,
         }
         self.ws.save_batch(record)
         return record
+
+    @_healthy
+    def cross(self, target: str, layers: Sequence[str], **options: Any) -> list[dict[str, Any]]:
+        """A cross-type run of two stored uploads (``uploads.cross_runs``, its keyword options): one batch per level, processed apart."""
+        return [self.submit(**run) for run in uploads.cross_runs(self.ws, self.ws.list_batches(), target, layers, self.settings, **options)]
 
     def ingest_file(self, path: Path) -> dict[str, Any]:
         """Submit and process one file in the calling thread (tests and scripts)."""
@@ -571,14 +606,17 @@ class Engine:
         ds, covers = record["dataset_id"], covers_of(result)
         insights = build_insights(result, self.settings.miner, dataset_id=ds, batch_id=record["batch_id"], filename=record["filename"])
         selection = select_insights(insights, self.settings.miner)
-        kept, refused = admit_insights(selection.kept, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
+        on, outside = uploads.cross_type_only(selection.kept) if record.get("cross") else (selection.kept, [])
+        kept, refused = admit_insights(on, self.settings.min_insight_weight, self.settings.max_insights_per_batch)
         if loaded.spatial:
             record["profile"]["geo"]["sac"] = {**sac_summary(insights, self.settings.miner.max_p_adjusted), "admitted": len(kept)}
             self.ws.save_profile(ds, record["profile"])
-        rejections = [*result.rejections, *selection.rejections, *refused]
+        rejections = [*result.rejections, *selection.rejections, *outside, *refused]
         self.ws.save_rejections(ds, [asdict(r) for r in rejections])
         if not kept:
-            raise PipelineError("no_viable_insights", f"No insight passed selection ({dict(Counter(r.reason for r in rejections))})")
+            pruned = dict(Counter(r.reason for r in rejections))
+            record["metrics"].update(pruned=pruned, pruned_total=len(rejections))  # a level that admits none still names its refusals
+            raise PipelineError("no_viable_insights", f"No insight passed selection ({pruned})")
         return kept, {i.id: covers[i.expression] for i in kept}, rejections
 
     def _commit(self, record: dict[str, Any], mined: _Mined, timings: dict[str, float], t0: float) -> tuple[dict[str, Any], CommittedState]:
@@ -649,20 +687,7 @@ class Engine:
     def _load(self, record: dict[str, Any], shared: bool = False) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it; ``shared`` for a level being
         processed, never for a re-check (``verify``), which reads the file as it is now."""
-        return load_dataset(
-            Path(record["source_path"]),
-            self.settings.miner,
-            filename=record["filename"],
-            bins=record.get("bins"),
-            categories=record.get("categories"),
-            geo=record.get("geo"),
-            strict=record.get("strict", True),
-            locator=record.get("locator"),
-            shared=shared,
-            time=record.get("time"),
-            grid=record.get("grid"),
-            tz=record.get("tz"),
-        )
+        return load_dataset(Path(record["source_path"]), self.settings.miner, shared=shared, **uploads.reading(record))
 
     @_healthy
     def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
@@ -768,7 +793,7 @@ class Engine:
     @_healthy
     def verify_pattern(self, pattern_id: str) -> dict[str, Any]:
         """``pattern_id`` recomputed from its stored upload (``verify.verify_pattern``, docs/06_graph_and_storage.md §6.7)."""
-        return verify.verify_pattern(self.ws, pattern_id, self._load)
+        return verify.verify_pattern(self.ws, pattern_id, self._load, self.settings.miner)
 
     def _publish(self, state: CommittedState, snapshot: dict[str, Any]) -> dict[str, Any]:
         """After a commit (batch, deletion or metadata change): readers switch to the new state in one assignment and
@@ -794,7 +819,7 @@ class Engine:
         (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
         refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
         the same transaction (docs/06_graph_and_storage.md §6.8)."""
-        changes = resolve_dataset_metadata(source, reliability, indicators)
+        changes = uploads.resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._writing():
@@ -855,13 +880,12 @@ class Engine:
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
         """Remove a dataset: its batches, patterns, vectors, memberships and artefacts (docs/06_graph_and_storage.md §6.8).
 
-        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their mass recounted;
-        those that lost a member moved to their surviving members' direction); the others go. Journal rows are renumbered, the snapshot is
-        rebuilt and the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the
-        state, the journal, the snapshot and the moved-aside files; an error rolls back at once, and a crash
-        leaves the ``pending.json`` marker, so the next writer start rolls back (``Workspace.recover``).
-        ``dataset_id`` may also be the batch id of a batch that failed before its dataset id was known.
-        """
+        Anchors that keep a member, or that are still RELATED_TO another anchor, survive (their mass recounted; those that
+        lost a member moved to their surviving members' direction); the others go. Journal rows are renumbered, the snapshot
+        rebuilt, the Neo4j mirror synced. All or nothing (``Workspace.transaction``): the checkpoint holds the state, the
+        journal, the snapshot and the moved-aside files; an error rolls back at once, a crash leaves ``pending.json`` for
+        the next writer start to roll back (``Workspace.recover``). ``dataset_id`` may be a batch id of a batch that failed
+        before its dataset id was known."""
         return {
             "dataset_id": dataset_id,
             **self._delete(lambda b: dataset_id in (b.get("dataset_id"), b["batch_id"]), {"dataset_id": dataset_id}, "unknown_dataset"),
@@ -881,6 +905,7 @@ class Engine:
             picked = [b for b in every if chosen(b)]
             if not picked:
                 raise PipelineError(unknown, key)
+            uploads.check_removal(every, picked)  # a hidden layer with runs stays
             ids = {b["dataset_id"] for b in picked if b.get("dataset_id")}
             batches = [b for b in every if chosen(b) or b.get("dataset_id") in ids]
             if any(b["status"] not in TERMINAL for b in batches):

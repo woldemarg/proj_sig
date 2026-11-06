@@ -363,3 +363,113 @@ def test_empty_graph_answer(tmp_path):
 
     qa = ask(make_engine(make_config(tmp_path / "empty")), "anything?")
     assert qa.answer_mode == "empty" and qa.metrics["error"] == "empty_graph"
+
+
+def test_crosstype_demo_apparatus(engine, tmp_path):
+    """The demonstration's measurement on a planted upload (X2: load raised in the cells holding the layer): the target
+    read again at the level a setting adds, from the same file, the layer kept as a layer-only upload, one run per
+    setting with its admitted insights' verdicts and its refusals by reason; then the frequency reading — the target
+    under a filter, its own upload at the same level — crossed with the layer over both disks."""
+    from crosstype_benchmark import RES, generate
+    from crosstype_demo import measure
+
+    upload = generate("X2", 1)
+    target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
+    upload["frame"].to_csv(target, index=False)
+    upload["layers"]["schools"].to_csv(layer, index=False)
+    result = measure(
+        engine, target, {"geo": f"lat,lon@{RES}", "time": "when"}, {"schools": layer}, ((RES, 1), (RES - 1, 0)), ("schools", "road_type=local")
+    )
+    # the level a setting adds, read too; the filtered reading its own upload at the file's level
+    assert [(t["level"], t["where"]) for t in result["target"]] == [(str(RES), None), (str(RES - 1), None), (str(RES), "road_type=local")]
+    assert [(r["layer"], r["level"], r["ring"]) for r in result["runs"]] == [
+        ("schools", RES, 1),
+        ("schools", RES - 1, 0),
+        ("schools · road_type=local", RES, 1),
+        ("schools · road_type=local", RES, 0),
+    ]
+    assert all(r["status"] in {"READY", "FAILED"} and r["seconds"] > 0 for r in result["runs"][2:])  # the reading's verdict, whichever it is
+    planted = result["runs"][0]
+    assert planted["status"] == "READY" and planted["admitted"] and all(a["p_context_adjusted"] <= 0.05 for a in planted["admitted"])
+    assert planted["refused"]["outside_cross_type"] > 0 and planted["seconds"] > 0  # the target's own findings refused by reason
+
+
+def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engine, tmp_path):
+    """The M19 spike's apparatus (concept §14a) on a planted upload: one run summarized with its family and its findings'
+    keys, the counted types' map medians at two levels, the co-location quotient of a type to the layer on the raw
+    points (and a refusal for a layer without them), and two null repeats of the calibration with their Moran's I, their
+    errors, the median test's alone and the draws dropped for support."""
+    import importlib.util
+
+    from crosstype_benchmark import RES, generate
+    from crosstype_demo import clq, models, run, type_medians
+    from crosstype_null_calibration import repeat, summarize
+
+    from insight_graph_service.core.settings import load_settings
+
+    upload = generate("X2", 1)
+    target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
+    upload["frame"].to_csv(target, index=False)
+    upload["layers"]["schools"].to_csv(layer, index=False)
+    with target.open("rb") as stream:
+        own = [engine.process(r["batch_id"]) for r in engine.upload("target.csv", stream, geo=f"lat,lon@{RES}")][0]["upload_id"]
+    with layer.open("rb") as stream:
+        kept = engine.upload("schools.csv", stream, geo="lat,lon", layer=True)[0]["upload_id"]
+    found = run(engine, own, kept, RES, 1)
+    assert found["status"] == "READY" and found["family"] and found["keys"] and all(len(k) == 3 for k in found["keys"])
+    spec = "road_type=local"
+    medians = type_medians(target, "lat,lon", spec, (RES, RES - 1))
+    assert set(medians["local"]) == {f"r{RES}", f"r{RES - 1}"} and medians["local"][f"r{RES - 1}"] >= medians["local"][f"r{RES}"]
+    assert clq(target, "lat,lon", spec, layer, "lat,lon")["local"] > 0
+    assert "refused" in clq(target, "lat,lon", spec, layer, "x,y")
+    if importlib.util.find_spec("statsmodels"):  # the eval group: the model references, an incidence and an odds ratio
+        ref = models(target, "lat,lon", spec, {"schools": layer}, RES)["schools"]["local"]
+        assert ref["irr"] > 0 and ref["or"] > 0 and 0 <= ref["p_irr"] <= 1 and ref["cells"] >= ref["near"] > 0
+    settings = load_settings(neo4j_enabled=False)
+    rows = [repeat(seed, settings.miner, settings) for seed in (0, 1)]
+    assert all({"moran_i", "errors", "median_only", "dropped"} <= set(r) for r in rows)
+    assert summarize(rows)["reps"] == 2 and 0 <= summarize(rows)["fwer"] <= 1
+
+
+def test_the_crosstype_controls_script_runs_each_control_as_the_console_runs_a_link(tmp_path):
+    """The layer link's controls (the cross-layer experiments of 2026-11-04, R-9) on a planted upload, one seed: the type
+    labels shuffled, layers of the target's own events jittered at the cell's scale and at the parent's, a uniform layer,
+    the real layer against two halves of the target — each a run through ``Engine.cross`` with its verdict, and per
+    control the runs that admitted a finding (for the shuffled one, a share finding)."""
+    from crosstype_benchmark import RES, generate
+    from crosstype_controls import controls
+
+    upload = generate("X2", 1)
+    target, layer = tmp_path / "target.csv", tmp_path / "schools.csv"
+    upload["frame"].sample(8000, random_state=1).to_csv(target, index=False)
+    upload["layers"]["schools"].to_csv(layer, index=False)
+    result = controls(target, {"geo": f"lat,lon@{RES}"}, layer, "road_type", 1, 0, tmp_path / "work")
+    assert set(result["rates"]) == {"real", "shuffled", "fine", "coarse", "uniform", "half a", "half b", "replicated"}
+    rates = [r for k, r in result["rates"].items() if k != "replicated"]
+    assert all(r["runs"] == 1 and 0 <= r["admitting"] <= 1 for r in rates) and "admitting_a_share" in result["rates"]["shuffled"]
+    assert len(result["rates"]["replicated"]["on both halves"]) == 1 and result["rates"]["replicated"]["real"] >= 0
+    assert all(r["status"] in {"READY", "FAILED"} and r["seconds"] > 0 and r["seed"] == 1 for r in result["runs"])
+
+
+def test_crosstype_benchmark_apparatus():
+    import h3
+    import numpy as np
+    import pandas as pd
+    from crosstype_benchmark import BOX, PLANTED, RES, SCENARIOS, generate
+    from perf_benchmark import CALIFORNIA, EPOCH
+
+    lat0, lon0, dlat, dlon = BOX
+    assert CALIFORNIA[0] <= lat0 and lat0 + dlat <= CALIFORNIA[2] and CALIFORNIA[1] <= lon0 and lon0 + dlon <= CALIFORNIA[3]
+    for name in SCENARIOS:
+        upload = generate(name, 1)
+        assert upload["frame"].equals(generate(name, 1)["frame"]), name  # the same seed writes the same file
+        for frame in (upload["frame"], *upload["layers"].values()):  # one territory, one epoch
+            assert frame["lat"].between(lat0, lat0 + dlat).all() and frame["lon"].between(lon0, lon0 + dlon).all(), name
+        assert (pd.to_datetime(upload["frame"]["when"]) - pd.Timestamp(EPOCH)).dt.days.between(0, 30).all()
+        assert bool(upload["planted"]) == (name in PLANTED), name  # a null plants nothing
+    x2 = generate("X2", 1)
+    schools = {h3.latlng_to_cell(a, b, RES) for a, b in zip(x2["layers"]["schools"]["lat"], x2["layers"]["schools"]["lon"])}
+    assert set(x2["planted"]) == schools  # X2 plants in the cells holding the layer
+    frame = x2["frame"]
+    inside = np.array([h3.latlng_to_cell(a, b, RES) in schools for a, b in zip(frame["lat"], frame["lon"])])
+    assert frame.loc[inside, "load"].median() > frame.loc[~inside, "load"].median() + 3  # load +4 there

@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +26,12 @@ import pandas as pd
 # scripts run from scripts/; the package lives one level up (not pip-installed)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from insight_contracts import Insight  # noqa: E402
+from insight_graph_service.core.batch import admit_insights  # noqa: E402
 from insight_graph_service.core.demo import generate_retail_dataset  # noqa: E402
 from insight_graph_service.core.engine import Engine  # noqa: E402
 from insight_graph_service.core.settings import PROJECT_ROOT, Settings, load_env_file, load_settings  # noqa: E402
+from subgroup_miner.selection import select_insights  # noqa: E402
 
 SCRATCH = PROJECT_ROOT / ".scratch"
 
@@ -93,6 +97,30 @@ def ingest_ready(engine: Engine, path: Path) -> dict[str, Any]:
     if record["status"] != "READY":
         raise SystemExit(f"{path.name}: {record['status']} {record.get('error')}")
     return record
+
+
+def upload_all(engine: Engine, path: Path, **options: Any) -> list[dict[str, Any]]:
+    """``path`` uploaded with ``options`` as the console sends them, every batch it made processed (a ``LAYER`` or
+    ``SKIPPED`` record as it is)."""
+    with path.open("rb") as stream:
+        records = engine.upload(path.name, stream, **options)
+    return [engine.process(r["batch_id"]) if r["status"] == "UPLOADED" else r for r in records]
+
+
+def admitted(found: list[Insight], config: Settings) -> list[Insight]:
+    """What a batch admits of ``found``: selection's validity rules, then the weight floor and the cap."""
+    return admit_insights(select_insights(found, config.miner).kept, config.min_insight_weight, config.max_insights_per_batch)[0]
+
+
+def without(insight: Insight, *keys: str) -> Insight:
+    """The insight with these ``provenance.spatial`` keys left out (no ``p_context``: the median test alone)."""
+    spatial = {k: v for k, v in insight.provenance.get("spatial", {}).items() if k not in keys}
+    return replace(insight, provenance={**insight.provenance, "spatial": spatial})
+
+
+def context_family(insights: list[Insight]) -> int:
+    """The upload's context cohorts, as its insights record them (0 without a layer)."""
+    return next((i.provenance["spatial"]["context_family"] for i in insights if "context_family" in i.provenance.get("spatial", {})), 0)
 
 
 def demo_engine(name: str) -> Engine:

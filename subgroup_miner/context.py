@@ -1,0 +1,154 @@
+"""A context layer: the points of another type counted on the target's H3 grid and read as one forced band per layer
+(``context_<name>_band``), and the within-parent deal of those counts the cross-type null draws from
+(docs/02_discovery.md §2.9; docs/extra_funcs/spatial_analytics_multi_type/cross_type_context_architecture.md §6).
+
+Pure functions over arrays; the statistics (the median test of a draw, the permutation p) live in ``discovery``."""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+import h3
+import numpy as np
+
+NONE_NEARBY = "none nearby"  # a cell whose disk holds no point of the layer; two words, as NO_CLUSTER (question._values)
+BANDS = 4  # quarters of the positive disk sums: the labels of apply_bins
+RINGS = (0, 1, 2)  # a layer's disk, the upload's option: the cell alone (the default), with its six neighbours, two rings
+# The cell alone by default: dealt within its parent (one level coarser, seven cells), a layer counted over the cell and its six
+# neighbours stays near most of the cells it was near (88 % of the cells near a bar in the 2026-11-04 experiments, 51 % for
+# the cell alone), so the null reproduces, and refuses, any effect of the layer's own cell. A wider disk is asked for.
+DEFAULT_RING = 0
+
+
+@dataclass
+class ContextSource:
+    """The located points of one layer, as ``load_dataset`` reads them."""
+
+    name: str
+    lat: np.ndarray
+    lon: np.ndarray
+    key: str = ""  # the points' identity (the file's hash, its locator, window and filter): the null's seed names the layer by it
+
+
+@dataclass
+class ContextLayer:
+    """A layer on the target's grid, in memory only (rebuilt from its file by every read, never stored): its counts over
+    every child of every parent a target cell's disk touches — so a deal within a parent can move a count into a cell
+    without target points —, each such cell's parent, and each target cell's disk over them (CSR, built once: a draw
+    only re-sums it)."""
+
+    name: str
+    counts: np.ndarray  # the layer's points per cell
+    parents: np.ndarray  # per cell, its parent one resolution coarser (int codes): the deal's unit
+    disk_ptr: np.ndarray  # CSR: target cell row -> positions of its disk among the cells
+    disk_idx: np.ndarray
+    edges: np.ndarray  # the quarter edges of the positive disk sums, as observed: every draw is read by them
+    key: str = ""  # the source's ``key``: what the null's seed calls the layer (its points, not its file name)
+
+    @property
+    def column(self) -> str:
+        return f"context_{self.name}_band"
+
+
+def context_layer(source: ContextSource, target_cells: np.ndarray, resolution: int, ring: int) -> ContextLayer:
+    """``source`` counted at ``resolution`` over the children of every parent that a target cell's ``ring``-disk touches."""
+    disks = [h3.grid_disk(c, ring) for c in target_cells]
+    parent = (lambda c: h3.cell_to_parent(c, resolution - 1)) if resolution else (lambda c: c)
+    parents = {parent(c) for disk in disks for c in disk}
+    cells = sorted({ch for p in parents for ch in (h3.cell_to_children(p, resolution) if resolution else [p])})
+    pos = {c: i for i, c in enumerate(cells)}
+    ok = np.isfinite(source.lat) & np.isfinite(source.lon)
+    counts = np.zeros(len(cells))
+    for c, n in Counter(h3.latlng_to_cell(a, b, resolution) for a, b in zip(source.lat[ok], source.lon[ok])).items():
+        if c in pos:
+            counts[pos[c]] = n
+    codes = np.unique([parent(c) for c in cells], return_inverse=True)[1]
+    ptr = np.cumsum([0, *map(len, disks)])
+    idx = np.array([pos[c] for disk in disks for c in disk], dtype=np.int64)
+    return ContextLayer(source.name, counts, codes, ptr, idx, fit_edges(np.add.reduceat(counts[idx], ptr[:-1])), source.key)
+
+
+def points_near(source: ContextSource, cells: np.ndarray, ring: int, cap: int) -> np.ndarray:
+    """The rows of ``source`` within ``ring`` of ``cells`` (at their resolution), at most ``cap``: the layer drawn beside a
+    focused insight."""
+    resolution = h3.get_resolution(str(cells[0]))
+    around = {n for cell in cells for n in h3.grid_disk(str(cell), ring)}
+    ok = np.flatnonzero(np.isfinite(source.lat) & np.isfinite(source.lon))
+    return np.array([i for i in ok if h3.latlng_to_cell(source.lat[i], source.lon[i], resolution) in around][:cap], dtype=int)
+
+
+def disk_sums(layer: ContextLayer, counts: np.ndarray | None = None) -> np.ndarray:
+    """Per target cell, the layer's points in its disk (absent cells count 0); ``counts`` stands in for the layer's own."""
+    counts = layer.counts if counts is None else counts
+    return np.add.reduceat(counts[layer.disk_idx], layer.disk_ptr[:-1])  # every disk holds its own cell: no empty segment
+
+
+def fit_edges(sums: np.ndarray) -> np.ndarray:
+    """The quarter edges of the positive sums (fewer where quantiles coincide); empty without a positive sum."""
+    positive = sums[sums > 0]
+    return np.unique(np.quantile(positive, np.linspace(0, 1, BANDS + 1))) if len(positive) else np.zeros(0)
+
+
+def band(sums: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """``q1..qk`` of each positive sum by ``edges`` (right-closed, as pd.qcut; a sum past the last edge in the top band),
+    ``NONE_NEARBY`` for zero."""
+    labels = np.array([f"q{i + 1}" for i in range(max(len(edges) - 1, 1))], dtype=object)
+    return np.where(sums > 0, labels[np.searchsorted(edges[1:-1], sums, side="left")], NONE_NEARBY)
+
+
+def deal(layer: ContextLayer, rng: np.random.Generator) -> np.ndarray:
+    """One draw of the null: the cells permuted within each parent (``counts[deal]`` keeps every parent's total). The
+    layers of one upload share their cells (the target's disks at one radius), so one deal moves every layer a scope
+    names and keeps them where they are to each other: dealt each on its own, layers in the same places would part."""
+    order = np.argsort(layer.parents, kind="stable")
+    perm = np.empty_like(order)
+    perm[order] = np.lexsort((rng.random(len(order)), layer.parents))  # both run parent by parent
+    return perm
+
+
+def dealt_band(layer: ContextLayer, perm: np.ndarray) -> np.ndarray:
+    """Every target cell's band with the layer's counts moved by ``perm`` (``deal``), read by the observed edges."""
+    return band(disk_sums(layer, layer.counts[perm]), layer.edges)
+
+
+def context_bands(
+    sources: Sequence[ContextSource], cells: np.ndarray, resolution: int, ring: int
+) -> tuple[dict[str, np.ndarray], dict[str, ContextLayer], dict[str, str], list[str]]:
+    """Each layer of ``sources`` on the target's ``cells`` -> (its band column, the layers, their glossary, warnings); a
+    layer that leaves one band at this resolution (too sparse) is left out with a warning."""
+    columns, layers, words, warnings = {}, {}, {}, []
+    for source in sources:
+        layer = context_layer(source, cells, resolution, ring)
+        bands = band(disk_sums(layer), layer.edges)
+        if len(np.unique(bands)) < 2:
+            warnings.append(f"geo: context layer {source.name!r} gives one band at resolution {resolution} (too sparse): not added")
+            continue
+        columns[layer.column], layers[source.name] = bands, layer
+        words |= glossary(layer, ring)
+    return columns, layers, words, warnings
+
+
+def band_words(i: int, k: int) -> str:
+    """The i-th of a layer's ``k`` positive bands in plain English, the twin of ``wording.layer_band_words``: the top
+    band is «the most» whatever ``k`` — quantiles that coincide leave fewer than four (the shipped bars at r9, counted
+    in the cell alone, give two: a band named by its quarter would read the opposite of the finding)."""
+    n = max(k, i)
+    if i >= n:
+        return "the most" if n > 1 else "some"
+    if i == 1:
+        return "the fewest"
+    return "the middle" if n == 3 else "fewer than the middle" if i == 2 else "more than the middle"
+
+
+def glossary(layer: ContextLayer, ring: int) -> dict[str, str]:
+    """The plain English of the layer's column and values (``SpatialContext.glossary``, the evidence prompt's words)."""
+    name = layer.name.replace("_", " ")
+    where = "the cell itself" if ring == 0 else "the cell and its six neighbours" if ring == 1 else f"the cell and its neighbours within {ring} rings"
+    k = max(len(layer.edges) - 1, 1)  # the bands the layer has, as ``band`` names them
+    words = {layer.column: f"number of {name} points in {where}, in {'quarters' if k == 4 else f'{k} bands'} of the cells that have any"}
+    words[f"{layer.column}={NONE_NEARBY}"] = f"no {name} point in {where}"
+    for i in range(1, k + 1):
+        words[f"{layer.column}=q{i}"] = f"{where} {'holds' if ring == 0 else 'hold'} {band_words(i, k)} {name} points (of the cells that have any)"
+    return words

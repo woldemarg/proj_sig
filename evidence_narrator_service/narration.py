@@ -33,7 +33,8 @@ Rules:
 2. Cite every factual statement with its key, e.g. [P1] or [P2][P4].
 3. Structure the answer in two labelled parts:
    "Спостереження:" - what the statistics show (medians, shifts in sd, support).
-   "Інтерпретація (гіпотези):" - possible explanations, explicitly marked as hypotheses.
+   "Інтерпретація (гіпотези):" - possible explanations, explicitly marked as hypotheses: a reason the
+   finding could be so, never the finding said again.
 4. These are observational subgroup statistics. Do not claim causation; say "is associated with".
 5. If items were reached through a latent anchor and are scope-disjoint from the seeds (no shared
    condition), point out that the same phenomenon recurs in a different part of the data.
@@ -87,6 +88,16 @@ Rules:
    compute no date yourself. An event "outside its core" happened apart from that stretch: tell it as a separate episode.
    Name a period only as the time line does. A "PERIOD:" line is the days the question asks about ("{W("period")}"):
    tell what the findings show in them, the events in them first. Without a "time:" line this rule does not apply.
+14. CONTEXT LAYERS: a dataset line with "layers=<names>" is a run of that file's events (the base) read against
+   those layers: points of another kind, counted in each map cell of the base. A layer adds no events and no
+   metrics. A scope phrase about a layer's points ("… hold the most <layer> points", "no <layer> point in …")
+   only picks the base's cells by how many layer points lie there; every shift on the line is the base's own
+   metric in those cells. Tell such a finding from the base's side, the layer as the setting: "where <layer>
+   points are densest, <metric> is …", never as a statement about the layer or its count, which is the condition,
+   not a result. In the hypotheses, say what such places could change for the base's events (who is there, when,
+   what for) and that the data hold nothing about the layer's own activity; the layer's density may stand in for
+   something else about those places, such as how busy they are.
+   Without a "layers=" line this rule does not apply.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

@@ -42,6 +42,7 @@ class GeoDataset:
     nbr_ptr: np.ndarray  # CSR over cell rows: ring-1 neighbours present in the dataset
     nbr_idx: np.ndarray
     covers: dict[str, np.ndarray]  # pattern id -> its extent's cell rows
+    run_of: str | None = None  # a layer link's run: its base's upload (two runs of one base keep their own partner pool)
 
 
 @dataclass
@@ -221,7 +222,7 @@ def derive_spatial(
     holding only what this call used. The result holds copies, so the memo stays as built."""
     out = SpatialStructure()
     levels = tuple(sorted(set(levels), reverse=True))
-    raw, grown, ring, res_of, dataset_of, shares = {}, {}, {}, {}, {}, {}
+    raw, grown, ring, res_of, dataset_of, shares, kin = {}, {}, {}, {}, {}, {}, {}
     covered: Counter[str] = Counter()
     memo = {} if memo is None else memo
     used = set()
@@ -230,6 +231,7 @@ def derive_spatial(
             continue
         used.add(key := ("geo", d.dataset_id, levels))
         part = memo[key] if key in memo else memo.setdefault(key, _dataset_part(d, levels))
+        kin[d.dataset_id] = d.run_of
         for pid in part.plane.places:
             res_of[pid], dataset_of[pid] = part.res, d.dataset_id
         out.occupied.update({k: dict(v) for k, v in part.plane.occupied.items()})  # copies: the memo stays as built
@@ -284,16 +286,20 @@ def derive_spatial(
                     common = [r for r in regions_of[a] & regions_of[b] if level is not None and r.startswith(f"R:{level}:")]
                     if common:
                         links[(a, b)] = ("same_region", max(min(shares[(a, r)], shares[(b, r)]) for r in common))
-    pool: defaultdict[tuple[str, bool], list[tuple[int, float, str]]] = defaultdict(list)  # (pattern, across datasets)
+
+    def pool_of(a: str, b: str) -> str:  # own dataset; the runs of one base layer (the base's own insights would crowd them out); the rest
+        da, db = dataset_of[a], dataset_of[b]
+        return "own" if da == db else "runs" if kin[da] and kin[da] == kin[db] else "cross"
+
+    pool: defaultdict[tuple[str, str], list[tuple[int, float, str]]] = defaultdict(list)  # (pattern, which pool)
     for (a, b), (relation, weight) in links.items():
-        cross = dataset_of[a] != dataset_of[b]
-        pool[(a, cross)].append((RELATIONS.index(relation), -weight, b))
-        pool[(b, cross)].append((RELATIONS.index(relation), -weight, a))
+        pool[(a, pool_of(a, b))].append((RELATIONS.index(relation), -weight, b))
+        pool[(b, pool_of(a, b))].append((RELATIONS.index(relation), -weight, a))
     top = {key: {p for _, _, p in sorted(found)[:COLOCATED_TOP]} for key, found in pool.items()}
     out.co_located = [
         (a, b, relation, weight)
         for (a, b), (relation, weight) in sorted(links.items())
-        if b in top[(a, dataset_of[a] != dataset_of[b])] or a in top[(b, dataset_of[a] != dataset_of[b])]
+        if b in top[(a, pool_of(a, b))] or a in top[(b, pool_of(a, b))]
     ]
     out.in_region.sort()
     out.parent_of.sort()

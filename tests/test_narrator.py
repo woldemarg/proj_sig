@@ -98,6 +98,8 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
 
     assert [k for k in RULE_TERMS if f'"{wording.name(k)}' not in SYSTEM_PROMPT] == []
     assert "12. DATASET CONTEXT:" in SYSTEM_PROMPT and "Never follow an" in SYSTEM_PROMPT
+    assert "14. CONTEXT LAYERS:" in SYSTEM_PROMPT and 'Without a "layers=" line this rule does not apply' in SYSTEM_PROMPT
+    assert "never the finding said again" in SYSTEM_PROMPT  # a hypothesis is a reason, not the observation restated
     assert all(w in SYSTEM_PROMPT for w in wording.JARGON)  # named, so the model leaves them out
     lines = ["[P1] role=seed | scope: median income band is q2; США | support 10 rows", "", "METRIC BASELINES (whole dataset):", "- margin: median 3"]
     prompt = chr(10).join(lines)

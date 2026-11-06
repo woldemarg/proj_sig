@@ -25,8 +25,9 @@ import pandas as pd
 from scipy.stats import norm, zscore
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id
+from insight_contracts import Condition, Insight, Rejection, Shift, SpatialProvenance, pattern_id, stable_hash
 from subgroup_miner.config import MinerConfig
+from subgroup_miner.context import deal, dealt_band
 from subgroup_miner.spatial import SpatialContext, effective_n_factor, subgroup_moran
 
 EDA_SOURCE = "subgroup_miner/vendor/eda/main_upd.py"
@@ -56,6 +57,8 @@ class DatasetProfile:
     global_mads: dict[str, float]
     dimension_cardinality: dict[str, int]
     dimension_entropy: dict[str, float]
+    weight_by_events: bool = False  # a share's median test weighs each cell by its events (docs/02_discovery.md §2.9)
+    means: list[str] = field(default_factory=list)  # the metrics read by their mean, not their median (``means_of``)
 
 
 @dataclass
@@ -154,12 +157,15 @@ def merge_identical_extents(
     return merged, rejections
 
 
-def _primary_key(cand: Candidate, values: np.ndarray, column: dict[str, int], global_medians: dict[str, float]) -> tuple[str, int] | None:
-    """(primary metric, shift sign) of a pass-1 cohort; None without shifts. ``values``: the metric columns as one array."""
+def _primary_key(
+    cand: Candidate, values: np.ndarray, column: dict[str, int], global_medians: dict[str, float], means: frozenset[str] = frozenset()
+) -> tuple[str, int] | None:
+    """(primary metric, shift sign) of a pass-1 cohort; None without shifts. ``values``: the metric columns as one array;
+    ``means``: the metrics read by their mean (``means_of``)."""
     if not cand.top_shifts:
         return None
     metric = cand.top_shifts[0][0]
-    local = float(np.nanmedian(values[cand.row_indices, column[metric]]))
+    local = _location(values[cand.row_indices, column[metric]], metric in means)
     return metric, 1 if local >= global_medians[metric] else -1
 
 
@@ -169,7 +175,13 @@ def _jaccard(rows: np.ndarray, other: np.ndarray) -> float:
 
 
 def prune_near_duplicates(
-    ranked: list[Candidate], values: np.ndarray, numerics: list[str], global_medians: dict[str, float], threshold: float, limit: int | None = None
+    ranked: list[Candidate],
+    values: np.ndarray,
+    numerics: list[str],
+    global_medians: dict[str, float],
+    threshold: float,
+    limit: int | None = None,
+    means: frozenset[str] = frozenset(),
 ) -> tuple[list[Candidate], list[Rejection]]:
     """Greedy in rank order (R6): a cohort with the primary metric and sign of a higher-ranked kept
     cohort and Jaccard(rows) >= ``threshold`` is absorbed as an alias of it. At most ``limit`` cohorts are
@@ -178,7 +190,7 @@ def prune_near_duplicates(
     rejections: list[Rejection] = []
     column = {name: j for j, name in enumerate(numerics)}
     for cand in ranked:
-        key = _primary_key(cand, values, column, global_medians)
+        key = _primary_key(cand, values, column, global_medians, means)
         rows = np.sort(cand.row_indices)
         host = next(
             (other for other, other_key, other_rows in kept if key is not None and key == other_key and _jaccard(rows, other_rows) >= threshold), None
@@ -216,7 +228,7 @@ def run_discovery(
 
     Deduplication runs *before* the validation budget is spent, so the bootstrap only
     sees distinct cohorts (docs/02_discovery.md §2.3)."""
-    profile = eda.step1_profile_data(df)
+    profile = eda.step1_profile_data(df, asked_metrics(spatial))
     numerics: list[str] = list(profile["numerics"])
     categoricals: list[str] = list(profile["categoricals"])
     data: pd.DataFrame = profile["data_safe"]
@@ -230,9 +242,10 @@ def run_discovery(
         forced = [c for c in categoricals if c in spatial.conditions]
         dims = forced + [d for d in dims if d not in forced]
     space = eda.step3_generate_search_space(profile, dims, compute_budget=config.compute_budget)
+    means = means_of(data, spatial)
     global_medians, global_mads = {}, {}
     for n in numerics:
-        global_medians[n], global_mads[n] = _global_stats(data[n])
+        global_medians[n], global_mads[n] = _global_stats(data[n], n in means)
     prof = DatasetProfile(
         rows=int(profile["total_rows"]),
         columns=int(df.shape[1]),
@@ -245,13 +258,15 @@ def run_discovery(
         global_mads=global_mads,
         dimension_cardinality={c: int(data[c].nunique()) for c in categoricals},
         dimension_entropy={c: _entropy(data[c]) for c in categoricals},
+        weight_by_events=config.weight_by_events and spatial is not None and any(n.startswith("share_") for n in numerics),  # where it applies
+        means=means,
     )
     if not space:
         raise DiscoveryError("no_candidates", f"Search space is empty (dimensions selected: {dims}).")
 
     if on_stage:
         on_stage("DISCOVERING")
-    raw = eda.step4_evaluate_micro_slices(profile, space, spatial.derived_from if spatial else None)
+    raw = eda.step4_evaluate_micro_slices(profile | {"means": frozenset(means)}, space, spatial.derived_from if spatial else None)
     if raw.empty:
         raise DiscoveryError("no_candidates", "No subgroup passed the pass-1 size screen.")
 
@@ -285,13 +300,15 @@ def run_discovery(
     for cand, index in zip(candidates, _z_positive(scores["sd"]) + _z_positive(scores["emm"]) + _z_positive(scores["vol"])):
         cand.temp_index = float(index)
     ranked = sorted(candidates, key=lambda c: -c.temp_index)  # stable: pass-1 order breaks ties
-    eligible, near = prune_near_duplicates(ranked, profile["values"], numerics, global_medians, config.redundancy_jaccard, config.validation_budget)
+    eligible, near = prune_near_duplicates(
+        ranked, profile["values"], numerics, global_medians, config.redundancy_jaccard, config.validation_budget, frozenset(means)
+    )
     rejections += near
 
     np.random.seed(config.eda_random_seed)  # step4b bootstrap uses the global RNG
     top = _validation_frame(eligible)
     validated_df = eda.step4b_deep_validation(
-        data, top, numerics, categoricals, global_medians, global_mads, spatial.blocks if spatial else np.arange(len(data))
+        data, top, numerics, categoricals, global_medians, global_mads, spatial.blocks if spatial else np.arange(len(data)), frozenset(means)
     )
     by_candidate = {c.expression: c for c in candidates}
     validated: list[Candidate] = []
@@ -315,20 +332,106 @@ def run_discovery(
     )
 
 
-def _median_test(values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0) -> float:
-    """Two-sided asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the
-    sample to its effective size under spatial autocorrelation (docs/02_discovery.md §2.9)."""
-    values = values[~np.isnan(values)]
-    n = len(values)
-    if n < 2:
-        return 1.0
-    root_n = math.sqrt(max(n * n_eff_factor, 1.0))
-    scale = eda.calculate_mad(values) or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
+def asked_metrics(spatial: SpatialContext | None) -> frozenset[str]:
+    """The metrics a run asks about by name: its per-type counters and their values' shares — never dropped as redundant
+    by the profile (``eda.step1_profile_data(keep=)``)."""
+    if spatial is None:
+        return frozenset()
+    return frozenset(spatial.type_counters) | {"share_" + c.removeprefix("count_") for c in spatial.type_counters}
+
+
+def means_of(data: pd.DataFrame, spatial: SpatialContext | None) -> list[str]:
+    """The per-type counters read by their mean: those whose map median is 0 — more than half the cells hold none of
+    the type, so a cohort's median stays 0 until half of it moves, however much more often the type occurs there (the
+    cross-layer experiments of 2026-11-04: robbery 3.5 times as frequent next to bars, median 0 on both sides). Never
+    under a zone baseline, whose columns are residuals, not counts; never for a table."""
+    if spatial is None or spatial.baseline == "zone":
+        return []
+    return sorted(m for m in spatial.type_counters if m in data and float(np.nanmedian(data[m].to_numpy(dtype=float))) == 0.0)
+
+
+def _location(values: np.ndarray | pd.Series, mean: bool) -> float:
+    """A metric's location in a set of rows: its mean for a metric of ``means_of``, else its median (NaN left out)."""
+    values = np.asarray(values, dtype=float)
+    return float(np.nanmean(values) if mean else np.nanmedian(values))
+
+
+def _median_z(
+    values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0, weights: np.ndarray | None = None, mean: bool = False
+) -> float:
+    """The z of the asymptotic test of H0: subgroup median == global median; ``n_eff_factor`` < 1 shrinks the sample to
+    its effective size under spatial autocorrelation (docs/02_discovery.md §2.9). With ``weights`` (one per value: a
+    cell's events) the median and the MAD are weighted and the sample is Kish's effective size (Σw)² / Σw², times the
+    same factor — two corrections, one for unequal weights, one for spatial dependence. ``mean`` (a metric of
+    ``means_of``): the cohort's mean against the map's, its standard error the cohort's standard deviation over the
+    root of the effective size. 0 where the test is undefined: fewer than two values, or an effective size under one
+    (no floor lifts it: that inflated |z|)."""
+    keep = ~np.isnan(values)
+    values = values[keep]
+    if len(values) < 2:
+        return 0.0
+    if weights is None:
+        n, median, scale = len(values), float(np.median(values)), eda.calculate_mad(values)
+    else:
+        w = weights[keep]
+        n, (median, scale) = w.sum() ** 2 / (w**2).sum(), _weighted_stats(values, w)
+    if not (size := n * n_eff_factor) >= 1.0:  # less than one effective value (Kish × Moran), or NaN: no test
+        return 0.0
+    root_n = math.sqrt(size)
+    if mean:
+        spread = float(np.std(values, ddof=1)) or global_mad / 0.6745
+        return (float(np.mean(values)) - global_median) / (spread / root_n) if spread else 0.0
+    scale = scale or global_mad  # same robust scale (incl. the zero-MAD fallback) as the EDA
     se = _MEDIAN_SE_FACTOR * scale / root_n if scale else float(np.std(values, ddof=1)) / root_n
     if not se or not np.isfinite(se):
-        return 1.0
-    z = (float(np.median(values)) - global_median) / se
-    return float(2.0 * norm.sf(abs(z)))
+        return 0.0
+    return (median - global_median) / se
+
+
+def _median_test(
+    values: np.ndarray, global_median: float, global_mad: float, n_eff_factor: float = 1.0, weights: np.ndarray | None = None, mean: bool = False
+) -> float:
+    """Two-sided p of ``_median_z``."""
+    return float(2.0 * norm.sf(abs(_median_z(values, global_median, global_mad, n_eff_factor, weights, mean))))
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """The value at which the cumulative weight reaches half of the total (the lower one on an exact half)."""
+    order = np.argsort(values, kind="stable")
+    cumulative = np.cumsum(weights[order])
+    return float(values[order][np.searchsorted(cumulative, cumulative[-1] / 2)])
+
+
+def _weighted_stats(values: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
+    """The weighted median and MAD of ``values`` (NaN left out); the MAD 0 (most weight on one value) falls back to the
+    weighted mean absolute deviation on the normal-consistent scale, as the EDA's ``calculate_mad`` does."""
+    keep = ~np.isnan(values)
+    values, weights = values[keep], weights[keep]
+    median = _weighted_median(values, weights)
+    deviations = np.abs(values - median)
+    return median, _weighted_median(deviations, weights) or eda._MAD_FROM_MEAN_ABS_DEV * float(np.average(deviations, weights=weights))
+
+
+def _event_weights(metric: str, config: MinerConfig, spatial: SpatialContext | None) -> np.ndarray | None:
+    """Each cell's events as the weights of ``metric``'s median test (``WEIGHT_BY_EVENTS``): a share is about the
+    events, so a cell weighs what it holds — the counts as counted (``SpatialContext.events``), never the ``points``
+    column, which a zone baseline replaces with signed residuals; None for any other metric, a table or the option off."""
+    if config.weight_by_events and metric.startswith("share_") and spatial is not None and spatial.events is not None:
+        return spatial.events
+    return None
+
+
+def _per_event(
+    data: pd.DataFrame, rows: np.ndarray, shift: Shift, config: MinerConfig, spatial: SpatialContext | None
+) -> tuple[Shift, np.ndarray | None]:
+    """A primary shift as its confirmation reads it, and the cohort's weights: a share's under ``WEIGHT_BY_EVENTS`` with
+    each cell weighing its events (the cohort's and the map's weighted medians, the weighted MAD); else as mined, no
+    weights. Mining and the recomputation both confirm here."""
+    weights = _event_weights(shift.metric, config, spatial)
+    if weights is None:
+        return shift, None
+    column = data[shift.metric].to_numpy(dtype=float)
+    return _shift(shift.metric, _weighted_stats(column[rows], weights[rows])[0], *_weighted_stats(column, weights)), weights[rows]
 
 
 def _covariance_pair(
@@ -363,25 +466,32 @@ def build_insights(result: DiscoveryResult, config: MinerConfig, *, dataset_id: 
     prof = result.profile
     spatial = result.spatial
     insights: list[Insight] = []
+    layers = {layer.column for layer in spatial.context.values()} if spatial else set()
+    family = sum(any(c.attribute in layers for c in cand.conditions) for cand in validated)  # the upload's context cohorts
+    means = set(prof.means)
     for cand in validated:
         rows = result.data.iloc[cand.row_indices]
         covariance = _covariance_pair(cand.row_indices, result.ranks, result.global_corr, prof.numerics, cand.restated)
         shifts: list[Shift] = []  # never empty: a cohort without a shift entered the rank on its covariance pair
         for metric, magnitude in cand.top_shifts:
-            shifts.append(_shift(metric, float(np.median(rows[metric].dropna())), prof.global_medians[metric], prof.global_mads[metric], magnitude))
+            shifts.append(_shift(metric, _location(rows[metric], metric in means), prof.global_medians[metric], prof.global_mads[metric], magnitude))
         for metric in covariance.get("pair", []):
             if all(s.metric != metric for s in shifts):
-                local_median = float(np.median(rows[metric].dropna()))
+                local_median = _location(rows[metric], metric in means)
                 shifts.append(_shift(metric, local_median, prof.global_medians[metric], prof.global_mads[metric], source="covariance_pair"))
         shifts.sort(key=lambda s: s.magnitude, reverse=True)
+        shifts[0], own = _per_event(result.data, cand.row_indices, shifts[0], config, spatial)  # mined per cell, confirmed per event
         primary = shifts[0]
         values = rows[primary.metric].to_numpy(dtype=float)
-        p_value, rho, n_eff_factor = _median_evidence(values, cand.row_indices, spatial, primary.global_median, primary.global_mad)
+        mean = primary.metric in means
+        p_value, rho, n_eff_factor = _median_evidence(values, cand.row_indices, spatial, primary.global_median, primary.global_mad, own, mean)
         pid = pattern_id(dataset_id, cand.conditions)
-        provenance_extra = {}
+        provenance_extra: dict[str, Any] = {"means": read} if (read := [s.metric for s in shifts if s.metric in means]) else {}
         if spatial:
-            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests)
-            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, **stats).to_dict()
+            scope = [(c.attribute, c.value) for c in cand.conditions]
+            p_context = _context_evidence(result.data, scope, cand.expression, primary, spatial, config, family, mean)
+            stats = _spatial_stats(values, cand.row_count, rho, n_eff_factor, primary, result.n_tests, p_context, family, own, mean)
+            provenance_extra["spatial"] = SpatialProvenance(resolution=spatial.resolution, baseline=spatial.baseline, **stats).to_dict()
         insights.append(
             Insight(
                 id=pid,
@@ -457,19 +567,27 @@ def selector_conditions(expression: str) -> list[tuple[str, str]] | None:
     return [m.groups() for m in found] if found and "".join(m.group(0) for m in found) == expression else None
 
 
-def _global_stats(column: pd.Series) -> tuple[float, float]:
-    """A metric's whole-table median and MAD (the EDA's robust scale)."""
+def _global_stats(column: pd.Series, mean: bool = False) -> tuple[float, float]:
+    """A metric's whole-table location (its median, or its mean for a metric of ``means_of``) and MAD (the EDA's robust
+    scale)."""
     values = column.dropna()
-    return float(np.median(values)), float(eda.calculate_mad(values))
+    return _location(values, mean), float(eda.calculate_mad(values))
 
 
 def _median_evidence(
-    values: np.ndarray, rows: np.ndarray, spatial: SpatialContext | None, global_median: float, global_mad: float
+    values: np.ndarray,
+    rows: np.ndarray,
+    spatial: SpatialContext | None,
+    global_median: float,
+    global_mad: float,
+    weights: np.ndarray | None = None,
+    mean: bool = False,
 ) -> tuple[float, float, float]:
-    """(p, the subgroup's Moran's I, its n_eff factor) of the primary metric's median test, as an insight records them."""
+    """(p, the subgroup's Moran's I, its n_eff factor) of the primary metric's median test (its mean's, ``mean``), as an
+    insight records them; ``weights``: the cohort's cells' events (``_event_weights``)."""
     rho = subgroup_moran(values, rows, spatial) if spatial else 0.0  # the subgroup's own dependence, not the map's
     factor = effective_n_factor(rho)
-    return _median_test(values, global_median, global_mad, factor), rho, factor
+    return _median_test(values, global_median, global_mad, factor, weights, mean), rho, factor
 
 
 def _shift(metric: str, local_median: float, global_median: float, global_mad: float, magnitude: float | None = None, source: str = "eda") -> Shift:
@@ -480,26 +598,107 @@ def _shift(metric: str, local_median: float, global_median: float, global_mad: f
     return Shift(metric, float(sign * z), local_median, global_median, global_mad, source)
 
 
-def _spatial_stats(values: np.ndarray, cells: int, rho: float, factor: float, primary: Shift, n_tests: int) -> dict[str, Any]:
+def _spatial_stats(
+    values: np.ndarray,
+    cells: int,
+    rho: float,
+    factor: float,
+    primary: Shift,
+    n_tests: int,
+    p_context: float | None = None,
+    context_family: int = 1,
+    weights: np.ndarray | None = None,
+    mean: bool = False,
+) -> dict[str, Any]:
     """What discovery records of a geo subgroup's own spatial dependence (``SpatialProvenance`` but its resolution): the
-    one place the rounding lives, for the mining and for the recomputation that must reproduce it."""
-    p_iid = _median_test(values, primary.global_median, primary.global_mad)
+    one place the rounding lives, for the mining and for the recomputation that must reproduce it. With ``weights`` the
+    effective size is Kish's of the cells' events, times the Moran factor."""
+    p_iid = _median_test(values, primary.global_median, primary.global_mad, weights=weights, mean=mean)
+    finite = np.isfinite(values)
+    n = finite.sum() if weights is None else weights[finite].sum() ** 2 / (weights[finite] ** 2).sum()
     return {
         "cells": cells,
         "moran_i": round(rho, 4),
-        "n_eff": round(int(np.isfinite(values).sum()) * factor, 1),
+        "n_eff": round(float(n) * factor, 1),
         "p_adjusted_iid": min(1.0, p_iid * n_tests),
+        **({"p_context": p_context, "context_family": context_family} if p_context is not None else {}),
     }
 
 
+def _context_evidence(
+    data: pd.DataFrame,
+    conditions: list[tuple[str, str]],
+    expression: str,
+    primary: Shift,
+    spatial: SpatialContext,
+    config: MinerConfig,
+    family: int = 1,
+    mean: bool = False,
+) -> float | None:
+    """``p_context`` of a cohort with a condition on a context layer's band (docs/02_discovery.md §2.9): the share of draws
+    — the layers the scope names dealt anew within their parent cells by one permutation (``context.deal``: they keep
+    their places to each other), each band read with the
+    observed edges, the other conditions fixed — whose cohort's median-test |z| (with that cohort's own n_eff) is at least
+    the observed cohort's, (1 + hits) / (draws + 1); a draw below ``MIN_SUPPORT_ROWS`` rows is no draw. |z|, not p: a
+    strong cohort's p underflows to 0 and would tie with every strong draw. The gate reads it times ``family``, the
+    upload's context cohorts (Bonferroni, as ``p_adjusted``), so the draws planned are at least 2 · family /
+    MAX_P_ADJUSTED — the least adjusted p can pass. The draws stop once none left could bring the adjusted p under the
+    gate (every one a miss: (1 + hits) / (draws + left + 1) · family past MAX_P_ADJUSTED), the p then the share so far:
+    a cohort the gate refuses costs what deciding it takes (the second strong draw of forty cohorts, half the planned
+    draws of a scope the deal rarely fills), and one it admits draws them all, its p as the whole run's. None without
+    such a condition or with ``CONTEXT_PERMUTATIONS`` 0. Seeded from the scope with each layer named by its points
+    (``ContextLayer.key``), so a re-check draws the same and a renamed copy of a layer is the same evidence."""
+    by_column = {layer.column: layer for layer in spatial.context.values()}
+    named = [(by_column[a], v) for a, v in conditions if a in by_column]
+    if not named or config.context_permutations <= 0:
+        return None
+    fixed = np.zeros(len(data), dtype=bool)
+    fixed[cohort_rows(data, [(a, v) for a, v in conditions if a not in by_column])] = True
+    values, weights = data[primary.metric].to_numpy(dtype=float), _event_weights(primary.metric, config, spatial)
+    observed = _cohort_z(values, cohort_rows(data, conditions), spatial, primary, weights, mean)
+    seed = expression
+    for layer in spatial.context.values():  # the layer by its points, not its file's name
+        seed = seed.replace(layer.column, f"context:{layer.key or layer.name}")
+    rng = np.random.default_rng(config.eda_random_seed ^ int(stable_hash(seed), 16))
+    planned = max(config.context_permutations, math.ceil(2 * family / config.max_p_adjusted))
+    hits = draws = 0
+    for left in range(planned - 1, -1, -1):
+        perm, mask = deal(named[0][0], rng), fixed.copy()  # one deal for every named layer, its parents' totals kept
+        for layer, value in named:
+            mask &= dealt_band(layer, perm) == value
+        rows = np.flatnonzero(mask)
+        if len(rows) >= config.min_support_rows:
+            draws += 1
+            hits += _cohort_z(values, rows, spatial, primary, weights, mean) >= observed
+        if (1 + hits) * family > config.max_p_adjusted * (draws + left + 1):  # refused whatever the draws left
+            break
+    return (1 + hits) / (draws + 1)
+
+
+def _cohort_z(
+    values: np.ndarray, rows: np.ndarray, spatial: SpatialContext, primary: Shift, weights: np.ndarray | None = None, mean: bool = False
+) -> float:
+    """|z| of the median test (the mean's, ``mean``) of the metric ``values`` over the cohort ``rows``, with the cohort's
+    own n_eff (and its cells' events as weights, ``_event_weights``)."""
+    factor = effective_n_factor(subgroup_moran(values[rows], rows, spatial))
+    return abs(_median_z(values[rows], primary.global_median, primary.global_mad, factor, None if weights is None else weights[rows], mean))
+
+
 def recompute_statistics(
-    frame: pd.DataFrame, conditions: list[tuple[str, str]], expression: str, metrics: list[str], spatial: SpatialContext | None, n_tests: int
+    frame: pd.DataFrame,
+    conditions: list[tuple[str, str]],
+    expression: str,
+    metrics: list[str],
+    spatial: SpatialContext | None,
+    n_tests: int,
+    config: MinerConfig,
+    context_family: int = 1,
 ) -> dict[str, Any]:
     """One insight's rows and numbers again from its table: the rows its ``conditions`` select (and those its EDA
     ``expression`` selects), the support, each of ``metrics``' shift (the first is the primary), the primary's median
-    test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance.
-    Not recomputed: ``NOT_RECOMPUTED``."""
-    profile = eda.step1_profile_data(frame)
+    test with the same effective n, the adjusted p over ``n_tests`` and, for a geo dataset, the spatial provenance (its
+    ``p_context`` drawn again under ``config`` over the record's ``context_family``). Not recomputed: ``NOT_RECOMPUTED``."""
+    profile = eda.step1_profile_data(frame, asked_metrics(spatial))
     data = profile["data_safe"]
     rows = cohort_rows(data, conditions)
     selector = selector_conditions(expression)
@@ -507,15 +706,17 @@ def recompute_statistics(
     out["support_fraction"] = len(rows) / max(int(profile["total_rows"]), 1)
     if not len(rows):
         return out
-    cohort, shifts = data.iloc[rows], []
+    cohort, shifts, means = data.iloc[rows], [], set(means_of(data, spatial))
     for metric in metrics:
-        shifts.append(_shift(metric, float(np.median(cohort[metric].dropna())), *_global_stats(data[metric])))
-    primary = shifts[0]
+        shifts.append(_shift(metric, _location(cohort[metric], metric in means), *_global_stats(data[metric], metric in means)))
+    shifts[0], own = _per_event(data, rows, shifts[0], config, spatial)  # as mining confirmed it
+    primary, mean = shifts[0], shifts[0].metric in means
     values = cohort[primary.metric].to_numpy(dtype=float)
-    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad)
+    p_value, rho, factor = _median_evidence(values, rows, spatial, primary.global_median, primary.global_mad, own, mean)
     out |= {"shifts": [asdict(s) for s in shifts], "p_value": p_value, "p_adjusted": min(1.0, p_value * n_tests)}
     if spatial:
-        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests)
+        p_context = _context_evidence(data, conditions, expression, primary, spatial, config, context_family, mean)
+        out["spatial"] = _spatial_stats(values, len(rows), rho, factor, primary, n_tests, p_context, context_family, own, mean)
     return out
 
 

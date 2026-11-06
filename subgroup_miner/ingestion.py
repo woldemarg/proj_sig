@@ -6,6 +6,7 @@ import csv
 import functools
 import hashlib
 import zoneinfo
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,18 @@ import pandas as pd
 
 from insight_contracts import TIME_GRIDS
 from subgroup_miner.config import MinerConfig
-from subgroup_miner.spatial import SpatialContext, SpatialError, build_cells, forget_profile, locate_points, parse_geo, parse_times, select_levels
+from subgroup_miner.context import DEFAULT_RING, RINGS, ContextSource
+from subgroup_miner.spatial import (
+    GEO_MODE_MAX_LEVELS,
+    SpatialContext,
+    SpatialError,
+    build_cells,
+    forget_profile,
+    locate_points,
+    parse_geo,
+    parse_times,
+    select_levels,
+)
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -90,10 +102,21 @@ def dataset_fingerprint(
     geo: str | None = None,
     left_out: list[str] | None = None,
     time: str | None = None,
+    context: list[str] | None = None,
+    context_ring: int = 1,
+    where: str | None = None,
+    counts: Sequence[str] = (),
+    weights: bool = False,
+    baseline: str | None = None,
 ) -> str:
     """Content-addressed dataset id from the sha256 of the file's bytes (``read_file``): same bytes + same derivation
     options -> same id. ``time``: ``<column>:<grid>`` (``auto`` as asked: its unit is fitted after admission) — the same
-    file with its time apart is another analysis."""
+    file with its time apart is another analysis. ``context``: ``<layer>:<sha12>:<locator>`` per context layer, in any
+    order — the same points with another layer beside them are another analysis too; ``context_ring`` their disk, mixed in
+    only when it is not 1 (the disk of every upload before the option, which keeps its id; the default is now 0); ``where`` a reading's row filter,
+    and ``counts`` the values counted per cell, each mixed in only when given (a whole file keeps its id); ``weights`` the
+    event-weighted median of the shares (``WEIGHT_BY_EVENTS``), mixed in only when on; ``baseline`` the zone baseline,
+    mixed in only when it is not the map."""
     h = digest.copy()
     h.update(repr(sorted(bins.items())).encode("utf-8"))
     if categories:  # mixed in only when overrides apply: a plain file keeps its plain id
@@ -104,6 +127,18 @@ def dataset_fingerprint(
         h.update(f"left_out={sorted(left_out)}".encode())
     if time:
         h.update(f"time={time}".encode())
+    if context:
+        h.update(f"context={sorted(context)}".encode())
+        if context_ring != 1:
+            h.update(f"ring={context_ring}".encode())
+    if where:
+        h.update(f"where={where}".encode())
+    if counts:
+        h.update(f"counts={sorted(counts)}".encode())
+    if weights:
+        h.update(b"weights=events")
+    if baseline:
+        h.update(f"baseline={baseline}".encode())
     return "ds-" + h.hexdigest()[:12]
 
 
@@ -161,8 +196,10 @@ _kept = functools.lru_cache(maxsize=1)(_parse)  # ponytail: one file, as the lev
 
 
 def forget_tables() -> None:
-    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``) and its points' profile."""
+    """Drop the parse kept for the levels of an upload (``read_file(shared=True)``), its points' profile and its
+    context layers' points."""
     _kept.cache_clear()
+    _context_points.cache_clear()
     forget_profile()
 
 
@@ -257,6 +294,76 @@ def parse_tz(tz: str | None) -> str | None:
     return name
 
 
+def parse_ring(ring: int | str | None) -> int:
+    """A context layer's disk (``RINGS``): the cell alone (0, ``DEFAULT_RING``: None or empty), with its six
+    neighbours (1), two rings (2). Another value is ``invalid_options``."""
+    text = str(DEFAULT_RING if ring is None else ring).strip() or str(DEFAULT_RING)
+    if text not in map(str, RINGS):
+        raise IngestionError(
+            "invalid_options", f"context_ring {ring!r}: one of {', '.join(map(str, RINGS))} — the rings around a cell its layers are counted over"
+        )
+    return int(text)
+
+
+def parse_baseline(spec: str | None) -> str | None:
+    """What a geo level's metrics are read against (docs/02_discovery.md §2.9): ``map`` (the default: None or empty) or
+    ``zone`` (each cell's parent one resolution coarser). Another value is ``invalid_options``."""
+    text = (spec or "map").strip().lower() or "map"
+    if text not in {"map", "zone"}:
+        raise IngestionError("invalid_options", f"baseline {spec!r}: map (every cell) or zone (the cell's parent cell)")
+    return None if text == "map" else text
+
+
+def parse_where(spec: str | None) -> str | None:
+    """A reading's row filter as written (``<column>=<value>``: one column, one value) -> ``column=value`` trimmed, None
+    for none; another shape is ``invalid_options``."""
+    if not (text := (spec or "").strip()):
+        return None
+    column, sep, value = text.partition("=")
+    if not (sep and column.strip() and value.strip()):
+        raise IngestionError("invalid_options", f"where {spec!r}: one column=value")
+    return f"{column.strip()}={value.strip()}"
+
+
+def check_counts(frame: pd.DataFrame | None, spec: str | None, min_rows: int) -> list[dict[str, Any]]:
+    """The values to count per cell (``<column>=<value>,...``, each as ``parse_where`` reads it, once each, in order),
+    each with its rows and its status: ``ok`` — a per-type counter of the cells — or ``sparse`` (fewer than ``min_rows``
+    rows: too few events for a frequency; no counter). A column the frame lacks, a number or one that is no category,
+    and a value no row holds are ``invalid_options`` (``filter_rows``). None asked, none (the frame is not read)."""
+    out = []
+    for where in dict.fromkeys(parse_where(part) for part in (spec or "").split(",") if part.strip()):
+        column, _, value = where.partition("=")
+        rows = len(filter_rows(frame, where))
+        out.append({"column": column, "value": value, "rows": rows, "status": "ok" if rows >= min_rows else "sparse"})
+    return out
+
+
+def filter_rows(frame: pd.DataFrame, where: str) -> pd.DataFrame:
+    """The rows of ``frame`` whose ``where`` column (``parse_where``) holds the value, read as text, that column dropped:
+    it is constant now. A column the frame lacks, a number or one of more than ``GEO_MODE_MAX_LEVELS`` values (no
+    category to split by), and a value no row holds are ``invalid_options``, the column's values listed with their rows.
+    The one filter of a reading, its target's rows and a layer's alike (docs/02_discovery.md §2.9)."""
+    column, _, value = where.partition("=")
+    if column not in frame.columns:
+        raise IngestionError("invalid_options", f"where {where}: no column {column!r}")
+    text = frame[column].astype("string")
+    counts = text.value_counts()
+    if pd.api.types.is_numeric_dtype(frame[column]) or not 2 <= len(counts) <= GEO_MODE_MAX_LEVELS:
+        raise IngestionError(
+            "invalid_options", f"where {where}: {column!r} is not a category to split by (2–{GEO_MODE_MAX_LEVELS} values, not a number)"
+        )
+    if value not in counts.index:
+        listed = ", ".join(f"{v} ({n})" for v, n in counts.items())
+        raise IngestionError("invalid_options", f"where {where}: no row holds {value!r}; the values of {column}: {listed}")
+    return frame[(text == value).fillna(False).to_numpy()].drop(columns=[column]).reset_index(drop=True)
+
+
+def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
+    """A stored file's rows as the levels of one upload read them (the shared parse), only ``where``'s when given."""
+    frame = read_file(Path(path), shared=True)[0]
+    return filter_rows(frame, where) if where else frame
+
+
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
     """A time column as UTC times, read in the one format that reads most of it (``spatial.parse_times``: the reading
     a geo level's cells count their days by too); a time without a zone is taken in ``tz``, UTC by default. A column the
@@ -291,6 +398,11 @@ def load_dataset(
     time: str | None = None,
     grid: str | None = None,
     tz: str | None = None,
+    context: Sequence[tuple] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
+    context_ring: int | str | None = DEFAULT_RING,
+    where: str | None = None,
+    count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> LoadedDataset:
     """``bins`` / ``categories`` = None -> the configured defaults, applied leniently (columns a
     dataset does not have are skipped); an explicit value is applied strictly. With ``strict`` False (the levels of one
@@ -302,7 +414,13 @@ def load_dataset(
     (``read_times``) and left out of the table, binned later by ``grid`` (``parse_grid``; ``auto``, the default, is
     ``resolve_grid`` of the span of the rows the series are of — a geo level's located points, a table's every row —,
     a unit the commit may coarsen for the admitted insights; §2.10) in the calendar of ``tz`` (``parse_tz``; UTC by
-    default, and the zone of a time written without one) — discovery never sees it."""
+    default, and the zone of a time written without one) — discovery never sees it. ``context``: ``(layer, path,
+    locator[, window])`` per context layer — another type's points, read apart (``read_context``; ``window`` keeps its
+    events within a span) and counted into the cells as one
+    forced band each over the disk of ``context_ring`` rings around a cell (``parse_ring``; §2.9); it needs ``geo``.
+    ``where``: the rows holding one value of one column (``filter_rows``), its own reading of the file (§2.9).
+    ``count_values``: ``column=value`` each, counted per cell (``count_<column>_<value>``; geo only, §2.9); ``baseline``
+    ``zone`` reads every cell metric against its parent cell's median (``parse_baseline``; geo only, §2.9)."""
     path = Path(path)
     if not path.is_file():
         raise IngestionError("unsupported_file", f"File not found: {path}")
@@ -312,7 +430,13 @@ def load_dataset(
         geo_spec = parse_geo(geo, config.geo_resolution) if geo else None
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
+    if context and not geo_spec:
+        raise IngestionError("invalid_options", "context layers need the geo option: they are counted into its cells")
+    ring = parse_ring(context_ring)
+    where, baseline = parse_where(where), parse_baseline(baseline)
+    layers = [read_context(*layer) for layer in context]
     frame, digest = read_file(path, shared=shared)
+    frame = filter_rows(frame, where) if where else frame
     if frame.shape[1] < 2:
         raise IngestionError("invalid_schema", "Need at least one categorical and one numeric column")
     if len(frame) < config.min_rows:
@@ -341,11 +465,13 @@ def load_dataset(
     point_values = None
     if geo_spec:
         points = frame
-        key = (digest.hexdigest(), geo_spec[0]) if shared else None  # the levels of one upload: one point profile
-        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key)
+        key = (digest.hexdigest(), geo_spec[0], where) if shared else None  # the levels of one reading: one point profile
+        frame, spatial, geo_warnings = _to_cells(frame, geo_spec, config, key, [source for source, _ in layers], ring, count_values, baseline)
         warnings += geo_warnings
         if times is not None:  # the series of a geo pattern read its points (docs/02_discovery.md §2.10)
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
+            if spatial.baseline != "zone":  # and each point's type: a zoned share or count is a residual, no point's
+                point_values = pd.concat([point_values, point_types(points, spatial.levels)], axis=1)
     if time:  # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
         grid = resolve_grid(times if spatial is None else times[spatial.point_cell >= 0], option)
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
@@ -369,6 +495,12 @@ def load_dataset(
             geo=_geo_text(geo_spec),
             left_out=left_out,
             time=f"{time}:{option}" + (f":{tz}" if tz else "") if time else None,
+            context=[fingerprint for _, fingerprint in layers],
+            context_ring=ring,
+            where=where,
+            counts=count_values if geo_spec else (),
+            weights=config.weight_by_events and spatial is not None and any(c.startswith("share_") for c in frame.columns),  # only where they apply
+            baseline=baseline if geo_spec else None,
         ),
         filename=filename or path.name,
         bins=present_bins,
@@ -385,11 +517,11 @@ def load_dataset(
     )
 
 
-def auto_levels(path: Path, locator: str, config: MinerConfig, region_levels: tuple[int, ...]) -> dict[str, Any]:
-    """``select_levels`` for the points of a stored file (the ``@auto`` resolution of an upload), its parse kept for
-    the levels (``read_file(shared=True)``)."""
+def auto_levels(path: Path, locator: str, config: MinerConfig, region_levels: tuple[int, ...], where: str | None = None) -> dict[str, Any]:
+    """``select_levels`` for the points of a stored file (the ``@auto`` resolution of an upload) — ``where``'s rows
+    when given —, its parse kept for the levels (``read_rows``)."""
     try:
-        lat, lon, _ = locate_points(read_file(Path(path), shared=True)[0], locator)
+        lat, lon, _ = locate_points(read_rows(path, where), locator)
         return select_levels(lat, lon, region_levels, min_rows=config.min_rows, min_cell_points=config.min_cell_points)
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc
@@ -399,17 +531,79 @@ def _geo_text(spec: tuple[str, int] | None) -> str | None:
     return f"{spec[0]}@{spec[1]}" if spec else None
 
 
+def point_types(points: pd.DataFrame, levels: Mapping[str, tuple[str, str]]) -> pd.DataFrame:
+    """Each point's type as one indicator per share or per-type counter of the cells (``SpatialContext.levels``: metric ->
+    its column and value), named by the metric: 1 where the point's value is that value, 0 elsewhere — the series of a
+    count or a share reads its points by them (docs/02_discovery.md §2.10)."""
+    return pd.DataFrame(
+        {m: points[col].astype("string").eq(value).fillna(False).astype(float).to_numpy() for m, (col, value) in levels.items() if col in points},
+        index=points.index,
+    )
+
+
+def read_context(
+    name: str, path: Path, locator: str, window: tuple[str, str | None, str, str] | None = None, where: str | None = None
+) -> tuple[ContextSource, str]:
+    """A context layer's points -> (them, its fingerprint part ``<layer>:<sha12>:<locator>``); a file without a point
+    is refused. Read once for the levels of an upload (kept by the file's stamp, as ``read_file`` keeps the target's;
+    a file changed since reads anew), never through the shared parse: that holds the upload's own file. ``window``
+    ``(time column, its zone, first, last)`` keeps the events within the span (``align=span``, a time outside it or
+    unread is no event of it) and names the span in the part: ``…:<time>@<first>..<last>``; ``where`` reads the
+    layer's rows that hold one value (``filter_rows``, the target's filter) and ends the part ``…:<column>=<value>``."""
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError as exc:  # removed meanwhile: as a missing source
+        raise IngestionError("unsupported_file", f"context layer {name!r}: file not found: {path}") from exc
+    try:
+        lat, lon, sha, times = _context_points(str(path), locator, *(window or (None, None))[:2], where, st.st_mtime_ns, st.st_size)
+    except (SpatialError, IngestionError) as exc:
+        raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
+    if window:  # the events within the span, the others as points without a place
+        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
+        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+    if not (np.isfinite(lat) & np.isfinite(lon)).any():
+        inside = f"no event of it falls within {window[2]}..{window[3]}" if window else f"No valid point in {path.name}"
+        raise IngestionError("invalid_options", f"context layer {name!r}: {inside}")
+    window_part = f":{window[0]}@{window[2]}..{window[3]}" if window else ""
+    key = f"{sha[:12]}:{locator}{window_part}" + (f":{where}" if where else "")
+    return ContextSource(name, lat, lon, key), f"{name}:{key}"
+
+
+@functools.lru_cache(maxsize=4)  # ponytail: the layers of the upload running now (at most two); keyed by the file's stamp
+def _context_points(
+    path: str, locator: str, time: str | None, tz: str | None, where: str | None, *_stamp: int
+) -> tuple[np.ndarray, np.ndarray, str, pd.Series | None]:
+    frame, digest = read_file(Path(path))
+    frame = filter_rows(frame, where) if where else frame
+    lat, lon, _ = locate_points(frame, locator)
+    return lat, lon, digest.hexdigest(), read_times(frame, time, tz) if time else None
+
+
 def _to_cells(
-    frame: pd.DataFrame, spec: tuple[str, int], config: MinerConfig, profile_key: object = None
+    frame: pd.DataFrame,
+    spec: tuple[str, int],
+    config: MinerConfig,
+    profile_key: object = None,
+    context: Sequence[ContextSource] = (),
+    context_ring: int = DEFAULT_RING,
+    count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
     """Point rows -> H3 cell rows; the neighbourhood lags become quartile-band dimensions. ``profile_key``: the levels of
-    one upload profile its point columns once (``spatial.point_profile``)."""
+    one upload profile its point columns once (``spatial.point_profile``); ``context``: the layers counted into the cells,
+    each over the disk of ``context_ring`` rings; ``count_values`` the values counted per cell; ``baseline`` ``zone``
+    the metrics read against their parent cell's median."""
     try:
         cells, ctx, warnings = build_cells(
             frame,
             *spec,
             min_cell_points=config.min_cell_points,
             profile_key=profile_key,
+            context=context,
+            context_ring=context_ring,
+            count_values=count_values,
+            baseline=baseline,
         )
     except SpatialError as exc:
         raise IngestionError("invalid_options", str(exc)) from exc

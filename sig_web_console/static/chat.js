@@ -86,7 +86,7 @@ function botCard(turn) {
     if (it.folded_into) return "";  // another level of the same finding: shown on its host's card
     const s = it.statistics;
     return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc(word(reached(it)))}</span>` +
-      (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") +
+      (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") + layerChip(it.provenance.dataset_id) +
       (it.also && it.also.length ? `<span class="role" title="Та сама знахідка на іншому рівні цього завантаження">також ${esc(it.also.join(", "))}</span>` : "") +
       (area && it.key in area ? `<span class="role" title="Її комірки мапи проти зони з питання">${area[it.key] ? "у виділеній зоні" : "поза виділеною зоною"}</span>` : "") +
       (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") +
@@ -170,7 +170,7 @@ function insightCard(turn) {
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +
     (links.length ? `<h4>Пов'язані знахідки</h4>${links.map((it) => nbRow(it.id, it.label, it.word)).join("")}` : "") +
-    `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph">Показати в графі</button></div></div>`;
+    `</div><div class="followups ic-actions"><button type="button" class="ic-ask">Запитати граф про це</button><button type="button" class="ic-graph" data-dev>Показати в графі</button></div></div>`;
 }
 
 function botTurn(turn, isLast) {

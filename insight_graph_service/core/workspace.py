@@ -35,6 +35,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -135,12 +136,17 @@ def acquire_writer_lock(workspace_dir: Path | str) -> None:
     _HELD_LOCKS[str(path)] = handle
 
 
+def new_batch_id(created: str) -> str:
+    """A batch id: its creation time to the second and six random hex digits."""
+    return f"B{created[:19].replace('-', '').replace(':', '')}-{uuid.uuid4().hex[:6]}"
+
+
 def utc_now() -> str:
     """Timestamps of records and snapshots: ISO 8601, UTC, whole seconds."""
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-TERMINAL = frozenset({"READY", "FAILED", "SKIPPED"})  # final batch states
+TERMINAL = frozenset({"READY", "FAILED", "SKIPPED", "LAYER"})  # final batch states (LAYER: points kept as a layer, never mined)
 
 
 class RepresentationMismatch(RuntimeError):
@@ -239,6 +245,10 @@ class Workspace:
 
     def save_rejections(self, dataset_id: str, rejections: list[dict[str, Any]]) -> None:
         atomic_write_json(self.dataset_dir(dataset_id) / "rejections.json", rejections)
+
+    def load_rejections(self, dataset_id: str) -> list[dict[str, Any]] | None:
+        """What selection refused of a dataset (``save_rejections``), None without it; ``dataset_id`` an id, never a path."""
+        return read_json(self.datasets_dir / dataset_id / "rejections.json") if re.fullmatch(r"[\w-]+", dataset_id) else None
 
     def covers_ref(self, dataset_id: str, pattern_id: str) -> str:
         """Where a pattern's covered row positions are stored (its ``provenance.rows_ref``)."""
@@ -478,17 +488,18 @@ class Workspace:
     def remove_datasets(self, dataset_ids: set[str], batches: list[dict[str, Any]], trash: Path) -> None:
         """Move the datasets' artefacts — their folders, their batches' blocks, records and uploads — into ``trash`` (inside
         the checkpoint), so a rollback can put them back and discarding the checkpoint deletes them. An upload another
-        batch still points at (another level of the same upload) stays."""
+        batch still points at (another level of the same upload) stays, and so do its context files."""
         root = self.root.resolve()
         for b in batches:
             self._batches.pop(b["batch_id"], None)
-        shared = {b.get("source_path") for b in self._batches.values()}
+        files = lambda b: [b.get("source_path") or "", *(c["path"] for c in b.get("context", ()))]  # noqa: E731
+        shared = {f for b in self._batches.values() for f in files(b)}
         paths = [self.datasets_dir / ds for ds in sorted(dataset_ids)]
         for b in batches:
-            source = Path(b.get("source_path") or "")
             paths += [self.journal_dir / "blocks" / f"{b['batch_id']}.npz", self.batch_path(b["batch_id"])]
-            if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()) and str(source) not in shared:
-                paths.append(source)
+            for source in map(Path, files(b)):
+                if source.is_file() and source.resolve().is_relative_to(self.uploads_dir.resolve()) and str(source) not in shared:
+                    paths.append(source)
         for path in paths:
             if path.exists():
                 dest = trash / path.resolve().relative_to(root)
