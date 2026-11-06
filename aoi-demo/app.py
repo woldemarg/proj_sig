@@ -35,7 +35,8 @@ from shapely.geometry import shape
 log = logging.getLogger("aoi")
 HERE = Path(__file__).resolve().parent
 
-SIG_URL = os.environ.get("SIG_URL", "http://127.0.0.1:8765")
+SIG_URL = os.environ.get("SIG_URL", "http://127.0.0.1:8765")  # SIG's graph service (or a console edge, which routes both)
+SIG_CHAT_URL = os.environ.get("SIG_CHAT_URL", SIG_URL)  # SIG's narrator: /api/chat/query
 ADS_URL = os.environ.get("ADS_URL", "http://127.0.0.1:8000")
 LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8080")
 DEMO_DIR = Path(os.environ.get("DEMO_DIR", HERE.parent / "data" / "demo"))  # the repo's shipped datasets (data/demo/SOURCES.md)
@@ -155,7 +156,7 @@ def sig_chat(cells: list[str], question: str) -> dict[str, Any]:
     user's question or without one (the console's zone-only ask: "no text: the map area below is the question"). With
     both, the graph scores its seeds by the text and the place together; its LLM then reads the evidence by the
     project's rules: observations, then hypotheses."""
-    r = http.post(f"{SIG_URL}/api/chat/query", json={"question": question, "cells": cells, "use_llm": True})
+    r = http.post(f"{SIG_CHAT_URL}/api/chat/query", json={"question": question, "cells": cells, "use_llm": True})
     if r.status_code >= 300:
         raise RuntimeError(f"SIG chat: {r.status_code} {r.text[:300]}")
     return r.json()
@@ -209,7 +210,7 @@ def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
     evidence its model read, the files the findings come from, and the call's trace — the same shape for the preview on
     polygon close (no question) and for the ask (the question), so the ask can fall back on the preview."""
     t0 = time.time()
-    trace = {"call": f"POST {SIG_URL}/api/chat/query", "question": question, "cells_count": len(cells)}
+    trace = {"call": f"POST {SIG_CHAT_URL}/api/chat/query", "question": question, "cells_count": len(cells)}
     qa = sig_chat(cells, question)
     insights = sig_findings(qa)
     metrics, mode, model = qa.get("metrics") or {}, qa.get("answer_mode"), (qa.get("llm") or {}).get("model")

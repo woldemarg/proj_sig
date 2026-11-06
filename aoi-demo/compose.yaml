@@ -1,14 +1,18 @@
 # The whole demo in one command:   docker compose up -d --build
 # SIG runs from this repo (../compose.yaml), ADS from its own repo (path in .env: ADS_DIR); nothing of them is copied here.
-# Their compose files are included into this project, so their containers, volumes and networks are this project's: SIG
-# gets a workspace holding only the demo's data. The standalone `sig` and `agentic-data-science` projects publish the same
-# host ports, and ADS fixes its container names, so stop those two first (`docker compose down` there, volumes kept).
+# Their compose files are included into this project, so their containers, volumes and networks are this project's. Only
+# what the demo calls starts (sig.profiles.yaml, ads.profiles.yaml): SIG's graph service, narrator and LLM broker, with a
+# workspace of the demo's own and no host port; ADS's orchestrator, executor, gateway, minio, postgres and MLflow (its
+# traces, http://localhost:5050). ADS publishes
+# its usual host ports and fixes its container names, so stop the standalone `agentic-data-science` project first
+# (`docker compose down` there, volumes kept); your own `sig` stack can keep running.
 name: aoi-demo
 
 include:
   - path:
       - ../compose.yaml
       - ../${SIG_GPU_FILE:-compose.gpu.yaml}
+      - ./sig.profiles.yaml
   - path:
       - ${ADS_DIR:?set ADS_DIR in .env}/docker-compose.full.yml
       - ./ads.profiles.yaml
@@ -21,10 +25,12 @@ services:
       - "127.0.0.1:${DEMO_PORT:-8090}:8090"
     environment:
       HOST: 0.0.0.0
-      SIG_URL: http://web-console:8080  # SIG's console edge (nginx), inside this project
+      SIG_URL: http://insight-graph:8000          # SIG's graph service: uploads, batches, cross runs, geo, search
+      SIG_CHAT_URL: http://evidence-narrator:8000  # SIG's narrator: the chat answer over the graph's evidence
       ADS_URL: http://orchestrator:8000
-      LLM_URL: http://llm:8080          # ADS's LLM gateway: the joint report's model
-    networks: [internal, public]        # internal: SIG and ADS; public: the published port
+      LLM_URL: http://llm:8080                    # ADS's LLM gateway: the joint report's model
+    networks: [internal, public]                  # internal: SIG and ADS; public: the published port
     depends_on:
-      web-console: { condition: service_healthy }
+      insight-graph: { condition: service_healthy }
+      evidence-narrator: { condition: service_healthy }
       orchestrator: { condition: service_started }  # the full ADS compose gives it no healthcheck; /health shows it
