@@ -252,8 +252,6 @@ function setRole(r, layerOnly = false) {
   $("roles").disabled = !r;
   for (const v of ["events", "table", "layer"]) { const el = $(`role-${v}`); el.checked = v === r; el.disabled = layerOnly && v !== "layer"; }
   $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
-  $("count-box").hidden = r !== "events";  // per-type counters: the map's cells only
-  fileTypes($("file").files[0]).then((t) => renderTypes($("count-types"), $("count-values"), t));  // a shipped set's file is the server's: typed
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
   syncTable();
@@ -269,18 +267,6 @@ function profileTypes(b) {
     if (head && key.startsWith(head)) (out[head.slice(6, -1)] ||= []).push(key.slice(head.length));
   }
   return out;
-}
-
-async function fileTypes(f) {
-  /* a CSV's or TSV's text columns of 2 to 20 values in its first rows */
-  // ponytail: a naive split of the first 256 KB, a quoted delimiter breaks its row; the server's read decides
-  if (!f || /\.parquet$/i.test(f.name)) return {};
-  const lines = (await f.slice(0, 262144).text()).split(/\r?\n/).filter(Boolean).slice(0, 2001);
-  const sep = [",", "\t", ";"].sort((a, b) => lines[0].split(b).length - lines[0].split(a).length)[0];
-  const cell = (v) => v.trim().replace(/^"|"$/g, ""), head = lines[0].split(sep).map(cell), seen = head.map(() => new Set());
-  for (const line of lines.slice(1, -1)) line.split(sep).forEach((v, i) => seen[i]?.add(cell(v)));
-  return Object.fromEntries(head.map((h, i) => [h, [...seen[i]].filter(Boolean)])
-    .filter(([h, vs]) => !POINT_COLUMNS.test(h) && vs.length >= 2 && vs.length <= 20 && vs.some((v) => Number.isNaN(Number(v)))));
 }
 
 const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -361,7 +347,7 @@ async function upload() {
     if (geo.trim() && $("table").checked) fd.append("table", "true");
     if ($("time").value.trim()) fd.append("grid", $("grid").value);
     if ($("where").value.trim()) fd.append("where", $("where").value);  // its own reading: the rows holding one value
-    if (geo.trim()) { fd.append("count_values", $("count-values").value); fd.append("baseline", $("baseline").value); }  // the geo cells'
+    if (geo.trim()) fd.append("baseline", $("baseline").value);  // the geo cells'
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
@@ -371,7 +357,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadNote(""); $("upload-dialog").close();
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("where").value = ""; $("count-values").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
+    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("where").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
   }
   catch (err) { setUploadNote(err.message, true); $("upload-btn").disabled = false; }
 }

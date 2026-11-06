@@ -84,10 +84,8 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.set_input_files("#file", str(tmp_path / "points.csv"))
         page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
-        page.click("#count-types .tp[data-v='kind=b']")  # the file's types as toggles, read off its first rows
-        assert page.input_value("#count-values") == "kind=b"
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
-        for field, value in {"#time": "when", "#where": "kind=a", "#count-values": "kind=a"}.items():
+        for field, value in {"#time": "when", "#where": "kind=a"}.items():
             page.fill(field, value)
         page.select_option("#baseline", "zone")
         page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
@@ -101,7 +99,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.fill("#time", "")  # the layer below: its points alone
         page.set_input_files("#metadata", [])
         assert {m.decode() for m in re.findall(rb'; name="([^"]+)"', sent[0])} == {
-            *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "count_values", "baseline"),
+            *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "baseline"),
             *("source", "reliability", "indicators", "glossary", "metadata"),
         }
         page.check("#role-layer")  # changed by hand: the points kept as a layer

@@ -416,10 +416,8 @@ function init() {
   on($("link-opts"), ".link-opt", (el) => runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample }));
   $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) runLink({ file: $("link-file").files[0] }); });
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
-  for (const [box, input] of [["count-types", "count-values"], ["link-types", "link-counts"]]) {  // the types' toggles and the field they fill
-    on($(box), ".tp", (el) => toggleType(el, $(input)));
-    $(input).addEventListener("input", () => $(box).querySelectorAll(".tp").forEach((b) => b.setAttribute("aria-pressed", String(typesOf($(input)).includes(b.dataset.v)))));
-  }
+  on($("link-types"), ".tp", (el) => toggleType(el, $("link-counts")));  // the types' toggles and the field they fill
+  $("link-counts").addEventListener("input", () => $("link-types").querySelectorAll(".tp").forEach((b) => b.setAttribute("aria-pressed", String(typesOf($("link-counts")).includes(b.dataset.v)))));
   $("add-btn").addEventListener("click", () => { setUploadNote(""); $("upload-dialog").showModal(); });
   $("upload-cancel").addEventListener("click", () => $("upload-dialog").close());
   on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
