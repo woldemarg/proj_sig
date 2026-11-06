@@ -200,8 +200,8 @@ BY контролює FDR, не FWER: ворота `p_adjusted ≤ MAX_P_ADJUSTE
 
 ### 7.2 Фрази
 
-- `ctx.glossary` (англійські, в evidence prompt): `context_<шар>_band` → "number of <шар> points in the cell and its six neighbours, in quarters of the cells that have any"; `=q4` → "the cell and its surroundings hold the most <шар> points (top quarter)"; `=none nearby` → "no <шар> point in the cell or around it".
-- `wording.condition_words` (українські): гілка `context_` — «поруч (комірка і сусіди) <шар> у <i>-й чверті (від найменших)», `none nearby` → «поруч немає <шар>»; `column_words` — «кількість <шар> у комірці та шести сусідніх»; `source_column` → `None` для `context_*`.
+- `ctx.glossary` (англійські, в evidence prompt; `context.glossary`): `context_<шар>_band` → "number of <шар> points in the cell and itself only / its six neighbours, in quarters (або «k bands») of the cells that have any"; смуги — за їх фактичною кількістю (`band_words`, двійник `wording.layer_band_words`: квантилі, що збігаються, лишають менше чотирьох — бари на r9 в самій комірці дають дві): верхня смуга завжди "the most", нижня "the fewest", середні "the middle" / "fewer than the middle" / "more than the middle"; `=none nearby` → "no <шар> point in the cell or itself only". До 2026-11-06 смуги називалися чвертями незалежно від їх кількості, і `q2` з двох читалося як "fewer than the middle" — оповідач перевертав знахідку.
+- `wording.condition_words` (українські): гілка `context_` — «кількість <шар> у самій комірці / у комірці та шести сусідніх: мало / нижче середнього / вище середнього / найбільше» (`layer_band_words`, верхня смуга — «найбільше» за будь-якої кількості смуг), `none nearby` → «немає <шар> у самій комірці»; `source_column` → `None` для `context_*`.
 
 ---
 

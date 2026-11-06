@@ -20,7 +20,6 @@ RINGS = (0, 1, 2)  # a layer's disk, the upload's option: the cell alone (the de
 # neighbours stays near most of the cells it was near (88 % of the cells near a bar in the 2026-11-04 experiments, 51 % for
 # the cell alone), so the null reproduces, and refuses, any effect of the layer's own cell. A wider disk is asked for.
 DEFAULT_RING = 0
-BAND_WORDS = {"q1": "the fewest", "q2": "fewer than the middle", "q3": "more than the middle", "q4": "the most"}
 
 
 @dataclass
@@ -131,12 +130,27 @@ def context_bands(
     return columns, layers, words, warnings
 
 
+def band_words(i: int, k: int) -> str:
+    """The i-th of a layer's ``k`` positive bands in plain English, the twin of ``wording.layer_band_words``: the top
+    band is «the most» whatever ``k`` — quantiles that coincide leave fewer than four (the shipped bars at r9, counted
+    in the cell alone, give two: a band named by its quarter would read the opposite of the finding)."""
+    n = max(k, i)
+    if i >= n:
+        return "the most" if n > 1 else "some"
+    if i == 1:
+        return "the fewest"
+    return "the middle" if n == 3 else "fewer than the middle" if i == 2 else "more than the middle"
+
+
 def glossary(layer: ContextLayer, ring: int) -> dict[str, str]:
-    """The plain English of the layer's column and values (``SpatialContext.glossary``)."""
+    """The plain English of the layer's column and values (``SpatialContext.glossary``, the evidence prompt's words)."""
     name = layer.name.replace("_", " ")
     around = "itself only" if ring == 0 else "its six neighbours" if ring == 1 else f"its neighbours within {ring} rings"
-    words = {layer.column: f"number of {name} points in the cell and {around}, in quarters of the cells that have any"}
+    k = max(len(layer.edges) - 1, 1)  # the bands the layer has, as ``band`` names them
+    words = {
+        layer.column: f"number of {name} points in the cell and {around}, in {'quarters' if k == 4 else f'{k} bands'} of the cells that have any"
+    }
     words[f"{layer.column}={NONE_NEARBY}"] = f"no {name} point in the cell or {around}"
-    for q, how in BAND_WORDS.items():
-        words[f"{layer.column}={q}"] = f"the cell and {around} hold {how} {name} points (of the cells that have any)"
+    for i in range(1, k + 1):
+        words[f"{layer.column}=q{i}"] = f"the cell and {around} hold {band_words(i, k)} {name} points (of the cells that have any)"
     return words

@@ -440,3 +440,22 @@ def test_an_asked_counter_is_mined_even_where_its_share_ranks_with_it(tmp_path):
     assert frame[["count_kind_r", "share_kind_r"]].rank().corr().iloc[0, 1] > 0.95  # the redundancy rule's threshold
     result = run_discovery(frame, config, spatial=loaded.spatial)
     assert {"count_kind_r", "share_kind_r"} <= set(result.profile.numerics)
+
+
+def test_the_prompts_band_words_follow_the_layers_band_count():
+    """The English of a layer's bands (the evidence prompt's glossary) names the bands the layer has, as the console's
+    Ukrainian does: the shipped bars at r9, counted in the cell alone, give two bands (most cells with a bar hold one),
+    so «q2» is the top band — «the most», never «fewer than the middle» (on 2026-11-06 the narrator read the finding
+    «more thefts where the bars are» as the opposite)."""
+    from subgroup_miner.context import ContextLayer, band_words, glossary
+
+    def layer(edges):
+        return ContextLayer("bars", np.zeros(1), np.zeros(1, int), np.zeros(2, int), np.zeros(0, int), np.asarray(edges, float))
+
+    two = glossary(layer([1, 3, 43]), 0)
+    assert two["context_bars_band=q2"] == "the cell and itself only hold the most bars points (of the cells that have any)"
+    assert "the fewest" in two["context_bars_band=q1"] and "q3" not in str(two) and "2 bands" in two["context_bars_band"]
+    four = glossary(layer([1, 2, 3, 5, 43]), 1)
+    assert "fewer than the middle" in four["context_bars_band=q2"] and "quarters" in four["context_bars_band"]
+    for k in (1, 2, 3, 4):  # the top band is the top band in both languages
+        assert band_words(k, k) in ("the most", "some") and wording.layer_band_words(k, k + 1) in ("найбільше", "є")
