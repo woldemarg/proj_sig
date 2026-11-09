@@ -1,6 +1,6 @@
 # Geospatial harness: SIG + ADS end-to-end — research and the POC plan
 
-Status: implemented 2026-11-06 — milestone #25, epic #316, issues #317–#321 (four harness PRs against `develop`, ADS on its branch `166-h3-cells-tool`; after a closed review of that branch the plugin tool of §9 became a profiler-gated codegen hint `<H3_Cells>`, see the branch); the sections below are the plan as approved, with §11 experiments still deferred to their triggers.
+Status: implemented 2026-11-06 — milestone #25, epic #316, issues #317–#321 (four harness PRs against `develop`, ADS on its branch `166-h3-cells-tool`; after a closed review of that branch the h3 API of the §9 playbook moved into a profiler-gated codegen hint `<H3_Cells>`; the plugin stayed as a thin router + deliverable over the hint — A/B 2026-11-09: routing and trace visibility, same analysis — see the branch); the sections below are the plan as approved, with §11 experiments still deferred to their triggers.
 Date: 2026-11-06. Repos: `sig` (develop, HEAD d6c0ff7; the harness is `sig/aoi-demo/`); `agentic-data-science` (ADS, master @ 7e422a9).
 Owner's rules: SIG is not changed outside `sig/aoi-demo/`; ADS is changed only on one experimental branch and only for the geo tool + the `h3` package (plus the docs/tests ADS's own `AGENTS.md` demands for that change). The POC is the existing page with three pipes changed; experiments run later, off the happy path, when a real run shows a default is wrong.
 
