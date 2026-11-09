@@ -134,7 +134,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.evaluate(f"GeoMap.pick('{renamed}')")
         page.wait_for_function("$('map-card').querySelector('.mc-shift').textContent.includes('вартість житла')", timeout=10000)
         engine.process(queued["batch_id"])
-        page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
+        page.wait_for_function(f"{deletes}.length === 4 && {deletes}.every((d) => !d)", timeout=10000)  # three rows and the file's own
         browser.close()
         assert not errors, errors
 

@@ -796,7 +796,8 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         page.evaluate("refreshBatches()")
         page.wait_for_function("document.querySelectorAll('#batches .ds').length === 1", timeout=20000)  # the far run; its layer lives under it
         alone = nothing.inner_text()
-        assert "Без знахідок" in alone and "Знахідок з умовою на шар немає" in alone and "Помилка" not in alone and "Спробуйте" not in alone
+        assert "Без знахідок" in alone and "Знахідок з умовою на шар немає" not in alone and "Помилка" not in alone and "Спробуйте" not in alone
+        assert nothing.locator(".chip").get_attribute("title") == "Знахідок з умовою на шар немає"  # said once: the reason in the chip's tooltip
     assert not errors, errors
 
 

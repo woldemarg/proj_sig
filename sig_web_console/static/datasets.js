@@ -77,7 +77,7 @@ function rowBody(b, neutral) {
       timeNotes(b) + warningsOf(b).map((w) => `<div class="ds-note">⚠ ${esc(w)}</div>`).join("") + refusals(b) +
       (p.selected_dimensions && p.selected_dimensions.length ? `<div class="ds-dims">${p.selected_dimensions.map((d) => `<span class="tag">${esc((b.dimension_words || {})[d] || human(d))}</span>`).join("")}</div>` : ""));
   }
-  if (neutral) return `<div class="ds-note">${b.cross ? "Знахідок з умовою на шар немає." : "На цьому рівні стійких знахідок немає."}</div>${more(b, `${refused}${refusals(b)}${timeNotes(b)}<div class="ds-note mono">${esc(b.error.message)}</div>`)}`;  // the codes' dict: the developer's
+  if (neutral) return more(b, `${refused}${refusals(b)}${timeNotes(b)}<div class="ds-note mono">${esc(b.error.message)}</div>`);  // the codes' dict: the developer's
   if (b.status === "FAILED" && b.error) {
     const [title, why, tip] = ERROR_HELP[b.error.code] || ["Обробка не вдалася", b.error.message, ""];
     return `<div class="ds-error"><b>${esc(title)}</b><div class="why">${esc(why)}</div>` + (tip ? `<div class="tip">💡 ${esc(tip)}</div>` : "") +
@@ -92,14 +92,13 @@ function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
   const off = !!layer && (b.status === "LAYER" ? !!b.hidden : (b.hidden_by || []).includes(layer));
   const m = b.metrics || {};
   const state = running ? chip("run", "Обробка") : ready ? `<span class="ds-count">${plural(m.validated_insights ?? 0, "інсайт", "інсайти", "інсайтів")}</span>`
-    : neutral ? chip("", "Без знахідок")
+    : neutral ? chip("", "Без знахідок", b.cross ? "Знахідок з умовою на шар немає" : "На цьому рівні стійких знахідок немає")
     : b.status === "FAILED" ? chip("bad", "Помилка") : b.status === "LAYER" ? `<span class="ds-count">${plural(b.points, "точка", "точки", "точок")}</span>` : chip("", "Пропущено", "Уже проаналізовано — нового немає.");
   const name = ready ? `<button type="button" class="ds-name ds-pick" title="${esc(label)}" aria-pressed="${active}">${esc(label)}</button>` : `<span class="ds-name" title="${esc(label)}">${esc(label)}</span>`;
   const level = !layer && levelOf(b) ? `<span class="ds-lvl" data-dev>${esc(levelOf(b))}</span>` : "";
   const hide = layer ? `<button type="button" class="ds-hide ds-icon" data-hide="${esc(layer)}" data-on="${off ? "" : "1"}"${busy ? " disabled" : ""} ` +
     `aria-label="${off ? "Показати шар" : "Сховати шар"}" title="${busy ? "Іде обробка: зачекайте" : off ? "Показати шар" : "Сховати шар (з усіх датасетів, де він є)"}">${off ? ICON.eyeOff : ICON.eye}</button>` : "";
-  const del = running ? "" : `<button type="button" class="ds-del ds-icon" data-del="${esc(b.dataset_id || b.batch_id)}" data-name="${esc(b.cross ? label : datasetName(b))}"${b.cross ? ` data-layer="${esc(layer)}"` : ""} aria-label="Видалити" ` +
-    `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : b.cross ? "Прибрати шар із цього датасету" : "Прибрати з бази знань"}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
+  const del = running ? "" : binOf([b.dataset_id || b.batch_id], b.cross ? label : datasetName(b), busy, b.cross ? "Прибрати шар із цього датасету" : "Прибрати з бази знань", b.cross ? layer : "");
   return `<div class="ds${ready ? " clickable" : ""}${active ? " active" : ""}${layer ? " layer" : ""}${off ? " off" : ""}" data-ds="${esc(ready ? b.dataset_id : "")}">` +
     `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}<span class="ds-label">${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}</span>${hide}${del}</div>` +
     `${rowBody(b, neutral)}</div>`;
@@ -119,26 +118,32 @@ function uploadGroups(cards) {
 
 const LINK_MIN_LEVEL = 8;  // uploads.LINK_MIN_LEVEL: a layer is linked on a map this fine or finer
 
+const binOf = (ids, name, busy, title, layer = "") =>  // a bin for one dataset, a file's levels, or a layer's run (``layer``)
+  `<button type="button" class="ds-del ds-icon" data-del="${esc(ids.join(" "))}" data-name="${esc(name)}"${layer ? ` data-layer="${esc(layer)}"` : ""} aria-label="Видалити" ` +
+  `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : title}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
+
 function uploadGroup(cards, busy) {
   /* an upload as a tree: its levels under its name (one level is the upload's row), each level's layer runs under it,
-     *+ Додати шар* under the level that can take one, and why none can when its finest map is coarser */
+     *+ Додати шар* under the level that can take one, and under the name why none can when its finest map is coarser */
   const levels = cards.filter((b) => !b.cross), runs = cards.filter((b) => b.cross);
   const ready = levels.filter((b) => b.status === "READY").length, neutral = (b) => ready > 0 && emptyLevel(b);
   const lead = levels[0] || runs[0], host = levels.find((b) => b.linkable), finest = levels.find(geoLevel);  // finest first
   const coarse = !host && finest && finest.status === "READY" && Number(finest.level) < LINK_MIN_LEVEL;
   const layer = (r) => dsRow(r, runLayers(r), busy, { neutral: verdict(r), layer: r.cross[0] });
   const owner = (r) => levels.find((b) => b.level === r.level && b.status === "READY") || levels.find((b) => b.level === r.level);  // two readings of one level: the first READY one shows its runs
+  const why = coarse ? `<div class="ds-note ds-why">Шар додається до мапи рівня ${LINK_MIN_LEVEL} і детальнішої; найдетальніший рівень цього файлу — ${finest.level}.</div>` : "";
   const under = (b) => {
     const kids = runs.filter((r) => owner(r) === b).map(layer).join("") +
-      (b === host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "") +  // uploads.cross_state
-      (coarse && b === finest ? `<div class="ds-note ds-why">Шар додається до мапи рівня ${LINK_MIN_LEVEL} і детальнішої; найдетальніший рівень цього файлу — ${b.level}.</div>` : "");
+      (b === host ? `<button type="button" class="ds-link" data-link="${esc(host.batch_id)}">+ Додати шар</button>` : "");  // uploads.cross_state
     return kids ? `<div class="ds-kids">${kids}</div>` : "";
   };
-  const astray = runs.filter((r) => !owner(r)).map(layer).join("");  // a run whose level is gone
-  const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy) + under(levels[0])
-    : `<div class="ds-group-head"><span class="ds-name">${esc(titleOf(lead) + (lead.where ? ` · ${lead.where}` : ""))}</span></div>` +
+  const astray = runs.filter((r) => !owner(r));  // a run whose level is gone
+  const name = titleOf(lead) + (lead.where ? ` · ${lead.where}` : "");
+  const whole = levels.length > 1 ? binOf([...levels, ...astray].map((b) => b.dataset_id || b.batch_id), name, busy, "Прибрати з бази знань увесь файл: усі його рівні й шари") : "";
+  const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy) + why + under(levels[0])
+    : `<div class="ds-group-head"><span class="ds-name">${esc(name)}</span>${whole}</div>` + why +
       (levels.length ? `<div class="ds-kids">${levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) }) + under(b)).join("")}</div>` : "");
-  return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${body}${astray ? `<div class="ds-kids">${astray}</div>` : ""}</div>`;
+  return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${body}${astray.length ? `<div class="ds-kids">${astray.map(layer).join("")}</div>` : ""}</div>`;
 }
 
 function renderTree(cards, busy) {
@@ -160,24 +165,27 @@ function datasetTrust(t) {
   return chips ? `<div class="ds-src">${chips}</div>` : "";
 }
 
-async function deleteDataset(id, name, layer = "") {
-  /* a dataset out of the knowledge base with its layer runs, then each layer-only upload no run left reads; a layer's
-     row (``layer``) removes that one run */
-  const key = (x) => x.dataset_id || x.batch_id, target = S.batches.find((x) => key(x) === id) || {};
-  const twin = S.batches.some((x) => !x.cross && x.status === "READY" && x.upload_id === target.upload_id && x.level === target.level && key(x) !== id);
-  const runs = layer || target.cross || twin ? [] : [...new Set(S.batches.filter((x) => x.cross && x.upload_id === target.upload_id && x.level === target.level && x.status !== "SKIPPED").map(key))];  // a run names no reading: another one of its level keeps them
-  const gone = new Set([id, ...runs]);
+async function deleteDataset(del, name, layer = "") {
+  /* datasets (``del``: their ids, space-separated — one row's, or a file's levels) out of the knowledge base with their
+     layer runs, then each layer-only upload no run left reads; a layer's row (``layer``) removes that one run */
+  const key = (x) => x.dataset_id || x.batch_id, ids = del.split(" ");
+  const runsOf = (t) => {  // a run names no reading: another one of its level keeps them
+    const twin = S.batches.some((x) => !x.cross && x.status === "READY" && x.upload_id === t.upload_id && x.level === t.level && !ids.includes(key(x)));
+    return layer || t.cross || twin ? [] : S.batches.filter((x) => x.cross && x.upload_id === t.upload_id && x.level === t.level && x.status !== "SKIPPED").map(key);
+  };
+  const runs = [...new Set(ids.flatMap((id) => runsOf(S.batches.find((x) => key(x) === id) || {})))].filter((r) => !ids.includes(r));
+  const gone = new Set([...ids, ...runs]);
   const read = (u) => S.batches.some((x) => (x.cross || []).includes(u) && !gone.has(key(x)) && x.status !== "SKIPPED");
   const layers = [...new Set(S.batches.filter((x) => gone.has(key(x))).flatMap((x) => x.cross || []))]
     .map((u) => S.batches.find((x) => x.upload_id === u && x.status === "LAYER")).filter((x) => x && !read(x.upload_id));
   const files = layers.length ? ` Файли шарів, які більше ніхто не використовує (${layers.map((x) => titleOf(x)).join(", ")}), — теж.` : "";
   const ask = layer ? `Прибрати шар «${name}»?\n\nЙого знахідки зникнуть.${files}`
-    : `Видалити «${name}» з бази знань?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.` +
+    : `Видалити «${name}» з бази знань${ids.length > 1 ? " разом з усіма рівнями" : ""}?\n\nЙого інсайти та їхня належність до тем зникнуть; теми, що лишаться без інсайтів і без зв'язків, — теж.` +
       (runs.length ? ` Разом з ним — ${plural(runs.length, "його шар", "його шари", "його шарів")}.` : "") + files;
   if (!confirm(ask)) return;
   let done = 0;  // one request each, in order: a failure stops there, and the rail shows what is left to delete again
   try {
-    for (const d of [...runs, id, ...layers.map((x) => x.batch_id)]) { await api(`/api/datasets/${encodeURIComponent(d)}`, { method: "DELETE" }); done++; }
+    for (const d of [...runs, ...ids, ...layers.map((x) => x.batch_id)]) { await api(`/api/datasets/${encodeURIComponent(d)}`, { method: "DELETE" }); done++; }
     setUploadMsg("");
   } catch (err) { setUploadMsg(`${done ? "Видалено не все: " : ""}${err.message}${done ? " — решту видно в списку, видаліть ще раз." : ""}`, true); }
   if (gone.has($("dataset-filter").value)) $("dataset-filter").value = "";
@@ -257,6 +265,11 @@ function syncTable() {  // a table's geo is held, not sent: its field disabled
   $("table").title = none ? "У цього набору немає власних чисел поза координатами: без комірок він нічого не виміряє" : "";
 }
 
+function fillOptions(o = {}) {  // the fields a shipped set's manifest fills: as it says, or their defaults for a file of one's own
+  for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
+  $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
+}
+
 const sampleItem = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;
 
 // the upload's role (docs/08_interface.md §8.2): proposed from a shipped set's manifest or a file's header, confirmed or changed
@@ -278,7 +291,7 @@ function setRole(r, layerOnly = false) {
   syncTable();
 }
 
-// the types a dataset holds for *більше подій* (docs/08_interface.md §8.2): column -> values, picked as toggles
+// the types a dataset holds for *більше подій* (docs/08_interface.md §8.2): column -> values, picked in a drop-down list
 function profileTypes(b) {
   /* a mined geo level's shares, share_<column>_<value>: the split whose words the share's glossary states exactly
      (spatial: "share of the cell's events whose <column, _ as space> is <value>"), so a column with a space or an "is" holds */
@@ -295,17 +308,27 @@ function profileTypes(b) {
 
 const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
 function renderTypes(box, input, types) {
-  /* a toggle per value, grouped by column, kept in ``input`` as column=value, …; without types the field is typed by hand */
-  const chosen = new Set(typesOf(input));
-  box.innerHTML = Object.entries(types).map(([col, values]) => `<div class="tp-col"><span class="tp-name">${esc(human(col))}</span>` +
-    values.map((v) => `<button type="button" class="tp" data-v="${esc(`${col}=${v}`)}" aria-pressed="${chosen.has(`${col}=${v}`)}">${esc(human(v))}</button>`).join("") + `</div>`).join("");
-  box.parentElement.classList.toggle("has-types", box.children.length > 0);
+  /* a checkbox per value under its column's name, kept in ``input`` as column=value, …; without types the field is typed by hand */
+  box.innerHTML = Object.entries(types).map(([col, values]) => `<div class="tp-col"><div class="tp-name">${esc(human(col))}</div>` +
+    values.map((v) => `<label class="tp-opt"><input type="checkbox" class="tp" data-v="${esc(`${col}=${v}`)}">${esc(human(v))}</label>`).join("") + `</div>`).join("");
+  box.closest(".types").classList.toggle("has-types", box.children.length > 0);
+  box.parentElement.open = false;
+  syncTypes(box, input);
 }
 
-function toggleType(btn, input) {
-  const on = btn.getAttribute("aria-pressed") !== "true", picked = typesOf(input).filter((t) => t !== btn.dataset.v);
-  input.value = (on ? [...picked, btn.dataset.v] : picked).join(", ");
-  btn.setAttribute("aria-pressed", String(on));
+function syncTypes(box, input) {
+  /* the checkboxes and the closed list's words follow the field: the picked values by column, or none */
+  const chosen = typesOf(input), sum = box.parentElement.querySelector(".tp-sum");
+  box.querySelectorAll(".tp").forEach((el) => { el.checked = chosen.includes(el.dataset.v); });
+  const byCol = Map.groupBy(chosen, (t) => t.slice(0, t.indexOf("=")));
+  sum.textContent = chosen.length ? [...byCol].map(([col, ts]) => `${human(col)}: ${ts.map((t) => human(t.slice(col.length + 1))).join(", ")}`).join(" · ") : "жодного — лише склад подій";
+  sum.classList.toggle("none", !chosen.length);
+}
+
+function toggleType(el, input) {
+  const picked = typesOf(input).filter((t) => t !== el.dataset.v);
+  input.value = (el.checked ? [...picked, el.dataset.v] : picked).join(", ");
+  syncTypes(el.closest(".tp-box"), input);
 }
 
 // *+ Додати шар* (docs/08_interface.md §8.2): one layer, one run of the base layer's finest level — the API's two calls
@@ -383,7 +406,7 @@ async function upload() {
   try {
     await api("/api/upload", { method: "POST", body: fd }); setUploadNote(""); $("upload-dialog").close();
     document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("file").value = ""; $("sample").value = ""; $("sample-hint").textContent = ""; $("metadata").value = ""; $("metadata-name").textContent = ""; $("where").value = ""; $("baseline").value = ""; setRole(""); $("file-name").textContent = ""; refreshBatches();
+    $("upload-form").reset(); $("sample-hint").textContent = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; setRole(""); refreshBatches();  // the next file starts from the defaults
   }
   catch (err) { setUploadNote(err.message, true); $("upload-btn").disabled = false; }
 }

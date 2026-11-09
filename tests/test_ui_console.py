@@ -78,8 +78,15 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.wait_for_function("typeof S !== 'undefined'", timeout=20000)
         page.click("#add-btn")
         assert page.is_disabled("#role-events")  # nothing picked: no role to confirm
+        page.evaluate(
+            "() => { S.samples = { ...S.samples, x: { key: 'x', title: 'X', file: 'x.csv', rows: 1, description: '', license: '', options: { geo: 'lat,lon@8', time: 'when', categories: 'kind' } } };"
+            " $('sample').insertAdjacentHTML('beforeend', sampleItem(S.samples.x)); }"
+        )
+        page.select_option("#sample", "x")
+        assert (page.input_value("#geo"), page.input_value("#time")) == ("lat,lon@8", "when")  # the set's own options
         page.set_input_files("#file", str(tmp_path / "rows.csv"))
         page.wait_for_function("document.getElementById('role-table').checked", timeout=5000)
+        assert [page.input_value(f) for f in ("#sample", "#geo", "#time", "#categories")] == [""] * 4  # one's own file: none of the set's
         assert page.is_disabled("#geo") and page.text_content("#upload-btn") == "Аналізувати"
         page.set_input_files("#file", str(tmp_path / "points.csv"))
         page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
@@ -109,6 +116,7 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
             "document.querySelector('#batches .ds-loose')?.textContent.includes('points')", timeout=20000
         )  # a layer no run reads, apart
         assert page.is_disabled("#role-events") and not page.is_checked("#role-layer")  # the form reset
+        assert [page.input_value(f) for f in ("#geo", "#where", "#baseline")] == [""] * 3  # the next file starts from the defaults
     (layer,) = engine.ws.list_batches()
     assert (layer["status"], layer["geo"]) == ("LAYER", "auto")
     assert not errors, errors
@@ -168,7 +176,13 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
             "kind=a",
             "0",
         )  # the base's types, the default disk: the cell alone
-        assert page.get_attribute(".tp[data-v='kind=a']", "aria-pressed") == "true"  # its toggle, from the base's shares
+        assert page.is_checked(".tp[data-v='kind=a']") and page.inner_text("#link-sum") == "kind: a"  # its box, from the base's shares
+        page.click("#link-dd summary")
+        page.click(".tp-opt:has(.tp[data-v='kind=b'])")  # picked from the list: the field follows
+        assert page.input_value("#link-counts") == "kind=a, kind=b" and page.inner_text("#link-sum") == "kind: a, b"
+        page.click("#link-title")  # a click elsewhere closes the list
+        assert not page.evaluate("$('link-dd').open")
+        page.fill("#link-counts", "kind=a")
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
         page.click(".link-opt[data-sample='schools']")  # one click runs it
         kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"
@@ -367,8 +381,8 @@ TREE = """() => {
 
 @pytest.mark.browser
 def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_with_care(cfg):
-    """The tree's guards (docs/08_interface.md §8.2): an upload whose finest map is coarser than r8 says why no layer can
-    be added; two readings of one level show its runs once and keep them when one of the readings is deleted, one
+    """The tree's guards (docs/08_interface.md §8.2): an upload whose finest map is coarser than r8 says once, under its
+    name, why no layer can be added; an upload's own bin takes every level with their runs and layer; two readings of one level show its runs once and keep them when one of the readings is deleted, one
     reading alone takes them and their layer along, and a failure midway says what is left; a failed run keeps the
     types and the disk picked for it; a share's column with a space or an *is* is split where its glossary says."""
     sync_api = pytest.importorskip("playwright.sync_api")
@@ -389,11 +403,26 @@ def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_wi
         page.evaluate(TREE)
         coarse = page.evaluate("uploadGroup([{ batch_id: 'g', upload_id: 'c', filename: 'c.csv', level: '6', status: 'READY', metrics: {} }], false)")
         assert "рівня 8" in coarse and "ds-link" not in coarse
+        group = """() => { const lv = (l) => ({ batch_id: `g${l}`, dataset_id: `d${l}`, upload_id: 'c', filename: 'c.csv', level: l, status: 'READY', metrics: {} });
+          const box = document.createElement('div'); box.innerHTML = uploadGroup([lv('6'), lv('5'), lv('table')], false);
+          return [box.querySelectorAll('.ds-why').length, box.querySelector('.ds-group-head + .ds-why') !== null, box.querySelector('.ds-group-head .ds-del').dataset.del]; }"""
+        assert page.evaluate(group) == [1, True, "d6 d5 dtable"]  # said once under the file's name; its bin takes every level
         assert page.evaluate("(uploadGroup(__twin.slice(0, 3), false).match(/ds-glyph/g) || []).length") == 1  # under one reading
         delete = "async (rows) => { S.batches = rows; __deleted.length = 0; await deleteDataset('dB', 'x'); return __deleted; }"
         assert page.evaluate(f"({delete})(__twin)") == ["/api/datasets/dB"]  # the other reading keeps the runs
         alone = page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
         assert alone == ["/api/datasets/dR", "/api/datasets/dB", "/api/datasets/B-L"]  # the runs, the reading, the layer
+        whole = page.evaluate(
+            "() => { const box = document.createElement('div'); box.innerHTML = uploadGroup(__twin.slice(0, 3), false); return box.querySelector('.ds-group-head .ds-del').dataset.del; }"
+        )
+        assert page.evaluate(
+            f"(async (rows) => {{ S.batches = rows; __deleted.length = 0; await deleteDataset('{whole}', 'x'); return __deleted; }})(__twin)"
+        ) == [
+            "/api/datasets/dR",
+            "/api/datasets/dA",
+            "/api/datasets/dB",
+            "/api/datasets/B-L",
+        ]  # a file's bin: both readings with their runs and the layer no run reads
         page.evaluate("window.__fail = true")
         page.evaluate(f"({delete})([__twin[1], __twin[2], __twin[3]])")
         assert page.inner_text("#upload-msg").startswith("Видалено не все: busy")
