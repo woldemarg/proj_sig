@@ -19,8 +19,7 @@ services:
       mlflow-init: { condition: service_completed_successfully }
 
 volumes:
-  # MLflow on the standalone ADS stack's database: the traces of both stacks in one place. External: this project neither
-  # creates nor removes it, so `docker compose down -v` here keeps it; the standalone ADS stack is stopped while the demo runs.
+  # MLflow on the standalone ADS stack's volume: the traces of both stacks in one place; created here if missing, so
+  # `docker compose down -v` here removes it too. The standalone ADS stack is stopped while the demo runs.
   mlflow_data:
     name: agentic-data-science_mlflow_data
-    external: true
