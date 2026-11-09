@@ -318,7 +318,7 @@ function init() {
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
-    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
+    if (f) { if ($("sample").value) fillOptions(); $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
     $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
   });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -337,11 +337,10 @@ function init() {
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];
     $("sample-hint").textContent = d ? `${d.description} ${d.span ? `${d.span[0]} — ${d.span[1]}. ` : ""}Ліцензія: ${d.license}.` : "";
-    if (!d) { $("upload-btn").disabled = !$("file").files[0]; setRole(""); return; }
+    if (!d) { fillOptions(); $("file-name").textContent = ""; $("upload-btn").disabled = true; setRole(""); return; }  // the list emptied by hand: the set's fields go with it
     $("file").value = ""; $("file-name").textContent = d.file;
     const o = d.options || {};
-    for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
-    $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
+    fillOptions(o);
     setRole(d.context_only ? "layer" : o.geo ? "events" : "table", !!d.context_only);  // a set meant only as a layer mines nothing
     $("upload-btn").disabled = false;
   });
@@ -409,8 +408,9 @@ function init() {
   on($("link-opts"), ".link-opt", (el) => runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample }));
   $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) runLink({ file: $("link-file").files[0] }); });
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
-  on($("link-types"), ".tp", (el) => toggleType(el, $("link-counts")));  // the types' toggles and the field they fill
-  $("link-counts").addEventListener("input", () => $("link-types").querySelectorAll(".tp").forEach((b) => b.setAttribute("aria-pressed", String(typesOf($("link-counts")).includes(b.dataset.v)))));
+  $("link-types").addEventListener("change", (e) => { if (e.target.matches(".tp")) toggleType(e.target, $("link-counts")); });  // the types' checkboxes and the field they fill
+  $("link-counts").addEventListener("input", () => syncTypes($("link-types"), $("link-counts")));
+  $("link-dialog").addEventListener("click", (e) => { if (!$("link-dd").contains(e.target)) $("link-dd").open = false; });  // a click elsewhere closes the list
   $("add-btn").addEventListener("click", () => { setUploadNote(""); $("upload-dialog").showModal(); });
   $("upload-cancel").addEventListener("click", () => $("upload-dialog").close());
   on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
