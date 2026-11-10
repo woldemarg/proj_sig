@@ -106,7 +106,7 @@ stated shift holds. A step does not count when it only uses an insight's event t
 something else the question asks (a time series, a count in the zone, a breakdown), or when it merely quotes the insight.
 Read literally: comparing the zone with its surroundings, or cells with and without context points, to answer a question
 about exactly that is the question's own work, not a recomputation, unless the step re-measures the insight's stated
-metric on the insight's own subgroup (its bands, its LISA class, its sig_o column).
+metric on the insight's own subgroup (its bands, its LISA class).
 
 <Established_Insights>
 {insights}
@@ -370,7 +370,7 @@ def judge() -> None:
         )  # noqa: E731, B023
         answer = rec["final"] or rec.get("final_raw")  # a refused answer is still graded; the report counts the refusal
         rec["judge"] = grade(answer) if answer else {"error": rec.get("joint_error")}
-        if rec["scenario"] in "BC":  # the sub-variant "the ADS report as is, no final call"
+        if rec["scenario"] == "B":  # the sub-variant "the ADS report as is, no final call"
             rec["judge_ads_report"] = grade(rec["ads_report"])
         rec["grounding"] = grounding(rec)
         rec["verify_words"] = sorted(
@@ -416,7 +416,7 @@ def report() -> str:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["run", "facts", "judge", "report"])
-    ap.add_argument("--scenario", nargs="+", default=list("ABCD"))
+    ap.add_argument("--scenario", nargs="+", default=list("AB"))
     ap.add_argument("--questions", nargs="+", default=list(QUESTIONS))
     ap.add_argument("--runs", type=int, default=3)
     args = ap.parse_args()

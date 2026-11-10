@@ -11,7 +11,6 @@ Run:  uv run app.py          the server on http://127.0.0.1:8090
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
@@ -66,8 +65,6 @@ SAMPLE_POINTS = 3000
 SCENARIOS = {
     "A": {"sig_llm": True, "task": "answer", "final_sig": True},  # SIG's answer and O# lines; hypotheses as claims to test
     "B": {"sig_llm": False, "task": "facts", "final_sig": False},  # the insights alone, as settled facts; the answer from ADS alone
-    "C": {"sig_llm": False, "task": "columns", "final_sig": False},  # the insights as sig_o# flag columns of the tables
-    "D": {"sig_llm": True, "task": "facts", "final_sig": True},  # B's hand-off to ADS; the answer joins both reports
 }
 HANDOFF = os.environ.get("HANDOFF", "A").upper()
 
@@ -450,59 +447,26 @@ def insight_blocks(items: list[dict[str, Any]], zone_cells: list[str]) -> list[s
     return out
 
 
-def sig_flag_files(files: dict[str, bytes], items: list[dict[str, Any]], cell_col: str) -> tuple[dict[str, bytes], list[str]]:
-    """Scenario C: the zone's tables with one sig_o<n> column per finding of the base file (1 = the row's cell is one of
-    the finding's cells), and each column's dictionary line for the task."""
-    frames = {name: pd.read_csv(io.BytesIO(data), dtype=str, keep_default_na=False) for name, data in files.items()}
-    notes = []
-    for n, it in enumerate(items, 1):
-        cells = set(PATTERN_CELLS.get(it.get("pattern_id", ""), []))
-        if not cells or it["filename"] != BASE["file"]:
-            continue
-        for f in frames.values():
-            f[f"sig_o{n}"] = f[cell_col].isin(cells).astype(int)
-        base = frames["base_aoi.csv"]
-        inside = int(((base[f"sig_o{n}"] == 1) & (base["in_aoi"] == "1")).sum())
-        layer = f"; it links the base layer to the context layer ({it['layer']})" if it.get("layer") else ""
-        notes.append(
-            f"- sig_o{n}: cells where {it['scope'] or '—'}; there {'; '.join(it['shift']) or '—'}{layer}; {inside} base rows inside the AOI carry 1"
-        )
-    return {name: f.to_csv(index=False).encode("utf-8") for name, f in frames.items()}, notes
-
-
-def task_parts(
-    task: str, head: list[dict[str, str]], sig: dict[str, Any] | None, zone: dict[str, Any] | None, cell: str, columns: list[str] | None
-) -> list[dict[str, str]]:
-    """The ADS task of scenarios B and C after the shared head (frame, question, data): what of SIG it carries and the guidance."""
+def task_parts(head: list[dict[str, str]], sig: dict[str, Any] | None, zone: dict[str, Any] | None) -> list[dict[str, str]]:
+    """The ADS task of scenario B after the shared head (frame, question, data): the insights as facts and the guidance."""
     items = (sig or {}).get("insights") or []
     pending = "(after the ask)" if sig is None else ""
     compare = (
         "- Where the question points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, shares for categories).\n"
     )
     causes = "- Describe differences as shifts and ratios, not causes; proximity is not causation."
-    if task == "facts":
-        blocks = pending or "\n\n".join(insight_blocks(items, (zone or {}).get("cells") or [])) or "SIG has no insights for this zone."
-        guidance = (
-            "\n\nGuidance:\n- Answer the question with your own computations on the tables. " + compare[2:] + "- The insights are settled: "
-            "quote those that bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, "
-            "breakdowns).\n" + causes
-        )
-        return [
-            {"kind": "primer", "text": INSIGHT_PRIMER},
-            *head,
-            {"kind": "insights", "text": "\n\nEstablished insights (facts; do not recompute):\n" + blocks},
-            {"kind": "guidance", "text": guidance},
-        ]
-    notes = pending or "\n".join(columns or []) or "SIG has no findings for this zone: the tables carry no sig_o columns."
-    text = (
-        "\n\nSIG columns (both tables): SIG, a statistical insight miner, was run on this dataset before this task. Each sig_o<n> is 1 when "
-        f"the row's {cell} cell belongs to a set of cells that SIG found to differ from the whole map, else 0:\n" + notes
-    )
+    blocks = pending or "\n\n".join(insight_blocks(items, (zone or {}).get("cells") or [])) or "SIG has no insights for this zone."
     guidance = (
-        "\n\nGuidance:\n" + compare + "- The sig_o columns are ready-made cuts: where one bears on the question, split your figures by it "
-        "(1 vs 0) inside the zone and name the column.\n" + causes
+        "\n\nGuidance:\n- Answer the question with your own computations on the tables. " + compare[2:] + "- The insights are settled: "
+        "quote those that bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, "
+        "breakdowns).\n" + causes
     )
-    return [*head, {"kind": "sig_columns", "text": text}, {"kind": "guidance", "text": guidance}]
+    return [
+        {"kind": "primer", "text": INSIGHT_PRIMER},
+        *head,
+        {"kind": "insights", "text": "\n\nEstablished insights (facts; do not recompute):\n" + blocks},
+        {"kind": "guidance", "text": guidance},
+    ]
 
 
 def ads_query_parts(
@@ -511,13 +475,12 @@ def ads_query_parts(
     data: dict[str, Any] | None,
     sig: dict[str, Any] | None,
     task: str = "answer",
-    columns: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """The ADS task, part by part, as the page shows it: the frame, the user's words, the data with its geo columns and
     zone counts, SIG's answer verbatim, SIG's findings as O# lines, and the guidance. The frame is English (ADS's own
     prose is English and Cyrillic costs its budgets two to three times more); the question and SIG's text stay verbatim.
     Before the zone and the ask the figures and the SIG parts are placeholders. Joined, the parts are the query.
-    ``task`` is the scenario's hand-off (SCENARIOS): "answer" is this layout, the others are task_parts."""
+    ``task`` is the scenario's hand-off (SCENARIOS): "answer" is this layout, "facts" is task_parts."""
     if zone and data:
         r, b, c = data["resolution"], zone["base"], zone["context"]
         cols = h3_columns(r)
@@ -552,7 +515,7 @@ def ads_query_parts(
         {"kind": "data", "text": geo},
     ]
     if task != "answer":
-        return task_parts(task, head, sig, zone, cell, columns)
+        return task_parts(head, sig, zone)
     cross = (  # only when a finding links the layers: the join is work ADS should not do for a question about a count trend
         f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
         f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
@@ -758,13 +721,11 @@ def run_ask(question: str, scenario: str) -> None:
             "combined": combined["trace"].get("result"),
             "preview": preview.get("trace", {}).get("result"),
         }
-        tables, columns = zone["files"], None  # this zone's tables as taken when its polygon closed
-        if mode["task"] == "columns":
-            tables, columns = sig_flag_files(tables, a["insights"], h3_columns(GRID["resolution"])[0])
+        tables = zone["files"]  # this zone's tables as taken when its polygon closed
         mark("ads")
         sid = ads_session()
         a["ads_session"] = sid
-        parts = ads_query_parts(question, zone, STATE["datasets"], chosen, mode["task"], columns)
+        parts = ads_query_parts(question, zone, STATE["datasets"], chosen, mode["task"])
         a["ads_query"] = "".join(p["text"] for p in parts)
         files = {**tables, "aoi.md": a["aoi_md"].encode("utf-8")}  # the tables and the column dictionary
         trace["ads"] = {
@@ -989,19 +950,12 @@ def check() -> None:
     # the hand-off scenarios (SCENARIOS): what each task carries of SIG
     PATTERN_CELLS["x1"] = ["a", "b"]
     fx = {"sig_answer": "A", "insights": [{**sig_fx["insights"][0], "pattern_id": "x1", "validation": "p < 0.001"}, sig_fx["insights"][1]]}
-    kinds = {t: [p["kind"] for p in ads_query_parts("q", zone_fx, data_fx, fx, t, ["- sig_o1: c"])] for t in ("facts", "columns")}
-    assert kinds == {
-        "facts": ["primer", "frame", "user", "data", "insights", "guidance"],
-        "columns": ["frame", "user", "data", "sig_columns", "guidance"],
-    }, kinds
+    kinds = [p["kind"] for p in ads_query_parts("q", zone_fx, data_fx, fx, "facts")]
+    assert kinds == ["primer", "frame", "user", "data", "insights", "guidance"], kinds
     facts = ads_query("q", zone_fx, data_fx, fx, "facts")
     assert facts.startswith("Read this first") and facts.index("Do not verify") < facts.index("Analyse the area of interest (AOI): q"), facts
     assert "O1 · in zone: yes (1 of its 2 cells are zone cells)\n  cells where: s\n  established: m: up\n  checks passed: p < 0.001" in facts, facts
     assert "claims to test" not in facts and "[P1]" not in facts and "Спостереження" not in facts, facts
-    csv = {"base_aoi.csv": b"h3_r9,in_aoi\na,1\nc,1\nb,0\n", "context_aoi.csv": b"h3_r9,in_aoi\nb,0\n"}
-    flagged, notes = sig_flag_files(csv, fx["insights"], "h3_r9")
-    assert flagged["base_aoi.csv"] == b"h3_r9,in_aoi,sig_o1\na,1,1\nc,1,0\nb,0,1\n" and flagged["context_aoi.csv"].endswith(b"b,0,1\n"), flagged
-    assert len(notes) == 1 and notes[0].startswith("- sig_o1: cells where s; there m: up") and "1 base rows inside" in notes[0], notes
     PATTERN_CELLS.clear()
     md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
     assert len(md) <= 2000 and "lisa_points" in md and "other.csv: P1" in md and "h3_r9" in md and "count_crime_theft" in md, len(md)
