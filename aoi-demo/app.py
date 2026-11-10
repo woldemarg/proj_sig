@@ -67,6 +67,7 @@ SCENARIOS = {
     "A": {"sig_llm": True, "task": "answer", "final_sig": True},  # SIG's answer and O# lines; hypotheses as claims to test
     "B": {"sig_llm": False, "task": "facts", "final_sig": False},  # the insights alone, as settled facts; the answer from ADS alone
     "C": {"sig_llm": False, "task": "columns", "final_sig": False},  # the insights as sig_o# flag columns of the tables
+    "D": {"sig_llm": True, "task": "facts", "final_sig": True},  # B's hand-off to ADS; the answer joins both reports
 }
 HANDOFF = os.environ.get("HANDOFF", "A").upper()
 

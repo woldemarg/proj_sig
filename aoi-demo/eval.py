@@ -416,7 +416,7 @@ def report() -> str:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["run", "facts", "judge", "report"])
-    ap.add_argument("--scenario", nargs="+", default=list("ABC"))
+    ap.add_argument("--scenario", nargs="+", default=list("ABCD"))
     ap.add_argument("--questions", nargs="+", default=list(QUESTIONS))
     ap.add_argument("--runs", type=int, default=3)
     args = ap.parse_args()
