@@ -69,7 +69,7 @@ flowchart TD
 |---|---|---|
 | SIG, перегляд зони | 1 | `GET /state` → `zone.sig.trace` |
 | SIG з питанням | 1 | `ask.trace.search.llm` (модель, час, токени) |
-| ADS | 9–20: guardrail, grounder, далі planner, codegen і evaluator на кожен крок, synthesis | `ask.trace.ads.counters` (`total_llm_calls`, токени, кроки); покроково — `GET /trace/ads` і MLflow, http://localhost:5050 |
+| ADS | 7–19: guardrail, grounder, далі planner, codegen і evaluator на кожен крок, synthesis | `ask.trace.ads.counters` (`total_llm_calls`, токени, кроки); покроково — `GET /trace/ads` і MLflow, http://localhost:5050 |
 | Фінальний звіт | 1 | `ask.trace.joint.usage`, `GET /trace/prompt` |
 
 MLflow отримує лише трасування ADS; виклики SIG і фінальний виклик у ньому не з'являються, їхні метрики є в стані демо.
