@@ -11,6 +11,7 @@ Run:  uv run app.py          the server on http://127.0.0.1:8090
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -61,6 +62,15 @@ COUNT_MIN = 250
 COUNT_DEFAULT = ("theft", "assault")  # the demo's preselected types
 MAX_INSIGHTS = 10  # findings drawn on the map, the zone's own first: SIG's evidence holds about ten
 SAMPLE_POINTS = 3000
+# How SIG's knowledge reaches ADS (issue #335): SIG's narrator LLM, what the ADS task carries of SIG, SIG in the final prompt
+SCENARIOS = {
+    "A": {"sig_llm": True, "task": "answer", "final_sig": True},  # SIG's answer and O# lines; hypotheses as claims to test
+    "B": {"sig_llm": False, "task": "facts", "final_sig": False},  # the insights alone, as settled facts; the answer from ADS alone
+    "C": {"sig_llm": False, "task": "columns", "final_sig": False},  # the insights as sig_o# flag columns of the tables
+    "D": {"sig_llm": True, "task": "none", "final_sig": True},  # ADS without SIG; SIG joins in the final prompt
+    "E": {"sig_llm": False, "task": "plan", "final_sig": False},  # the insights turned into an analysis plan for ADS
+}
+HANDOFF = os.environ.get("HANDOFF", "A").upper()
 
 http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 
@@ -70,6 +80,7 @@ http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 STATE: dict[str, Any] = {"datasets": None, "zone": None, "ask": None}
 DATA: dict[str, pd.DataFrame] = {}
 GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres, and SIG's resolution
+PATTERN_CELLS: dict[str, list[str]] = {}  # pattern id -> its h3 cells, kept out of STATE (the page draws the rings)
 
 
 @lru_cache(maxsize=1)
@@ -151,20 +162,21 @@ def cell_grid(pack: dict[str, Any]) -> dict[str, Any]:
     return {"h3": pack["columns"]["h3"], "rings": rings}
 
 
-def sig_chat(cells: list[str], question: str) -> dict[str, Any]:
+def sig_chat(cells: list[str], question: str, use_llm: bool = True) -> dict[str, Any]:
     """SIG's reading of the area exactly as its console's chat asks it: the selected map cells as the zone, with the
     user's question or without one (the console's zone-only ask: "no text: the map area below is the question"). With
     both, the graph scores its seeds by the text and the place together; its LLM then reads the evidence by the
-    project's rules: observations, then hypotheses."""
-    r = http.post(f"{SIG_CHAT_URL}/api/chat/query", json={"question": question, "cells": cells, "use_llm": True})
+    project's rules: observations, then hypotheses. Without use_llm the narrator returns the evidence alone, no model."""
+    r = http.post(f"{SIG_CHAT_URL}/api/chat/query", json={"question": question, "cells": cells, "use_llm": use_llm})
     if r.status_code >= 300:
         raise RuntimeError(f"SIG chat: {r.status_code} {r.text[:300]}")
     return r.json()
 
 
-def sig_rings(dataset_id: str, pattern_id: str) -> list[list[list[float]]]:
+def sig_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
+    """A finding's place on the map: its cells' ids and rings."""
     r = http.get(f"{SIG_URL}/api/geo/{dataset_id}/patterns/{pattern_id}", params={"rings": "true"})
-    return r.json().get("rings", []) if r.status_code < 300 else []
+    return r.json() if r.status_code < 300 else {}
 
 
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # SIG's credibility, best first: confirmed, unconfirmed, no other source, contradicted
@@ -183,6 +195,8 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     out = []
     for it in items[:MAX_INSIGHTS]:  # SIG's own text, in its own language, as is
         dataset_id = (source.get(it["key"]) or {}).get("dataset_id", "")
+        place = sig_pattern(dataset_id, it["pattern_id"]) if dataset_id else {}
+        PATTERN_CELLS[it["pattern_id"]] = place.get("cells") or []
         out.append(
             {
                 "key": it["key"],
@@ -199,19 +213,19 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
                 "trust": it.get("trust", ""),
                 "credibility": it.get("credibility"),
                 "place": area.get(it["key"]),
-                "rings": sig_rings(dataset_id, it["pattern_id"]) if dataset_id else [],
+                "rings": place.get("rings") or [],
             }
         )
     return out
 
 
-def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
+def sig_zone_answer(cells: list[str], question: str, use_llm: bool = True) -> dict[str, Any]:
     """One SIG reading of the zone, with the user's question or without it: the findings for the map, SIG's answer, the
     evidence its model read, the files the findings come from, and the call's trace — the same shape for the preview on
     polygon close (no question) and for the ask (the question), so the ask can fall back on the preview."""
     t0 = time.time()
     trace = {"call": f"POST {SIG_CHAT_URL}/api/chat/query", "question": question, "cells_count": len(cells)}
-    qa = sig_chat(cells, question)
+    qa = sig_chat(cells, question, use_llm)
     insights = sig_findings(qa)
     metrics, mode, model = qa.get("metrics") or {}, qa.get("answer_mode"), (qa.get("llm") or {}).get("model")
     trace["result"] = {
@@ -227,6 +241,7 @@ def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
         "sig_evidence": qa.get("prompt", ""),
         "sig_mode": mode,
         "sig_model": model,
+        "llm": qa.get("llm") or {},
         "sig_sources": qa.get("provenance_footer", ""),
         "files": finding_files(qa),
         "trace": trace,
@@ -344,11 +359,7 @@ def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str
             "- aoi_zone: inside (in_aoi 1) | adjacent (outside the polygon, in a zone cell or one of its six neighbours) | far.",
             f"- SIG's cells: one row of SIG's table = one {cols[0]} cell with its events; shares and medians per cell exist for cells with 5 or more events; "
             f"per-type counters SIG built: {', '.join(data.get('counted') or []) or 'none'}.",
-            "- SIG's terms: points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
-            "their number; <column>_mode = the cell's most frequent value; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
-            "neighbours; lisa_points = local Moran class of event counts (hot spot, cold spot, high outlier, low outlier, no cluster); "
-            "context_<layer>_band = none nearby, or the quantile of context points in the cell; shift = the subgroup's median against the map's median "
-            "in robust sd; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
+            f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
             f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
         ]
     )
@@ -394,11 +405,150 @@ def domain_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -
     )
 
 
-def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None) -> list[dict[str, str]]:
+SIG_TERMS = (
+    "points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
+    "their number; <column>_mode = the cell's most frequent value; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
+    "neighbours; lisa_points = local Moran class of event counts (hot spot, cold spot, high outlier, low outlier, no cluster); "
+    "context_<layer>_band = none nearby, or the quantile of context points in the cell; shift = the subgroup's median against the map's median "
+    "in robust sd"
+)
+
+# Scenario B: what an insight is and how to read it, ahead of the user's question (the query is the part ADS never trims)
+INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
+
+Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a fact already computed for this dataset, not a suggestion.
+
+How to read an insight:
+- `cells where` is the condition that selects a set of H3 map cells of the base layer (the finest h3_r column); SIG's row is a cell with its events, not an event.
+- `established` is how a per-cell metric in those cells differs from the whole map: the subgroup's median against the map's median, in robust standard deviations (sd).
+- `in zone` says whether those cells overlap the user's area of interest.
+- SIG's terms: {SIG_TERMS}.
+
+Rules for the insights:
+1. They are ground truth. Do not verify, test, reproduce, re-derive or recompute an insight, its medians, its sd or its cell condition; no step of your plan may have that purpose. The per-cell features behind them (neighbour bands, LISA classes, per-cell shares) are not columns of the tables, so a recomputation would only produce a different, wrong number.
+2. Use them as navigation: they tell you which event types, places and conditions deserve attention. Spend your steps on what the question asks and the insights do not already state.
+3. In the report cite an insight by its id and quote its numbers exactly as given, as an established fact, next to your own figures.
+
+"""
+
+
+def insight_blocks(items: list[dict[str, Any]], zone_cells: list[str]) -> list[str]:
+    """Scenario B's one template per insight: the id and its place, the cell condition, each shift, the checks it passed."""
+    zone = set(zone_cells)
+    out = []
+    for n, it in enumerate(items, 1):
+        cells = PATTERN_CELLS.get(it.get("pattern_id", ""), [])
+        place = f" ({len(zone & set(cells))} of its {len(cells)} cells are zone cells)" if cells else ""
+        lines = [f"O{n} · in zone: {'yes' if it['inside'] else 'no'}{place}", f"  cells where: {it['scope'] or '—'}"]
+        lines += [f"  established: {s}" for s in it["shift"]]
+        if it.get("validation"):
+            lines.append(f"  checks passed: {it['validation']}")
+        if it.get("layer"):
+            lines.append(f"  layers: links the base layer's events to the context layer's points in the cell ({it['layer']})")
+        if it["filename"] != BASE["file"]:
+            lines.append(f"  file: {it['filename'] or '?'} (another dataset of the graph: context only, not a fact about the base layer)")
+        out.append("\n".join(lines))
+    return out
+
+
+def sig_flag_files(files: dict[str, bytes], items: list[dict[str, Any]], cell_col: str) -> tuple[dict[str, bytes], list[str]]:
+    """Scenario C: the zone's tables with one sig_o<n> column per finding of the base file (1 = the row's cell is one of
+    the finding's cells), and each column's dictionary line for the task."""
+    frames = {name: pd.read_csv(io.BytesIO(data), dtype=str, keep_default_na=False) for name, data in files.items()}
+    notes = []
+    for n, it in enumerate(items, 1):
+        cells = set(PATTERN_CELLS.get(it.get("pattern_id", ""), []))
+        if not cells or it["filename"] != BASE["file"]:
+            continue
+        for f in frames.values():
+            f[f"sig_o{n}"] = f[cell_col].isin(cells).astype(int)
+        base = frames["base_aoi.csv"]
+        inside = int(((base[f"sig_o{n}"] == 1) & (base["in_aoi"] == "1")).sum())
+        layer = f"; it links the base layer to the context layer ({it['layer']})" if it.get("layer") else ""
+        notes.append(
+            f"- sig_o{n}: cells where {it['scope'] or '—'}; there {'; '.join(it['shift']) or '—'}{layer}; {inside} base rows inside the AOI carry 1"
+        )
+    return {name: f.to_csv(index=False).encode("utf-8") for name, f in frames.items()}, notes
+
+
+PLAN_PROMPT = """You plan the work of a data-science agent that answers a user's question about an area of interest (AOI) on two tables.
+
+Question: {question}
+{data}
+
+Established insights about this dataset (already computed and validated by a separate system; facts, not claims):
+{insights}
+
+Write the analysis plan: 3 to 5 numbered steps, one line each. A step says what to compute, on which table, columns and cut, and ends with the insight ids that motivated it in brackets, or (question) when the question alone did.
+- At least one step answers the question directly.
+- Let the insights that concern the zone and the question steer where the steps look: the event types, the conditions, the layers they name.
+- No step verifies or recomputes an insight; a step is computable from the listed columns alone.
+- Output only the numbered steps, in English."""
+
+
+def task_parts(
+    task: str, head: list[dict[str, str]], sig: dict[str, Any] | None, zone: dict[str, Any] | None, cell: str, plan: str, columns: list[str] | None
+) -> list[dict[str, str]]:
+    """The ADS task of scenarios B–E after the shared head (frame, question, data): what of SIG it carries and the guidance."""
+    items = (sig or {}).get("insights") or []
+    pending = "(after the ask)" if sig is None else ""
+    compare = (
+        "- Where the question points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, shares for categories).\n"
+    )
+    causes = "- Describe differences as shifts and ratios, not causes; proximity is not causation."
+    if task == "none":
+        return [*head, {"kind": "guidance", "text": "\n\nGuidance:\n" + compare + causes}]
+    if task == "facts":
+        blocks = pending or "\n\n".join(insight_blocks(items, (zone or {}).get("cells") or [])) or "SIG has no insights for this zone."
+        guidance = (
+            "\n\nGuidance:\n- Answer the question with your own computations on the tables. " + compare[2:] + "- The insights are settled: "
+            "quote those that bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, "
+            "breakdowns).\n" + causes
+        )
+        return [
+            {"kind": "primer", "text": INSIGHT_PRIMER},
+            *head,
+            {"kind": "insights", "text": "\n\nEstablished insights (facts; do not recompute):\n" + blocks},
+            {"kind": "guidance", "text": guidance},
+        ]
+    if task == "columns":
+        notes = pending or "\n".join(columns or []) or "SIG has no findings for this zone: the tables carry no sig_o columns."
+        text = (
+            "\n\nSIG columns (both tables): SIG, a statistical insight miner, was run on this dataset before this task. Each sig_o<n> is 1 when "
+            f"the row's {cell} cell belongs to a set of cells that SIG found to differ from the whole map, else 0:\n" + notes
+        )
+        guidance = (
+            "\n\nGuidance:\n" + compare + "- The sig_o columns are ready-made cuts: where one bears on the question, split your figures by it "
+            "(1 vs 0) inside the zone and name the column.\n" + causes
+        )
+        return [*head, {"kind": "sig_columns", "text": text}, {"kind": "guidance", "text": guidance}]
+    lines = pending or "\n".join(observation_lines(items)) or "SIG has no findings for this zone."
+    guidance = (
+        "\n\nGuidance:\n- Follow the plan step by step; add at most one step of your own when the data call for it.\n"
+        "- The insights are settled facts: quote them by O# where a step rests on one; do not recompute them.\n" + causes
+    )
+    return [
+        *head,
+        {"kind": "observations", "text": "\n\nEstablished insights about this dataset (O#; facts computed by SIG before this task):\n" + lines},
+        {"kind": "plan", "text": "\n\nAnalysis plan:\n" + (pending or plan.strip() or "(no plan: answer the question directly)")},
+        {"kind": "guidance", "text": guidance},
+    ]
+
+
+def ads_query_parts(
+    question: str,
+    zone: dict[str, Any] | None,
+    data: dict[str, Any] | None,
+    sig: dict[str, Any] | None,
+    task: str = "answer",
+    plan: str = "",
+    columns: list[str] | None = None,
+) -> list[dict[str, str]]:
     """The ADS task, part by part, as the page shows it: the frame, the user's words, the data with its geo columns and
     zone counts, SIG's answer verbatim, SIG's findings as O# lines, and the guidance. The frame is English (ADS's own
     prose is English and Cyrillic costs its budgets two to three times more); the question and SIG's text stay verbatim.
-    Before the zone and the ask the figures and the SIG parts are placeholders. Joined, the parts are the query."""
+    Before the zone and the ask the figures and the SIG parts are placeholders. Joined, the parts are the query.
+    ``task`` is the scenario's hand-off (SCENARIOS): "answer" is this layout, the others are task_parts."""
     if zone and data:
         r, b, c = data["resolution"], zone["base"], zone["context"]
         cols = h3_columns(r)
@@ -427,6 +577,13 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
             "\n\nSIG findings (O#; 'in zone' says whether the finding's cells lie in the AOI — check each that concerns the question on the data):\n"
             + ("\n".join(lines) or "SIG has no findings for this zone.")
         )
+    head = [
+        {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
+        {"kind": "user", "text": question},
+        {"kind": "data", "text": geo},
+    ]
+    if task != "answer":
+        return task_parts(task, head, sig, zone, cell, plan, columns)
     cross = (  # only when a finding links the layers: the join is work ADS should not do for a question about a count trend
         f"- A finding marked cross-layer links the base layer to the context layer: reproduce that relation on the tables — count the context "
         f"rows per {cell} cell by joining the two tables on the cell id, then compare the counted type's rows per cell between cells with many, "
@@ -442,18 +599,11 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
         "not testable with these columns. Do not re-mine spatial clusters.\n" + cross + "- Describe differences as shifts and ratios, not causes; "
         "proximity is not causation; label O# explicitly in the report."
     )
-    return [
-        {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
-        {"kind": "user", "text": question},
-        {"kind": "data", "text": geo},
-        {"kind": "sig_answer", "text": answer},
-        {"kind": "observations", "text": obs},
-        {"kind": "guidance", "text": guidance},
-    ]
+    return [*head, {"kind": "sig_answer", "text": answer}, {"kind": "observations", "text": obs}, {"kind": "guidance", "text": guidance}]
 
 
-def ads_query(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None) -> str:
-    return "".join(p["text"] for p in ads_query_parts(question, zone, data, sig))
+def ads_query(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None, task: str = "answer") -> str:
+    return "".join(p["text"] for p in ads_query_parts(question, zone, data, sig, task))
 
 
 # ----------------------------------------------------------------------------- ADS
@@ -502,6 +652,7 @@ def ads_report(status: dict[str, Any]) -> str:
 
 JOINT_MAX_TOKENS = 16384  # Copilot's final_response_max_tokens: the prompt keeps every row of the report's tables (a year of days)
 PROMPTS: dict[str, str] = {}  # the last joint prompt, served apart (GET /trace/prompt) so /state stays light to poll
+TRACES: dict[str, Any] = {}  # the last ADS job's counters and steps, served apart (GET /trace/ads)
 
 
 def llm_chat(prompt: str) -> dict[str, Any]:
@@ -512,7 +663,9 @@ def llm_chat(prompt: str) -> dict[str, Any]:
     return r.json()
 
 
-def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str, domain: str, observations: str) -> tuple[str, dict[str, Any]]:
+def joint_report(
+    question: str, report: str, sig_answer: str, sig_evidence: str, domain: str, observations: str, ads_saw_sig: bool = True
+) -> tuple[str, dict[str, Any]]:
     """Copilot's final response prompt adapted for two sources (prompts/joint_response.jinja): the ADS report, SIG's
     answer, the graph evidence it read and its findings as the O# lines, verbatim; the zone's methodology and the SIG
     glossary as domain knowledge. -> (the report, "" without its required sections; the call's trace)."""
@@ -524,6 +677,7 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
         insight_evidence=sig_evidence,
         observations=observations,
         domain_knowledge=domain,
+        ads_saw_sig=ads_saw_sig,
         query_language="uk",
     )
     PROMPTS["joint"] = prompt
@@ -547,7 +701,9 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
         "usage": resp.get("usage"),
         "answer_chars": len(out),
     }
-    return (out if "## Результати аналізу" in out and "## Методологія" in out else ""), trace
+    if "## Результати аналізу" in out and "## Методологія" in out:
+        return out, trace
+    return "", {**trace, "raw": out}  # the answer that missed its required sections, for the trace
 
 
 # ----------------------------------------------------------------------------- the flows
@@ -597,7 +753,7 @@ def run_mine(z: dict[str, Any]) -> None:
     The ask repeats the call with the question and falls back on this reading when the text finds nothing in the zone."""
     s = z["sig"]
     try:
-        s.update(sig_zone_answer(z["cells"], ""))
+        s.update(sig_zone_answer(z["cells"], "", SCENARIOS[HANDOFF]["sig_llm"]))
         s["stage"] = "ready"
     except Exception as exc:  # the question can still go to ADS, with whatever the ask's own SIG call brings
         log.exception("zone preview failed")
@@ -606,8 +762,8 @@ def run_mine(z: dict[str, Any]) -> None:
         s.update({"insights": [], "sig_answer": "", "sig_evidence": "", "files": {}})
 
 
-def run_ask(question: str) -> None:
-    a, zone = STATE["ask"], STATE["zone"]
+def run_ask(question: str, scenario: str) -> None:
+    a, zone, mode = STATE["ask"], STATE["zone"], SCENARIOS[scenario]
     preview = zone["sig"]  # SIG's reading of the place alone, done when the zone was drawn
     timings: dict[str, float] = {}
     t = time.time()
@@ -620,7 +776,7 @@ def run_ask(question: str) -> None:
 
     trace = a["trace"] = {}  # per stage: what went to the service and what came back
     try:
-        combined = sig_zone_answer(zone["cells"], question)  # the question and the zone together: the graph scores both
+        combined = sig_zone_answer(zone["cells"], question, mode["sig_llm"])  # the question and the zone together: the graph scores both
         fallback = not in_zone(combined) and in_zone(preview)  # the text pulled the seeds out of the zone: the preview stands
         chosen = preview if fallback else combined
         a["sig_entry"] = "preview" if fallback else "combined"
@@ -632,18 +788,25 @@ def run_ask(question: str) -> None:
         trace["search"] = {
             **chosen.get("trace", {}),
             "entry": a["sig_entry"],
+            "llm": combined.get("llm") if mode["sig_llm"] else {},  # this ask's narrator call: model, latency, usage
             "combined": combined["trace"].get("result"),
             "preview": preview.get("trace", {}).get("result"),
         }
+        tables, columns, plan = zone["files"], None, ""  # this zone's tables as taken when its polygon closed
+        if mode["task"] == "columns":
+            tables, columns = sig_flag_files(tables, a["insights"], h3_columns(GRID["resolution"])[0])
+        if mode["task"] == "plan":
+            mark("plan")
+            head = ads_query_parts(question, zone, STATE["datasets"], chosen, "none")[2]["text"].strip()
+            resp = llm_chat(PLAN_PROMPT.format(question=question, data=head, insights=a["observations"] or "none"))
+            plan = a["plan"] = resp["choices"][0]["message"]["content"]
+            trace["plan"] = {"call": f"POST {LLM_URL}/v1/chat/completions", "model": resp.get("model"), "usage": resp.get("usage")}
         mark("ads")
         sid = ads_session()
         a["ads_session"] = sid
-        parts = ads_query_parts(question, zone, STATE["datasets"], chosen)
+        parts = ads_query_parts(question, zone, STATE["datasets"], chosen, mode["task"], plan, columns)
         a["ads_query"] = "".join(p["text"] for p in parts)
-        files = {
-            **zone["files"],
-            "aoi.md": a["aoi_md"].encode("utf-8"),
-        }  # this zone's tables as taken when its polygon closed, and the column dictionary
+        files = {**tables, "aoi.md": a["aoi_md"].encode("utf-8")}  # the tables and the column dictionary
         trace["ads"] = {
             "call": f"POST {ADS_URL}/sessions/{sid}/jobs",
             "files": {name: len(data) for name, data in files.items()},
@@ -658,6 +821,8 @@ def run_ask(question: str) -> None:
         last = (status.get("result") or {}).get("last_execute_response") or {}
         counters = (status.get("result") or {}).get("system_counters") or {}
         steps = (status.get("result") or {}).get("execution_trace") or []
+        TRACES["ads"] = {"counters": counters, "steps": steps}
+        trace["ads"]["counters"] = counters
         trace["ads"]["result"] = {
             "outcome": f"{a['ads_outcome']} · {last.get('completion_status')}",
             "кроків": counters.get("total_steps_taken"),
@@ -670,9 +835,11 @@ def run_ask(question: str) -> None:
         if not a["ads_report"]:
             raise RuntimeError(f"ADS returned no report (outcome {a['ads_outcome']})")
         mark("joint")
-        a["joint_report"], trace["joint"] = joint_report(
-            question, a["ads_report"], a["sig_answer"], a["sig_evidence"], a["domain_md"], a["observations"]
-        )
+        if mode["final_sig"]:  # the two reports joined; otherwise the answer is built from the ADS report alone
+            sig_parts = (a["sig_answer"], a["sig_evidence"], a["domain_md"], a["observations"])
+        else:
+            sig_parts = ("", "", a["domain_md"], "")
+        a["joint_report"], trace["joint"] = joint_report(question, a["ads_report"], *sig_parts, ads_saw_sig=mode["task"] != "none")
         if not a["joint_report"]:
             a["joint_error"] = "спільний звіт не зібрано: відповідь без обов'язкових розділів"
         mark("done")
@@ -715,13 +882,19 @@ def state() -> dict[str, Any]:
 def ads_query_preview(question: str = "") -> dict[str, Any]:
     """The ADS task for this question, part by part, as the run will build it: the figures once the zone is drawn, the
     SIG parts (its answer with this question, the O# lines) only when the ask runs, so the preview is never exact."""
-    return {"parts": ads_query_parts(question.strip(), STATE["zone"], STATE["datasets"], None), "exact": False}
+    return {"parts": ads_query_parts(question.strip(), STATE["zone"], STATE["datasets"], None, SCENARIOS[HANDOFF]["task"]), "exact": False}
 
 
 @app.get("/trace/prompt")
 def trace_prompt() -> PlainTextResponse:
     """The last joint prompt as sent to the LLM: long, so the page asks for it only when opened."""
     return PlainTextResponse(PROMPTS.get("joint", ""))
+
+
+@app.get("/trace/ads")
+def trace_ads() -> dict[str, Any]:
+    """The last ADS job's counters (steps, LLM calls, tokens) and its execution trace, step by step."""
+    return TRACES.get("ads", {})
 
 
 @app.get("/datasets/options")
@@ -793,8 +966,19 @@ def ask(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(409, "попереднє питання ще виконується")
     if STATE["zone"]["sig"]["stage"] == "mining":
         raise HTTPException(409, "SIG ще аналізує зону")
-    STATE["ask"] = {"question": question, "stage": "search", "insights": [], "ads_report": "", "joint_report": "", "error": None}
-    threading.Thread(target=run_ask, args=(question,), daemon=True).start()
+    scenario = str(body.get("scenario") or HANDOFF).upper()
+    if scenario not in SCENARIOS:
+        raise HTTPException(400, f"scenario: один із {', '.join(SCENARIOS)}")
+    STATE["ask"] = {
+        "question": question,
+        "scenario": scenario,
+        "stage": "search",
+        "insights": [],
+        "ads_report": "",
+        "joint_report": "",
+        "error": None,
+    }
+    threading.Thread(target=run_ask, args=(question, scenario), daemon=True).start()
     return STATE["ask"]
 
 
@@ -842,6 +1026,31 @@ def check() -> None:
     assert "A finding marked cross-layer" not in plain and "proximity is not causation" in plain  # the join bullet only with a layer finding
     assert "(other file, context only)" in q and "Спостереження: A [P1]" in q and "proximity is not causation" in q and "h3_r8 whether" in q, q
     assert "(after the ask)" in ads_query("q", None, None, None) and "(after the ask)" not in q
+    # the hand-off scenarios (SCENARIOS): what each task carries of SIG
+    PATTERN_CELLS["x1"] = ["a", "b"]
+    fx = {"sig_answer": "A", "insights": [{**sig_fx["insights"][0], "pattern_id": "x1", "validation": "p < 0.001"}, sig_fx["insights"][1]]}
+    kinds = {
+        t: [p["kind"] for p in ads_query_parts("q", zone_fx, data_fx, fx, t, "1. step (O1)", ["- sig_o1: c"])]
+        for t in ("facts", "columns", "none", "plan")
+    }
+    assert kinds == {
+        "facts": ["primer", "frame", "user", "data", "insights", "guidance"],
+        "columns": ["frame", "user", "data", "sig_columns", "guidance"],
+        "none": ["frame", "user", "data", "guidance"],
+        "plan": ["frame", "user", "data", "observations", "plan", "guidance"],
+    }, kinds
+    facts = ads_query("q", zone_fx, data_fx, fx, "facts")
+    assert facts.startswith("Read this first") and facts.index("Do not verify") < facts.index("Analyse the area of interest (AOI): q"), facts
+    assert "O1 · in zone: yes (1 of its 2 cells are zone cells)\n  cells where: s\n  established: m: up\n  checks passed: p < 0.001" in facts, facts
+    assert "claims to test" not in facts and "[P1]" not in facts and "Спостереження" not in facts, facts
+    blind = ads_query("q", zone_fx, data_fx, fx, "none")
+    assert "O1" not in blind and "SIG" not in blind.split("Guidance:")[1], blind
+    assert "1. step (O1)" in ads_query_parts("q", zone_fx, data_fx, fx, "plan", "1. step (O1)")[4]["text"]
+    csv = {"base_aoi.csv": b"h3_r9,in_aoi\na,1\nc,1\nb,0\n", "context_aoi.csv": b"h3_r9,in_aoi\nb,0\n"}
+    flagged, notes = sig_flag_files(csv, fx["insights"], "h3_r9")
+    assert flagged["base_aoi.csv"] == b"h3_r9,in_aoi,sig_o1\na,1,1\nc,1,0\nb,0,1\n" and flagged["context_aoi.csv"].endswith(b"b,0,1\n"), flagged
+    assert len(notes) == 1 and notes[0].startswith("- sig_o1: cells where s; there m: up") and "1 base rows inside" in notes[0], notes
+    PATTERN_CELLS.clear()
     md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
     assert len(md) <= 2000 and "lisa_points" in md and "other.csv: P1" in md and "h3_r9" in md and "count_crime_theft" in md, len(md)
     assert not any(w in md.lower() for w in ("must", "always", "never", "ignore")), md  # declarative: ADS's guardrail reads it
@@ -867,6 +1076,12 @@ def check() -> None:
     ):
         assert tag in prompt, tag
     assert "O1 [P1] H" in prompt and "area only, never" not in prompt, "the prompt says SIG got the query and the area"
+    assert "SIG's hypotheses as claims to test" in prompt
+    render = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render
+    late = render(user_query="q", report="R", insight_analysis="A", insight_evidence="E", ads_saw_sig=False, query_language="uk")
+    assert "ADS did not see SIG's findings" in late and "claims to test" not in late
+    alone = render(user_query="q", report="R", insight_analysis="", insight_evidence="", observations="", domain_knowledge="D", query_language="uk")
+    assert "<insight_integration>" not in alone and "\n<Insight_Analysis>\n" not in alone and "<Analytical_Report>" in alone  # the ADS report alone
     # a cell package of two cells, offsets in 10**-1 degrees: a unit square at (0, 0) and one at (5, 5)
     grid = cell_grid({"scale": 1, "columns": {"h3": ["a", "b"]}, "rings": [[0, 0, 10, 0, 10, 10, 0, 10], [5, 5, 10, 0, 10, 10, 0, 10]]})
     assert grid["rings"][0] == [[0, 0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0, 0]], grid["rings"]

@@ -136,12 +136,20 @@ AOI demo. Two steps came before you, one after the other:
   hypotheses as hypotheses. <Insight_Observations> lists the same findings as numbered lines O#
   (headline, where, shift, in zone, credibility, file) — the lines the ADS task carried, so the
   report may name them O#.
+{% if ads_saw_sig | default(true) -%}
 - ADS, <Analytical_Report>: then, the answer to the user's query computed on the uploaded tables,
   each row marked inside / adjacent / far and keyed to H3 cells, with SIG's findings (O#) as extra
   cuts of the same calculation and SIG's hypotheses as claims to test. Its figures are what the
   data show about SIG's findings and hypotheses. For each O# that concerns the query, say what ADS
   showed about it; when ADS compared the area with its surroundings (adjacent, far) or with a
   coarser level of cells, give that comparison its own paragraph.
+{%- else -%}
+- ADS, <Analytical_Report>: then, the answer to the user's query computed on the uploaded tables,
+  each row marked inside / adjacent / far and keyed to H3 cells. ADS did not see SIG's findings and
+  its report never names them: relate its figures to SIG's findings yourself, where both bear on
+  the same place, period or type of event. When ADS compared the area with its surroundings
+  (adjacent, far) or with a coarser level of cells, give that comparison its own paragraph.
+{%- endif %}
 - A finding marked "cross-layer" in <Insight_Observations> links the base layer's events to the
   context layer (its condition is a band of the context layer's points in the cell). It leads the
   part of the answer about that layer: open that part with it, in plain words and with its numbers
