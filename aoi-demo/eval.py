@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import statistics
 import time
 from pathlib import Path
@@ -45,10 +46,14 @@ QUESTIONS = {
 # Fixed before the first run. Every axis 0-3; the judge sees neither the scenario nor the other answers.
 RUBRIC = """Score the answer on four axes, each an integer 0-3.
 
-correctness: figures and statements agree with the reference facts and with each other.
-  3 = every checkable figure matches the reference (rounding aside), no internal contradiction;
-  2 = one minor mismatch or imprecision; 1 = several mismatches or one that changes a conclusion;
-  0 = the main conclusion is wrong or figures are invented. A figure the reference cannot check is neutral.
+correctness: figures and statements agree with the data and with each other.
+  A figure is right when it matches <Reference_Facts> or <Computed_Outputs> (what the analysis code printed), rounding
+  aside. Another valid definition of the same thing (Pearson instead of Spearman, a mean instead of a median, cells of
+  the whole map instead of the zone) is not a mismatch. A figure found in neither is unverified, not wrong.
+  Wrong is: a figure that contradicts both, a figure attached to the wrong thing or unit (a share told as a percent
+  of a percent, a map-wide number told as the zone's), a conclusion the reference contradicts.
+  3 = nothing wrong, no internal contradiction; 2 = one minor error or several unverified figures;
+  1 = several errors or one that changes a conclusion; 0 = the main conclusion is wrong.
   When the question asks for something the data do not hold, 3 requires saying so plainly.
 insights_used: the answer uses the established insights that bear on the question and the zone.
   3 = the relevant ones are woven into the answer with their numbers; 2 = used but generic or without numbers;
@@ -73,6 +78,11 @@ Computed directly from the tables for the zone (ground truth for the figures the
 {facts}
 </Reference_Facts>
 
+<Computed_Outputs>
+What the analysis steps behind this answer printed (truncated):
+{outputs}
+</Computed_Outputs>
+
 <Established_Insights>
 Validated findings of a statistical insight miner about this dataset (ground truth):
 {insights}
@@ -94,6 +104,9 @@ rebuilds the insight's cell condition from the data (neighbour bands, LISA class
 or recomputes the insight's per-cell metric for that subgroup against the rest or the whole map to see whether the
 stated shift holds. A step does not count when it only uses an insight's event type, place or condition to compute
 something else the question asks (a time series, a count in the zone, a breakdown), or when it merely quotes the insight.
+Read literally: comparing the zone with its surroundings, or cells with and without context points, to answer a question
+about exactly that is the question's own work, not a recomputation, unless the step re-measures the insight's stated
+metric on the insight's own subgroup (its bands, its LISA class, its sig_o column).
 
 <Established_Insights>
 {insights}
@@ -224,6 +237,23 @@ def facts() -> dict[str, Any]:
     per_cell = per_cell.fillna(0)
     top = per_cell.sort_values("theft", ascending=False).head(5)
     with_bars, without = per_cell[per_cell["bars"] > 0], per_cell[per_cell["bars"] == 0]
+    by_zone = {}
+    for z in ("inside", "adjacent", "far"):  # cells as ADS usually builds them: grouped by cell and the rows' class
+        ev = b[b["aoi_zone"] == z]
+        pc = pd.DataFrame({"events": ev.groupby(col).size(), "theft": ev[ev["crime"] == "theft"].groupby(col).size()})
+        pc["bars"] = c.groupby(col).size()
+        pc = pc.fillna(0)
+        th = pc[pc["theft"] > 0]
+        by_zone[z] = {
+            "cells_with_events": len(pc),
+            "cells_with_theft": len(th),
+            "mean_events_per_cell": round(float(pc["events"].mean()), 2),
+            "mean_theft_per_cell": round(float(pc["theft"].mean()), 2),
+            "mean_theft_per_theft_cell": round(float(th["theft"].mean()), 2),
+            "mean_bars_per_cell": round(float(pc["bars"].mean()), 2),
+            "mean_bars_per_theft_cell": round(float(th["bars"].mean()), 2),
+            "pearson_bars_theft(theft cells)": round(float(th["bars"].corr(th["theft"])), 3),
+        }
     out = {
         "columns_base": list(pd.read_csv(DEMO_DIR / BASE["file"], nrows=0).columns),
         "columns_context": list(pd.read_csv(DEMO_DIR / CONTEXT["file"], nrows=0).columns),
@@ -262,7 +292,11 @@ def facts() -> dict[str, Any]:
             "median_theft_without_bars": float(without["theft"].median()),
             "spearman_bars_theft_per_cell": round(float(per_cell["bars"].rank().corr(per_cell["theft"].rank())), 3),
             "spearman_bars_events_per_cell": round(float(per_cell["bars"].rank().corr(per_cell["events"].rank())), 3),
+            "pearson_bars_theft_per_cell": round(float(per_cell["bars"].corr(per_cell["theft"])), 3),
         },
+        "per_cell_by_aoi_zone(cells of all rows, by the rows' class)": by_zone,
+        "note": "per-cell figures depend on which cells are counted (cells with any event, with a theft, with a bar); a figure "
+        "within about 15% of one above, under another such choice, is consistent",
     }
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "facts.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -282,12 +316,44 @@ def ask_json(prompt: str) -> dict[str, Any]:
     raise RuntimeError(f"the judge returned no JSON: {text[:300]}")
 
 
+NUMBER = re.compile(r"(?<![\w.])\d[\d  ]*(?:[.,]\d+)?")
+
+
+def numbers(text: str) -> set[str]:
+    """The figures of a text, to three significant digits, so 0.5105123 and 0.51 meet and 1 358 and 1358 meet."""
+    out = set()
+    for m in NUMBER.findall(text):
+        v = float(re.sub(r"[  ]", "", m).replace(",", "."))
+        out |= {f"{v:.3g}", f"{v:.2g}", f"{v * 100:.3g}", f"{v * 100:.2g}", f"{v / 100:.3g}"} if v else set()
+    return out
+
+
+def grounding(rec: dict[str, Any]) -> float | None:
+    """The share of the final answer's figures found in what stood behind it: the ADS report, the steps' output, SIG's
+    findings and the task. A figure found nowhere is one the final call made up or recomputed."""
+    answer = rec["final"] or rec.get("final_raw") or ""
+    mine = {f"{float(re.sub(r'[  ]', '', m).replace(',', '.')):.3g}" for m in NUMBER.findall(answer)}
+    mine = {n for n in mine if float(n) > 12 or "." in n}  # small integers are list numbers, months, O# ids
+    steps = " ".join(str(s.get("stdout_tail") or "") + json.dumps(s.get("observation") or {}) for s in rec["ads_trace"].get("steps") or [])
+    known = numbers(" ".join([rec["ads_report"], steps, rec["observations"], rec["ads_query"]]))
+    return round(len(mine & known) / len(mine), 2) if mine else None
+
+
+VERIFY = re.compile(
+    r"\b(verif\w*|validat\w*|confirm\w*|re-?comput\w*|reproduc\w*|test(?:ing)? (?:the |whether |if )?(?:sig|insight|hypothes|claim|o\d))", re.I
+)
+
+
 def steps_text(trace: dict[str, Any]) -> str:
     out = []
     for n, s in enumerate(trace.get("steps") or [], 1):
         goal, code = s.get("step_summary") or "", str(s.get("code") or "")[:2500]
         out.append(f"Step {n} [{s.get('tool_name') or '?'}] {goal}\n{code}")
     return "\n\n".join(out) or "(no steps)"
+
+
+def outputs_text(trace: dict[str, Any]) -> str:
+    return "\n".join(f"Step {n}: {str(s.get('stdout_tail') or '')[:1500]}" for n, s in enumerate(trace.get("steps") or [], 1)) or "(none)"
 
 
 def judge() -> None:
@@ -301,11 +367,17 @@ def judge() -> None:
         if "judge" in rec or rec["stage"] != "done":
             continue
         insights = rec["observations"] or "none"
-        grade = lambda answer: ask_json(JUDGE.format(rubric=RUBRIC, question=rec["question"], facts=ref, insights=insights, answer=answer))  # noqa: E731, B023
+        grade = lambda answer: ask_json(  # noqa: E731, B023
+            JUDGE.format(rubric=RUBRIC, question=rec["question"], facts=ref, outputs=outputs_text(rec["ads_trace"]), insights=insights, answer=answer)
+        )  # noqa: E731, B023
         answer = rec["final"] or rec.get("final_raw")  # a refused answer is still graded; the report counts the refusal
         rec["judge"] = grade(answer) if answer else {"error": rec.get("joint_error")}
         if rec["scenario"] in "BCE":  # the sub-variant "the ADS report as is, no final call"
             rec["judge_ads_report"] = grade(rec["ads_report"])
+        rec["grounding"] = grounding(rec)
+        rec["verify_words"] = sorted(
+            {m.group(0).lower() for s in rec["ads_trace"].get("steps") or [] for m in VERIFY.finditer(s.get("step_summary") or "")}
+        )
         rec["recompute"] = ask_json(RECOMPUTE.format(insights=insights, steps=steps_text(rec["ads_trace"])))["recomputed"]
         p.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
         print(p.name, rec["judge"], len(rec["recompute"]), flush=True)
@@ -319,8 +391,8 @@ def report() -> str:
     med = lambda xs: round(statistics.median(xs), 1) if xs else None  # noqa: E731
     spread = lambda xs: f"{med(xs)} ({min(xs)}–{max(xs)})" if xs else "—"  # noqa: E731
     lines = [
-        "| Сценарій | Запитання | n | збої + відмови гейта | якість Σ/12 | правильність | інсайти | без суперечностей | корисність | перерахунок, запусків | час, с | SIG / ADS / фінал, с | виклики LLM | токени |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Сценарій | Запитання | n | збої + відмови гейта | якість Σ/12 | правильність | інсайти | без суперечностей | корисність | числа з джерел | перерахунок (суддя), запусків | слова перевірки в кроках, запусків | кроків ADS | час, с | SIG / ADS / фінал, с | виклики LLM | токени |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for sc in sorted({r["scenario"] for r in recs}):
         for qid in [*QUESTIONS, "усі"]:
@@ -333,7 +405,8 @@ def report() -> str:
             lines.append(
                 f"| {sc} | {qid} | {len(rs)} | {len(rs) - len(ok)}+{sum(not r['final'] for r in ok)} | {spread(total)} | "
                 + " | ".join(str(med([r["judge"][a] for r in ok])) for a in AXES)
-                + f" | {sum(bool(r.get('recompute')) for r in ok)}/{len(ok)} | {spread([r['seconds'] for r in ok])} | "
+                + f" | {med([r['grounding'] for r in ok if r['grounding'] is not None])} | {sum(bool(r.get('recompute')) for r in ok)}/{len(ok)} | "
+                f"{sum(bool(r.get('verify_words')) for r in ok)}/{len(ok)} | {med([len(r['ads_trace'].get('steps') or []) for r in ok])} | {spread([r['seconds'] for r in ok])} | "
                 f"{stage('search')} / {stage('ads')} / {stage('joint')} | {med([sum(r['llm_calls'].values()) for r in ok])} | "
                 f"{med([sum(r['tokens'].values()) for r in ok])} |"
             )
