@@ -154,7 +154,6 @@ def llm_calls(a: dict[str, Any]) -> dict[str, int]:
     ads = (trace.get("ads") or {}).get("counters") or {}
     return {
         "sig": int(bool((trace.get("search") or {}).get("llm"))),
-        "plan": int("plan" in trace),
         "ads": int(ads.get("total_llm_calls") or 0),
         "joint": int("joint" in trace),
     }
@@ -166,7 +165,6 @@ def tokens(a: dict[str, Any]) -> dict[str, int]:
     use = lambda u: int((u or {}).get("total_tokens") or 0)  # noqa: E731
     return {
         "sig": use(((trace.get("search") or {}).get("llm") or {}).get("usage")),
-        "plan": use((trace.get("plan") or {}).get("usage")),
         "ads": int(ads.get("total_prompt_tokens") or 0) + int(ads.get("total_completion_tokens") or 0),
         "joint": use((trace.get("joint") or {}).get("usage")),
     }
@@ -182,6 +180,7 @@ def run(scenarios: list[str], questions: list[str], runs: int) -> None:
                 if path.exists():
                     continue
                 t0 = time.time()
+                wait(lambda s: not s["ask"] or s["ask"]["stage"] in ("done", "error"))  # an ask a stopped run left behind
                 r = http.post(f"{DEMO}/ask", json={"question": QUESTIONS[qid], "scenario": sc})
                 r.raise_for_status()
                 a = wait(lambda s: s["ask"]["stage"] in ("done", "error"))["ask"]
@@ -199,7 +198,6 @@ def run(scenarios: list[str], questions: list[str], runs: int) -> None:
                     "tokens": tokens(a),
                     "sig_entry": a.get("sig_entry"),
                     "observations": a.get("observations", ""),
-                    "plan": a.get("plan", ""),
                     "ads_query": a.get("ads_query", ""),
                     "ads_report": a.get("ads_report", ""),
                     "final": a.get("joint_report", ""),
@@ -372,7 +370,7 @@ def judge() -> None:
         )  # noqa: E731, B023
         answer = rec["final"] or rec.get("final_raw")  # a refused answer is still graded; the report counts the refusal
         rec["judge"] = grade(answer) if answer else {"error": rec.get("joint_error")}
-        if rec["scenario"] in "BCE":  # the sub-variant "the ADS report as is, no final call"
+        if rec["scenario"] in "BC":  # the sub-variant "the ADS report as is, no final call"
             rec["judge_ads_report"] = grade(rec["ads_report"])
         rec["grounding"] = grounding(rec)
         rec["verify_words"] = sorted(
@@ -418,7 +416,7 @@ def report() -> str:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["run", "facts", "judge", "report"])
-    ap.add_argument("--scenario", nargs="+", default=list("ABCDE"))
+    ap.add_argument("--scenario", nargs="+", default=list("ABC"))
     ap.add_argument("--questions", nargs="+", default=list(QUESTIONS))
     ap.add_argument("--runs", type=int, default=3)
     args = ap.parse_args()
