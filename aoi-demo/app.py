@@ -274,8 +274,8 @@ SIG_GLOSSARY = """## Словник термінів графа інсайтів
 
 - Комірка мапи (H3): шестикутна комірка сітки H3. У SIG рядок даних є коміркою з подіями, а не окремою подією. Підгрупа (`scope`, subgroup) є набором комірок, що відповідають умовам `<колонка> is <значення>`.
 - `points`: кількість подій у комірці.
-- `share <колонка> <значення>`: частка подій комірки з цим значенням. Наприклад, `share crime robbery` означає частку пограбувань серед подій комірки.
-- `<колонка>_mode`: найчастіше значення серед подій комірки. `district_mode is district 10` означає, що найбільше подій комірки належить округу `district 10`.
+- `share <колонка> <значення>`: частка подій комірки з цим значенням колонки.
+- `<колонка>_mode`: найчастіше значення колонки серед подій комірки.
 - `neighbours_<лічильник>_band is q1…q4`: наскільки жваві шість сусідніх комірок за цим лічильником, у чвертях усіх комірок. `q1` найтихіша чверть, `q4` найжвавіша. Сама комірка тут не враховується.
 - `lisa_points`: локальний кластер LISA (локальний індекс Морана), тобто чи утворюють комірка і її сусіди скупчення за кількістю подій.
   - `hot spot`: гаряча точка, жвава комірка серед жвавих сусідів.
@@ -283,13 +283,13 @@ SIG_GLOSSARY = """## Словник термінів графа інсайтів
   - `high outlier`: жвава комірка серед тихих сусідів.
   - `low outlier`: тиха комірка серед жвавих сусідів.
   - `no cluster`: комірка не входить ні в жваве, ні в тихе скупчення. Це звичайне місто без вираженого скупчення, а не відсутність подій.
-- `context_<шар>_band`: скільки точок контекстного шару, наприклад барів, у самій комірці. `none nearby` означає жодної, `q1…q4` чверті серед комірок, де вони є.
+- `context_<шар>_band`: скільки точок контекстного шару в самій комірці. `none nearby` означає жодної, `q1…q4` чверті серед комірок, де вони є.
 - Зсув `<метрика>: mild|moderate|strong|extreme increase|decrease, ±z sd (median a vs b overall)`: медіана метрики в комірках підгрупи (a) проти медіани всієї мапи (b). `sd` є робастним стандартним відхиленням, тобто різницею медіан, поділеною на MAD. Слова сили: mild означає слабкий, moderate помірний, strong сильний, extreme надзвичайно сильний.
 - `bootstrap stability`: частка повторних вибірок, у яких підгрупа відтворюється; 1.0 означає завжди.
 - `adjusted p`: p-значення після поправки на множинні порівняння; що менше, то менш імовірно, що знахідка випадкова.
 - `credibility`, рівень довіри: 1 підтверджено іншим джерелом; 2 не підтверджено, бо інше джерело має події в цьому місці, але такої знахідки не має; 5 суперечить іншому джерелу; 6 немає іншого джерела. Це окремо від статистичної перевірки: сильне p з одного джерела все одно не є підтвердженням.
 - `source F`: надійність джерела не оцінена тим, хто завантажив дані.
-- Граф SIG спільний для всіх завантажених датасетів. Знахідка з іншого файлу, наприклад іншого року, є контекстом, а не фактом про базовий шар цього аналізу.
+- Граф SIG спільний для всіх завантажених датасетів. Знахідка з іншого файлу є контекстом, а не фактом про базовий шар цього аналізу.
 """
 
 
@@ -324,7 +324,7 @@ def aoi_md(zone: dict[str, Any], data: dict[str, Any], files: dict[str, list[str
             "# Area of interest: tables and columns",
             f"- Zone: the user's polygon on the map, {vertices} vertices, lon {lon_span}, lat {lat_span}. "
             f"Base events: {b['inside']} of {b['total']} inside; context points: {c['inside']} of {c['total']} inside.",
-            f"- base_aoi.csv ({BASE['file']}, {BASE['label']}): the events. context_aoi.csv ({CONTEXT['file']}, {CONTEXT['label']}): the context points. "
+            f"- base_aoi.csv ({BASE['file']}, {BASE['label']}): the main table, one row = one event, time column {BASE['time']}. context_aoi.csv ({CONTEXT['file']}, {CONTEXT['label']}): its context layer, one row = one point. "
             f"Both carry {', '.join(cols)}, in_aoi, aoi_zone.",
             f"- H3 columns: {levels}; a coarser id is the parent of the finer one; the finest is the level SIG analysed.",
             "- in_aoi: 1 = the point lies inside the polygon (exact point-in-polygon), 0 = outside.",
@@ -349,7 +349,7 @@ def domain_md(zone: dict[str, Any], files: dict[str, list[str]] | None = None) -
     sources = [
         "## Джерела знахідок SIG",
         "",
-        f"Базовий шар цього аналізу: {BASE['file']}. Граф SIG містить і інші датасети, наприклад інший рік того самого типу подій. "
+        f"Базовий шар цього аналізу: {BASE['file']}. Граф SIG містить і інші датасети. "
         "Знахідка з іншого файлу не є фактом про базовий шар, і її числа не можна поєднувати з числами ADS.",
         "",
         *by_file,
@@ -433,17 +433,25 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
         r, b, c = data["resolution"], zone["base"], zone["context"]
         cols = h3_columns(r)
         geo = (
-            f"\n\nData: base_aoi.csv → df_base_aoi ({BASE['label']}, {b['total']} rows, {b['inside']} inside the AOI); "
-            f"context_aoi.csv → df_context_aoi ({CONTEXT['label']}, {c['total']} rows, {c['inside']} inside).\n"
+            f"\n\nData and roles:\n- df_base_aoi (base_aoi.csv: {BASE['label']}, {b['total']} rows, {b['inside']} inside the AOI) is the main "
+            "table, the subject of the analysis: one row is one event. Every count, share and trend the question asks for is computed on its rows.\n"
+            f"- df_context_aoi (context_aoi.csv: {CONTEXT['label']}, {c['total']} rows, {c['inside']} inside) is a context layer of the main "
+            "table: one row is one point of another kind. It adds no events and no metrics of its own; it describes the places of the main "
+            "table's events. The tables share no key but the H3 cell ids: relate them by counting the layer's points per cell and joining on "
+            "the cell id, then compare the main table's per-cell figures between cells with and without layer points (never sum the layer's "
+            "count over event rows), and tell the result from the main table's side (the layer is the setting, not the result).\n"
+            f"- Time: {BASE['time']} in df_base_aoi is the event's timestamp, with the time of day; for figures per day, week or month group "
+            "by its calendar date, never by the raw value.\n"
             f"Geo columns (both tables): {', '.join(cols)} are H3 cell ids (strings) at resolutions {', '.join(str(r - k) for k in H3_LEVELS)}; "
             "a coarser id is the parent of the finer one; group by them, never edit them. in_aoi is 1 for points inside the polygon (exact). "
             "aoi_zone is inside (= in_aoi 1) | adjacent (outside the polygon but in the zone's cells or their ring-1 neighbours) | far. "
-            "A point in the same cell as the zone is not inside the zone.\n"
+            "A point in the same cell as the zone is not inside the zone. The AOI is the inside rows only; adjacent and far rows are "
+            "comparison groups, never part of the AOI's own figures.\n"
             f"Zone (base rows): inside={b['inside']}, adjacent={b['adjacent']}, far={b['far']}; {cols[0]} cells in the zone: {len(zone['cells'])}. "
-            f"SIG counted these types per cell: {', '.join(data.get('counted') or []) or 'none'}."
+            f"SIG's per-cell counters: {', '.join(data.get('counted') or []) or 'none'}."
         )
     else:
-        geo = "\n\nData: base_aoi.csv → df_base_aoi and context_aoi.csv → df_context_aoi with the H3 columns h3_r*, in_aoi and aoi_zone (the figures appear once the zone is drawn)."
+        geo = "\n\nData and roles: df_base_aoi (base_aoi.csv) is the main table, df_context_aoi (context_aoi.csv) its context layer; both carry the H3 columns h3_r*, in_aoi and aoi_zone (the figures appear once the zone is drawn)."
     if sig is None:
         blocks = "(after the ask)"
     else:
@@ -452,6 +460,12 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
         "\n\nGuidance:\n- Answer the question with your own computations on the tables. Where the question points to it, compare inside vs "
         "adjacent vs far at the same level (rows per cell for counts, shares for categories).\n- The insights are computed: quote those that "
         "bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, breakdowns).\n"
+        "- End the report with one section 'Established insights'. List only the insights that bear on the question (their condition or "
+        "metric is what the question asks about), the ones in the zone first. For each give its id and whether it is in the zone, copy its "
+        "'established' lines word for word (a median pair reads 'median a vs b overall'; sd is the unit of the shift, not of a median), and "
+        "add one sentence on what it adds to your own figures. When no insight bears on the question, say so in one sentence. An insight "
+        "with 'in zone: no' describes other places: say so, never present it as a fact about the AOI.\n"
+        "- Report figures for groups of cells (inside, adjacent, far; with and without layer points), not tables of raw cell ids.\n"
         "- Describe differences as shifts and ratios, not causes; proximity is not causation."
     )
     return [
@@ -839,7 +853,13 @@ def check() -> None:
     assert [p["kind"] for p in parts] == ["primer", "frame", "user", "data", "insights", "guidance"], parts
     q = "".join(p["text"] for p in parts)
     assert q.startswith("Read this first") and q.index("Do not verify") < q.index("Analyse the area of interest (AOI): як змінювалась"), q
-    assert "h3_r9, h3_r8, h3_r7" in q and "inside=1, adjacent=1, far=0" in q and "proximity is not causation" in q, q
+    assert (
+        "h3_r9, h3_r8, h3_r7" in q
+        and "inside=1, adjacent=1, far=0" in q
+        and "is the main table" in q
+        and f"Time: {BASE['time']}" in q
+        and "proximity is not causation" in q
+    ), q
     assert "O1 · in zone: yes (1 of its 2 cells are zone cells)\n  cells where: s\n  established: m: up\n  validation: p < 0.001" in q, q
     assert "  trust: credibility 5 (contradicted)" in q and "ground truth" not in q and "is contested" in q, q
     assert "context_x_band=q2" in q and "O2 · in zone: no" in q and "other.csv (another dataset of the graph" in q and "[P1]" not in q, q

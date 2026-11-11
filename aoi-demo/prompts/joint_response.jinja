@@ -1,5 +1,5 @@
 {#- AOI demo: the final report's prompt over the ADS report; <User_Domain_Knowledge> holds the zone's methodology and
-    the SIG glossary. -#}
+    the SIG glossary; <grounding_rules> rule 8 keeps the report's section of established insights. -#}
 {%- set is_uk = (query_language | default("en") | lower) == "uk" -%}
 {%- set lang = "Ukrainian" if is_uk else "English" -%}
 {%- set results_heading = "## Результати аналізу" if is_uk else "## Analysis results" -%}
@@ -7,7 +7,7 @@
 {%- set pronouns = "`я`, `мене`, `мій`" if is_uk else "`I`, `me`, `my`" -%}
 {%- set first_person = "Я" if is_uk else "I" -%}
 {%- set opener_verbs = "зіставив, дослідив, проаналізував, узагальнив, оцінив, порівняв, перевірив, простежив" if is_uk else "compared, examined, reviewed, summarized, assessed, ranked, checked, traced" -%}
-{%- set key_example = "`theft` -> `крадіжка`" if is_uk else "`крадіжка` -> `theft`" -%}
+{%- set key_example = "`category` -> `категорія`" if is_uk else "`категорія` -> `category`" -%}
 {%- set no_period = "період не вказано" if is_uk else "period not specified" -%}
 {%- set units = "`km` -> `км`, `h` -> `год`" if is_uk else "standard English abbreviations (`km`, `h`)" -%}
 {%- set num_format = "Thousands separator is a space (`1 193`), decimal mark a point as in the report (`39.4%`), consistently." if is_uk else "Thousands separator is a comma (`1,193`), decimal mark a point (`39.4%`), consistently." -%}
@@ -110,6 +110,9 @@ Numbers never change. Render Ukrainian temporal words in English («15 серп�
    answer. Name listed months and items individually; a count does not replace the list.
 7. If the report lacks what the query asks for, say so in one sentence, then present what it
    does contain.
+8. A section of established insights in the report (items with ids such as O1, O2) stays in the
+   answer as its own subsection, every item with its id and its figures; `sd` is the unit of a
+   shift, never of a median (AOI demo).
 
 </grounding_rules>
 

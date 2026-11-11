@@ -483,7 +483,7 @@ const kv = (o) => `<div class="kv">${Object.entries(o).map(([k, v]) => `<span cl
 const fold = (title, body, lazy = "") => `<details${lazy ? ` data-lazy="${lazy}"` : ""}><summary>${esc(title)}</summary>${body}</details>`;
 const chars = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, `${v} симв.`]));
 // the ADS task part by part: the user's words highlighted, each deterministic addition tagged
-const QUERY_PART = { primer: "+ що таке інсайт SIG і як його читати", frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані, колонки H3, in_aoi і aoi_zone, лічильники зони", insights: "+ інсайти SIG як встановлені факти O#", guidance: "+ настанови: власні обчислення, зона проти оточення, інсайти не перераховувати" };
+const QUERY_PART = { primer: "+ що таке інсайт SIG і як його читати", frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані: основна таблиця і контекстний шар, колонки H3, in_aoi і aoi_zone, лічильники зони", insights: "+ інсайти SIG як встановлені факти O#", guidance: "+ настанови: власні обчислення, зона проти оточення, інсайти не перераховувати" };
 const queryParts = (parts, pending) => parts.map((p) => `<div class="qp${p.kind === "user" ? " user" : ""}"><span class="qtag">${QUERY_PART[p.kind] || p.kind}${pending && p.kind === "insights" ? " (після запиту)" : ""}</span>${esc(p.text.trim()) || "<i>порожньо</i>"}</div>`).join("");
 
 let previewTimer = null, sentShown = false;
