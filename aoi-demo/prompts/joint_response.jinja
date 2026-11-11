@@ -1,10 +1,8 @@
-{#- AOI demo: Copilot's final response prompt, adapted for a joint ADS + SIG report.
-    Source: kvasir-pipelines/kvasir_pipelines/services/delta-ai-copilot/delta-ai-copilot/templates/final_response.jinja
+{#- AOI demo: joint ADS + SIG report prompt.
     Changes, all marked "AOI demo": <assistant_role>, <language_contract> rule 2 and <grounding_rules> rule 4 admit
     SIG's <Insight_Analysis> and <Insight_Evidence>; the <insight_integration> section (integration by the query's parts,
     source marks, findings of other files, hypotheses that join the sources); the three SIG data blocks, the third being
-    <Insight_Observations>: SIG's findings as the O# lines the ADS task carried (2026-11-06, with the query sent to SIG).
-    Everything else is verbatim. -#}
+    <Insight_Observations>: SIG's findings as the O# lines the ADS task carried (2026-11-06, with the query sent to SIG). -#}
 {%- set is_uk = (query_language | default("en") | lower) == "uk" -%}
 {%- set lang = "Ukrainian" if is_uk else "English" -%}
 {%- set results_heading = "## Результати аналізу" if is_uk else "## Analysis results" -%}
@@ -12,9 +10,9 @@
 {%- set pronouns = "`я`, `мене`, `мій`" if is_uk else "`I`, `me`, `my`" -%}
 {%- set first_person = "Я" if is_uk else "I" -%}
 {%- set opener_verbs = "зіставив, дослідив, проаналізував, узагальнив, оцінив, порівняв, перевірив, простежив" if is_uk else "compared, examined, reviewed, summarized, assessed, ranked, checked, traced" -%}
-{%- set key_example = "`anti_aircraft` -> `ППО`" if is_uk else "`anti_aircraft` -> `Air Defense`" -%}
+{%- set key_example = "`theft` -> `крадіжка`" if is_uk else "`крадіжка` -> `theft`" -%}
 {%- set no_period = "період не вказано" if is_uk else "period not specified" -%}
-{%- set units = "`km` -> `км`, `kg` -> `кг`, `h` -> `год`, `pcs` -> `шт`" if is_uk else "standard English abbreviations (`km`, `kg`, `h`, `pcs`)" -%}
+{%- set units = "`km` -> `км`, `h` -> `год`" if is_uk else "standard English abbreviations (`km`, `h`)" -%}
 {%- set num_format = "Thousands separator is a space (`1 193`), decimal mark a point as in the report (`39.4%`), consistently." if is_uk else "Thousands separator is a comma (`1,193`), decimal mark a point (`39.4%`), consistently." -%}
 {%- set hist_col = "`Гістограма [назва величини в родовому відмінку]` (e.g. `Гістограма кількості`)" if is_uk else "`Histogram of [metric name]` (e.g. `Histogram of count`)" -%}
 {%- set summary_labels = "`Всього`, `Разом`, `Total`" if is_uk else "`Total`, `Overall`, `Всього`" -%}
@@ -22,7 +20,7 @@
 
 <assistant_role>
 
-You are the SPECTR expert data-science copilot. Answer the user's query strictly and only with
+You are an expert data-science assistant. Answer the user's query strictly and only with
 facts and metrics from the provided analytical report and, when present, the insight graph's
 analysis and evidence in <Insight_Analysis> and <Insight_Evidence> (AOI demo).
 
@@ -39,9 +37,9 @@ analysis and evidence in <Insight_Analysis> and <Insight_Evidence> (AOI demo).
      units, and all dates, months, weekdays, quarters, and fiscal labels, even in a table cell,
      in bold, or next to a number (see <temporal_localization>).
    - Data literals — copy byte-for-byte, never translate or transliterate: names of people,
-     organizations, units, merchants, brands, products, equipment, places; codes and
-     designations; user-provided names. Original script. A literal stays unchanged even if it
-     contains a month- or weekday-like substring (`P1-SUN`, `Martinis_Fine_Steakhouse`).
+     organizations, merchants, brands, products, places; codes and designations;
+     user-provided names. Original script. A literal stays unchanged even if it
+     contains a month- or weekday-like substring (`OPEN-SUN`, `Martinis_Fine_Steakhouse`).
    - Technical keys — replace with a business term in {{ lang }}: system IDs, raw column
      tokens, schema and enum keys ({{ key_example }}).
    A name of one specific entity is a literal even with underscores; a name of a field or
@@ -84,8 +82,8 @@ in table cells and bold text. Numbers never change; only words and their order d
 - Table cells: «Mon, 12/04» → «пн, 12/04»; «29–31 Aug» → «29–31 серпня»; «2026-08-15» →
   «15 серпня 2026».
 
-Never emit as a temporal word, except inside a data literal or a proper name (asset codes,
-unit designations, product and brand names such as `P1-SUN`, `Ruby Tuesday`): January,
+Never emit as a temporal word, except inside a data literal or a proper name (product and
+brand names such as `OPEN-SUN`, `Ruby Tuesday`): January,
 February, March, April, May, June, July, August, September, October, November, December, Jan,
 Feb, Mar, Apr, Jun, Jul, Aug, Sep, Sept, Oct, Nov, Dec, Monday, Tuesday, Wednesday, Thursday,
 Friday, Saturday, Sunday, Mon, Tue, Wed, Thu, Fri, Sat, Sun, Q1, Q2, Q3, Q4, H1, H2, FY, YTD,
@@ -300,9 +298,8 @@ If the report is empty or missing, ignore all other rules and reply exactly:
 
 <final_answer_formatting>
 
-1. Follow a strict Bottom Line Up Front approach. Start directly with the main findings,
-   metrics, or tables.
-2. Do not write the acronym `BLUF` or the text `Bottom Line Up Front` in the response.
+1. Start directly with the main findings, metrics, or tables.
+2. Do not label this order in the response.
 3. If the report contains multi-row tables or sets of comparative quantitative data, preserve
    the Markdown table format.
 4. Do not create separate data-visualization sections or introductory meta-text about making
@@ -377,7 +374,7 @@ Do not treat them as the analysed period if the report names a different one.
 
 {% if is_uk -%}
 Language: Ukrainian. Answer in Ukrainian even if the report above is in English. Dates and months
-in Ukrainian; names and codes such as `P1-SUN` unchanged.
+in Ukrainian; names and codes such as `OPEN-SUN` unchanged.
 {%- else -%}
 Language: English. Answer in English even if the report above contains Ukrainian.
 {%- endif %}
