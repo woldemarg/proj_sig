@@ -70,7 +70,6 @@ http = httpx.Client(timeout=httpx.Timeout(600.0, connect=10.0))
 STATE: dict[str, Any] = {"datasets": None, "zone": None, "ask": None}
 DATA: dict[str, pd.DataFrame] = {}
 GRID: dict[str, Any] = {}  # the base layer's map cells in SIG: h3 ids, rings, centres, and SIG's resolution
-PATTERN_CELLS: dict[str, list[str]] = {}  # pattern id -> its h3 cells, kept out of STATE (the page draws the rings)
 
 
 @lru_cache(maxsize=1)
@@ -171,7 +170,16 @@ def sig_pattern(dataset_id: str, pattern_id: str) -> dict[str, Any]:
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # SIG's credibility, best first: confirmed, unconfirmed, no other source, contradicted
 
 
-def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
+def zone_overlap(cells: list[str], zone: list[str]) -> int:
+    """How many of a finding's cells lie in the zone, both taken at the coarser of their two H3 levels."""
+    if not cells or not zone:
+        return 0
+    r = min(h3.get_resolution(cells[0]), h3.get_resolution(zone[0]))
+    zone_at = {h3.cell_to_parent(c, r) for c in zone}
+    return sum(h3.cell_to_parent(c, r) in zone_at for c in cells)
+
+
+def sig_findings(qa: dict[str, Any], zone: list[str]) -> list[dict[str, Any]]:
     """The chat's evidence items with their cells' rings for the map: the ones the zone weighed as inside (place > 0)
     first, the most credible first, then the ones outside it that SIG's answer also tells; at most MAX_INSIGHTS."""
     evidence = (qa.get("view") or {}).get("evidence") or {}
@@ -185,7 +193,7 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     for it in items[:MAX_INSIGHTS]:  # SIG's own text, in its own language, as is
         dataset_id = (source.get(it["key"]) or {}).get("dataset_id", "")
         place = sig_pattern(dataset_id, it["pattern_id"]) if dataset_id else {}
-        PATTERN_CELLS[it["pattern_id"]] = place.get("cells") or []
+        cells = place.get("cells") or []
         out.append(
             {
                 "key": it["key"],
@@ -202,6 +210,8 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
                 "trust": it.get("trust", ""),
                 "credibility": it.get("credibility"),
                 "place": area.get(it["key"]),
+                "cells_total": len(cells),
+                "cells_in_zone": zone_overlap(cells, zone),
                 "rings": place.get("rings") or [],
             }
         )
@@ -210,12 +220,12 @@ def sig_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
 
 def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
     """One SIG reading of the zone, with the user's question or without it: the findings for the map and the ADS task,
-    the graph evidence, the files the findings come from, and the call's trace — the same shape for the preview on
+    the graph evidence, and the call's trace — the same shape for the preview on
     polygon close (no question) and for the ask (the question), so the ask can fall back on the preview."""
     t0 = time.time()
     trace = {"call": f"POST {SIG_CHAT_URL}/api/chat/query", "question": question, "cells_count": len(cells)}
     qa = sig_chat(cells, question)
-    insights = sig_findings(qa)
+    insights = sig_findings(qa, cells)
     metrics = qa.get("metrics") or {}
     trace["result"] = {
         "граф": f"точок входу {metrics.get('seed_count')} · обійдено станів {metrics.get('visited_states')} · глибина "
@@ -226,7 +236,6 @@ def sig_zone_answer(cells: list[str], question: str) -> dict[str, Any]:
     return {
         "insights": insights,
         "sig_evidence": qa.get("prompt", ""),
-        "files": finding_files(qa),
         "trace": trace,
         "seconds": round(time.time() - t0, 1),
     }
@@ -275,22 +284,20 @@ SIG_GLOSSARY = """## Словник термінів графа інсайтів
   - `low outlier`: тиха комірка серед жвавих сусідів.
   - `no cluster`: комірка не входить ні в жваве, ні в тихе скупчення. Це звичайне місто без вираженого скупчення, а не відсутність подій.
 - `context_<шар>_band`: скільки точок контекстного шару, наприклад барів, у самій комірці. `none nearby` означає жодної, `q1…q4` чверті серед комірок, де вони є.
-- Зсув `<метрика>: mild|moderate|strong increase|decrease, ±z sd (median a vs b overall)`: медіана метрики в комірках підгрупи (a) проти медіани всієї мапи (b). `sd` є робастним стандартним відхиленням, тобто різницею медіан, поділеною на MAD. Слова сили: mild означає слабкий, moderate помірний, strong сильний.
+- Зсув `<метрика>: mild|moderate|strong|extreme increase|decrease, ±z sd (median a vs b overall)`: медіана метрики в комірках підгрупи (a) проти медіани всієї мапи (b). `sd` є робастним стандартним відхиленням, тобто різницею медіан, поділеною на MAD. Слова сили: mild означає слабкий, moderate помірний, strong сильний, extreme надзвичайно сильний.
 - `bootstrap stability`: частка повторних вибірок, у яких підгрупа відтворюється; 1.0 означає завжди.
 - `adjusted p`: p-значення після поправки на множинні порівняння; що менше, то менш імовірно, що знахідка випадкова.
 - `credibility`, рівень довіри: 1 підтверджено іншим джерелом; 2 не підтверджено, бо інше джерело має події в цьому місці, але такої знахідки не має; 5 суперечить іншому джерелу; 6 немає іншого джерела. Це окремо від статистичної перевірки: сильне p з одного джерела все одно не є підтвердженням.
 - `source F`: надійність джерела не оцінена тим, хто завантажив дані.
-- Роль знахідки: `seed` знайдена прямо за питанням і зоною; `transversal` досягнута через латентний якір, тобто схожа картина в іншій частині даних; лише за місцем означає, що знахідка лежить поруч, і це не доводить зв'язку.
-- `AREA`, місце в зоні: наскільки комірки знахідки збігаються з виділеною зоною, 100% означає ті самі комірки. Знахідки поза зоною (`outside`) описують інші місця.
 - Граф SIG спільний для всіх завантажених датасетів. Знахідка з іншого файлу, наприклад іншого року, є контекстом, а не фактом про базовий шар цього аналізу.
 """
 
 
-def finding_files(qa: dict[str, Any]) -> dict[str, list[str]]:
-    """file -> the keys of the chat's findings that come from it (the evidence's provenance)."""
+def finding_files(insights: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """file -> the O# ids, as the ADS task numbers them, of the findings that come from it."""
     out: dict[str, list[str]] = {}
-    for p in ((qa.get("view") or {}).get("evidence") or {}).get("provenance") or []:
-        out.setdefault(p.get("filename") or p.get("dataset_id", "?"), []).append(p["key"])
+    for n, it in enumerate(insights, 1):
+        out.setdefault(it["filename"] or it["dataset_id"] or "?", []).append(f"O{n}")
     return out
 
 
@@ -381,33 +388,34 @@ SIG_TERMS = (
 # What an insight is and how to read it, ahead of the user's question (the query is the part ADS never trims)
 INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
 
-Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a fact already computed for this dataset, not a suggestion.
+Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a result already computed and validated for this dataset, not a suggestion.
 
 How to read an insight:
 - `cells where` is the condition that selects a set of H3 map cells of the base layer (the finest h3_r column); SIG's row is a cell with its events, not an event.
 - `established` is how a per-cell metric in those cells differs from the whole map: the subgroup's median against the map's median, in robust standard deviations (sd).
 - `in zone` says whether those cells overlap the user's area of interest.
+- `trust` is how far the insight's source is confirmed: the source's reliability, whether another source confirms or contradicts the insight (credibility), and the record's integrity. It is separate from the statistics.
 - SIG's terms: {SIG_TERMS}.
 
 Rules for the insights:
-1. They are ground truth. Do not verify, test, reproduce, re-derive or recompute an insight, its medians, its sd or its cell condition; no step of your plan may have that purpose. The per-cell features behind them (neighbour bands, LISA classes, per-cell shares) are not columns of the tables, so a recomputation would only produce a different, wrong number.
+1. They are computed and validated. Do not verify, test, reproduce, re-derive or recompute an insight, its medians, its sd or its cell condition; no step of your plan may have that purpose. The per-cell features behind them (neighbour bands, LISA classes, per-cell shares) are not columns of the tables, so a recomputation would only produce a different, wrong number.
 2. Use them as navigation: they tell you which event types, places and conditions deserve attention. Spend your steps on what the question asks and the insights do not already state.
-3. In the report cite an insight by its id and quote its numbers exactly as given, as an established fact, next to your own figures.
+3. In the report cite an insight by its id and quote its numbers exactly as given, next to your own figures. An insight whose `trust` line says another source contradicts it is contested: say so when you cite it.
 
 """
 
 
-def insight_blocks(items: list[dict[str, Any]], zone_cells: list[str]) -> list[str]:
-    """One template per insight: the id and its place, the cell condition, each shift, the checks it passed."""
-    zone = set(zone_cells)
+def insight_blocks(items: list[dict[str, Any]]) -> list[str]:
+    """One template per insight: the id and its place, the cell condition, each shift, its validation and its trust."""
     out = []
     for n, it in enumerate(items, 1):
-        cells = PATTERN_CELLS.get(it.get("pattern_id", ""), [])
-        place = f" ({len(zone & set(cells))} of its {len(cells)} cells are zone cells)" if cells else ""
+        place = f" ({it['cells_in_zone']} of its {it['cells_total']} cells are zone cells)" if it.get("cells_total") else ""
         lines = [f"O{n} · in zone: {'yes' if it['inside'] else 'no'}{place}", f"  cells where: {it['scope'] or '—'}"]
         lines += [f"  established: {s}" for s in it["shift"]]
         if it.get("validation"):
-            lines.append(f"  checks passed: {it['validation']}")
+            lines.append(f"  validation: {it['validation']}")
+        if it.get("trust"):
+            lines.append(f"  trust: {it['trust']}")
         if it.get("layer"):
             lines.append(f"  layers: links the base layer's events to the context layer's points in the cell ({it['layer']})")
         if it["filename"] != BASE["file"]:
@@ -439,10 +447,10 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
     if sig is None:
         blocks = "(after the ask)"
     else:
-        blocks = "\n\n".join(insight_blocks(sig.get("insights") or [], (zone or {}).get("cells") or [])) or "SIG has no insights for this zone."
+        blocks = "\n\n".join(insight_blocks(sig.get("insights") or [])) or "SIG has no insights for this zone."
     guidance = (
         "\n\nGuidance:\n- Answer the question with your own computations on the tables. Where the question points to it, compare inside vs "
-        "adjacent vs far at the same level (rows per cell for counts, shares for categories).\n- The insights are settled: quote those that "
+        "adjacent vs far at the same level (rows per cell for counts, shares for categories).\n- The insights are computed: quote those that "
         "bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, breakdowns).\n"
         "- Describe differences as shifts and ratios, not causes; proximity is not causation."
     )
@@ -451,7 +459,7 @@ def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, 
         {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
         {"kind": "user", "text": question},
         {"kind": "data", "text": geo},
-        {"kind": "insights", "text": "\n\nEstablished insights (facts; do not recompute):\n" + blocks},
+        {"kind": "insights", "text": "\n\nEstablished insights (computed and validated; do not recompute):\n" + blocks},
         {"kind": "guidance", "text": guidance},
     ]
 
@@ -506,7 +514,7 @@ def ads_report(status: dict[str, Any]) -> str:
 
 JOINT_MAX_TOKENS = 16384  # the prompt keeps every row of the report's tables (a year of days)
 PROMPTS: dict[str, str] = {}  # the last final prompt, served apart (GET /trace/prompt) so /state stays light to poll
-TRACES: dict[str, Any] = {}  # the last ADS job's counters and steps, served apart (GET /trace/ads)
+TRACES: dict[str, Any] = {}  # the last ADS job's counters and steps: debugging by hand, GET /trace/ads (ADS drops them with the session)
 
 
 def llm_chat(prompt: str) -> dict[str, Any]:
@@ -542,7 +550,8 @@ def joint_report(question: str, report: str, domain: str) -> tuple[str, dict[str
     }
     if "## Результати аналізу" in out and "## Методологія" in out:
         return out, trace
-    return "", {**trace, "raw": out}  # the answer that missed its required sections, for the trace
+    log.warning("final report without its required sections: %s", out[:2000])
+    return "", trace
 
 
 # ----------------------------------------------------------------------------- the flows
@@ -598,7 +607,7 @@ def run_mine(z: dict[str, Any]) -> None:
         log.exception("zone preview failed")
         s["stage"], s["error"] = "error", f"{type(exc).__name__}: {exc}"
         s.setdefault("seconds", 0)
-        s.update({"insights": [], "sig_evidence": "", "files": {}})
+        s.update({"insights": [], "sig_evidence": ""})
 
 
 def run_ask(question: str) -> None:
@@ -620,7 +629,7 @@ def run_ask(question: str) -> None:
         chosen = preview if fallback else combined
         a["sig_entry"] = "preview" if fallback else "combined"
         a["insights"], a["sig_evidence"] = chosen["insights"], chosen.get("sig_evidence")
-        files_of = chosen.get("files") or {}
+        files_of = finding_files(a["insights"])
         a["aoi_md"], a["domain_md"] = aoi_md(zone, STATE["datasets"], files_of), domain_md(zone, files_of)
         trace["search"] = {
             **chosen.get("trace", {}),
@@ -650,7 +659,6 @@ def run_ask(question: str) -> None:
         counters = (status.get("result") or {}).get("system_counters") or {}
         steps = (status.get("result") or {}).get("execution_trace") or []
         TRACES["ads"] = {"counters": counters, "steps": steps}
-        trace["ads"]["counters"] = counters
         trace["ads"]["result"] = {
             "outcome": f"{a['ads_outcome']} · {last.get('completion_status')}",
             "кроків": counters.get("total_steps_taken"),
@@ -755,6 +763,8 @@ def zone(body: dict[str, Any]) -> dict[str, Any]:
     polygon = body.get("polygon") or {}
     if polygon.get("type") != "Polygon" or len((polygon.get("coordinates") or [[]])[0]) < 4:
         raise HTTPException(400, "polygon: GeoJSON Polygon з щонайменше трьома вершинами")
+    fold = [[[x if -180 <= x <= 180 else (x + 180) % 360 - 180, y] for x, y, *_ in ring] for ring in polygon["coordinates"]]
+    polygon = {"type": "Polygon", "coordinates": fold}  # a longitude past ±180 folded back, as SIG folds it
     cells = zone_h3_cells(polygon, GRID["resolution"], GRID["h3"])  # the zone as SIG reads a geometry
     if not cells:
         raise HTTPException(400, "у полігоні немає жодної комірки мапи SIG: обведіть ділянку з подіями")
@@ -817,28 +827,30 @@ def check() -> None:
         "cells": ["a"],
     }
     data_fx = {"resolution": 9, "counted": ["count_crime_theft"]}
-    found = {"key": "P1", "headline": "H", "scope": "s", "shift": ["m: up"], "inside": True, "filename": BASE["file"]}
+    found = {"key": "P1", "headline": "H", "scope": "s", "shift": ["m: up"], "inside": True, "filename": BASE["file"], "dataset_id": "d"}
+    seen = {"layer": "context_x_band=q2", "validation": "p < 0.001", "trust": "credibility 5 (contradicted)", "cells_total": 2, "cells_in_zone": 1}
     sig_fx = {
         "insights": [
-            {**found, "layer": "context_x_band=q2", "pattern_id": "x1", "validation": "p < 0.001"},
+            {**found, **seen},
             {**found, "key": "P2", "scope": "", "shift": [], "inside": False, "filename": "other.csv", "layer": ""},
         ],
     }
-    PATTERN_CELLS["x1"] = ["a", "b"]
     parts = ads_query_parts("як змінювалась кількість?", zone_fx, data_fx, sig_fx)
     assert [p["kind"] for p in parts] == ["primer", "frame", "user", "data", "insights", "guidance"], parts
     q = "".join(p["text"] for p in parts)
-    PATTERN_CELLS.clear()
     assert q.startswith("Read this first") and q.index("Do not verify") < q.index("Analyse the area of interest (AOI): як змінювалась"), q
     assert "h3_r9, h3_r8, h3_r7" in q and "inside=1, adjacent=1, far=0" in q and "proximity is not causation" in q, q
-    assert "O1 · in zone: yes (1 of its 2 cells are zone cells)\n  cells where: s\n  established: m: up\n  checks passed: p < 0.001" in q, q
+    assert "O1 · in zone: yes (1 of its 2 cells are zone cells)\n  cells where: s\n  established: m: up\n  validation: p < 0.001" in q, q
+    assert "  trust: credibility 5 (contradicted)" in q and "ground truth" not in q and "is contested" in q, q
     assert "context_x_band=q2" in q and "O2 · in zone: no" in q and "other.csv (another dataset of the graph" in q and "[P1]" not in q, q
     assert "(after the ask)" in ads_query("q", None, None, None) and "(after the ask)" not in q
-    md = aoi_md(zone_fx, data_fx, {"other.csv": ["P1"]})
-    assert len(md) <= 2000 and "lisa_points" in md and "other.csv: P1" in md and "h3_r9" in md and "count_crime_theft" in md, len(md)
+    files_fx = finding_files(sig_fx["insights"])
+    assert files_fx == {BASE["file"]: ["O1"], "other.csv": ["O2"]}, files_fx
+    md = aoi_md(zone_fx, data_fx, files_fx)
+    assert len(md) <= 2000 and "lisa_points" in md and "other.csv: O2" in md and "h3_r9" in md and "count_crime_theft" in md, len(md)
     assert not any(w in md.lower() for w in ("must", "always", "never", "ignore")), md  # declarative: ADS's guardrail reads it
-    dom = domain_md(zone_fx, {"other.csv": ["P1"]})
-    assert "lisa_points" in dom and "other.csv: P1, інший датасет" in dom and "питанням користувача" in dom, dom
+    dom = domain_md(zone_fx, files_fx)
+    assert "lisa_points" in dom and "other.csv: O2, інший датасет" in dom and "extreme" in dom and "питанням користувача" in dom, dom
     assert (DEMO_DIR / BASE["file"]).is_file(), f"demo data missing: {DEMO_DIR}"
     prompt = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render(user_query="q", report="R", domain_knowledge="D", query_language="uk")
     assert "<Analytical_Report>\nR\n" in prompt and "<User_Domain_Knowledge>\nD\n" in prompt and "Insight" not in prompt, prompt[-600:]
@@ -848,11 +860,13 @@ def check() -> None:
     # SIG's credibility order (1 confirmed, 2 unconfirmed, 6 no other source, 5 contradicted), the zone's items first
     items = [{"key": f"P{i}", "pattern_id": "x", "credibility": c, "scope": []} for i, c in enumerate((5, 6, 2, 1, 1), 1)]
     items[1]["scope"] = ["context_bars_band=q2", "lisa_points=no cluster"]  # a cross-layer finding: tagged, not promoted
-    found = sig_findings({"view": {"evidence": {"items": items, "area": {"P1": 0.4, "P2": 0.4, "P3": 0.4, "P4": 0.4}, "provenance": []}}})
+    found = sig_findings({"view": {"evidence": {"items": items, "area": {"P1": 0.4, "P2": 0.4, "P3": 0.4, "P4": 0.4}, "provenance": []}}}, [])
     assert [it["key"] for it in found] == ["P4", "P3", "P2", "P1", "P5"], [it["key"] for it in found]
     assert found[2]["layer"] == "context_bars_band=q2" and found[0]["layer"] == ""
     # geo.py: SIG's own indexing, parents consistent, a cell's own boundary polygon is exactly that cell, the rows' place
     cell = h3.latlng_to_cell(41.885, -87.625, 9)
+    kids = sorted(h3.cell_to_children(h3.cell_to_parent(cell, 8), 9))  # a finding at r8 against a zone at r9: one level
+    assert zone_overlap([h3.cell_to_parent(cell, 8)], kids[:2]) == 1 and zone_overlap(kids, kids[:2]) == 2 and zone_overlap([], kids) == 0
     e = enrich_h3(pd.DataFrame({"lon": [-87.625, -87.6251, None], "lat": [41.885, 41.885, 41.9]}), 9)
     assert e["h3_r9"].tolist() == [cell, cell, ""] and e["h3_r7"].tolist()[2] == "", e
     assert all(h3.cell_to_parent(c, 8) == p for c, p in zip(e["h3_r9"][:2], e["h3_r8"][:2], strict=True)), e
