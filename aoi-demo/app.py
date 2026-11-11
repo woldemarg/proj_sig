@@ -3,7 +3,7 @@
 # dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2", "h3>=4,<5"]
 # ///
 """AOI demo: polygon on a map -> SIG insights in the zone + ADS analysis of the in_aoi tables -> one joint report
-rendered through Copilot's final_response.jinja. One process, one user, state in memory (see README.md).
+from prompts/joint_response.jinja. One process, one user, state in memory (see README.md).
 
 Run:  uv run app.py          the server on http://127.0.0.1:8090
       uv run app.py check    the in_aoi self-check
@@ -40,7 +40,7 @@ SIG_CHAT_URL = os.environ.get("SIG_CHAT_URL", SIG_URL)  # SIG's narrator: /api/c
 ADS_URL = os.environ.get("ADS_URL", "http://127.0.0.1:8000")
 LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8080")
 DEMO_DIR = Path(os.environ.get("DEMO_DIR", HERE.parent / "data" / "demo"))  # the repo's shipped datasets (data/demo/SOURCES.md)
-# Copilot's final_response.jinja adapted for a joint ADS + SIG report; its header names the source and the changes
+# joint ADS + SIG report prompt; its header names the demo's changes
 JOINT_TEMPLATE = Path(os.environ.get("JOINT_TEMPLATE", HERE / "prompts/joint_response.jinja"))
 
 # the happy path is Chicago: the shipped SIG datasets, with the options data/demo/datasets.json reads them with
@@ -500,7 +500,7 @@ def ads_report(status: dict[str, Any]) -> str:
     return _WORKSPACE_REFS.sub(lambda m: m.group(1) or "", text).strip()
 
 
-JOINT_MAX_TOKENS = 16384  # Copilot's final_response_max_tokens: the prompt keeps every row of the report's tables (a year of days)
+JOINT_MAX_TOKENS = 16384  # the prompt keeps every row of the report's tables (a year of days)
 PROMPTS: dict[str, str] = {}  # the last joint prompt, served apart (GET /trace/prompt) so /state stays light to poll
 
 
@@ -513,7 +513,7 @@ def llm_chat(prompt: str) -> dict[str, Any]:
 
 
 def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str, domain: str, observations: str) -> tuple[str, dict[str, Any]]:
-    """Copilot's final response prompt adapted for two sources (prompts/joint_response.jinja): the ADS report, SIG's
+    """Joint report prompt for two sources (prompts/joint_response.jinja): the ADS report, SIG's
     answer, the graph evidence it read and its findings as the O# lines, verbatim; the zone's methodology and the SIG
     glossary as domain knowledge. -> (the report, "" without its required sections; the call's trace)."""
     template = Template(JOINT_TEMPLATE.read_text(encoding="utf-8"))
@@ -534,7 +534,7 @@ def joint_report(question: str, report: str, sig_answer: str, sig_evidence: str,
         "route": "synthesis",
         "model": resp.get("model"),
         "max_tokens": JOINT_MAX_TOKENS,
-        "template": f"prompts/{JOINT_TEMPLATE.name} (Copilot final_response.jinja, правки «AOI demo»)",
+        "template": f"prompts/{JOINT_TEMPLATE.name}",
         "inputs": {
             "user_query: питання користувача": len(question),
             "Analytical_Report: звіт ADS": len(report),
