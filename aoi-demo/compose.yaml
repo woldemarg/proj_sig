@@ -29,7 +29,6 @@ services:
       SIG_CHAT_URL: http://evidence-narrator:8000  # SIG's narrator: the chat answer over the graph's evidence
       ADS_URL: http://orchestrator:8000
       LLM_URL: http://llm:8080                    # ADS's LLM gateway: the joint report's model
-      HANDOFF: ${HANDOFF:-A}                       # how SIG's knowledge reaches ADS: A or B (app.py SCENARIOS)
     networks: [internal, public]                  # internal: SIG and ADS; public: the published port
     depends_on:
       insight-graph: { condition: service_healthy }
