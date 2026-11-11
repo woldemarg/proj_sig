@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["fastapi", "uvicorn", "httpx", "pandas", "shapely", "jinja2", "h3>=4,<5"]
 # ///
-"""AOI demo: polygon on a map -> SIG's insights in the zone, settled facts in the ADS task -> ADS analysis of the
+"""AOI demo: polygon on a map -> SIG's insights in the zone, computed results in the ADS task -> ADS analysis of the
 in_aoi tables -> the final report from prompts/joint_response.jinja. One process, one user, state in memory (see README.md).
 
 Run:  uv run app.py          the server on http://127.0.0.1:8090
@@ -391,7 +391,7 @@ INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
 Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a result already computed and validated for this dataset, not a suggestion.
 
 How to read an insight:
-- `cells where` is the condition that selects a set of H3 map cells of the base layer (the finest h3_r column); SIG's row is a cell with its events, not an event.
+- `cells where` is the condition that selects a set of H3 map cells at the insight's own H3 level (for the base layer: the finest h3_r column); SIG's row is a cell with its events, not an event.
 - `established` is how a per-cell metric in those cells differs from the whole map: the subgroup's median against the map's median, in robust standard deviations (sd).
 - `in zone` says whether those cells overlap the user's area of interest.
 - `trust` is how far the insight's source is confirmed: the source's reliability, whether another source confirms or contradicts the insight (credibility), and the record's integrity. It is separate from the statistics.
@@ -426,7 +426,7 @@ def insight_blocks(items: list[dict[str, Any]]) -> list[str]:
 
 def ads_query_parts(question: str, zone: dict[str, Any] | None, data: dict[str, Any] | None, sig: dict[str, Any] | None) -> list[dict[str, str]]:
     """The ADS task, part by part, as the page shows it: the insight primer, the frame, the user's words, the data with
-    its geo columns and zone counts, SIG's insights as settled facts, and the guidance. The frame is English (ADS's own
+    its geo columns and zone counts, SIG's insights as computed results, and the guidance. The frame is English (ADS's own
     prose is English and Cyrillic costs its budgets two to three times more); the question stays verbatim. Before the
     zone and the ask the figures and the insights are placeholders. Joined, the parts are the query."""
     if zone and data:
@@ -819,7 +819,7 @@ def check() -> None:
     df = pd.DataFrame({"lon": [0.5, 0.2, 2.0], "lat": [0.5, 0.8, 2.0]})
     square = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
     assert flag_in_aoi(df, square).tolist() == [1, 1, 0], flag_in_aoi(df, square).tolist()
-    # the ADS task: the primer ahead of the question, the insights as settled facts, the guidance; a placeholder before the ask
+    # the ADS task: the primer ahead of the question, the insights as computed results, the guidance; a placeholder before the ask
     zone_fx = {
         "polygon": square,
         "base": {"total": 2, "inside": 1, "adjacent": 1, "far": 0},
