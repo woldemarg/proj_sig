@@ -1,6 +1,6 @@
 # ADS for the demo: the orchestrator and what it needs to run a job (minio, postgres, executor, llm), with MLflow for its
-# traces as ADS has it (http://localhost:5050, workspace and experiment agentic-data-science). Copilot, its UI and auth,
-# Phoenix and monitoring start only with `--profile ads-full`.
+# traces as ADS has it (http://localhost:5050, workspace and experiment agentic-data-science). Extra ADS services
+# (UI, auth, Phoenix, monitoring) start only with `--profile ads-full`.
 services:
   phoenix: { profiles: [ads-full] }
   ads-a2a: { profiles: [ads-full] }
