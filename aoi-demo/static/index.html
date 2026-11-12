@@ -82,7 +82,6 @@
   .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 8px; margin-right: 6px; }
   .tag.in { background: rgba(229,57,122,.25); color: #ff9cc2; }
   .tag.out { background: rgba(142,108,216,.25); color: #c9b6ff; }
-  .sig-answer { font-size: 13.5px; }
   @media (max-width: 900px) {  /* narrow screens: the chat above, the map below */
     body { display: block; height: auto; }
     #splitter { display: none; }
@@ -123,7 +122,6 @@
     <details id="zone-sig" open hidden>
       <summary>Що SIG знайшов у зоні</summary>
       <div id="insights"></div>
-      <details><summary>Відповідь SIG про зону</summary><div class="report sig-answer" id="sig-answer"></div><p class="hint" id="sig-sources"></p></details>
     </details>
   </section>
 
@@ -140,14 +138,14 @@
     <div class="stages" id="stages">
       <details class="stage" data-stage="search"><summary><span>SIG: питання + зона</span><span class="t"></span></summary><div class="trace"></div></details>
       <details class="stage" data-stage="ads"><summary><span>ADS: таблиці з H3, in_aoi і aoi_zone</span><span class="t"></span></summary><div class="trace"></div></details>
-      <details class="stage" data-stage="joint"><summary><span>Спільний звіт</span><span class="t"></span></summary><div class="trace"></div></details>
+      <details class="stage" data-stage="joint"><summary><span>Фінальний звіт</span><span class="t"></span></summary><div class="trace"></div></details>
     </div>
     <div class="hint" style="margin-top:4px">Клік по стадії показує, що саме пішло в сервіс і що повернулося.</div>
     <div class="status" id="st-ask"></div>
   </section>
 
   <section id="result" hidden>
-    <h3>Спільний звіт</h3>
+    <h3>Фінальний звіт</h3>
     <div class="report" id="joint"></div>
     <details><summary>Звіт ADS</summary><div class="report" id="ads"></div></details>
     <details><summary>Запит і файли для ADS</summary><pre class="hint" id="files"></pre></details>
@@ -372,11 +370,9 @@ function renderZoneSig(z) {  // step 1 on the page: what SIG found in the place,
   } else {
     const inside = (s.insights || []).filter((it) => it.inside).length;
     $("st-sig").className = "status";
-    $("st-sig").textContent = `Попередній перегляд SIG за ${s.seconds} с: ${inside ? `у зоні знахідок ${inside}` : "у зоні знахідок немає"}. «Запитати» читає зону ще раз, із питанням; відповідь SIG і знахідки O# підуть у запит до ADS.`;
+    $("st-sig").textContent = `Попередній перегляд SIG за ${s.seconds} с: ${inside ? `у зоні знахідок ${inside}` : "у зоні знахідок немає"}. «Запитати» читає зону ще раз, із питанням; знахідки підуть у запит до ADS як встановлені факти O#.`;
     $("zone-sig").hidden = false;
     renderInsights(s.insights || [], "попередній перегляд, без питання");
-    $("sig-answer").innerHTML = s.sig_answer ? marked.parse(s.sig_answer) : "<p class='hint'>порожньо</p>";
-    $("sig-sources").textContent = `${s.sig_mode === "llm" ? "модель SIG: " + (s.sig_model || "") : "без LLM SIG"} · ${s.sig_sources || ""}`;
   }
   if (!asking) $("btn-ask").disabled = false;
   previewQuery();  // the ADS task is exact now
@@ -466,15 +462,14 @@ function renderAsk(a) {
   if (a.stage === "error") { $("st-ask").textContent = a.error; $("st-ask").className = "status err"; $("btn-ask").disabled = false; }
   if (a.sig_entry && $("insights").dataset.key !== `ask:${a.sig_entry}`) {  // the findings that went to ADS as O#, once per ask
     $("insights").dataset.key = `ask:${a.sig_entry}`;
-    renderInsights(a.insights || [], a.sig_entry === "preview" ? "відповідь із питанням не мала знахідок у зоні — узято попередній перегляд" : "відповідь SIG на питання в зоні");
-    $("sig-answer").innerHTML = a.sig_answer ? marked.parse(a.sig_answer) : "<p class='hint'>порожньо</p>";
+    renderInsights(a.insights || [], a.sig_entry === "preview" ? "пошук із питанням не мав знахідок у зоні — узято попередній перегляд" : "знахідки SIG на питання в зоні");
   }
   if (a.stage === "done" || a.stage === "error") {
     $("btn-ask").disabled = false; $("btn-ask").dataset.running = "";
     $("btn-draw").disabled = $("btn-clear").disabled = false;
     if (a.ads_report) {
       $("result").hidden = false;
-      $("joint").innerHTML = a.joint_report ? marked.parse(a.joint_report) : `<p class="hint">${a.joint_error || "спільний звіт відсутній"}</p>`;
+      $("joint").innerHTML = a.joint_report ? marked.parse(a.joint_report) : `<p class="hint">${a.joint_error || "фінальний звіт відсутній"}</p>`;
       $("ads").innerHTML = a.ads_report ? marked.parse(a.ads_report) : "<p class='hint'>порожньо</p>";
       $("files").textContent = `# Запит до ADS\n\n${a.ads_query || ""}\n\n# aoi.md\n\n${a.aoi_md || ""}`;
     }
@@ -488,8 +483,8 @@ const kv = (o) => `<div class="kv">${Object.entries(o).map(([k, v]) => `<span cl
 const fold = (title, body, lazy = "") => `<details${lazy ? ` data-lazy="${lazy}"` : ""}><summary>${esc(title)}</summary>${body}</details>`;
 const chars = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, `${v} симв.`]));
 // the ADS task part by part: the user's words highlighted, each deterministic addition tagged
-const QUERY_PART = { frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані, колонки H3, in_aoi і aoi_zone, лічильники зони", sig_answer: "+ відповідь SIG на це питання, дослівно", observations: "+ знахідки SIG як рядки O#", guidance: "+ настанови: зона проти оточення, зрізи SIG, гіпотези як твердження" };
-const queryParts = (parts, pending) => parts.map((p) => `<div class="qp${p.kind === "user" ? " user" : ""}"><span class="qtag">${QUERY_PART[p.kind] || p.kind}${pending && ["sig_answer", "observations"].includes(p.kind) ? " (після запиту)" : ""}</span>${esc(p.text.trim()) || "<i>порожньо</i>"}</div>`).join("");
+const QUERY_PART = { primer: "+ що таке інсайт SIG і як його читати", frame: "+ рамка: зона інтересу", user: "запит користувача", data: "+ дані: основна таблиця і контекстний шар, колонки H3, in_aoi і aoi_zone, лічильники зони", insights: "+ інсайти SIG як встановлені факти O#", guidance: "+ настанови: власні обчислення, зона проти оточення, інсайти не перераховувати" };
+const queryParts = (parts, pending) => parts.map((p) => `<div class="qp${p.kind === "user" ? " user" : ""}"><span class="qtag">${QUERY_PART[p.kind] || p.kind}${pending && p.kind === "insights" ? " (після запиту)" : ""}</span>${esc(p.text.trim()) || "<i>порожньо</i>"}</div>`).join("");
 
 let previewTimer = null, sentShown = false;
 function previewQuery() {  // what the ADS task will be for the typed question, from the same function the run uses
@@ -498,7 +493,7 @@ function previewQuery() {  // what the ADS task will be for the typed question, 
     if (sentShown) return;
     const q = await (await fetch(`/ads-query?question=${encodeURIComponent($("question").value)}`)).json();
     $("qparts").innerHTML = queryParts(q.parts, !q.exact);
-    $("qcard-note").textContent = "попередній перегляд: відповідь SIG і рядки O# додаються при запиті";
+    $("qcard-note").textContent = "попередній перегляд: інсайти SIG додаються при запиті";
   }, 250);
 }
 $("question").addEventListener("input", () => { sentShown = false; previewQuery(); });
@@ -515,9 +510,9 @@ function traceHtml(stage, a) {
   const t = (a.trace || {})[stage];
   if (!t) return "";
   if (stage === "search") {  // the short statistics of what SIG found
-    return `<div class="hint">У SIG пішли ${t.cells_count} комірок зони${t.question ? " і питання користувача" : ", без питання користувача"}${t.entry === "preview" ? "; відповідь із питанням не мала знахідок у зоні, узято попередній перегляд" : ""}.</div>`
+    return `<div class="hint">У SIG пішли ${t.cells_count} комірок зони${t.question ? " і питання користувача" : ", без питання користувача"}${t.entry === "preview" ? "; пошук із питанням не мав знахідок у зоні, узято попередній перегляд" : ""}.</div>`
       + (t.result ? kv(t.result) : "<div class='hint'>виконується…</div>")
-      + (a.sig_evidence ? fold(`Свідчення графа, яке читала модель SIG (${a.sig_evidence.length} симв.)`, `<pre>${esc(a.sig_evidence)}</pre>`) : "");
+      + (a.sig_evidence ? fold(`Свідчення графа SIG (${a.sig_evidence.length} симв.)`, `<pre>${esc(a.sig_evidence)}</pre>`) : "");
   }
   if (stage === "ads") {
     const sizes = Object.fromEntries(Object.entries(t.files).map(([k, v]) => [k, `${(v / 1024).toFixed(1)} КБ`]));
@@ -543,7 +538,7 @@ function renderTrace(a) {  // re-rendered only when a stage's trace changes, so 
   }
 }
 
-document.addEventListener("toggle", async (e) => {  // a lazy fold (the full joint prompt) loads once, when first opened
+document.addEventListener("toggle", async (e) => {  // a lazy fold (the full final prompt) loads once, when first opened
   const d = e.target;
   if (!(d instanceof HTMLDetailsElement) || !d.open || !d.dataset.lazy || d.dataset.loaded) return;
   d.dataset.loaded = "1";
