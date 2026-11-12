@@ -46,6 +46,7 @@ def test_a_pattern_is_recomputed_from_its_stored_upload(cfg, tmp_path, demo_csv)
         [s["metric"] for s in reordered["shifts"]],
         loaded.spatial,
         reordered["provenance"]["multiple_testing_family"],
+        engine.settings.miner,
     )
     reordered["p_value"], reordered["p_adjusted"] = again["p_value"], again["p_adjusted"]
     forged["p_value"], forged["p_adjusted"] = 0.0123, 0.0123 * forged["provenance"]["multiple_testing_family"]  # a demo p may be 0.0

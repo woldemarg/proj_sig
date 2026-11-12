@@ -8,7 +8,7 @@ import re
 
 import httpx
 import pytest
-from conftest import make_engine, serve, stack, upload_levels
+from conftest import make_engine, pick_dataset, serve, stack, upload_levels
 from dev import chromium
 
 from insight_graph_service.core.settings import PROJECT_ROOT
@@ -33,6 +33,7 @@ def test_the_drawer_lists_where_a_base_insight_lies(cfg):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -67,14 +68,16 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.nodes.length > 0", timeout=60000)
         deletes = "[...document.querySelectorAll('.ds-del')].map((b) => b.disabled)"
         assert page.evaluate(deletes) == [True]  # the geo level's; the queued batch's card has none yet
+        page.click("#add-btn")
         page.click(".adv summary")
-        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in the rail, not the page
+        assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")  # the open form scrolls in its dialog, not the page
         assert page.is_disabled("#table")
         page.fill("#geo", "auto@5")
         assert page.is_enabled("#table") and page.is_checked("#table")
@@ -85,12 +88,14 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.is_enabled("#table")
         grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
+        page.click("#upload-cancel")  # the form keeps its fields for the upload below
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
         held = "G.overlay.features.reduce((a, f) => a + f.properties.n, 0)"
         before = page.evaluate(held)
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
+        page.click("#add-btn")
         page.set_input_files("#file", str(housing))
         page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
         page.set_input_files(
@@ -113,17 +118,13 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
-        assert page.inner_text(f".ds-group[data-upload='{geo['upload_id']}'] .ds-group-head") == "california_housing.csv · готово рівнів: 2 з 2"
-        assert page.evaluate(
+        assert page.evaluate(  # the upload by its shipped set's title, its levels under it
             f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
-        ) == [
-            "california_housing.csv · H3 r5",
-            "california_housing.csv · таблиця",
-        ]
+        ) == ["Житло Каліфорнії (мапа)", "мапа · рівень 5", "таблиця"]
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
-        assert page.locator(chips).all_inner_texts()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]
+        assert page.locator(chips).all_text_contents()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]  # under the folded record
         # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
         patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)
         assert patched.status_code == 200
@@ -133,7 +134,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.evaluate(f"GeoMap.pick('{renamed}')")
         page.wait_for_function("$('map-card').querySelector('.mc-shift').textContent.includes('вартість житла')", timeout=10000)
         engine.process(queued["batch_id"])
-        page.wait_for_function(f"{deletes}.length === 3 && {deletes}.every((d) => !d)", timeout=10000)
+        page.wait_for_function(f"{deletes}.length === 4 && {deletes}.every((d) => !d)", timeout=10000)  # three rows and the file's own
         browser.close()
         assert not errors, errors
 
@@ -154,6 +155,7 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         requested: list[str] = []
@@ -162,8 +164,8 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
         assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
         group = f".ds-group[data-upload='{fine['upload_id']}']"
-        assert page.inner_text(f"{group} .ds-group-head") == "points.csv · готово рівнів: 2 з 3 · без знахідок: 1"
-        card = page.locator(f"{group} .ds", has_text="H3 r5")
+        assert page.inner_text(f"{group} .ds-group-head") == "points"
+        card = page.locator(f"{group} .ds", has_text="рівень 5")
         assert card.locator(".chip").inner_text() == "Без знахідок" and not card.locator(".chip.bad, .ds-error").count()
         # without a READY level the upload failed, as the backend reads it; a table level that finds nothing failed too
         level = "(lv, st, code) => ({ batch_id: lv, upload_id: 'u', filename: 'f.csv', level: lv, status: st, locator: lv === 'table' ? 'auto' : null, error: code && { code, message: code } })"
@@ -259,11 +261,12 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0", timeout=60000)
-        page.select_option("#dataset-filter", fine["dataset_id"])
+        pick_dataset(page, fine["dataset_id"])
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function(f"G.ds === '{fine['dataset_id']}' && G.map.loaded() && W.data && W.data.themes.length", timeout=60000)
         page.evaluate("if (W.folded) $('mw-fold').click()")
@@ -380,6 +383,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -394,7 +398,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
         assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
-        assert page.inner_text("#map-title") == "Усі датасети" and "half.csv" in page.inner_text("#map-meta")
+        assert page.inner_text("#map-title") == "Усі датасети" and "half" in page.inner_text("#map-meta")
         assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
         rows = "W.data.themes.flatMap((t) => t.insights)"
         assert {i["dataset_id"] for i in page.evaluate(rows)} == {full["dataset_id"], other["dataset_id"]}
@@ -415,7 +419,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         page.evaluate(
             f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
         )
-        assert all(name in page.inner_text(".sig-pop") for name in ("california_housing.csv", "half.csv"))
+        assert all(name in page.inner_text(".sig-pop") for name in ("Житло Каліфорнії (мапа)", "half"))  # the datasets by their titles
         assert page.evaluate(f"GeoMap.placeOf({theirs!r})") == []  # unfocused, it carries no zone the map does not show
         busiest = "G.data.features.reduce((a, f) => (f.properties.points > a.properties.points ? f : a))"
         page.evaluate(f"GeoMap.closePopup(); G.map.jumpTo({{ center: centre({busiest}), zoom: 13 }})")
@@ -426,12 +430,12 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
         assert page.evaluate("[G.ds, G.others]") == [full["dataset_id"], []]
         page.evaluate(f"loadDataset({other['dataset_id']!r})")  # its anchor again: «Усі датасети» for the filter to leave
         assert page.evaluate("[G.ds, G.others]") == [other["dataset_id"], [full["dataset_id"]]]
-        page.select_option("#dataset-filter", full["dataset_id"])
+        pick_dataset(page, full["dataset_id"])
         page.wait_for_function("G.others.length === 0 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'visible'", timeout=20000)
-        assert page.inner_text("#map-title") == "california_housing.csv"
-        page.select_option("#dataset-filter", other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
+        assert page.inner_text("#map-title") == "Житло Каліфорнії (мапа)"  # a shipped set by its title
+        pick_dataset(page, other["dataset_id"])  # the anchor alone, then all again: the same cells, another mode
         page.wait_for_function(f"G.ds === {other['dataset_id']!r} && G.others.length === 0 && !G.loading", timeout=20000)
-        page.select_option("#dataset-filter", "")
+        pick_dataset(page, "")
         page.wait_for_function("G.others.length === 1 && G.map.getLayoutProperty('cells-fill', 'visibility') === 'none'", timeout=20000)
         assert page.inner_text("#map-title") == "Усі датасети"
         browser.close()
@@ -462,6 +466,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
     port, app = stack(engine)
     with serve(app, port=port) as url, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the graph and the technical fields
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -475,9 +480,9 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
         served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
         assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
-        page.select_option("#dataset-filter", other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
+        pick_dataset(page, other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
         page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
-        page.select_option("#dataset-filter", "")
+        pick_dataset(page, "")
         page.wait_for_function("W.data && W.data.themes && document.querySelector('#map-window .mw-i')", timeout=60000)
         page.evaluate("W.all = true; renderWindow()")
         assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span

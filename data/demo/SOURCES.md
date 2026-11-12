@@ -51,6 +51,54 @@ Built by `scripts/demo_datasets.py`; each file keeps its source's licence.
 - Attribution: City of Chicago / Chicago Police Department (E-Crash), data.cityofchicago.org; Kaggle copy by hientrandai.
 - Prepared: 2023-10 … 2024-09; третина аварій за хешем ідентифікатора; учасники й вік водіїв з таблиці людей; рідкісні рівні — Other
 
+## `chicago_schools.csv` — Школи Чикаго, 2023–24 (контекстний шар)
+
+- Source: City of Chicago Data Portal, Chicago Public Schools - School Locations SY2324 (mv87-m4mi)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 649
+- Attribution: City of Chicago / Chicago Public Schools, data.cityofchicago.org.
+- Prepared: усі 649 шкіл; точка з Lat/Long; тип — ES/HS
+
+## `chicago_crimes.csv` — Злочини в Чикаго, 2025
+
+- Source: City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 39,192; 2025-01-01 … 2025-12-31
+- Attribution: City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.
+- Prepared: 2025; шоста частина за хешем ідентифікатора; типи злочинів — у сім класів; місце — вулиця чи ні
+
+## `chicago_crimes_2024.csv` — Злочини в Чикаго, 2024
+
+- Source: City of Chicago Data Portal, Crimes - 2001 to Present (ijzp-q8t2)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 43,038; 2024-01-01 … 2024-12-31
+- Attribution: City of Chicago / Chicago Police Department (CLEAR), data.cityofchicago.org.
+- Prepared: 2024; шоста частина за хешем ідентифікатора; типи злочинів — у сім класів; місце — вулиця чи ні
+
+## `chicago_bars.csv` — Бари й заклади з алкоголем у Чикаго (контекстний шар)
+
+- Source: City of Chicago Data Portal, Liquor and Public Places of Amusement Licenses (nrmj-3kcf)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 3,037
+- Attribution: City of Chicago / Department of Business Affairs and Consumer Protection, data.cityofchicago.org.
+- Prepared: чинні ліцензії Tavern, Consumption on Premises - Incidental Activity, Late Hour; одне місце — один рядок
+
+## `chicago_liquor_stores.csv` — Магазини алкоголю в Чикаго (контекстний шар)
+
+- Source: City of Chicago Data Portal, Liquor and Public Places of Amusement Licenses (nrmj-3kcf)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 1,023
+- Attribution: City of Chicago / Department of Business Affairs and Consumer Protection, data.cityofchicago.org.
+- Prepared: чинні ліцензії Package Goods; одне місце — один рядок
+
+## `chicago_l_stations.csv` — Станції 'L' у Чикаго (контекстний шар)
+
+- Source: City of Chicago Data Portal, CTA - System Information - List of 'L' Stops (8pix-ypme)
+- Licence: City of Chicago Data Portal Terms of Use
+- Rows: 144
+- Attribution: Chicago Transit Authority, data.cityofchicago.org.
+- Prepared: одна станція — один рядок (платформи разом); точка з поля location
+
 ## `nyc_collisions.csv` — ДТП у Нью-Йорку, 2023–2024
 
 - Source: NYC Open Data (NYPD), Motor Vehicle Collisions - Crashes (h9gi-nx95), через Kaggle sahirmaharajj/motor-vehicle-collisions-crashes

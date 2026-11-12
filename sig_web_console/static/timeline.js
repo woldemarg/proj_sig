@@ -50,22 +50,23 @@ const Timeline = (() => {
       choose(...(lo < hi ? [lo, hi] : [T.wlo, T.whi]), false);
     } else { S.period = null; drawBar(); }
     if (JSON.stringify(S.period) !== was) GeoMap.onPeriod();  // the map hears of a stretch the filter narrowed or dropped
-    if (!hubs.length && S.view === "time") setView("graph");
+    if (!hubs.length && S.view === "time") setView("table");
     else if (S.view === "time") render();
   }
 
   function render() {
     const body = $("time-body"), levels = TIME_LEVELS.filter((l) => T.hubs.some((h) => h.granularity === l));
     if (!levels.length) { body.innerHTML = ""; return; }
-    const count = (l) => T.hubs.filter((h) => h.granularity === l).length, room = Math.max(body.clientWidth - 240, 200);
-    if (!levels.includes(T.level)) T.level = levels.find((l) => room / count(l) >= 56) || levels[levels.length - 1];  // the finest whose labels fit
-    const now = S.asOf ? ms(S.asOf) : null;
+    const room = Math.max(body.clientWidth - 240, 200), now = S.asOf ? ms(S.asOf) : null;
     const t0 = Math.min(...T.hubs.map((h) => ms(h.t_start)), now ?? Infinity), t1 = Math.max(...T.hubs.map((h) => ms(h.t_end)), now ?? -Infinity);
+    const px = (h) => (room * (ms(h.t_end) - ms(h.t_start))) / (t1 - t0 || 1);  // a period's width on the ruler
+    const narrowest = (l) => Math.min(...T.hubs.filter((h) => h.granularity === l).map(px));
+    if (!levels.includes(T.level)) T.level = levels.find((l) => narrowest(l) >= 56) || levels[levels.length - 1];  // the finest whose labels fit
     const at = (t) => ((100 * (t - t0)) / (t1 - t0 || 1)).toFixed(2), span = (a, b) => `left:${at(a)}%;width:${(at(b) - at(a)).toFixed(2)}%`;
     $("time-levels").innerHTML = TIME_LEVELS.map((l) =>
       `<button type="button" class="tl-level${l === T.level ? " active" : ""}" data-level="${l}" aria-pressed="${l === T.level}"${levels.includes(l) ? "" : " disabled"}>${TIME_LEVEL_NAMES[l]}</button>`).join("");
     const ticks = T.hubs.filter((h) => h.granularity === T.level).map((h) =>
-      `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(h.period)}</button>`).join("");
+      `<button type="button" class="tl-tick" data-id="${esc(h.id)}" style="${span(ms(h.t_start), ms(h.t_end))}" title="${esc(h.period)}: ${esc(h.t_start.slice(0, 10))} — ${esc(h.t_end.slice(0, 10))}">${esc(px(h) >= 56 ? h.period : px(h) >= 20 ? h.period.split("-").pop() : "")}</button>`).join("");  // 2025-03, else 03, else none
     const [lo, hi] = S.period ? [T.plo, T.phi] : [-Infinity, Infinity];
     const cut = (a, b) => {  // a core's part outside the stretch dark: where the stretch starts and ends along the bar
       if (!S.period) return "";
@@ -75,8 +76,9 @@ const Timeline = (() => {
     const rows = T.rows.map((r) => {
       const c = r.core;
       const marks = r.events.map((e) => `<b class="tl-ev ${e.kind === "PEAKED_AT" ? "up" : "down"}" style="left:${at((ms(e.hub.t_start) + ms(e.hub.t_end)) / 2)}%" title="${esc(word(e.kind))} ${esc(e.hub.period)}">${e.kind === "PEAKED_AT" ? "▲" : "▼"}</b>`).join("");
-      return `<div class="tl-row" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(r.full_label)}">` +
-        `<span class="tl-name">${esc(r.full_label)}</span><span class="tl-track">${c ? `<i class="tl-core${S.period ? " cut" : ""}" style="${span(ms(c.t_start), ms(c.t_end))}${cut(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
+      const name = (r.words || []).join(" · ") || r.full_label;  // the conditions in words, as the insights table reads them
+      return `<div class="tl-row" data-id="${esc(r.id)}" tabindex="0" role="button" title="${esc(name)}">` +
+        `<span class="tl-name">${esc(name)}</span><span class="tl-track">${c ? `<i class="tl-core${S.period ? " cut" : ""}" style="${span(ms(c.t_start), ms(c.t_end))}${cut(ms(c.t_start), ms(c.t_end))}"></i>` : ""}${marks}</span></div>`;
     }).join("");
     const line = now !== null ? `<i class="tl-asof" style="left:calc(var(--tl-gutter) + (100% - var(--tl-gutter)) * ${at(now) / 100})" title="${esc(word("as_of"))} ${esc(S.asOf.slice(0, 10))}"></i>` : "";
     body.innerHTML = `<div class="tl-head"><span class="tl-name muted">${esc(cap(TIME_LEVEL_NAMES[T.level]))}</span><span class="tl-track">${ticks}</span></div>${rows}${line}`;

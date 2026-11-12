@@ -13,7 +13,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -24,13 +24,14 @@ from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
 from graph_query_engine.temporal import parse_as_of, parse_period
+from insight_contracts import wording
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
 from insight_graph_service.core.settings import Settings
-from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, cross_state, hidden_datasets, rejection_words
 from insight_graph_service.core.workspace import RepresentationMismatch, RollbackPending, UploadTooLarge, WorkspaceBusy
-from insight_graph_service.server.views import cytoscape_elements, node_details, sphere_points
+from insight_graph_service.server.views import cytoscape_elements, dimension_words, node_details, sphere_points
 
 log = logging.getLogger(__name__)
 STATUS = {
@@ -76,6 +77,23 @@ class SearchIn(BaseModel):
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
+    include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
+
+
+class HiddenIn(BaseModel):
+    hidden: bool  # a layer out of the answers and the views, or back
+
+
+class CrossTypeIn(BaseModel):
+    target: str  # an upload id (``up-…``), or a dataset id of its reading: the base layer whose metrics are mined, at its finest level
+    layers: list[str]  # one upload whose points become its context layer (a second layer is a second run)
+    ring: int | str | None = None  # their disk: 0, 1 (empty), 2
+    levels: list[int | str] | None = None  # H3 levels of the target; empty: its finest
+    allow_coarse: bool = False  # a level coarser than LINK_MIN_LEVEL too (scripts and eval; the console never asks)
+    align: str | None = None  # span: an event layer's events within the target's span only
+    layer_where: dict[str, str] | None = None  # {upload id: column=value}: a layer stored whole read under a filter
+    count_values: str | None = None  # column=value,...: per-type counters of the run; empty: none; absent: the target level's own
+    baseline: str | None = None  # map | zone: what the run's metrics are read against; empty: the target level's own
 
 
 class DatasetMetadataIn(BaseModel):
@@ -142,9 +160,12 @@ def create_app(engine: Engine) -> FastAPI:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
     def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
-        records = engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options)
+        return queued(engine.upload(name, stream, bins=bins, categories=categories, geo=geo, **options))
+
+    def queued(records: list[dict[str, Any]]) -> JSONResponse:
         for record in records:  # one worker thread: the levels run in turn
-            run(engine.process, record["batch_id"])
+            if record["status"] == "UPLOADED":  # a LAYER record: nothing to run
+                run(engine.process, record["batch_id"])
         run(warm)  # after the last level
         levels = {record["level"]: record["batch_id"] for record in records}
         return JSONResponse(records[0] | {"levels": levels}, status_code=202)  # the finest level's record, every level's batch
@@ -178,7 +199,13 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/batches")
     def batches(upload_id: str | None = None) -> list[dict[str, Any]]:
-        return [engine.polled(b) for b in reversed(engine.ws.list_batches()) if upload_id in (None, b.get("upload_id"))]
+        listed = engine.ws.list_batches()
+        state = cross_state(listed)  # a run whose layer's upload is gone, a layer's runs: read off the registry
+        timed = lambda b: {"time_words": words} if (words := wording.layer_time_words(b.get("context") or ())) else {}  # noqa: E731 — its layers' time, in words
+        named = lambda b: {"dimension_words": dimension_words(b)} if (b.get("profile") or {}).get("selected_dimensions") else {}  # noqa: E731
+        return [
+            engine.polled(b) | state.get(b["batch_id"], {}) | timed(b) | named(b) for b in reversed(listed) if upload_id in (None, b.get("upload_id"))
+        ]
 
     @app.get("/api/batches/{batch_id}")
     def batch(batch_id: str) -> dict[str, Any]:
@@ -209,11 +236,20 @@ def create_app(engine: Engine) -> FastAPI:
         time: str = Form(""),
         grid: str = Form(""),
         tz: str = Form(""),
+        context: list[UploadFile] | None = File(None),
+        context_geo: str = Form(""),
+        context_demo: list[str] | None = Form(None),
+        context_ring: str = Form(""),
+        layer: bool = Form(False),
+        where: str = Form(""),
+        count_values: str = Form(""),
+        baseline: str = Form(""),
     ) -> JSONResponse:
         if (length := request.headers.get("content-length")) and int(length) > engine.settings.max_upload_bytes:  # refused before the body is read
             raise UploadTooLarge(f"{file.filename if file else demo} exceeds {engine.settings.max_upload_mb} MB (MAX_UPLOAD_MB)")
         # a shipped dataset by its key (GET /api/demo/datasets) instead of a file: the form's options as sent
-        shipped = next((d for d in demo_datasets() if d["key"] == demo), None) if demo else None
+        sets = {d["key"]: d for d in demo_datasets()}  # a shipped dataset may be a context layer too (context_demo)
+        shipped = sets.get(demo)
         if (file is None) == (shipped is None):
             raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
@@ -228,12 +264,27 @@ def create_app(engine: Engine) -> FastAPI:
             "time": time.strip() or None,
             "grid": grid.strip() or None,
             "tz": tz.strip() or None,
+            "context_geo": context_geo.strip() or None,
+            "context_ring": context_ring.strip() or None,
+            "layer": layer,
+            "where": where.strip() or None,
+            "count_values": count_values.strip() or None,
+            "baseline": baseline.strip() or None,
         }
         parsed = (bins.strip() or None, categories.strip() or None, geo.strip() or None)
-        if shipped:
-            with (DEMO_DIR / shipped["file"]).open("rb") as stream:
-                return accept(shipped["file"], stream, *parsed, **options)
-        return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
+        if unknown := [k for k in context_demo or [] if k not in sets]:
+            raise HTTPException(400, f"no shipped dataset {unknown}")
+        with ExitStack() as files:  # every file read is closed once the upload is stored
+            options["context"] = [(Path(f.filename or "context.csv").name, f.file) for f in context or []]
+            options["context"] += [(sets[k]["file"], files.enter_context((DEMO_DIR / sets[k]["file"]).open("rb"))) for k in context_demo or []]
+            if shipped:
+                return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
+            return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
+
+    @app.post("/api/crosstype")
+    def crosstype(body: CrossTypeIn) -> JSONResponse:
+        # two stored uploads: the target's levels read again with the layers as context (docs/02_discovery.md §2.9)
+        return queued(engine.cross(**body.model_dump()))  # its fields are Engine.cross's arguments
 
     @app.post("/api/demo")
     def demo() -> JSONResponse:
@@ -253,7 +304,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/nodes/{node_id:path}")  # column ids hold raw column names, '/' included
     def node(node_id: str) -> dict[str, Any]:
-        return node_details(engine.graph(), node_id, settings.thresholds)
+        return node_details(engine.graph(), node_id, settings.thresholds, hidden_datasets(engine.ws.list_batches()))
 
     @app.post("/api/search")
     def search(body: SearchIn) -> dict[str, Any]:
@@ -266,7 +317,8 @@ def create_app(engine: Engine) -> FastAPI:
         except ValueError as exc:
             raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
         period = asked_period(*body.period) if body.period else None
-        return engine.evidence(body.question, as_of, period, cells=body.cells, geometry=body.geometry, resolution=body.resolution).to_dict()
+        zone = {"cells": body.cells, "geometry": body.geometry, "resolution": body.resolution}
+        return engine.evidence(body.question, as_of, period, include_hidden=body.include_hidden, **zone).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
@@ -274,7 +326,9 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/sphere")
     def sphere(dataset: str | None = None) -> dict[str, Any]:
-        return sphere_points(engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None)
+        return sphere_points(
+            engine.committed(), settings.topology.random_seed, settings.thresholds, dataset or None, hidden_datasets(engine.ws.list_batches())
+        )
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:
@@ -322,6 +376,14 @@ def create_app(engine: Engine) -> FastAPI:
             )
         )
 
+    @app.get("/api/datasets/{dataset_id}/rejections")
+    def rejections(dataset_id: str) -> list[dict[str, Any]]:
+        """What selection refused of a dataset, each with its reason (``rejections.json``, docs/03_insights.md §3.2)."""
+        if (listed := engine.ws.load_rejections(dataset_id)) is None:  # an id, never a path
+            raise HTTPException(404, "no rejections recorded for this dataset")
+        record = next((b for b in engine.ws.list_batches() if b.get("dataset_id") == dataset_id), None)
+        return rejection_words(listed, record)  # each in the console's words beside its expression
+
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
         return written(engine.delete_dataset(dataset_id))
@@ -329,6 +391,10 @@ def create_app(engine: Engine) -> FastAPI:
     @app.delete("/api/uploads/{upload_id}")
     def delete_upload(upload_id: str) -> dict[str, Any]:
         return written(engine.delete_upload(upload_id))
+
+    @app.patch("/api/uploads/{upload_id}")
+    def hide_upload(upload_id: str, body: HiddenIn) -> dict[str, Any]:
+        return engine.set_hidden(upload_id, body.hidden)  # unsigned: no commit, no rebuild
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:

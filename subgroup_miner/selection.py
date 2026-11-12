@@ -99,27 +99,45 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
     survivors: list[Insight] = []
     for ins in insights:
         covariance = ins.phenomenon_type == "covariance"  # its shift tests are None
-        significant = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        marginal = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        # a context-layer cohort (docs/02 §2.9): its shift must also beat the layer dealt at random within its parent cells,
+        # and it is never admitted on a correlation change, which that null does not test
+        spatial = ins.provenance.get("spatial", {})
+        p_context = spatial.get("p_context")  # adjusted below over the upload's context cohorts, as p_adjusted is
+        confounded = p_context is not None and min(1.0, p_context * spatial.get("context_family", 1)) > config.max_p_adjusted
+        significant = marginal and not confounded
         stable = not covariance and ins.stability >= config.min_stability
         shift_ok = significant and stable  # R2 + R3: the bootstrap measures the shift score
-        emm_ok = ins.emm_score >= config.thresholds.min_emm_score and bool(ins.covariance)
+        emm_ok = ins.emm_score >= config.thresholds.min_emm_score and bool(ins.covariance) and p_context is None
         if not shift_ok and emm_ok:
             # the shift is absent, insignificant or unstable, but the correlation change holds:
             # the phenomenon is the divergent pair (never cited as a median shift)
             ins = _as_covariance(ins)
         ins = with_weight(ins, config)
         if ins.support < config.min_support_rows:  # R1
-            rejections.append(Rejection(ins.expression, "min_support", f"support={ins.support}"))
+            rejections.append(Rejection(ins.expression, "min_support", f"support={ins.support}", ins.target))
         elif not (shift_ok or emm_ok):  # R2 / R3
             if covariance:
                 reason, detail = "weak_effect", f"emm={ins.emm_score:.2f}"
+            elif marginal and confounded and p_context <= config.max_p_adjusted:  # rarely reproduced, not rarely enough
+                family = spatial.get("context_family", 1)
+                reason, detail = (
+                    "context_family",
+                    f"p_context={p_context:.2g} × {family} cohorts = {min(1.0, p_context * family):.2g}: the dealt layer rarely reproduces the shift, "
+                    f"but not rarely enough once multiplied by the run's {family} layer cohorts",
+                )
+            elif marginal and confounded:
+                reason, detail = (
+                    "context_confounded",
+                    f"p_context={p_context:.2g} × {spatial.get('context_family', 1)} cohorts: the shift holds as often when the layer is dealt at random within the parent cells",
+                )
             elif significant:
                 reason, detail = "unstable", f"stability={ins.stability:.2f}"
             elif abs(ins.effect_size) >= config.min_effect_z:
                 reason, detail = "not_significant", f"|z|={abs(ins.effect_size):.2f} p_adj={ins.p_adjusted:.2g}"
             else:
                 reason, detail = "weak_effect", f"|z|={abs(ins.effect_size):.2f} p_adj={ins.p_adjusted:.2g} emm={ins.emm_score:.2f}"
-            rejections.append(Rejection(ins.expression, reason, detail))
+            rejections.append(Rejection(ins.expression, reason, detail, ins.target))
         else:
             survivors.append(ins)
     return SelectionResult(sorted(survivors, key=lambda i: (-i.weight, i.expression)), rejections)

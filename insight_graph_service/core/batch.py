@@ -19,7 +19,17 @@ from insight_contracts import Insight, Rejection, record_digest
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import DiscoveryResult
 from subgroup_miner.ingestion import IngestionError, LoadedDataset
-from subgroup_miner.temporal import annotate, calendar_bins, carriers, dynamics, extent_points, fit_grid, reference_scale
+from subgroup_miner.temporal import (
+    annotate,
+    annotate_counts,
+    calendar_bins,
+    carriers,
+    count_scale,
+    dynamics,
+    extent_points,
+    fit_grid,
+    reference_scale,
+)
 
 
 def pattern_records(kept: list[Insight], canon: list[CanonicalInsight], row_ids: list[int], spec: EmbeddingSpec) -> list[dict[str, Any]]:
@@ -139,13 +149,30 @@ def annotate_batch(
     times, frame, covers = series_times(loaded), loaded.frame, rows
     if loaded.spatial is not None:
         located = loaded.spatial.point_cell >= 0
-        frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: f"{c}_median")
+        typed = loaded.spatial.levels  # a share's points by their type: its series is the cohort's share in each bin
+        frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: c if c in typed else f"{c}_median")
+        kinds = frame[[c for c in frame if c.startswith("count_")]]  # a type's indicator read as a count, never as a share
+        frame = frame.drop(columns=kinds.columns)
         covers = extent_points(loaded.spatial.point_cell[located], rows)
     grid = loaded.grid if min_bins is None else fit_grid(times, loaded.grid, covers, config.temporal_min_rows_bin, min_bins, loaded.tz)
     codes, bins = calendar_bins(times, grid, tz=loaded.tz)
     scale = reference_scale(frame)
+    if loaded.spatial is not None:  # a share's unit is its spread over the cells, the unit it was admitted in
+        scale |= reference_scale(loaded.frame[[c for c in frame if c.startswith("share_")]])
     metrics = {i.id: [s.metric for s in i.shifts] for i in kept}
     series = annotate(frame, codes, bins, covers, metrics, scale, config.temporal_min_rows_bin, config.temporal_tie_share)
+    if loaded.spatial is not None and loaded.spatial.baseline != "zone":  # its counts per cell, against the rest's (never residuals)
+        counted = {
+            m: count_scale(loaded.frame[m].to_numpy(float))
+            for m in {m for ms in metrics.values() for m in ms}
+            if m == "points" or m.startswith("count_")
+        }
+        types = {m: kinds[m].to_numpy(float) for m in counted if m in kinds}
+        for pid, extra in annotate_counts(
+            codes, bins, covers, {p: len(r) for p, r in rows.items()}, len(loaded.frame), metrics, types, counted, config.temporal_min_rows_bin
+        ).items():
+            series[pid]["series"] |= extra
+        scale = scale | {m: s for m, s in counted.items() if s}
     if loaded.spatial is None and dimensions:  # a geo level's points have no dimension a condition could name
         events = {pid: dynamics(entry, bins, metrics[pid], config)["events"] for pid, entry in series.items() if entry["series"]}
         for pid, found in carriers(frame, codes, covers, events, scale, config, dimensions).items():

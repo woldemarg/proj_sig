@@ -1,14 +1,14 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
   BUILDING_GRAPH: "Побудова графа", PERSISTING: "Збереження", READY: "Готово",
 };
 const STAGES = Object.keys(STAGE_TEXT);  // in processing order
-const TERMINAL = new Set(["READY", "FAILED", "SKIPPED"]);
+const TERMINAL = new Set(["READY", "FAILED", "SKIPPED", "LAYER"]);  // workspace.TERMINAL
 const DECLARED = "джерело, надійність, показники, глосарій і документ";  // what a dataset's metadata digest signs: every mismatch notice names them
 const ERROR_HELP = {
   no_candidates: ["Немає за чим групувати", "У таблиці немає придатних колонок, щоб групувати рядки (текстових колонок із кількома значеннями).", "Позначте колонки з кодами (ID, прапорці) у «Вважати категоріями» або розбийте числову колонку на смуги."],
@@ -78,6 +78,21 @@ const TERMS = {
   "weight": ["сила свідчення", "від нижньої межі до 1: зважене геометричне середнє сили зсуву, стабільності, обсягу і зміни зв'язків; слабкий бік не компенсується сильним"],
   "support": ["рядки", "скільки рядків даних охоплює інсайт і яку частку всіх рядків"],
   "p_adjusted": ["скоригована p", "результат тесту медіани з поправкою на кількість перевірок; поріг відбору, а не точна ймовірність"],
+  "p_context": ["нуль шару", "частка перестановок шару в межах батьківських комірок, за яких зсув не слабший за знайдений, помножена на кількість когорт зі смугою шару; інсайт зі смугою шару допущено, лише коли вона не більша за поріг відбору: розклад шару всередині батька зсуву не відтворює"],
+  "context_confounded": ["пояснюється фоном зони", "когорти зі смугою шару, чий зсув відтворює перестановка шару в межах батьківських комірок: збіг дає спільна щільність, а не сам шар"],
+  "context_family": ["замало свідчень після поправки", "когорти зі смугою шару, чий зсув перестановка шару відтворює рідко, але не досить рідко після поправки на кількість когорт шару, перевірених у прогоні"],
+  "layer_time": ["час шару", "коли сталися події контекстного шару порівняно з періодом базового; без вирівнювання шар із подіями читається як незмінний за весь свій період"],
+  "outside_cross_type": ["без умови шару", "знахідки прогону зв'язку шарів без смуги шару: це знахідки самого базового шару, вони лишаються на його власних рівнях"],
+  "base_layer": ["базовий шар", "набір подій, чиї метрики й склад аналізуємо"],
+  "context_layer": ["контекстний шар", "точки іншого набору як умова для подій базового шару: скільки їх у комірці й поруч; сам шар не аналізується"],
+  "layer_link": ["зв'язок шарів", "прогін базового шару з одним контекстним: чи інші події там, де багато точок шару"],
+  "more_events": ["більше подій", "подій обраного типу в комірці більше, ніж у типовій комірці мапи — на одну комірку, без поділу на площу"],
+  "other_mix": ["інший склад", "частка типу серед подій комірки інша, ніж у типовій комірці мапи"],
+  "exploratory": ["дослідницька знахідка", "знайдено й перевірено на цих самих даних; на іншому періоді чи наборі не відтворювали"],
+  "insufficient_data": ["замало даних", "замало подій чи комірок, щоб тест мав силу: висновку немає, причина названа"],
+  "same_places": ["також у тих самих місцях", "інсайти інших контекстних шарів того самого базового, чиї місця перекриваються чи межують; спільна дія шарів не перевірялась"],
+  "per_event": ["з вагою подій", "частку перевірено з вагою подій кожної комірки; шукали — по комірках"],
+  "zone_baseline": ["відносно своєї зони", "кожна метрика — відносно медіани своєї батьківської комірки, а не всієї мапи"],
   "stability": ["стабільність", "1 − min(CV, 0,9), де CV — коефіцієнт варіації суми |z| головних зсувів на 20 бутстреп-вибірках; від 0,1 до 1, 0 коли зсуву немає; ближче до 1 — менше коливання"],
   "drivers": ["супутні чинники", "колонки, чиї значення в цій частині даних розподілені помітно інакше (тест хі-квадрат); вони можуть пояснювати зсув"],
   "covariance": ["зміна зв'язку", "кореляція двох метрик тут інша, ніж у всіх даних"],
@@ -167,7 +182,7 @@ const TERMS = {
   "window_lift": ["частота у вікні", "у скільки разів частіше події інсайту трапляються у вікні мапи (комірки з центром у рамці), ніж очікувано за його часткою на всій мапі; згладжено 30 подіями"],
   "place_lift": ["частота в регіоні", "у скільки разів частіше події інсайту трапляються в цьому регіоні, ніж очікувано за часткою регіону на всій мапі"],
   "compactness": ["суцільність", "частка зв'язків сусідства (кільце 1) між комірками інсайту, що лишаються всередині нього: 1 — суцільний блок, 0 — розкидані комірки"],
-  "n_eff": ["ефективний обсяг", "ефективний обсяг для тесту медіани: кількість комірок з непорожнім значенням метрики, зменшена за схожістю сусідніх комірок (Moran's I > 0)"],
+  "n_eff": ["ефективний обсяг", "ефективний обсяг для тесту медіани (з вагою подій — обсяг Кіша: події за їхньою вагою, не комірки): кількість комірок з непорожнім значенням метрики, зменшена за схожістю сусідніх комірок (Moran's I > 0)"],
   "moran_i": ["схожість сусідів", "наскільки сусідні комірки інсайту схожі за метрикою (Moran's I): більше 0 — схожі, 0 і менше — ні"],
   "sac": ["поправка на сусідство", "скільки перевірених знахідок значущі без поправки → з поправкою на схожість сусідніх комірок (просторову автокореляцію)"],
   "mass": ["вага теми", "сума сил свідчення її інсайтів"],
@@ -187,7 +202,7 @@ const word = (key) => (TERMS[key] || [key])[0];  // a term's name; an unknown ke
 const term = (key) => (TERMS[key] ? `<span class="term" title="${esc(TERMS[key][1])}">${esc(TERMS[key][0])}</span>` : esc(key));
 const reached = (it) => (it.located ? "located" : `role_${it.role}`);  // how an answer reached an item: by location alone, else its role (docs/07 §7.4)
 const cred = (level) => [CREDIBILITY[level] ?? "warn", TERMS[`credibility_${level}`] ? word(`credibility_${level}`) : "не оцінено"];
-const RELATION = { overlaps: "ділянки перетинаються", adjacent: "ділянки торкаються", same_region: "той самий регіон, ділянки окремо" };
+const RELATION = { overlaps: "ділянки з сусідніми комірками перетинаються", adjacent: "ділянки торкаються", same_region: "той самий регіон, ділянки окремо" };
 const LEGEND = { ...MARKS, seed: ".hl-seed", ev: ".hl-evidence", cross: ".hl-cross", path: ".hl-edge, .hl-anchor" };  // + the answer's marks
 
 const $ = (id) => document.getElementById(id);
@@ -195,6 +210,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const num = (x, d = 2) => (x === null || x === undefined || Number.isNaN(Number(x))) ? "–" : Number(x).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
 const signed = (x, d = 2) => (x > 0 ? "+" : "") + num(x, d);
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+// a layer link's insights (docs/08_interface.md §8.2): one colour per context layer, from its run's dataset (cross_layers)
+const allLayers = () => [...new Set(Object.values(S.datasets).flatMap((d) => d.cross_layers || []))].sort();
+const layersOf = (datasetId) => S.datasets[datasetId]?.cross_layers || [];
+const layerVar = (name) => `--layer-${(allLayers().indexOf(name) % 4) + 1}`;  // a palette of its own, the place by the layers' names
+const layerColor = (name) => cssVar(layerVar(name));  // read when painted
+const layerChip = (datasetId) => layersOf(datasetId).map((l) => `<span class="tag layer" style="--lc:var(${layerVar(l)})" title="${esc(TERMS.layer_link[1])}">${esc(word("context_layer"))}: ${esc(layerName(l))}</span>`).join("");
 const human = (s) => String(s || "").replace(/_/g, " ");
 const PLURAL = new Intl.PluralRules("uk");
 const form = (n, one, few, many) => ({ one, few }[PLURAL.select(n)] ?? many);  // 1 / 2–4 / 5+
@@ -202,6 +223,7 @@ const plural = (n, one, few, many) => `${num(n, 0)} ${form(n, one, few, many)}`;
 const on = (root, selector, fn) =>  // one click listener on a container for every ``selector`` its renders produce
   root.addEventListener("click", (e) => { const el = e.target.closest(selector); if (el && root.contains(el)) fn(el, e); });
 const chip = (cls, text, title = "") => `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+const dev = (html) => html.replace(/^<(\w+)/, "<$1 data-dev");  // one element the developer mode alone shows
 const KEYED = '[role="button"]:not(button), tr[data-id], th[data-k]';  // clickable without being buttons: tabindex 0
 const MOTION = matchMedia("(prefers-reduced-motion: reduce)");
 const calm = () => MOTION.matches;  // no camera flights or pulses then
@@ -215,13 +237,7 @@ async function api(path, opts = {}) {
   return body;
 }
 
-// theme + health
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  try { localStorage.setItem("sig-theme", t); } catch (e) { /* private mode */ }
-  if (S.cy) S.cy.style(graphStyle());
-  renderSphere();  // same palette in 3D
-}
+// health
 
 const CPU_HINT = "Модель опису інсайтів працює на CPU: завантаження повільніші. На Mac запустіть сервіс графа на хості, де він бере GPU (MPS; README, Mac: GPU); з GPU NVIDIA запускайте стек із compose.gpu.yaml.";
 
@@ -235,9 +251,9 @@ async function refreshHealth() {
     const cpu = h.embedding_device === "cpu";  // amber: on a Mac, Docker sees no GPU (README, Mac: GPU)
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `модель · ${h.embedding_device}`;
     $("health").innerHTML =
-      `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"><i class="dot"></i>${esc(llmTxt)}</span>` +
-      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j"><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
-      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}"><i class="dot"></i>${esc(emb)}</span>`;
+      `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"${llmCls === "ok" ? " data-dev" : ""}><i class="dot"></i>${esc(llmTxt)}</span>` +  // the person sees it only when it fails
+      `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j" data-dev><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
+      `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}" data-dev><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `пояснення ${model}`;
     $("reset-btn").hidden = !h.problem;  // a degraded workspace: only a reset makes it usable again
     if (h.problem) setUploadMsg(`Робочим простором користуватися не можна: ${h.problem}`, true);
@@ -249,6 +265,16 @@ function setLegend(show) {
   $("legend-btn").setAttribute("aria-pressed", String(show));
   try { localStorage.setItem("sig-legend", show ? "on" : "off"); } catch (e) { /* private mode */ }
   if (S.cy) S.cy.resize();
+}
+
+// the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
+const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
+function setDev(on) {
+  document.body.classList.toggle("dev", on);
+  $("dev-btn").setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
+  if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+  if (!on) $("use-llm").checked = true;  // the switch is the developer's: the person always gets the explanation
 }
 
 function initResize() {
@@ -287,37 +313,35 @@ function init() {
     const keys = LEGEND_TERMS[el.dataset.key];
     if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
-  $("theme-btn").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
   // upload: click or drop
   const drop = $("drop");
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
-    if (f) { $("sample").value = ""; $("sample-hint").textContent = ""; }
+    if (f) { if ($("sample").value) fillOptions(); $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
     $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
   });
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
-  const syncTable = () => { $("table").disabled = !$("geo").value.trim(); };  // the base level is one of a geo upload's
   $("geo").addEventListener("input", syncTable);
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
+  $("roles").addEventListener("change", (e) => setRole(e.target.value));  // a set locked to a layer has no other card to change to
   // the shipped datasets (data/demo/datasets.json): one chosen fills the form with the options it is meant to be read with
   api("/api/demo/datasets").then((list) => {
     S.samples = Object.fromEntries(list.map((d) => [d.key, d]));
-    $("sample").insertAdjacentHTML("beforeend", list.map((d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`).join(""));
+    $("sample").insertAdjacentHTML("beforeend", list.map(sampleItem).join(""));  // every shipped set: its role proposed when picked
+    refreshBatches();  // the rail names the shipped sets by their titles
   }).catch(() => {});  // no list: the form still takes a file
   $("sample").addEventListener("change", () => {
     const d = (S.samples || {})[$("sample").value];
     $("sample-hint").textContent = d ? `${d.description} ${d.span ? `${d.span[0]} — ${d.span[1]}. ` : ""}Ліцензія: ${d.license}.` : "";
-    if (!d) { $("upload-btn").disabled = !$("file").files[0]; return; }
+    if (!d) { fillOptions(); $("file-name").textContent = ""; $("upload-btn").disabled = true; setRole(""); return; }  // the list emptied by hand: the set's fields go with it
     $("file").value = ""; $("file-name").textContent = d.file;
     const o = d.options || {};
-    for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
-    $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
-    syncTable();
-    document.querySelector("#upload-form details.adv").open = true;  // what the dataset will be read with, before it is
+    fillOptions(o);
+    setRole(d.context_only ? "layer" : o.geo ? "events" : "table", !!d.context_only);  // a set meant only as a layer mines nothing
     $("upload-btn").disabled = false;
   });
   $("reset-btn").addEventListener("click", async () => {
@@ -326,7 +350,8 @@ function init() {
     S.lastReady = null; refreshBatches(); refreshHealth();
   });
   // canvas
-  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => { S.picked = true; setView(b.dataset.view); }));
+  $("dev-btn").addEventListener("click", () => setDev(!document.body.classList.contains("dev")));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (b.dataset.key === "region") return toggleRegions();
@@ -371,8 +396,32 @@ function init() {
     if (sel.value && sel.value !== p.dataset_id) { sel.value = ""; await refreshBatches(); }
     setView("graph"); reveal(p.id);
   });
-  on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name); });
-  on($("batches"), ".ds.clickable", (el) => { const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches(); });
+  on($("batches"), ".ds-del", (el, e) => { e.stopImmediatePropagation(); deleteDataset(el.dataset.del, el.dataset.name, el.dataset.layer); });
+  on($("batches"), ".ds-refused summary", (el, e) => {  // a run's refused layer cohorts, read once on the first opening
+    e.stopImmediatePropagation();
+    const box = el.parentElement;
+    if (!box.dataset.loaded) { box.dataset.loaded = "1"; showRefusals(box).catch(() => { box.dataset.loaded = ""; }); }
+  });
+  on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
+  $("link-form").addEventListener("submit", (e) => e.preventDefault());
+  on($("link-opts"), ".link-opt", (el) => runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample }));
+  $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) runLink({ file: $("link-file").files[0] }); });
+  $("link-cancel").addEventListener("click", () => $("link-dialog").close());
+  $("link-types").addEventListener("change", (e) => { if (e.target.matches(".tp")) toggleType(e.target, $("link-counts")); });  // the types' checkboxes and the field they fill
+  $("link-counts").addEventListener("input", () => syncTypes($("link-types"), $("link-counts")));
+  $("link-dialog").addEventListener("click", (e) => { if (!$("link-dd").contains(e.target)) $("link-dd").open = false; });  // a click elsewhere closes the list
+  $("add-btn").addEventListener("click", () => { setUploadNote(""); $("upload-dialog").showModal(); });
+  $("upload-cancel").addEventListener("click", () => $("upload-dialog").close());
+  on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
+    if (e.target.closest(".ds-more")) return;
+    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches();
+  });
+  on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
+    e.stopImmediatePropagation();
+    S.openVariants.has(el.dataset.var) ? S.openVariants.delete(el.dataset.var) : S.openVariants.add(el.dataset.var);
+    renderTable();
+  });
   on($("ins-table"), "tbody tr[data-id]", (tr) => inspect(tr.dataset.id));
   on($("time-body"), ".tl-row, .tl-tick", (el) => inspect(el.dataset.id));  // an insight's bar or a period on the ruler: its drawer
   on($("time-levels"), ".tl-level", (b) => Timeline.setLevel(b.dataset.level));
@@ -410,6 +459,9 @@ function init() {
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot
   try { if (localStorage.getItem("sig-legend") === "off") setLegend(false); } catch (e) { /* private mode */ }
+  let devOn = false;
+  try { devOn = localStorage.getItem("sig-dev") === "on"; } catch (e) { /* private mode: off */ }
+  setDev(devOn);
   renderThread(); refreshHealth(); refreshBatches();
   setInterval(refreshHealth, 30000);
   setInterval(() => tick(document), 1000);  // a running stage's and a pending question's time, between renders

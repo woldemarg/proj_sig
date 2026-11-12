@@ -104,6 +104,7 @@ const GeoMap = {
     G.map.getSource("focus").setData(empty()); G.focus = []; G.focusId = null;
     G.map.setPaintProperty("cells-fill", "fill-opacity", 0.55);
     G.map.getSource("pts").setData(empty());
+    G.map.getSource("layer-pts").setData(empty());
     $("map-card").hidden = true;
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.remove("on"));
   },
@@ -129,6 +130,9 @@ const GeoMap = {
         if (fit && rings.features.length) G.map.fitBounds(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
       }
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
+      const lp = (pts.layer_points || [])[0];  // the run's layer beside its insight, in the layer's colour
+      G.map.getSource("layer-pts").setData({ type: "FeatureCollection", features: (lp ? lp.points : []).map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
+      if (lp) G.map.setPaintProperty("layer-pts", "circle-color", layerColor(lp.name));
       renderCard(p, item, pts);
     } catch (e) { /* the card stays without the point count */ }
   },
@@ -155,7 +159,8 @@ function spread(filter) {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("graph"); return; }
+  if (G.datasets.length && !S.picked && S.view === "table" && !document.body.classList.contains("dev")) setView("map");  // geo data: the map first
+  if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("table"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
   if (G.focusId && !GeoMap.has(G.focusId)) GeoMap.unfocus();  // another dataset's insight left the set: its zone goes with it
@@ -201,7 +206,8 @@ function paintFocus(p, item, cells, h3) {
   /* a focused insight's cells — orange where its target is higher, cyan lower, green a correlation — and the rest dimmed;
      G.focus their H3 ids, of whichever dataset draws it (never row ids: another dataset's index other cells) */
   const color = (item || p).phenomenon_type === "covariance" ? C.cov : (item ? item.statistics.effect_size : p.effect_size) >= 0 ? C.up : C.down;
-  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, color);
+  const layer = layersOf(item ? item.provenance.dataset_id : p.dataset_id || G.ds)[0];  // a layer link's insight: outlined in its layer's colour, from any list
+  for (const [id, key] of [["hl-fill", "fill-color"], ["hl-glow", "line-color"], ["hl-line", "line-color"]]) G.map.setPaintProperty(id, key, id === "hl-line" && layer ? layerColor(layer) : color);
   G.focus = h3; G.map.getSource("focus").setData(cells);
   G.map.setPaintProperty("cells-fill", "fill-opacity", 0.14);
 }
@@ -220,15 +226,15 @@ function paintMode() {
   paintZone();  // cells or hexes, as the mode draws them
   if (all) {
     const files = [...new Map([G.ds, ...G.others].map((ds) => G.datasets.find((d) => d.dataset_id === ds) || { dataset_id: ds })
-      .map((d) => [uploadOf(d), d.filename || d.dataset_id])).values()];  // one per upload: two files of one name are two
+      .map((d) => [uploadOf(d), titleOfDataset(d.dataset_id, d.filename)])).values()];  // one per upload: two files of one name are two
     $("map-title").textContent = "Усі датасети";
-    $("map-meta").textContent = `${plural(files.length, "файл", "файли", "файлів")}: ${files.join(", ")}`;
+    $("map-meta").textContent = files.join(", ");
     return;
   }
   const info = G.datasets.find((d) => d.dataset_id === G.ds) || {}, sac = info.sac || {};
-  $("map-title").textContent = info.filename || G.ds;
-  $("map-meta").innerHTML = `H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · ${plural(info.points, "подія", "події", "подій")}` +
-    (sac.validated ? `<br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}` : "");
+  $("map-title").textContent = titleOfDataset(G.ds, info.filename);
+  $("map-meta").innerHTML = `<span data-dev>H3 рівень ${info.resolution} · ${plural(info.cells, "комірка", "комірки", "комірок")} · </span>${plural(info.points, "подія", "події", "подій")}` +
+    (sac.validated ? `<span data-dev><br>${term("sac")}: ${sac.significant_iid} → <b>${sac.significant_corrected}</b> значущих із ${sac.validated}</span>` : "");
 }
 
 function boundsOf(rows) {  // the cells' boxes, each moved next to the first one: cells across ±180° stay one box
@@ -271,6 +277,7 @@ function ensureMap() {
     m.addSource("focus", cellSource());  // the focused insight's cells
     m.addSource("zone", cellSource());  // the selected zone's cells
     m.addSource("pts", { type: "geojson", data: empty() });
+    m.addSource("layer-pts", { type: "geojson", data: empty() });  // a focused run insight's layer: its points around it
     m.addSource("regions", { type: "geojson", data: empty() });
     m.addSource("region-labels", { type: "geojson", data: empty() });  // a point per region, its count as an icon
     const layer = (id, type, source, paint, filter, extra = {}) => m.addLayer({ id, type, source, paint, ...(filter ? { filter } : {}), ...extra });
@@ -294,6 +301,7 @@ function ensureMap() {
     layer("regions-n", "symbol", "region-labels", {}, ["==", ["get", "resolution"], -1], { layout: { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true } });
     layer("zone-line", "line", "zone", { "line-color": "#eef3ff", "line-width": 2, "line-dasharray": [2, 1] });
     layer("pts-halo", "circle", "pts", { "circle-color": "#ff4d6d", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 8], "circle-blur": 1, "circle-opacity": 0.45 });
+    layer("layer-pts", "circle", "layer-pts", { "circle-color": C.amber, "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 1.5, 11, 4.5], "circle-stroke-color": "#05080d", "circle-stroke-width": 0.8 });
     layer("pts-core", "circle", "pts", { "circle-color": "#ffe0e6", "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4] });
     // each pulse step redraws the whole map: ~15 steps a second, none while it moves (until it is idle again) or is out of sight
     let rest = true, still = true, last = 0;
@@ -565,9 +573,10 @@ function renderCard(p, item, pts) {
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by every cell holding one of its located events
       ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
-      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1)], [term("moran_i"), num(sp.moran_i)], [term("weight"), num(p.weight)]])
-      .map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` +
-    (p.numbers && p.numbers.n_eff ? `<div class="mc-note">${esc(p.numbers.n_eff)}</div>` : "") +
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness), true], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
+      .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
+    (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
+    (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
     (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -580,6 +589,8 @@ function trustTags(pid) {
   return `<i class="pp-tag ${cls}">${TERMS[`credibility_${t.credibility}`] ? term(`credibility_${t.credibility}`) : esc(words)}</i>` + (t.scale ? `<i class="pp-tag">${term(`scale_${t.scale}`)}</i>` : "");
 }
 
+const LISA_WORDS = { "hot spot": "гаряча точка", "cold spot": "холодна точка" };
+
 function cellPopup(f, lngLat) {
   const p = f.properties, row = p.row, level = G.level ?? regionLevel();
   const skip = new Set(["row", "h3"]);
@@ -587,16 +598,18 @@ function cellPopup(f, lngLat) {
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const region = level != null && G.overlay ? G.overlay.features.find((r) => r.properties.resolution === level && r.properties.rows.includes(row)) : null;
   const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div><div class="pp-list"></div>` : "";
-  const popup = openPopup(`<div class="pp-head"><span>${esc(p.h3)}</span><span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}">${esc(p.lisa_points)}</span></div>` +
-    `<div class="pp-scroll">${reg}<div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div>`, lngLat, p.h3);
+  const spot = LISA_WORDS[p.lisa_points];  // the person reads a hot or cold spot in words, the developer every label
+  const popup = openPopup(`<div class="pp-head"><span data-dev>${esc(p.h3)}</span><span data-user>${esc(cap(word("cell")))} · ${esc(plural(p.points ?? 0, "подія", "події", "подій"))}</span>` +
+    `<span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}"${spot ? "" : " data-dev"}>${esc(spot || p.lisa_points)}</span></div>` +
+    `<div class="pp-scroll">${reg}<div data-dev><div class="pp-sub">${cap(word("cell"))}</div><table>${rows}</table></div></div>`, lngLat, p.h3);
   if (region && region.properties.n) cellInsights(popup, row, level);
 }
 
 function regionPopup(id, lngLat) {
   /* «Усі датасети»: a hex's count and what each dataset brings to it; the zone and the question take its H3 */
   const f = ((G.overlay || empty()).features).find((r) => r.properties.id === id); if (!f) return;
-  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(fileOf(ds))}</th><td>${num(n, 0)}</td></tr>`).join("");
-  openPopup(`<div class="pp-head"><span>${esc(id)}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
+  const by = Object.entries(f.properties.by).filter(([, n]) => n).map(([ds, n]) => `<tr><th>${esc(titleOfDataset(ds, fileOf(ds)))}</th><td>${num(n, 0)}</td></tr>`).join("");
+  openPopup(`<div class="pp-head"><span data-dev>${esc(id)}</span><span data-user>${esc(cap(word("region")))}</span></div><div class="pp-scroll"><div class="pp-sub pp-here">${cap(word("region"))}: ` +
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat, id.split(":")[2]);
 }
 
@@ -659,8 +672,16 @@ const insightTail = (i) => i.label.slice(i.label.lastIndexOf(": ") + 2);  // the
 const readingOf = (pid) => (G.patterns[pid] || G.overlay?.patterns[pid] || {}).reading;  // as the map holds it; «Усі датасети» another dataset's as its overlay does
 const reading = (pid) => { const r = readingOf(pid); return r ? `${r.where} — ${r.what}` : ""; };  // a row's insight in a sentence
 
+function visibleWindow(d) {
+  /* the window without a hidden layer's runs (S.hidden): their rows gone, the rest ranked again, the count without them */
+  const themes = d.themes.map((t) => ({ ...t, insights: t.insights.filter((i) => !S.hidden.has(i.dataset_id)) })).filter((t) => t.insights.length);
+  const order = themes.flatMap((t) => t.insights).sort((a, b) => a.rank - b.rank).map((i) => i.id);
+  const gone = d.themes.reduce((n, t) => n + t.insights.length, 0) - order.length;
+  return { ...d, insights: d.insights - gone, themes: themes.map((t) => ({ ...t, insights: t.insights.map((i) => ({ ...i, rank: order.indexOf(i.id) })) })) };
+}
+
 function renderWindow() {
-  const el = $("map-window"), d = W.data;
+  const el = $("map-window"), d = W.data && !W.data.error ? visibleWindow(W.data) : W.data;
   el.hidden = !d || !G.ds;
   if (el.hidden) return;
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells

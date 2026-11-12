@@ -207,7 +207,7 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
 
     def warmed(ds: str) -> bool:  # the worker's reads: the test reads no graph or map of its own before
         for _ in range(400):
-            if {("cytoscape", "", False), ("projection", ds), ("overlay", ds)} <= engine.graph().memo.keys():
+            if {("cytoscape", "", False), ("projection", ds, frozenset()), ("overlay", ds, frozenset())} <= engine.graph().memo.keys():
                 return True
             time.sleep(0.05)
         return False
@@ -223,7 +223,7 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
     engine.update_dataset_metadata(ds, source="")  # a new graph, and a batch waiting for the worker
     engine.submit(points_csv)
     engine.warm_map()
-    assert not {("projection", ds), ("overlay", ds)} & engine.graph().memo.keys()
+    assert not {("projection", ds, frozenset()), ("overlay", ds, frozenset())} & engine.graph().memo.keys()
     for read in (engine.geo_overlay, engine.geo_projected):  # its record deleted after its files were read: refused, no TypeError
         with mock.patch.object(engine.ws, "ready_batch_for", return_value=None), pytest.raises(PipelineError, match="not a geo dataset"):
             read(ds)
@@ -239,7 +239,7 @@ def test_geo_evidence_speaks_plain_language(engine, points_csv):
     assert scopes and not any("neighbours_points_band" in line or "lisa_points" in line for line in scopes)
 
 
-def test_spatial_provenance_is_the_five_ingest_fields():
+def test_spatial_provenance_is_the_ingest_fields():
     stored = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01, "compactness": 0.5, "colocated": []}
     spatial = SpatialProvenance.from_dict(stored)
     assert spatial.to_dict() == {k: stored[k] for k in ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")}  # derived keys stay out
@@ -249,14 +249,37 @@ def test_spatial_provenance_is_the_five_ingest_fields():
     assert tuple(SpatialProvenance.__dataclass_fields__) == SPATIAL_DIGEST_FIELDS  # widening either is a decision about stored digests
 
 
-def _geo_dataset(name, cells, covers):
+def _geo_dataset(name, cells, covers, run_of=None):
     from subgroup_miner.spatial import _neighbour_graph
     from subgroup_miner.spatial_plane import GeoDataset
 
     cells = np.array(sorted(set(cells)), dtype=object)
     ptr, idx, _ = _neighbour_graph(cells)
     pos = {c: i for i, c in enumerate(cells)}
-    return GeoDataset(name, cells, ptr, idx, {p: np.array(sorted({pos[c] for c in cs})) for p, cs in covers.items()})
+    return GeoDataset(name, cells, ptr, idx, {p: np.array(sorted({pos[c] for c in cs})) for p, cs in covers.items()}, run_of)
+
+
+def test_the_runs_of_one_base_keep_their_same_places_edge_beside_the_bases_insights():
+    """Two runs of one base layer lie in the base's own places, so three strong insights of the base would fill their
+    ``COLOCATED_TOP`` cross-dataset slots and the run–run edge — the card's *також у тих самих місцях* — would never be
+    made; the runs of one upload keep a partner pool of their own (the e2e review's F-11). Without that kinship the
+    base's insights crowd it out."""
+    from subgroup_miner.spatial_plane import derive_spatial
+
+    c = h3.latlng_to_cell(36.5, -119.2, 8)
+    disk, wide = h3.grid_disk(c, 2), h3.grid_disk(c, 6)
+    covers = {f"P-a{i}": disk for i in range(3)}  # the base's insights sort before the runs': they take the slots first
+
+    def pairs(kin: bool) -> set[frozenset[str]]:
+        sets = [
+            _geo_dataset("base", wide, covers),
+            _geo_dataset("run-1", wide, {"P-z1": disk}, "up-b" if kin else None),
+            _geo_dataset("run-2", wide, {"P-z2": disk}, "up-b" if kin else None),
+        ]
+        return {frozenset((a, b)) for a, b, _, _ in derive_spatial(sets, (7, 5, 3, 1)).co_located}
+
+    assert frozenset(("P-z1", "P-z2")) in pairs(True) and frozenset(("P-z1", "P-z2")) not in pairs(False)
+    assert {frozenset(("P-z1", f"P-a{i}")) for i in range(3)} <= pairs(True)  # the base's edges stay
 
 
 def test_derive_spatial_relations_regions_and_the_partner_cap():
@@ -743,9 +766,12 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
 
 
-def test_a_zone_from_the_map_is_the_same_question(engine, points_csv):
+def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
     """A zone weighs the seeds of the ordinary search: the question's seed stays first and gets the same scale chain, a
-    zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels."""
+    zone alone seeds from inside it, a polygon equal to the cells seeds the same, ``resolution`` keeps the coarser levels.
+    The search's mechanics on a known graph: its shares confirmed per cell, as the graph these expectations describe
+    (``WEIGHT_BY_EVENTS`` changes which share insights the fixture yields, not how a zone weighs them)."""
+    engine = make_engine(make_config(tmp_path / "ws", weight_by_events=False))
     assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     question = "Where is load higher?"
     text = engine.search(question)

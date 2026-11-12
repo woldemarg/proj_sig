@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,7 @@ from scipy import sparse
 from scipy.stats import false_discovery_control, norm
 
 from insight_contracts import Insight
+from subgroup_miner.context import DEFAULT_RING, ContextLayer, ContextSource, context_bands
 
 POINT_PARSE_SHARE = 0.95  # share of non-null values that must parse as points for a column to be the location
 LAT_NAMES = frozenset({"lat", "latitude"})
@@ -46,10 +48,11 @@ NESTED_SHARE = 0.9  # nesting above which a mode condition never explains the ot
 GEO_SHARE_MAX_LEVELS = 8  # categoricals with at most this many levels also become per-level share metrics
 GEO_MODE_MAX_LEVELS = 40  # categoricals with more levels are not aggregated
 GEO_COLOCATION_MIN = 0.3  # CO_LOCATED: overlap of the one-ring-dilated extents
-COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset and of the others (the strongest relations)
+COLOCATED_TOP = 3  # CO_LOCATED partners per pattern, of its own dataset, of its base's other runs and of the rest (the strongest relations)
 GEO_REGION_MIN_SHARE = 0.2  # IN_REGION: |P ∩ R| over the smaller of the pattern and the region's occupied cells
 MIN_MIXED_SHARE = 0.1  # a share metric needs this share of dense cells strictly between 0 and 1
 GEO_AUTO_RESOLUTIONS = range(10, 2, -1)  # the resolutions ``@auto`` weighs, finest first
+CELL_AREA_SPREAD = 0.05  # the occupied cells' areas differ by more: a per-type count no longer reads as per area (warning)
 GEO_DENSE_POINTS_MIN = 0.5  # ``@auto``: the finest level needs this share of the points in cells with at least min_cell_points
 GEO_AUTO_MAX_CELLS = 5_000  # ``@auto``: the finest level's cells at most, counted at its region level (docs/02 §2.9)
 GEO_AUTO_MIN_CELLS = 500  # ``@auto``: a coarser level's cells at least (the miner's least subgroup, 5 cells per metric, fills a smaller one)
@@ -85,6 +88,12 @@ class SpatialContext:
     derived_from: dict[str, list[str]] = field(default_factory=dict)  # condition column -> the metrics it restates
     moran: dict[str, float] = field(default_factory=dict)  # global Moran's I per metric (row-standardised ring-1): a description of the map
     glossary: dict[str, str] = field(default_factory=dict)  # derived column (or "column=value") -> plain words
+    context: dict[str, ContextLayer] = field(default_factory=dict)  # layer name -> its counts and disks (context.py), the null's input; never stored
+    exposure: dict[str, Any] = field(default_factory=dict)  # per-type counters' denominator words: {kind: area, cell_km2}; empty without them
+    baseline: str | None = None  # zone: every metric read against its parent cell's median; None: the map
+    events: np.ndarray | None = None  # per cell its events as counted: a share's test weighs them (never the zoned ``points``)
+    type_counters: list[str] = field(default_factory=list)  # the per-type counters asked (``count_<column>_<value>``)
+    levels: dict[str, tuple[str, str]] = field(default_factory=dict)  # a share or a per-type counter -> (its column, its value)
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -394,8 +403,22 @@ def build_cells(
     *,
     min_cell_points: int,
     profile_key: object = None,
+    context: Sequence[ContextSource] = (),
+    context_ring: int = DEFAULT_RING,
+    count_values: Sequence[str] = (),
+    baseline: str | None = None,
 ) -> tuple[pd.DataFrame, SpatialContext, list[str]]:
-    """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``."""
+    """Source rows -> (cell table, spatial context, warnings); the levels of one upload (``profile_key``) share a ``point_profile``.
+    Each ``context`` layer (points of another type) becomes one forced band, the layer's points in the cell and its
+    ``context_ring`` rings (``context.py``); a layer with one band only at this resolution is left out with a warning.
+    Each of ``count_values`` (``column=value``) becomes a per-type counter ``count_<column>_<value>``: the cell's events
+    of that value, every cell, divided by nothing (a level's cells are of one area; ``exposure`` names it for the
+    words, and a spread of the occupied cells' areas past ``CELL_AREA_SPREAD`` is a warning). The neighbourhood bands
+    and ``lisa_points`` restate it (``derived_from``); it adds no band of its own (docs/02_discovery.md §2.9).
+    ``baseline`` ``zone`` reads every metric against the median of its zone — the cell's parent one resolution coarser,
+    the unit the context null deals within and the bootstrap's block —: a counter as ``log(1 + n)`` minus its zone's
+    median, a median or a share minus its zone's; the columns are replaced, not added, and the neighbourhood bands and
+    ``lisa_points`` keep reading the raw activity."""
     profile = point_profile(frame, locator, profile_key)
     lat, lon, location = profile.lat, profile.lon, profile.location
     ok = np.isfinite(lat) & np.isfinite(lon)
@@ -440,16 +463,37 @@ def build_cells(
         total = table.sum(axis=1).to_numpy(float)
         out[f"{col}_mode"] = np.where(total > 0, table.columns.to_numpy()[table.to_numpy().argmax(axis=1)], "missing")
         glossary[f"{col}_mode"] = f"the most frequent {_words(col)} among the cell's events"
+    asked = {tuple(spec.partition("=")[::2]) for spec in count_values}  # a counted value's share is written too, whatever its rarity
+    levels: dict[str, tuple[str, str]] = {}  # each share and per-type counter's column and value: their points' series
     for col in share_cols:
         table = _level_counts(profile.codes[col], codes, len(cells))
         total = table.sum(axis=1).to_numpy(float)
-        kept = table.columns[-1:] if table.shape[1] == 2 else table.columns  # a binary column: its rarer level
+        kept = list(table.columns[-1:] if table.shape[1] == 2 else table.columns)  # a binary column: its rarer level
+        kept += [v for v in table.columns if (col, v) in asked and v not in kept]
         for level in kept:
             with np.errstate(invalid="ignore", divide="ignore"):
                 share = np.where(dense & (total > 0), table[level].to_numpy(float) / total, np.nan)
             if np.nanmean((share > 0) & (share < 1)) >= MIN_MIXED_SHARE:
                 out[f"share_{col}_{level}"] = share
+                levels[f"share_{col}_{level}"] = (col, str(level))
                 glossary[f"share_{col}_{level}"] = f"share of the cell's events whose {_words(col)} is {level}" + _kind_of(profile, col, level)
+    counted: dict[str, list[str]] = {}  # source column -> its per-type counters
+    for spec in count_values:
+        col, _, value = spec.partition("=")
+        if col not in profile.codes or value not in profile.codes[col][1]:  # no category here: ingestion checked the file's rows
+            warnings.append(f"geo: no per-type counter for {spec}: no such category among the located points")
+            continue
+        level = profile.codes[col][0] == profile.codes[col][1].get_loc(value)
+        out[f"count_{col}_{value}"] = np.bincount(codes[level], minlength=len(cells)).astype(float)
+        levels[f"count_{col}_{value}"] = (col, value)
+        glossary[f"count_{col}_{value}"] = f"number of the cell's events whose {_words(col)} is {value}"
+        counted.setdefault(col, []).append(f"count_{col}_{value}")
+    exposure = {}
+    if counted:
+        areas = np.array([h3.cell_area(c, "km^2") for c in cells])  # the occupied cells': the global average is off at high latitudes
+        exposure = {"kind": "area", "cell_km2": round(float(areas.mean()), 6)}
+        if (spread := areas.max() / areas.min() - 1) > CELL_AREA_SPREAD:
+            warnings.append(f"geo: the occupied cells' areas differ by {spread:.0%} at r{resolution}: a per-type count is per cell, not per km²")
     if dropped:
         warnings.append(f"geo: columns not aggregated (too many or too few levels, or determining a share column): {dropped}")
 
@@ -470,15 +514,26 @@ def build_cells(
         for q, words in QUARTERS.items():
             glossary[f"{band}={q}"] = f"the surrounding cells are {words} ({by})"
         glossary[f"{band}=missing"] = "no surrounding cell has events"
-        derived[f"{name}_band"] = counters  # every counter measures the same activity
+        derived[f"{name}_band"] = list(counters)  # the activity counters; a per-type count is a type's own question (§2.9)
+    bands, layers, words, notes = context_bands(context, cells, resolution, context_ring)
+    out |= bands
+    derived |= {column: [] for column in bands}  # forced, and restating no metric of the target
+    glossary |= words
+    warnings += notes
     neighbourhood = [*derived, LISA_COLUMN]
     for col, others in nested.items():
-        if others:
-            derived[f"{col}_mode"] = [m for o in others for m in out if m.startswith(f"share_{o}_")]
+        if others or col in counted:  # and the cell's most frequent value restates the column's own per-type counts
+            derived[f"{col}_mode"] = [*(m for o in others for m in out if m.startswith((f"share_{o}_", f"count_{o}_"))), *counted.get(col, [])]
     out[LISA_COLUMN] = local_moran(np.log1p(counts), ptr, idx)
-    derived[LISA_COLUMN] = counters
+    derived[LISA_COLUMN] = list(counters)
     glossary[LISA_COLUMN] = "whether the cell and its neighbours form a cluster of many or few events"
     glossary.update({f"{LISA_COLUMN}={k}": v for k, v in LISA_WORDS.items()})
+    if baseline == "zone":  # the difference between zones taken out of every metric, after the conditions read the raw ones
+        logged = {*counters, *(c for cs in counted.values() for c in cs)}  # the counters: points, active days, per-type counts
+        for metric in metrics:
+            values = np.log1p(out[metric]) if metric in logged else out[metric]
+            out[metric] = values - pd.Series(values).groupby(blocks).transform("median").to_numpy()
+            glossary[metric] = f"{glossary[metric]}{', as log(1 + n),' if metric in logged else ''} minus the median of its zone (the parent cell)"
     table = pd.DataFrame(out)
     ctx = SpatialContext(
         resolution=resolution,
@@ -496,6 +551,12 @@ def build_cells(
         derived_from=derived,
         moran={m: moran_i(out[m], ptr, idx) for m in metrics},
         glossary={k: v for k, v in glossary.items() if k.split("=", 1)[0] in table.columns or k.split("=", 1)[0] in derived},
+        context=layers,
+        exposure=exposure,
+        baseline=baseline,
+        events=counts,  # the frame copies its columns; the zone rebinds them, never writes into these
+        type_counters=[c for cs in counted.values() for c in cs],
+        levels=levels,
     )
     return table, ctx, warnings
 

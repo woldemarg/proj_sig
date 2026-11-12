@@ -83,7 +83,10 @@ def rank_correlation(ranks):
 # ==========================================
 # STEP 1: Ingestion & Semantic Profiling
 # ==========================================
-def step1_profile_data(data):
+def step1_profile_data(data, keep=frozenset()):
+    """``keep``: metrics never dropped as redundant (local repair: the per-type counters a run asks for and their
+    shares — a rare type is 0 in most rows by count and by share, so the two rank together and the counter, the
+    run's question, was dropped)."""
     data_safe = data.copy()
 
     # Continuous float measures are naturally all-unique; only non-float
@@ -141,7 +144,7 @@ def step1_profile_data(data):
             np.triu(np.ones(init_corr.shape), k=1).astype(bool)
         )
         nums_to_drop = [
-            col for col in upper_tri.columns if any(upper_tri[col] > 0.95)
+            col for col in upper_tri.columns if col not in keep and any(upper_tri[col] > 0.95)
         ]
         valid_nums = [n for n in valid_nums if n not in nums_to_drop]
         values = data_safe[valid_nums].to_numpy(dtype=float)
@@ -309,8 +312,12 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
     global_corr = profile["global_corr"]
     total_rows = profile["total_rows"]
 
-    global_medians = {num: np.median(data[num].dropna()) for num in numerics}
+    # local repair: a counter whose median is 0 almost everywhere (``profile["means"]``, set by the caller) is read by
+    # its mean — its median would say nothing of a subgroup until half of it moved
+    means = profile.get("means", frozenset())
+    global_medians = {num: (np.mean if num in means else np.median)(data[num].dropna()) for num in numerics}
     global_mads = {num: calculate_mad(data[num].dropna()) for num in numerics}
+    mean_cols = [j for j, num in enumerate(numerics) if num in means]
 
     min_sg_size = max(len(numerics) * 5, int(total_rows * 0.005))
     insights = []
@@ -328,7 +335,10 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
 
         shift_profile = {}
         own = set().union(*(forbidden.get(a, ()) for a in extract_dimension_attrs(selector))) if forbidden else set()
-        for num_col, s_median in zip(numerics, np.nanmedian(values[row_indices], axis=0)):
+        locations = np.nanmedian(values[row_indices], axis=0)
+        if mean_cols:
+            locations[mean_cols] = np.nanmean(values[row_indices][:, mean_cols], axis=0)
+        for num_col, s_median in zip(numerics, locations):
             if not np.isnan(s_median) and num_col not in own:
                 shift_profile[num_col] = robust_z_score(
                     s_median, global_medians[num_col], global_mads[num_col]
@@ -389,12 +399,14 @@ def _skew_p_value(local_counts, global_counts):
 
 
 def step4b_deep_validation(
-    data, top_candidates, numerics, categoricals, global_medians, global_mads, blocks
+    data, top_candidates, numerics, categoricals, global_medians, global_mads, blocks, means=frozenset()
 ):
     """``blocks``: one block id per row of ``data``, the bootstrap's resampling unit — each row its own block for a
     plain table (the same draws as a row resample), the cell's parent cell for spatial data, so neighbouring cells
     stay together as the rows of an independent sample would. ``top_candidates["restated"]``: per subgroup, the
-    metrics its conditions are computed from — never reported as a hidden shift."""
+    metrics its conditions are computed from — never reported as a hidden shift. ``means``: the metrics read by their
+    mean, not their median (local repair, as in step4)."""
+    location = lambda num, values: (np.mean if num in means else np.median)(values)  # noqa: E731
     validated_insights = []
     global_cat_dists = {
         cat: data[cat].value_counts(normalize=True) for cat in categoricals
@@ -418,7 +430,7 @@ def step4b_deep_validation(
                     b_score = None
                     break
                 b_score += robust_z_score(
-                    np.median(values), global_medians[num_col], global_mads[num_col]
+                    location(num_col, values), global_medians[num_col], global_mads[num_col]
                 )
             if b_score is not None:
                 bootstrap_scores.append(b_score)
@@ -458,7 +470,7 @@ def step4b_deep_validation(
         top_shift_cols = [col for col, _ in row["top_shifts"]]
         for num in numerics:
             if num not in top_shift_cols and num not in row["restated"]:
-                s_med = np.median(sg_data[num].dropna())
+                s_med = location(num, sg_data[num].dropna())
                 shift = robust_z_score(
                     s_med, global_medians[num], global_mads[num]
                 )

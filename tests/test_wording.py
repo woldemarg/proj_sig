@@ -252,3 +252,32 @@ def test_the_console_speaks_ukrainian_and_explains_every_error_code():
 def test_the_interface_chapter_quotes_the_ukrainian_chrome():
     doc = (ROOT / "docs" / "current_docs" / "08_interface.md").read_text(encoding="utf-8")
     assert not [s for s in ENGLISH_CHROME if f"*{s}" in doc or f"«{s}" in doc]
+
+
+def test_no_surface_holds_a_bare_cross_type_literal():
+    """The base / context layer vocabulary has one source (``TERMS``): neither it, nor the console, nor the current docs
+    say «крос-типовий» any more."""
+    surfaces = [*(ROOT / "sig_web_console" / "static").glob("*.js"), ROOT / "sig_web_console" / "static" / "index.html"]
+    surfaces += [*(ROOT / "docs" / "current_docs").glob("*.md")] if (ROOT / "docs").is_dir() else []
+    surfaces.append(ROOT / "insight_contracts" / "wording.py")
+    assert not [p.name for p in surfaces if "рос-тип" in p.read_text(encoding="utf-8")]
+
+
+def test_a_layer_link_speaks_of_layers_and_places_not_nearness():
+    """The terms of a layer link: two layers, two questions, per-cell counts; *поруч* belongs to the disk alone — runs
+    whose places meet are *у тих самих місцях*, never «поруч»."""
+    for key in ("base_layer", "context_layer", "layer_link", "more_events", "other_mix", "exploratory", "insufficient_data", "same_places"):
+        assert key in w.TERMS
+    assert "поруч" not in " ".join(w.TERMS["same_places"])
+    assert "площ" in w.TERMS["more_events"][1] and "раза" not in " ".join(w.TERMS["other_mix"])
+    assert w.exposure_words({"kind": "area", "cell_km2": 0.105}) == "на комірку ≈ 0,1 км²"
+    assert w.exposure_words({"kind": "area", "cell_km2": 5.16}) == "на комірку ≈ 5,2 км²" and w.exposure_words(None) == ""
+
+
+def test_n_eff_under_event_weights_reads_as_events_not_cells():
+    """With the dataset's shares confirmed per event, ``n_eff`` is Kish's effective number of events: the words say so and
+    name no count of cells (the e2e review's F-22, F-33)."""
+    ins = toy_insight([("a", "b")], [Shift("m", 1, 2, 1, 1)], p_adjusted=0.01, provenance={"spatial": {"cells": 420, "n_eff": 120.0, "moran_i": 0.2}})
+    weighted, plain = w.value_words(ins, True)["n_eff"], w.value_words(ins)["n_eff"]
+    assert weighted.startswith("120: обсяг Кіша") and "комірок метрики" not in weighted and "схожістю" in weighted
+    assert "непорожніх комірок метрики" in plain and "Кіша" in w.TERMS["n_eff"][1]

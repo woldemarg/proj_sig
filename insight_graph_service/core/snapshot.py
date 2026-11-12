@@ -98,9 +98,15 @@ def _schema_plane(
                 **({"source": b["source"]} if b.get("source") else {}),
                 "reliability": b.get("reliability", "F"),
                 "integrity": integrity[bid],
-                **{k: b[k] for k in ("upload_id", "level", "supersedes") if k in b},
+                **{k: b[k] for k in ("upload_id", "level", "supersedes", "context_ring", "cross") if k in b},
+                **({"cross_layers": [c["name"] for c in b["context"]]} if b.get("cross") else {}),  # a run names its layers
+                **({"layer_time": timed} if (timed := layer_time(b)) else {}),  # its event layers' time against the target's span
                 **({"upload_levels": sorted(levels[b["upload_id"]], key=lambda lv: -int(lv) if lv.isdigit() else 1)} if "upload_id" in b else {}),
                 **({"glossary": profile["geo"]["glossary"]} if "glossary" in profile.get("geo", {}) else {}),
+                **({"count_values": b["count_values"]} if b.get("count_values") else {}),  # the per-type counters asked, each with its status
+                **({"exposure": profile["geo"]["exposure"]} if "exposure" in profile.get("geo", {}) else {}),  # what a count is per
+                **({"weight_by_events": True} if profile.get("weight_by_events") else {}),  # its shares confirmed per event
+                **({"baseline": b["baseline"]} if b.get("baseline") else {}),  # zone: its metrics read against their zone
                 **({"user_glossary": declared} if (declared := declared_glossary(b)) else {}),
                 **({"glossary_columns": n} if (n := len({k.split("=", 1)[0] for k in b.get("user_glossary") or {}})) else {}),
                 **({"metadata_doc": b["metadata_doc"]} if b.get("metadata_doc") else {}),
@@ -459,7 +465,7 @@ def _temporal_plane(
         mine = {}
         for pid, entry in sorted(series.items()):
             if pid not in nodes or nodes[pid].props["integrity"] == "mismatch" or not entry["series"]:
-                continue  # no metric of it has a series (a geo counter or share): it has no time line
+                continue  # no metric of it has a series (a geo pattern's time-derived metrics, a zoned share or count): no time line
             props = nodes[pid].props
             metrics = [props["target"], *(s["metric"] for s in props["shifts"])]
             traj = mine[pid] = head | dynamics(entry, signed["bins"], metrics, settings.miner)
@@ -536,6 +542,8 @@ BATCH_DIGEST_FIELDS = (
     "supersedes",
     "profile",
     "temporal",  # the time column's grid and bins, and the SHA-256 of its series file (docs/02_discovery.md §2.10)
+    "count_values",  # a geo level's per-type counters with their statuses: what the card reads (§2.9)
+    "baseline",  # zone: what its metrics are read against
     "window",  # a chain-model time record's window: no new record has it; kept so such a record stays verifiable (§6.1)
 )
 
@@ -630,3 +638,10 @@ def build_snapshot(
             "as_of": max(spans, key=datetime.fromisoformat, default=None),  # the latest data: the reference date of an answer (§7.2)
         },
     }
+
+
+def layer_time(batch: dict[str, Any]) -> list[dict[str, Any]]:
+    """A run's event layers as their entries record them (``uploads.cross_runs``): the name, the span, the share of the
+    target's span it covers and the window an aligned run counted in."""
+    keys = ("name", "span", "overlap", "window", "target_span")
+    return [{k: e[k] for k in keys if k in e} for e in batch.get("context") or () if e.get("time_rule") == "events"] if batch.get("cross") else []

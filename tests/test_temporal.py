@@ -698,12 +698,12 @@ def test_a_geo_upload_with_a_time_column_gives_its_cell_patterns_the_series_of_t
     props = {n["id"]: n["props"] for n in snap["nodes"] if n["kind"] == "Pattern"}
     geo = [pid for pid, p in props.items() if p["dataset_id"] == cells["dataset_id"]]
     series = json.loads((engine.ws.datasets_dir / cells["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
-    for pid in geo:  # a median has a series, a share or a counter none; the trend reads the target when it has one
+    for pid in geo:  # a median, a share and a count of the points have a series (a time-derived metric none): the trend reads the target
         shifts = [s["metric"] for s in props[pid]["shifts"]]
-        assert set(series[pid]["series"]) == {m for m in shifts if m.endswith("_median")}
+        assert set(series[pid]["series"]) == {m for m in shifts if m.endswith("_median") or m.startswith(("share_", "count_")) or m == "points"}
         assert snap["trajectories"][pid]["metric"] == (props[pid]["target"] if props[pid]["target"] in series[pid]["series"] else "load_median")
         assert props[pid]["temporal_summary"]["metric"] == snap["trajectories"][pid]["metric"]
-    assert any(not props[pid]["target"].endswith("_median") for pid in geo)  # a target without a series: the trend falls to the median
+    assert any(not props[pid]["target"].endswith("_median") for pid in geo)  # a share's or a count's insight: its own time line
     covers = engine.ws.load_covers(cells["dataset_id"])
     assert all(sum(series[pid]["rows"]) + series[pid]["untimed"] == np.isin(stored["point_cell"], covers[pid]).sum() for pid in geo)
     # one bin of a cell pattern again from the file with h3 alone: its points in the week against the week's other located points
@@ -916,19 +916,6 @@ def test_a_geo_levels_auto_grid_is_the_unit_of_its_located_points(tmp_path):
     cells, table = upload_levels(engine, path, geo="latitude,longitude@7", table=True, time="when")
     assert (cells["status"], cells["grid"]) == ("READY", "auto") and cells["temporal"]["grid"] in ("day", "week")
     assert table["status"] == "READY" and table["temporal"]["grid"] in ("month", "quarter")
-
-
-def test_a_geo_pattern_without_a_series_has_no_time_line(tmp_path):
-    frame = geo_frame().drop(columns="load")  # the cells hold counters, shares and modes only: no metric has a series
-    frame["when"] = frame["when"].astype(str)
-    path = tmp_path / "points.csv"
-    frame.to_csv(path, index=False)
-    engine = make_engine(make_config(tmp_path / "ws"))
-    (cells,) = upload_levels(engine, path, geo="latitude,longitude@7", time="when", grid="week")
-    series = json.loads((engine.ws.datasets_dir / cells["dataset_id"] / "temporal.json").read_text(encoding="utf-8"))
-    snap = engine.ws.load_graph()
-    assert cells["status"] == "READY" and series and all(not entry["series"] for entry in series.values())
-    assert not snap["trajectories"] and not any("temporal_summary" in n["props"] for n in snap["nodes"])  # never «not measured»
 
 
 def test_a_time_zone_reads_wall_times_in_it_and_bins_on_its_calendar():

@@ -10,6 +10,7 @@ function graphStyle() {
     { selector: "node", style: { label: "data(label)", "font-size": 11, "font-family": "Inter, Segoe UI, system-ui, sans-serif", "text-wrap": "wrap", "text-max-width": 120, "text-valign": "bottom", "text-margin-y": 4, color: ink, "border-width": 0, "min-zoomed-font-size": 8, "text-outline-color": surface, "text-outline-width": 2 } },
     { selector: 'node[kind="Pattern"]', style: { shape: "ellipse", width: "mapData(weight, 0, 1, 12, 30)", height: "mapData(weight, 0, 1, 12, 30)", "background-color": up } },
     { selector: 'node[kind="Pattern"][direction < 0]', style: { "background-color": down } },
+    { selector: "node[layer]", style: { "border-width": 3, "border-color": (n) => layerColor(n.data("layer")) } },  // a layer link's insight
     { selector: 'node[kind="Pattern"][ptype="covariance"]', style: { "background-color": cov, shape: "round-rectangle" } },
     { selector: 'node[kind="Attractor"]', style: { shape: "hexagon", width: "mapData(n_patterns, 1, 12, 36, 66)", height: "mapData(n_patterns, 1, 12, 32, 58)", "background-color": anchor, "font-size": 11.5, "font-weight": 700, color: ink, "text-max-width": 170 } },
     { selector: 'node[kind="Dimension"]', style: { shape: "round-rectangle", width: 44, height: 18, "background-color": muted, "font-size": 9, "text-valign": "center", "text-margin-y": 0, color: "#fff", "text-outline-width": 0 } },
@@ -215,7 +216,7 @@ function applyVisibility() {
 
 // the latent sphere (docs/08_interface.md §8.4): /api/sphere gives the projected points and the edges between them;
 // the traces are drawn here in the graph's visual language and restyled in place (layers, spotlight), never re-fetched
-// for a highlight or a theme change. Every trace a legend entry explains carries the entry's key as `meta`.
+// for a highlight. Every trace a legend entry explains carries the entry's key as `meta`.
 const HOVER = "%{hovertext}<extra></extra>";
 const SPHERE_LINKS = [  // legend key, edge type, name, palette colour, width, dash
   ["latent", "RELATED_TO", "Theme links", "anchor", 4, null],
@@ -330,11 +331,15 @@ async function loadGraph() {
   S.regionsIn = regions; S.regionCount = g.regions;
   S.datasets = g.datasets || {};
   S.asOf = (g.stats || {}).as_of || null;  // the latest data: the date the answers and the drawer count freshness from
+  const off = new Set(g.nodes.filter((n) => n.data.kind === "Pattern" && S.hidden.has(n.data.dataset)).map((n) => n.data.id));
+  g.nodes = g.nodes.filter((n) => !off.has(n.data.id)); g.edges = g.edges.filter((e) => !off.has(e.data.source) && !off.has(e.data.target));
+  S.hiddenCount = off.size;  // the table's foot names them
   S.nodes = g.nodes.map((n) => n.data).filter((d) => d.kind === "Pattern");
   $("ins-count").textContent = S.nodes.length ? S.nodes.length : "";
   const themes = g.nodes.filter((n) => n.data.kind === "Attractor").length;
   $("view-caption").textContent = S.nodes.length ? `Показано: ${plural(S.nodes.length, "інсайт", "інсайти", "інсайтів")} · ${plural(themes, "тема", "теми", "тем")}` : "Немає інсайтів для показу";
   $("empty-hint").hidden = g.nodes.length > 0 || S.view === "table";
+  for (const n of g.nodes) { const l = layersOf(n.data.dataset)[0]; if (l) n.data.layer = l; }
   const els = [...g.nodes, ...g.edges];
   if (g.nodes.length) {
     els.push({ data: { id: "__lbl_latent", kind: "PlaneLabel", label: "ТЕМИ" }, selectable: false, grabbable: false });
@@ -347,6 +352,9 @@ async function loadGraph() {
   } else {
     S.cy.elements().remove(); S.cy.add(els);
   }
+  const shown = [...new Set(S.nodes.flatMap((d) => layersOf(d.dataset)))].sort();  // the layers of the insights in view
+  $("lg-layers").hidden = !shown.length;
+  $("lg-layers-keys").innerHTML = shown.map((l) => `<div class="key"><i class="sw" style="background:var(${layerVar(l)})"></i><span>${esc(layerName(l))}</span></div>`).join("");
   countLegend();
   applyVisibility(); runLayout();
   if (S.hl) highlight(S.hl);
@@ -410,7 +418,10 @@ async function renderSphere() {
 function renderTable() {
   const q = $("table-search").value.trim().toLowerCase();
   const { k, asc } = S.sort;
-  const rows = S.nodes.filter((d) => !q || [d.full_label, d.target, d.anchor_label, ...(d.scope || [])].join(" ").toLowerCase().includes(q));
+  const variants = {};  // one effect under several conditions of a run: its leader's row holds the others (views.run_variants)
+  S.nodes.forEach((d) => { if (d.variant_of) (variants[d.variant_of] ||= []).push(d.id); });
+  const rows = S.nodes.filter((d) => (!d.variant_of || S.openVariants.has(d.variant_of)) &&
+    (!q || [d.full_label, d.target, d.metric_words, d.anchor_label, ...(d.scope || []), ...(d.words || [])].join(" ").toLowerCase().includes(q)));
   rows.sort((a, b) => {
     const va = k === "scope" ? (a.scope || []).join() : a[k], vb = k === "scope" ? (b.scope || []).join() : b[k];
     const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va ?? "").localeCompare(String(vb ?? ""));
@@ -421,11 +432,17 @@ function renderTable() {
   $("ins-table").querySelector("tbody").innerHTML = rows.map((d) => {
     const cls = d.ptype === "covariance" ? "cov" : d.direction > 0 ? "up" : "down";
     const effect = d.ptype === "covariance" ? word("covariance") : `${signed(d.effect)} sd`;
-    return `<tr data-id="${esc(d.id)}" tabindex="0"><td><div class="scope-tags">${(d.scope || []).map((c) => `<span class="tag">${esc(human(c).replace("=", " = "))}</span>`).join("")}</div></td>` +
-      `<td>${esc(human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
+    const n = (variants[d.id] || []).length;
+    const extra = (n ? `<button type="button" class="tag var-toggle" data-var="${esc(d.id)}" title="Та сама знахідка за іншими умовами в тих самих місцях">${S.openVariants.has(d.id) ? "−" : "+"}${plural(n, "варіант", "варіанти", "варіантів")}</button>` : "") +
+      (d.variant_of ? `<span class="tag" title="Варіант знахідки вище: ті самі місця, інші умови">варіант</span>` : "") +
+      (d.complement_of ? `<span class="tag" title="Той самий контраст, прочитаний з комірок без шару: доповнення іншої знахідки, не окрема">доповнення</span>` : "");
+    const words = d.words || (d.scope || []).map((c) => human(c).replace("=", " = "));
+    return `<tr data-id="${esc(d.id)}" tabindex="0"${d.variant_of ? ' class="variant"' : ""}><td><div class="scope-tags">${words.map((w) => `<span class="tag">${esc(w)}</span>`).join("")}${layerChip(d.dataset)}${extra}</div></td>` +
+      `<td>${esc(d.metric_words || human(d.target))}</td><td class="num"><span class="effect ${cls}">${effect}</span></td><td class="num">${num(d.support, 0)}</td>` +
       `<td class="num"><span class="bar" style="width:${Math.round((d.weight / maxW) * 40)}px"></span>${num(d.weight)}</td>` +
       `<td>${d.anchor_label ? `<span class="tag anchor">${esc(d.anchor_label)}</span>` : ""}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">${S.nodes.length ? "Жоден інсайт не відповідає фільтру." : "Інсайтів ще немає."}</td></tr>`;
+  if (S.hiddenCount) $("ins-table").querySelector("tbody").insertAdjacentHTML("beforeend", `<tr class="hidden-foot"><td colspan="6" class="muted">ще ${plural(S.hiddenCount, "інсайт", "інсайти", "інсайтів")} приховано: їхній шар вимкнено</td></tr>`);
   $("table-summary").textContent = S.nodes.length ? `${rows.length} з ${S.nodes.length}` : "";
 }
 
@@ -460,7 +477,7 @@ function highlightPath(turn, item, el) {
   const edges = item.path.map((st) => st.edge_id);
   S.hl = { seeds: h.seeds, anchors: item.path.filter((s) => s.target.startsWith("A-")).map((s) => s.target), evidence: [item.pattern_id],
     transversal_only: item.transversal_only ? [item.pattern_id] : [], edges, traversed: [] };
-  if (S.view === "table") setView("graph");
+  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
   highlight(S.hl);
   if (S.view === "sphere") renderSphere(); else focusNodes([item.pattern_id, ...item.path.map((s) => s.source)]);
   document.querySelectorAll(".ev.on").forEach((x) => x.classList.remove("on"));
@@ -484,7 +501,7 @@ function reveal(id, { isolate = null, walk = false } = {}) {
   if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
   if (S.view === "map") { GeoMap.unfocus(); return inspect(id, GeoMap.offMap(id)); }  // the old focus goes
   if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
-  if (S.view === "table") setView("graph");
+  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
   focusNodes([id]);
   inspect(id);
 }
@@ -531,7 +548,12 @@ async function verifyPattern(id) {
   if (out.isConnected) { out.innerHTML = html; btn.disabled = false; }
 }
 
-const nodeLabel = (id, labels = {}) => labels[id] || (S.nodes.find((d) => d.id === id) || {}).full_label || id;
+const metricWords = (name) =>  // a metric as the insights read it (their metric_words), by its column or its spaced name
+  (S.nodes.find((d) => d.target === name || human(d.target) === name) || {}).metric_words || human(name);
+const nodeLabel = (id, labels = {}) => {  // an insight the graph holds in words, as the table reads it; else its stored label
+  const n = S.nodes.find((d) => d.id === id);
+  return n && n.words ? `${n.words.join(" · ")}: ${n.metric_words} ${n.ptype === "covariance" ? word("covariance") : `${signed(n.effect)} sd`}` : labels[id] || (n || {}).full_label || id;
+};
 
 function trustRows(p, ds, labels) {
   /* an insight's three trust axes: its source's reliability, its credibility from other sources, its integrity */
@@ -547,6 +569,11 @@ function trustRows(p, ds, labels) {
     [term("integrity"), `${chip(INTEGRITY[integrity] ?? "warn", integrity)} ${esc(word(`integrity_${integrity}`))}`],
   ]) + (others.length ? `<details class="nb-group"><summary>Підстава <span class="muted">(${others.length})</span></summary>${others.map((x) => nbRow(x, nodeLabel(x, labels), (basis.confirmed_by || []).includes(x) ? "підтверджує" : "")).join("")}</details>` : "");
 }
+
+const trustLine = (p, ds) => {  // the person's one line of trust: confirmed or not, and a broken record named
+  const [cls, words] = cred(p.credibility), broken = p.integrity === "mismatch" || ds.integrity === "mismatch";
+  return `<p class="trust-line" data-user>${chip(cls, words, TERMS.credibility[1])}${broken ? ` ${chip("bad", word("integrity_mismatch"), TERMS.integrity_mismatch[1])}` : ""}</p>`;
+};
 
 const SHOWN = 3;  // rows of a long list shown before the rest folds under «Решта»
 const folded = (rows) => rows.slice(0, SHOWN).join("") + (rows.length > SHOWN ? `<details class="nb-group"><summary>Решта <span class="muted">(${rows.length - SHOWN})</span></summary>${rows.slice(SHOWN).join("")}</details>` : "");
@@ -605,6 +632,43 @@ function ageWords(core, asOf) {
   return at < end ? `${word("as_of")} ${date} триває` : `${word("as_of")} ${date} закінчилося ${span(at - end)} тому`;
 }
 
+const pct = (x) => `${num(x * 100, 0)} %`;
+
+function linkCard(p, d) {
+  /* a layer link's insight in its two questions (docs/08_interface.md §8.2): one is its tested primary — more events
+     (a count) or another mix (a share) —, the other is the same cohort's other metric when the insight holds it
+     (link.pair: a description of the same cells, not a test of its own), else what the run asked; never one number;
+     the run's level and disk; the same base layer's other links in the same places (CO_LOCATED, no test of their
+     joint effect). A metric neither a count nor a share answers neither question: no rows */
+  const ds = d.dataset, s0 = p.shifts[0], me = { target: p.target, effect: p.effect_size, local: s0.local_median, baseline: s0.global_median, tested: true };
+  const pair = d.link.pair, [kind, key] = me.target.split(/_(.+)/);
+  const { count = null, share = null } = { [kind === "points" ? "count" : kind]: me, ...(pair && { [pair.target.split("_")[0]]: pair }) };  // points: every event's count
+  const asked = (ds.count_values || []).find((c) => `${c.column}_${c.value}` === key), held = `не ${word("context_confounded")}`;  // admitted: past the layer's null
+  const zoned = ds.baseline === "zone", aside = (x) => (x.tested ? held : "та сама когорта, окремо не перевірялось");
+  const more = count ? `${count.effect > 0 ? "так" : "менше"} · ${aside(count)}${zoned ? ` · ${word("zone_baseline")}` : count.tested ? "" : ` · ${num(count.local, 1)} проти ${num(count.baseline, 1)}`}${d.link.exposure ? ` · ${d.link.exposure}` : ""}`
+    : !(ds.count_values || []).length ? "не перевірялось" : asked && asked.status !== "ok" ? `${word("insufficient_data")} для частоти на цьому рівні` : "у цій знахідці не вимірювалось";
+  const mix = share ? `${share.effect > 0 ? "так" : "менше"} · ${aside(share)}` + (zoned ? ` · ${word("zone_baseline")}` : ` · типова частка ${pct(share.local)} проти ${pct(share.baseline)}`) +
+    (ds.weight_by_events && share.tested ? ` · ${word("per_event")}` : "") : "у цій знахідці не вимірювалось";
+  const same = [...(d.neighbors.CO_LOCATED || []), ...(d.neighbors["CO_LOCATED (in)"] || [])].filter((it) => it.layers);
+  return `<div class="link-card">${layerChip(ds.dataset_id)}<h4>Біля ${esc((ds.cross_layers || []).join(", "))} — ${esc(ds.filename)}</h4>` +
+    `<p class="hint">рівень H3 r${esc(ds.level)} · ${esc(d.link.disk)} · ${term("exploratory")}</p>` +
+    (count || share ? kv([[term("more_events"), esc(more)], [term("other_mix"), esc(mix)]]) : "") +
+    (d.link.time ? kv([[term("layer_time"), esc(d.link.time)]]) : "") +
+    variantRows(p.id, d.link.variants || {}) +
+    (same.length ? `<h4>${term("same_places")}</h4><p class="hint">${esc(TERMS.same_places[1])}</p>` +
+      same.map((it) => nbRow(it.id, it.layers.join(", "), (it.props.relation === "overlaps" ? `${RELATION.overlaps}: ${pct(it.weight)}` : RELATION[it.props.relation] || "") +
+        (S.hidden.has(it.dataset_id) ? " · у відповідях шар вимкнено" : ""))).join("") : "") + `</div>`;
+}
+
+function variantRows(pid, variants) {
+  /* one effect of a run under several conditions: this insight's variants, or the one it varies or mirrors */
+  const label = (id) => (S.nodes.find((n) => n.id === id) || {}).label || id;
+  const mine = Object.keys(variants).filter((id) => variants[id].variant_of === pid), own = variants[pid] || {};
+  return (mine.length ? `<p class="hint">та сама знахідка за іншими умовами в тих самих місцях: ${mine.length}</p>` + mine.map((id) => nbRow(id, label(id), "варіант")).join("") : "") +
+    (own.variant_of ? nbRow(own.variant_of, label(own.variant_of), "варіант цієї знахідки") : "") +
+    (own.complement_of ? nbRow(own.complement_of, label(own.complement_of), "доповнення: той самий контраст з комірок без шару") : "");
+}
+
 async function inspect(id, note = "") {
   const within = $("drawer").contains(document.activeElement);  // a drawer row followed: the focus stays in the drawer
   let d;
@@ -617,37 +681,41 @@ async function inspect(id, note = "") {
     $("drawer-title").textContent = d.reading.where;  // the insight in words (insight_contracts/wording.py), as every surface reads it
     const cov = p.covariance && p.covariance.pair ? p.covariance : null, ds = d.dataset || {};
     html += `<p class="lead">${esc(d.reading.gist)}</p>`;  // the words alone: the table below holds the numbers
-    html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>${shiftRows(p.shifts, ds.metadata_doc)}`;
+    if (d.link) html += linkCard(p, d);
+    html += `<h4>${p.phenomenon_type === "covariance" ? "Різниці медіан (не перевірено)" : "Зсуви"}</h4>` +
+      (ds.baseline === "zone" ? `<p class="hint">${term("zone_baseline")}: ${esc(TERMS.zone_baseline[1])} — медіани нижче читаються так</p>` : "") +  // zoned values, named
+      shiftRows(p.shifts, ds.metadata_doc);
     if (cov) html += kv([[term("covariance"), `${esc(human(cov.pair.join(" ~ ")))}: ${num(cov.global_corr)} → ${num(cov.local_corr)}`]]);
     html += `<h4>Свідчення</h4>` + kv([[term("support"), `${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}% даних)`], [term("weight"), `<b>${num(p.weight)}</b>`]]) +
-      `<details class="nb-group"><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])) + `</details>` +
-      kv([
+      `<details class="nb-group" data-dev><summary>Складники сили свідчення</summary>` + kv(Object.entries(p.weight_factors || {}).map(([k, v]) => [term(k === "stability" ? k : `weight_${k}`), num(v)]).concat([[term("sd_score"), num(p.sd_score)], [term("emm_score"), num(p.emm_score, 3)], [term("volume_utility"), num(p.volume_utility, 3)]])
+        .concat(d.numbers.p_context ? [[term("p_context"), esc(d.numbers.p_context)]] : [])) + `</details>` +  // a cohort on a layer's band: the layer's p
+      dev(`<div>${kv([
         [term("p_adjusted"), esc(d.numbers.p_adjusted)],
         [term("stability"), p.stability === null || p.stability === undefined ? "не вимірюється (зміна зв'язку)" : num(p.stability)],
-        [term("drivers"), esc((p.drivers || []).join("; ") || "не виявлено")],
-      ]);
-    html += `<h4>Довіра</h4>${trustRows(p, ds, d.labels)}`;
-    html += `<div class="verify"><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
+        [term("drivers"), esc((d.drivers || p.drivers || []).join("; ") || "не виявлено")],  // in words (wording.driver_words)
+      ])}</div>`);
+    html += dev(`<div><h4>Довіра</h4>${trustRows(p, ds, d.labels)}</div>`) + trustLine(p, ds);
+    html += `<div class="verify" data-dev><button type="button" class="btn ghost sm" id="verify-btn" title="Перерахувати статистику цього інсайту зі збереженого завантаження й порівняти з журналом">Перевірити за сирими даними</button><div class="msg" id="verify-out"></div></div>`;
     if (d.trajectory) html += timeRows(d.trajectory, (ds.temporal || {}).span?.[1] || S.asOf);  // its age from its own dataset's latest data
     if (d.scale_chain) html += scaleRows(d.scale_chain, d.labels);
     else if ((d.places || []).length) html += whereRows(d.places);
-    tail += `<details class="nb-group"><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
-    tail += `<details class="nb-group"><summary>Походження</summary>` + kv([
-      ["Датасет", esc(`${p.provenance.filename}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
+    tail += `<details class="nb-group" data-dev><summary>Канонічний опис</summary><pre class="canon">${esc(p.canonical.document)}</pre></details>`;
+    tail += `<details class="nb-group" data-dev><summary>Походження</summary>` + kv([
+      ["Датасет", esc(`${p.provenance.filename}${(ds.cross_layers || []).length ? ` · + ${ds.cross_layers.join(", ")}` : ""}`)], ["Ідентифікатор датасету", `<span class="mono">${esc(p.provenance.dataset_id)}</span>`], ["Обробка", `<span class="mono">${esc(p.provenance.batch_id)}</span>`],
       ["Селектор", `<span class="mono">${esc(p.expression)}</span>`],
       ...(p.aliases || []).length ? [[esc(cap(word("aliases"))), p.aliases.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>")]] : [],
       ["Рушій", esc(p.provenance.engine)], ["Посилання на рядки", `<span class="mono">${esc(p.provenance.rows_ref)}</span>`],
       ["Модель опису", esc(`${p.embedding.model_id} · ${p.embedding.dim}d · ${p.embedding.representation_version}`)],
     ]) + `</details>`;
   } else if (n.kind === "Attractor") {
-    $("drawer-title").textContent = n.label;
+    $("drawer-title").textContent = n.label.split(" · ").map((part) => part.replace(/^(.*?)( [↑↓])?$/, (_, m, arrow = "") => metricWords(m) + arrow)).join(" · ");
     html += `<p class="lead">${esc(d.reading.what)}</p>`;
-    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(s.component)}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
-    html += `<h4>Подробиці</h4>` + kv([
+    html += `<h4>Ознаки теми</h4>` + p.signature.map((s) => `<div class="shift-row"><span>${esc(metricWords(s.component))}</span><b class="effect ${s.value >= 0 ? "up" : "down"}">${signed(s.value)}</b></div>`).join("");
+    html += dev(`<div><h4>Подробиці</h4>` + kv([
       ["Колонки", esc(p.dimensions.map(human).join(", "))], ["Метрики", esc(p.targets.map(human).join(", "))],
       [term("mass"), num(p.mass, 0)], [term("evidence_mass"), num(p.evidence_mass)], [term("dispersion"), num(p.dispersion, 3)],
       ["Оновлено під час обробки", `<span class="mono">${esc(p.last_updated_batch)}</span>`],
-    ]);
+    ]) + `</div>`);
   } else if (n.kind === "TemporalNode") {  // who lives in the period or moved in it, at any level (views.node_details' members)
     $("drawer-title").textContent = p.period;
     const m = d.members || {}, list = (key, items) =>
@@ -672,9 +740,9 @@ async function inspect(id, note = "") {
   }
   const groups = Object.entries(merged).filter(([t]) => !["DISCOVERED_IN", "OF_DATASET", "HAS_SCOPE (in)", "TARGETS (in)", ...shown].includes(t));
   if (groups.length) {
-    html += `<h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
+    html += `<div data-dev><h4>Зв'язки</h4>` + groups.map(([type, { items, count }]) =>
       `<details class="nb-group" ${/^ACTIVATES \(in\)$|RELATED|CO_OCCURS|CONTRAST/.test(type) ? "open" : ""}><summary>${esc(cap(word(type)))} <span class="muted">(${count > items.length ? `${items.length} з ${num(count, 0)}` : items.length})</span></summary>` +
-      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("");
+      items.map((it) => nbRow(it.id, it.label, (it.props.relation ? `${RELATION[it.props.relation] || human(it.props.relation)} · ` : "") + num(Number(it.weight)))).join("") + `</details>`).join("") + `</div>`;
   }
   $("inspector").innerHTML = html + tail;
   $("verify-btn")?.addEventListener("click", () => verifyPattern(n.id));

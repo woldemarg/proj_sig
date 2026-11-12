@@ -1,0 +1,16 @@
+# SIG for the demo: the graph service and the narrator only (the demo asks for evidence without SIG's model, so the LLM
+# broker does not start). The demo calls the two directly
+# (compose.yaml: SIG_URL, SIG_CHAT_URL), so SIG's console (nginx + UI) and its Neo4j mirror do not start: SIG then
+# publishes no host port (it runs beside your own `sig` stack) and nothing can be mined into the demo's graph by hand.
+# `--profile sig-console` starts the console for a look at the demo's graph; anything uploaded there joins that graph.
+services:
+  web-console: { profiles: [sig-console] }
+  neo4j: { profiles: [neo4j-mirror] }
+  llm-model-broker: { profiles: [sig-llm] }
+  evidence-narrator:
+    depends_on: !override
+      insight-graph: { condition: service_healthy }
+  insight-graph:
+    environment: { NEO4J_ENABLED: "false" }  # the mirror serves the Neo4j browser only; search reads SIG's own graph
+    depends_on: !override
+      model-init: { condition: service_completed_successfully }
