@@ -197,7 +197,7 @@ def build_query_parts(question: str, tables: list[dict[str, Any]], findings: lis
 
 def _zone_span(polygon: dict[str, Any]) -> tuple[int, str, str]:
     ring = polygon["coordinates"][0]
-    west = (ring[0][0] + 180) % 360 - 180  # a map past ±180° gives longitudes out of range: read around the first, in range
+    west = (ring[0][0] + 180) % 360 - 180  # read around the first vertex, itself in range: a zone across 180° stays one span, its far end past ±180°
     lons, lats = [west + (c[0] - ring[0][0] + 540) % 360 - 180 for c in ring], [c[1] for c in ring]
     return len(ring) - 1, f"{min(lons):.4f}…{max(lons):.4f}", f"{min(lats):.4f}…{max(lats):.4f}"
 
