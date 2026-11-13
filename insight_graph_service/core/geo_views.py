@@ -25,10 +25,10 @@ from graph_query_engine.vertical import affinity, restating, scale_chain, scale_
 from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import context_files, hidden_datasets, same_points
+from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.context import points_near
-from subgroup_miner.ingestion import read_context
+from subgroup_miner.ingestion import IngestionError, aoi_rows, read_context
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
@@ -171,6 +171,20 @@ def _zone_scores(
 # cached on its arguments: a dataset id fixes its files (a READY id is never mined again, its duplicate is SKIPPED; one
 # uploaded again after its deletion is mined to the same files), and a commit that changes the datasets changes them
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
+
+
+def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    """A geo dataset's rows as CSV with their place against a drawn zone, and the rows per place with the file's name
+    (``ingestion.aoi_rows``): what an analysis outside SIG reads beside the zone's insights."""
+    record = _owner(ws, dataset_id)
+    geo = (record.get("profile") or {}).get("geo")
+    if not geo:
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+    try:
+        data, counts = aoi_rows(Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), geo["resolution"], polygon)
+    except (SpatialError, IngestionError) as exc:
+        raise PipelineError("invalid_options", str(exc)) from exc
+    return data, counts | {"dataset_id": dataset_id, "filename": record["filename"]}
 
 
 def point_times(times: Any) -> np.ndarray | None:

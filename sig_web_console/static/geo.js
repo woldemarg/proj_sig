@@ -22,6 +22,7 @@ const GeoMap = {
   zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
 
   polygon: () => G.poly,  // the zone as drawn (GeoJSON)
+  datasets: () => G.datasets,  // the geo datasets: the tables a question to ADS picks from
 
   setPolygon(polygon) {
     /* the zone: the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the polygon holds, as the graph
@@ -589,7 +590,7 @@ function zonePopup(ring, inside) {
   if (below && under < POPUP_ROOM) G.map.panBy([0, POPUP_ROOM - under], { duration: 0 });
   const popup = openPopup(`<div class="pp-head"><span>${esc(cap(word("zone")))} · ${esc(plural(inside.length, "комірка", "комірки", "комірок"))}${cells ? ` · ${esc(plural(events, "подія", "події", "подій"))}` : ""}</span></div>` +
     `<div class="pp-scroll">${cells ? `<div class="pp-sub pp-here">Характерні інсайти в зоні</div><div class="pp-list"></div>` : ""}</div>`,
-    [x, below ? box[1] : box[3]], () => ask($("question").value, { cells: GeoMap.zone() }), below ? "top" : "bottom");
+    [x, below ? box[1] : box[3]], true, below ? "top" : "bottom");
   const rows = new Set(inside.map((f) => f.properties.row));
   if (cells) popupInsights(popup, box, (i) => G.patterns[i.id].rows.some((r) => rows.has(r)), (n) => `: ${n}`);
 }
@@ -729,13 +730,17 @@ function regionPopup(id, lngLat) {
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat);
 }
 
-function openPopup(html, lngLat, askZone = null, anchor) {
-  /* one popup at a time; the zone's carries its question button, asked with the text typed, if any */
+function openPopup(html, lngLat, zone = false, anchor) {
+  /* one popup at a time; the zone's carries its questions: to the graph, with the text typed, if any, and to ADS */
   GeoMap.closePopup();
-  const button = askZone ? `<button type="button" class="pp-ask">Запитати про цю зону</button>` : "";
-  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${button}</div>`).addTo(G.map);
+  const buttons = !zone ? "" : `<button type="button" class="pp-ask">Запитати про цю зону</button>` +
+    `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="ADS недоступний: його стан показано вгорі сторінки"`}>Запитати про це ADS</button>`;
+  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${buttons}</div>`).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });
-  if (askZone) popup.getElement().querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); askZone(); });
+  if (!zone) return popup;
+  const el = popup.getElement();
+  el.querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); ask($("question").value, { cells: GeoMap.zone() }); });
+  el.querySelector(".pp-ads").addEventListener("click", () => { GeoMap.closePopup(); openAds(); });
   return popup;
 }
 

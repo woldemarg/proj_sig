@@ -225,9 +225,10 @@ def pick_dataset(page, dataset_id: str) -> None:
         page.click(f"#batches .ds[data-ds='{dataset_id or current}'] .ds-pick")
 
 
-def stack(engine):
+def stack(engine, ads_url: str | None = None):
     """The graph service and the narrator with the fake LLM on one local port, as the console reaches them (the browser
-    tests); the services are imported here, so a library test never loads them."""
+    tests), with the ADS bridge in front of ``ads_url`` when given; the services are imported here, so a library test
+    never loads them."""
     from dev import compose
     from scratch import free_port
 
@@ -236,8 +237,15 @@ def stack(engine):
     from insight_graph_service.server.app import create_app
 
     port = free_port()
-    narrator = create_narrator(NarratorSettings(insight_graph_url=f"http://127.0.0.1:{port}"), llm=FakeLLM())
-    return port, compose(create_app(engine), narrator)
+    here = f"http://127.0.0.1:{port}"
+    narrator = create_narrator(NarratorSettings(insight_graph_url=here), llm=FakeLLM())
+    bridge = None
+    if ads_url:
+        from ads_bridge_service.app import create_app as create_bridge
+        from ads_bridge_service.settings import AdsSettings
+
+        bridge = create_bridge(AdsSettings(ads_url=ads_url, ads_llm_url=ads_url, ads_graph_url=here, ads_narrator_url=here, ads_poll_s=0.05))
+    return port, compose(create_app(engine), narrator, bridge)
 
 
 def make_config(workspace: Path, **overrides):

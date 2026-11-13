@@ -26,6 +26,7 @@ PACKAGES = [
     "insight_graph_service",
     "evidence_narrator_service",
     "llm_model_broker",
+    "ads_bridge_service",
 ]
 # the interpreter, its standard library and site-packages (also of a base environment the venv is layered on)
 ENVIRONMENT = sorted(
