@@ -280,16 +280,23 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         y0, y1 = min(c["y"] for c in near) - 6, max(c["y"] for c in near) + 6
         within = f"G.data.features.filter((f) => {{ const p = G.map.project(centre(f)); return p.x > {x0} && p.x < {x1} && p.y > {y0} && p.y < {y1}; }}).map((f) => f.properties.h3)"
         cells = page.evaluate(within)  # the cells whose centre the box round the three holds
+        page.evaluate("$('map-hud').classList.remove('folded')")  # the map's panel open: its metric select would cover the button's place
         page.click("#map-draw")
+        assert page.inner_text("#map-draw") == "Скасувати" and page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')[3]") == 0.06  # every cell dimmed
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)):  # real clicks: four vertices, then the first one again closes it
             page.mouse.click(box["x"] + x, box["y"] + y)
         page.wait_for_function("/: \\d+$/.test(document.querySelector('.sig-pop .pp-here')?.textContent || '')", timeout=10000)
-        assert page.inner_text(".sig-pop .pp-head").startswith("Зона · ") and page.is_visible(".sig-pop .pp-ask")
-        assert page.inner_text("#map-draw") == "Намалювати зону" and page.evaluate("GeoMap.polygon().coordinates[0].length") == 5
-        page.click("#map-draw")  # Esc drops a polygon being drawn; the one before it went with the new start
+        assert page.inner_text(".sig-pop .pp-head").startswith(f"Зона · {len(cells)} ком") and page.is_visible(".sig-pop .pp-ask")
+        assert page.inner_text("#map-draw") == "Прибрати зону" and page.evaluate("GeoMap.polygon().coordinates[0].length") == 5
+        lit = page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')")  # the zone's cells alone keep their colour
+        assert sorted(lit[1][2][1]) == sorted(cells) and lit[2:] == [0.8, 0.06] and not page.evaluate("G.map.getSource('draft').serialize().data.features.length")
+        page.click("#map-draw")  # the button clears the zone, then starts another; Esc drops a polygon being drawn
+        assert page.inner_text("#map-draw") == "Намалювати зону" and not page.evaluate("GeoMap.zone().length || GeoMap.polygon()")
+        assert page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')") == 0.55
+        page.click("#map-draw")
         page.mouse.click(box["x"] + x0, box["y"] + y0)
         page.keyboard.press("Escape")
-        assert page.is_hidden("#map-zone") and not page.evaluate("G.draw || GeoMap.polygon()")
+        assert not page.evaluate("G.draw || GeoMap.polygon()") and page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')") == 0.55
         page.click("#map-draw")
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y1 + 40)):  # a vertex too many, taken back; Enter closes
             page.mouse.click(box["x"] + x, box["y"] + y)
@@ -297,9 +304,12 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.keyboard.press("Enter")
         page.wait_for_selector(".sig-pop .pp-ask")
         page.evaluate("GeoMap.closePopup()")
-        page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # a cell's popup tells, it asks nothing
+        page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # a cell of the zone opens the zone's popup again
+        page.wait_for_selector(".sig-pop .pp-ask")
+        page.evaluate("GeoMap.closePopup()")
+        page.evaluate("(() => { const f = G.data.features.find((f) => !G.zone.has(f.properties.h3)); cellPopup(f, centre(f)); })()")
         page.wait_for_selector(".sig-pop .pp-head")
-        assert not page.query_selector(".sig-pop button:not(.maplibregl-popup-close-button)")
+        assert not page.query_selector(".sig-pop button:not(.maplibregl-popup-close-button)")  # a cell's popup tells, it asks nothing
         page.evaluate("GeoMap.closePopup()")
         assert page.evaluate("G.map.getFilter('regions-n')[2] === G.level && G.overlay.features.some((f) => f.properties.resolution === G.level)")
         assert page.evaluate("document.querySelectorAll('.maplibregl-marker').length") < 50  # region counts are a symbol layer, places capped
@@ -318,7 +328,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.evaluate("loadProjected(G.ds)")
         assert page.is_hidden("#map-projected-error")
         n = len(cells)
-        assert n >= 3 and page.inner_text("#map-zone-n").startswith(f"ЗОНА · {n} ком") and sorted(page.evaluate("GeoMap.zone()")) == sorted(cells)
+        assert n >= 3 and sorted(page.evaluate("GeoMap.zone()")) == sorted(cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
         page.evaluate("GeoMap.setPolygon(GeoMap.polygon())")  # the zone's popup again: its button asks
         page.click(".sig-pop .pp-ask")
@@ -331,10 +341,8 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == n and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
-        page.evaluate("G.zone.add('8a2a1072b59ffff'); paintZone()")  # a cell this map does not draw (a zone kept from another level)
-        assert page.inner_text("#map-zone-n").endswith(f" · на цій мапі: {n}")
-        page.click("#map-zone-clear")
-        assert page.is_hidden("#map-zone")
+        page.click("#map-draw")
+        assert not page.evaluate("GeoMap.zone().length") and page.inner_text("#map-draw") == "Намалювати зону"
         drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
             const row = [...document.querySelectorAll('#inspector .nb')].find((r) => r.dataset.id !== p.id && GeoMap.has(r.dataset.id));
             if (row) { row.closest('details').open = true; return row.dataset.id; } } return null; }"""  # its group opened, as a click on it does
