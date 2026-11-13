@@ -23,6 +23,7 @@ REPO = {
     "insight_graph_service",
     "evidence_narrator_service",
     "llm_model_broker",
+    "ads_bridge_service",
 }
 KERNEL = {"insight_contracts"}
 # package -> (repository packages it may import besides itself, third-party top-level modules it may import)
@@ -42,6 +43,7 @@ RULES = {
     ),
     "evidence_narrator_service": (KERNEL, {"fastapi", "pydantic", "uvicorn", "httpx"}),
     "llm_model_broker": (set(), {"fastapi", "pydantic", "uvicorn", "httpx"}),
+    "ads_bridge_service": (set(), {"fastapi", "pydantic", "uvicorn", "httpx", "jinja2"}),  # it reaches SIG and ADS over HTTP alone
 }
 
 

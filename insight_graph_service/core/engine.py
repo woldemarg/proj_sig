@@ -694,6 +694,10 @@ class Engine:
         return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings)
 
     @_healthy
+    def geo_aoi_rows(self, dataset_id: str, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+        return geo_views.geo_aoi_rows(self.ws, dataset_id, polygon)
+
+    @_healthy
     def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
         return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
