@@ -34,6 +34,7 @@ graph = [
 ]
 narrator = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
 broker = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
+ads = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27", "jinja2>=3.1"]  # jinja2: the final report's prompt template
 # the torch build of the graph image (build arg TORCH); the host takes PyPI's torch through sentence-transformers
 cpu = ["torch"]
 cu130 = ["torch"]
@@ -45,6 +46,7 @@ dev = [
     { include-group = "graph" },
     { include-group = "narrator" },
     { include-group = "broker" },
+    { include-group = "ads" },
     "pytest==9.1.1",
     "ruff==0.16.9",
     "playwright==1.63.0",  # optional: the browser smoke test (uses an installed Chromium)
