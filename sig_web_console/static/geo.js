@@ -10,6 +10,7 @@ const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is reposit
 const ZONE_DIM = 0.2;  // the cells outside a zone, and every cell while one is drawn
 const POPUP_ROOM = 380;  // the height in px a zone's popup takes with its list
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
+const TILT = 35;  // the camera's pitch in degrees: the map seen at a slant, as a phone's
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
 const GeoMap = {
@@ -64,7 +65,7 @@ const GeoMap = {
       try { await GeoMap.refresh(); } catch (e) { G.stale = true; console.error("map load failed", e); }
     }
     if (G.pending) { const qa = G.pending; G.pending = null; GeoMap.onAnswer(qa); }
-    else if (G.data && !G.evidence.length) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
+    else if (G.data && !G.evidence.length) fit(G.box, { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   },
 
@@ -146,7 +147,7 @@ const GeoMap = {
       if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of; its cells its place
         const rings = { type: "FeatureCollection", features: pts.rings.map((r) => ({ type: "Feature", geometry: { type: "Polygon", coordinates: [r] }, properties: {} })) };
         paintFocus(p, item, rings, pts.cells);
-        if (fit && rings.features.length) G.map.fitBounds(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
+        if (fit && rings.features.length) fit(ringsBox(rings.features), { padding: 90, maxZoom: 10, duration: calm() ? 0 : 900 });
       }
       G.map.getSource("pts").setData({ type: "FeatureCollection", features: pts.points.map((c) => ({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} })) });
       const lp = (pts.layer_points || [])[0];  // the run's layer beside its insight, in the layer's colour
@@ -193,7 +194,7 @@ async function refreshPass() {
   else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
   else if (!G.loading) {  // a commit changes the graph over the same cells, a filter the mode: a new mode is fitted as a load is
     await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode();
-    if (G.others.join() !== was) G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
+    if (G.others.join() !== was) fit(G.box, { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   }
   if (!S.chat.length) renderThread();  // the welcome card offers this dataset's questions
@@ -267,7 +268,7 @@ function boundsOf(rows) {  // the cells' boxes, each moved next to the first one
 }
 
 function fitRows(rows, padding) {
-  if (rows.length && G.bounds[rows[0]]) G.map.fitBounds(boundsOf(rows), { padding, maxZoom: 10, duration: calm() ? 0 : 900 });
+  if (rows.length && G.bounds[rows[0]]) fit(boundsOf(rows), { padding, maxZoom: 10, duration: calm() ? 0 : 900 });
 }
 
 function graticule() {
@@ -277,10 +278,15 @@ function graticule() {
   return { type: "FeatureCollection", features: f };
 }
 
+// ponytail: MapLibre 4.7.1 fits a box as if flat; under the tilt its near edge (~0.3 camera distances in front of the
+// centre) is drawn 1/(1 − 0.3·sin TILT) wider, so the fit zooms out by that much; fit per box if a corner still clips
+const TILT_FIT = -Math.log2(1 - 0.3 * Math.sin(TILT * Math.PI / 180));
+const fit = (box, o) => { const c = G.map.cameraForBounds(box, o); if (c) G.map.flyTo({ ...c, zoom: c.zoom - TILT_FIT, duration: o.duration }); };
+
 function ensureMap() {
   if (G.ready) return G.ready;
   G.map = new maplibregl.Map({  // no box zoom: it swallows a Shift-click on a cell
-    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
+    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, pitch: TILT, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
     fadeDuration: 0,  // with the zero transition below a pulse step is one frame, and the region counts appear without fading
     style: { version: 8, transition: { duration: 0, delay: 0 }, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
   });
@@ -433,7 +439,7 @@ async function loadDataset(ds) {
     await paintPeriod();
     if (seq !== G.loadSeq) return false;
     paintMode();
-    G.map.fitBounds(G.box, { padding: viewPadding(), duration: 0 });
+    fit(G.box, { padding: viewPadding(), duration: 0 });
     return true;
   } finally { if (seq === G.loadSeq) { G.loading = false; scheduleWindow(); } }
 }
@@ -766,10 +772,11 @@ const FOCUS_INSET = 0.2;  // the share of the map left out at each edge, where t
 function scheduleWindow() { clearTimeout(W.timer); W.timer = setTimeout(loadWindow, 250); }
 
 function focusBox() {
-  /* what the list reads, as [west, south, east, north]: the map less FOCUS_INSET at each edge, the panels over it not apart */
+  /* what the list reads, as [west, south, east, north]: the box on the ground of the map less FOCUS_INSET at each edge
+     (under the tilt a trapezoid, its far edge wider), the panels over it not apart */
   const w = $("map").clientWidth, h = $("map").clientHeight, dx = w * FOCUS_INSET, dy = h * FOCUS_INSET;
-  const nw = G.map.unproject([dx, dy]), se = G.map.unproject([w - dx, h - dy]);
-  return [nw.lng, se.lat, se.lng, nw.lat];
+  const c = [[dx, dy], [w - dx, dy], [w - dx, h - dy], [dx, h - dy]].map((p) => G.map.unproject(p)), xs = c.map((p) => p.lng), ys = c.map((p) => p.lat);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
 async function loadWindow() {
