@@ -286,6 +286,7 @@ svg.spark line.zero { stroke: var(--line-2); stroke-dasharray: 3 3; } svg.spark 
 .answer-box p { margin: 0 0 8px; } .answer-box p:last-child { margin-bottom: 0; }
 .answer-box h4 { margin: 12px 0 4px; font-size: 13px; } .answer-box h4:first-child { margin-top: 0; }
 .answer-box ul, .answer-box ol { margin: 4px 0 8px; padding-left: 20px; } .answer-box li { margin: 3px 0; }
+#ads-question { height: auto; min-height: 72px; padding: 8px 10px; line-height: 1.45; resize: vertical; }  /* .field is a one-line input's height */
 .ads-tables { margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); max-height: 160px; overflow-y: auto; } .ads-tables label { display: block; }
 .ads-more { margin-top: 8px; } .ads-more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; } .ads-more pre { max-height: 240px; overflow: auto; white-space: pre-wrap; font: 11.5px var(--mono); margin: 6px 0 0; }
 .ads-stages { display: grid; gap: 3px; margin-bottom: 10px; font-size: 12.5px; } .ads-stage { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; color: var(--muted); }

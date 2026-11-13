@@ -146,7 +146,7 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `unknown_pattern` (not a batch code) | `Engine.verify_pattern` was given an id no journal record carries (HTTP 404) | — |
 | `unknown_upload` (not a batch code) | `Engine.delete_upload` was given an upload id no batch carries (HTTP 404) | — |
 | `empty_zone` (not a batch code) | `POST /api/ads/jobs` without a drawn zone (HTTP 400) | — |
-| `ads_unavailable`, `ads_timeout`, `ads_failed`, `sig_failed` (an ADS job's `error.code`) | ADS or its LLM gateway did not connect; the ADS job ran past `ADS_JOB_TIMEOUT_S`; ADS refused a call or returned no report; the narrator or the graph service refused the zone's evidence or rows. The job ends `stage = error` with `failed_stage` ([8.8](08_interface.md#88-a-zones-question-to-ads)) | search / ads / joint |
+| `ads_unavailable`, `ads_timeout`, `ads_failed`, `sig_failed`, `internal_error` (an ADS job's `error.code`) | ADS did not connect; the ADS job ran past `ADS_JOB_TIMEOUT_S`; ADS refused a call, could not be read `STATUS_RETRIES` times in a row or returned no report; the narrator or the graph service refused the zone's evidence or rows; anything else (the trace is logged). A final report that fails is no error: the job ends `done` with `joint_error`. The job ends `stage = error` with `failed_stage` ([8.8](08_interface.md#88-a-zones-question-to-ads)) | search / ads / joint |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | question |
 
