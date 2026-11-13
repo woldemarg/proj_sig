@@ -367,10 +367,14 @@ def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
 
 def aoi_rows(path: Path, locator: str, where: str | None, resolution: int, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     """A stored file's rows as CSV with each row's place against a drawn zone (``spatial_plane.aoi_columns``: the cell
-    columns, ``in_aoi``, ``aoi_zone``), and the rows per place. Read as the upload's levels read it."""
+    columns, ``in_aoi``, ``aoi_zone``), and the rows per place. Read as the upload's levels read it (pandas' reading:
+    a code with leading zeros that parsed as a number comes back as that number); a file that already holds one of the
+    added columns is refused."""
     frame = read_rows(path, where)
     lat, lon, _ = locate_points(frame, locator)
     columns, counts = aoi_columns(lat, lon, resolution, polygon)
+    if taken := sorted(set(columns) & set(frame.columns)):
+        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the zone adds")
     return frame.assign(**columns).to_csv(index=False).encode("utf-8"), counts
 
 

@@ -83,6 +83,7 @@ class SearchIn(BaseModel):
 
 class AoiIn(BaseModel):
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
+    resolution: int | None = Field(default=None, ge=0, le=15)  # the cell columns' resolution; None: the dataset's own
 
 
 class HiddenIn(BaseModel):
@@ -365,7 +366,7 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.post("/api/geo/{dataset_id}/aoi")
     def geo_aoi_rows(dataset_id: str, body: AoiIn) -> Response:
-        data, counts = engine.geo_aoi_rows(dataset_id, body.polygon)
+        data, counts = engine.geo_aoi_rows(dataset_id, body.polygon, body.resolution)
         return Response(data, media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})  # ASCII: a header's bytes
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")

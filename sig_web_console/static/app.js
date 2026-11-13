@@ -238,7 +238,7 @@ const picture = (r) => `${plural(r.patterns, "інсайт", "інсайти", "
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText), { status: res.status, code: body.code });
   return body;
 }
 
