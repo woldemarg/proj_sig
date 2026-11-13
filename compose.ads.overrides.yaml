@@ -1,0 +1,23 @@
+# What compose.ads.yaml changes in the ADS stack it includes: only the services a zone's question needs start
+# (orchestrator, executor, llm, minio, postgres, mlflow, mlflow-init); the rest wait behind the profile ads-full.
+
+services:
+  phoenix: { profiles: [ads-full] }
+  ads-a2a: { profiles: [ads-full] }
+  delta-ai-copilot: { profiles: [ads-full] }
+  local-auth: { profiles: [ads-full] }
+  extension-spectr: { profiles: [ads-full] }
+  prometheus: { profiles: [ads-full] }
+  grafana: { profiles: [ads-full] }
+  orchestrator:
+    environment: { TRACING_BACKEND: mlflow }  # phoenix is not started
+    depends_on: !override
+      minio: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      executor: { condition: service_started }
+      llm: { condition: service_started }
+      mlflow-init: { condition: service_completed_successfully }
+
+volumes:
+  mlflow_data:
+    name: agentic-data-science_mlflow_data  # the traces of the standalone ADS stack, kept in one place

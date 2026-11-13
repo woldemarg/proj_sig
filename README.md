@@ -62,6 +62,7 @@ Python **3.12+** (the EDA script uses PEP 701 f-strings).
 copy .env.sample .env                     # then edit: GEMMA_* (the broker's upstream, model and key), tunables
 docker compose up -d --build --wait       # then http://127.0.0.1:8765
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
+docker compose -f compose.ads.yaml up -d --build --wait   # the same with ADS (ADS_DIR in .env): a drawn zone's question can go to it
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
 The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 3 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
@@ -274,7 +275,7 @@ sig/
                               Dockerfile (targets runtime, test)
   evidence_narrator_service/  the chat service (Dockerfile)
   llm_model_broker/           the LLM model broker (Dockerfile)
-  ads_bridge_service/         the ADS bridge
+  ads_bridge_service/         the ADS bridge (Dockerfile)
   sig_web_console/            the static UI, nginx.conf, Dockerfile, PROVENANCE.md (vendored browser libraries)
   compose.yaml, .dockerignore   the service suite in start order
   pyproject.toml, uv.lock     the dependency groups (one per library and service, dev, the torch build) and their exact versions

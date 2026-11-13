@@ -142,9 +142,12 @@ The narrator knows only `LLM_BASE_URL`, the broker, and sends no model name or k
 ```text
 docker compose up -d --build --wait               # then http://127.0.0.1:8765
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
+docker compose -f compose.ads.yaml up -d --build --wait   # the same with ADS and the bridge (below)
 python scripts/compose_check.py                   # verification: its own project, ports and volumes, beside your stack
 python scripts/compose_check.py --fresh --tests   # clean room: no build cache, pulled base images, the test suite inside the image
 ```
+
+**With ADS** (`compose.ads.yaml`, [8.8](08_interface.md#88-a-zones-question-to-ads)). The file includes `compose.yaml` and the ADS stack of a local checkout (`${ADS_DIR}/docker-compose.full.yml`, with `compose.ads.overrides.yaml` over it), and adds `ads-bridge` (`ads_bridge_service/Dockerfile`, health `GET /api/ads/health`, `internal` only, no state), which waits for the graph service and the narrator healthy and the orchestrator started. Of ADS it starts `orchestrator`, `executor`, `llm` (its LLM gateway), `minio` and `postgres` (its storages) and `mlflow` with `mlflow-init` (its traces, http://localhost:5050); the overrides keep its other services behind the profile `ads-full`, trace to MLflow alone and name the MLflow volume `agentic-data-science_mlflow_data`. `ADS_DIR` is set in `.env`; ADS reads its own `.env` and `copilot.env` there. The project stays `sig`, so the volumes are those of the plain stack; both stacks declare `internal`, which becomes one network, where the bridge reaches `orchestrator:8000` and `llm:8080`. ADS publishes its own host ports (8000, 8080, 9000, 9001, 5432, 5050) under fixed container names, so a standalone ADS stack is stopped first. `compose.gpu.yaml` is added as with the plain stack. Without this file the console's `/api/ads/` answers 502 and the header says *ADS вимкнено*.
 
 **Networks.** `internal` has no egress. `edge` publishes ports and has egress: `model-init`, `neo4j`, the broker and the console sit on it; the graph service and the narrator are on `internal` only, with no egress.
 
