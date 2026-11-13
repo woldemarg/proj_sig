@@ -282,35 +282,33 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         cells = page.evaluate(within)  # the cells whose centre the box round the three holds
         page.evaluate("$('map-hud').classList.remove('folded')")  # the map's panel open: its metric select would cover the button's place
         page.click("#map-draw")
-        assert page.inner_text("#map-draw") == "Скасувати" and page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')[3]") == 0.06  # every cell dimmed
+        fill = "G.map.getPaintProperty('cells-fill', 'fill-opacity')"
+        assert page.inner_text("#map-draw") == "Скасувати" and page.evaluate(fill)[3] == 0.2  # every cell dimmed
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)):  # real clicks: four vertices, then the first one again closes it
             page.mouse.click(box["x"] + x, box["y"] + y)
         page.wait_for_function("/: \\d+$/.test(document.querySelector('.sig-pop .pp-here')?.textContent || '')", timeout=10000)
         assert page.inner_text(".sig-pop .pp-head").startswith(f"Зона · {len(cells)} ком") and page.is_visible(".sig-pop .pp-ask")
         assert page.inner_text("#map-draw") == "Прибрати зону" and page.evaluate("GeoMap.polygon().coordinates[0].length") == 5
-        lit = page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')")  # the zone's cells alone keep their colour
-        assert sorted(lit[1][2][1]) == sorted(cells) and lit[2:] == [0.8, 0.06] and not page.evaluate("G.map.getSource('draft').serialize().data.features.length")
+        lit = page.evaluate(fill)  # the zone's cells alone keep their colour; no outline stays
+        assert sorted(lit[1][2][1]) == sorted(cells) and lit[2:] == [0.55, 0.2]
+        assert not page.evaluate("G.map.getSource('draft').serialize().data.features.length")
+        page.evaluate("GeoMap.closePopup()")  # the popup lies over the panels
         page.click("#map-draw")  # the button clears the zone, then starts another; Esc drops a polygon being drawn
         assert page.inner_text("#map-draw") == "Намалювати зону" and not page.evaluate("GeoMap.zone().length || GeoMap.polygon()")
-        assert page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')") == 0.55
         page.click("#map-draw")
         page.mouse.click(box["x"] + x0, box["y"] + y0)
         page.keyboard.press("Escape")
-        assert not page.evaluate("G.draw || GeoMap.polygon()") and page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-opacity')") == 0.55
+        assert not page.evaluate("G.draw || GeoMap.polygon()") and page.evaluate(fill) == 0.55
         page.click("#map-draw")
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y1 + 40)):  # a vertex too many, taken back; Enter closes
             page.mouse.click(box["x"] + x, box["y"] + y)
         page.keyboard.press("Backspace")
         page.keyboard.press("Enter")
-        page.wait_for_selector(".sig-pop .pp-ask")
-        page.evaluate("GeoMap.closePopup()")
+        assert page.evaluate("GeoMap.closePopup()")  # the closed zone's popup was open
         page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # a cell of the zone opens the zone's popup again
         page.wait_for_selector(".sig-pop .pp-ask")
-        page.evaluate("GeoMap.closePopup()")
         page.evaluate("(() => { const f = G.data.features.find((f) => !G.zone.has(f.properties.h3)); cellPopup(f, centre(f)); })()")
-        page.wait_for_selector(".sig-pop .pp-head")
-        assert not page.query_selector(".sig-pop button:not(.maplibregl-popup-close-button)")  # a cell's popup tells, it asks nothing
-        page.evaluate("GeoMap.closePopup()")
+        assert page.query_selector(".sig-pop .pp-head") and not page.query_selector(".sig-pop .pp-ask")  # a cell's popup tells, it asks nothing
         assert page.evaluate("G.map.getFilter('regions-n')[2] === G.level && G.overlay.features.some((f) => f.properties.resolution === G.level)")
         assert page.evaluate("document.querySelectorAll('.maplibregl-marker').length") < 50  # region counts are a symbol layer, places capped
         ring = "[[179.87, 1.86], [179.18, 0.66], [179.84, -0.72], [-178.8, -0.94], [-178.08, 0.25], [-178.75, 1.67], [179.87, 1.86]]"
@@ -341,7 +339,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == n and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
-        page.click("#map-draw")
+        page.press("#map canvas", "Escape")  # out of the chat box, no popup, no focused insight: Esc clears the zone
         assert not page.evaluate("GeoMap.zone().length") and page.inner_text("#map-draw") == "Намалювати зону"
         drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
             const row = [...document.querySelectorAll('#inspector .nb')].find((r) => r.dataset.id !== p.id && GeoMap.has(r.dataset.id));

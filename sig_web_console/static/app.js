@@ -449,11 +449,12 @@ function init() {
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
   });
-  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, the map's focus, the drawer; a text field keeps its own
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the map's focus, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
+    if (S.view === "map" && GeoMap.zone().length) { GeoMap.clearZone(); return; }
     closeDrawer();
   });
   initResize();
