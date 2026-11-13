@@ -94,10 +94,10 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.wait_for_function("G.data && G.map.loaded() && document.querySelector('#mw-body .mw-i')", timeout=60000)
         page.evaluate("() => document.querySelector('#mw-body .mw-i').click()")
         page.wait_for_selector("#map-card:not([hidden])")
-        page.evaluate("() => G.data.features.slice(0, 3).forEach((f) => GeoMap.toggleZone(f.properties.h3))")  # the zone bar too
+        page.evaluate("() => { GeoMap.setPolygon(G.data.features[0].geometry); GeoMap.closePopup(); }")  # the zone bar too
         page.wait_for_selector("#map-zone:not([hidden])")
         boxes = """() => { const r = (q) => { const e = document.querySelector(q); return e && !e.hidden && e.getClientRects().length ? e.getBoundingClientRect() : null; };
-            const panels = ['.map-hud', '#map-window', '#map-card', '#map-zone'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+            const panels = ['.map-hud', '#map-window', '#map-card', '#map-zone', '#map-draw'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             return { overlaps: panels.flatMap((a, i) => panels.slice(i + 1).filter((b) => cut(a, b))).length, map: r('#map').height, canvas: r('.canvas').bottom, chat: r('.chat').top }; }"""
         for width, height in ((1500, 844), (1200, 844), (1200, 600), (1001, 600), (1000, 844), (750, 844), (390, 844)):  # a short window too
             page.set_viewport_size({"width": width, "height": height})
