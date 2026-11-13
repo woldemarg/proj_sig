@@ -277,8 +277,8 @@ function graticule() {
 
 function ensureMap() {
   if (G.ready) return G.ready;
-  G.map = new maplibregl.Map({
-    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
+  G.map = new maplibregl.Map({  // no box zoom: it swallows a Shift-click on a cell
+    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
     fadeDuration: 0,  // with the zero transition below a pulse step is one frame, and the region counts appear without fading
     style: { version: 8, transition: { duration: 0, delay: 0 }, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
   });
@@ -292,7 +292,7 @@ function ensureMap() {
     m.addSource("grid", { type: "geojson", data: graticule() });
     m.addSource("cells", cellSource());
     m.addSource("focus", cellSource());  // the focused insight's cells
-    m.addSource("zone", cellSource());  // «Усі датасети»: the zone's hexes
+    m.addSource("zone", cellSource());  // the zone's outline where no cell shows it: «Усі датасети» hexes, the polygon on another level
     m.addSource("draft", { type: "geojson", data: empty() });  // the polygon being drawn
     m.addSource("pts", { type: "geojson", data: empty() });
     m.addSource("layer-pts", { type: "geojson", data: empty() });  // a focused run insight's layer: its points around it
@@ -559,7 +559,7 @@ function paintCells() {
   /* the cells' fill and the LISA outlines: dimmed while a zone is drawn, all but the zone's cells once it is closed;
      else dimmed under a focused insight */
   if (!G.map || !G.map.getLayer("cells-fill")) return;
-  const zoned = G.draw || G.zone.size, inZone = ["in", ["get", "h3"], ["literal", [...G.zone]]];
+  const zoned = G.draw || zoneShown(), inZone = ["has", ["get", "h3"], ["literal", Object.fromEntries([...G.zone].map((c) => [c, 1]))]];  // a lookup, not a scan per cell
   G.map.setPaintProperty("cells-fill", "fill-opacity", zoned ? ["case", inZone, 0.55, ZONE_DIM] : G.focus.length ? 0.14 : 0.55);
   for (const id of ["lisa-hot", "lisa-cold"]) G.map.setPaintProperty(id, "line-opacity", zoned ? ["case", inZone, 0.6, ZONE_DIM] : 0.6);
 }
@@ -590,12 +590,16 @@ function zonePopup(ring, inside) {
 }
 
 function paintZone() {
-  /* the zone on the map: its cells alone keep their colour (H3 ids are global, so the zone survives a switch of
-     dataset); «Усі датасети» fills no cell, so there its hexes are outlined */
+  /* the zone on the map: its cells alone keep their colour; «Усі датасети» fills no cell, so there its hexes are
+     outlined. H3 ids are global, so the zone survives a switch of dataset: a map that draws none of its cells (another
+     level) outlines its polygon instead and dims nothing */
   paintDraft(); paintCells();
   const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => G.zone.has(f.properties.id.split(":")[2])) : [];
-  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: hexes });
+  const lost = G.poly && !zoneShown() && !hexes.length ? [{ type: "Feature", geometry: G.poly, properties: {} }] : [];
+  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: [...hexes, ...lost] });
 }
+
+const zoneShown = () => !G.others.length && Boolean(G.data) && G.data.features.some((f) => G.zone.has(f.properties.h3));  // a cell of the zone is drawn
 
 function listMetrics() {
   /* the cells' numeric columns as the colour choices, the one in use kept when the cells still have it */
@@ -656,7 +660,7 @@ function wireHud() {
     if (G.zone.size) GeoMap.clearZone(); else setDrawing(true);
   });
   document.addEventListener("keydown", (e) => {  // drawing: Enter closes the polygon, Backspace takes the last vertex back (Esc: app.js)
-    if (!G.draw || e.target.matches("textarea, input, select")) return;
+    if (!G.draw || !(e.target === document.body || e.target.closest("#map-view")) || e.target.matches("textarea, input, select")) return;
     if (e.key === "Enter") { e.preventDefault(); finishPolygon(); }
     else if (e.key === "Backspace") { e.preventDefault(); G.draw.pop(); paintDraft(); }
   });
