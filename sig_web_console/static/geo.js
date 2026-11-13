@@ -590,9 +590,8 @@ function zonePopup(ring, inside) {
 }
 
 function paintZone() {
-  /* the zone on the map: its cells alone keep their colour; «Усі датасети» fills no cell, so there its hexes are
-     outlined. H3 ids are global, so the zone survives a switch of dataset: a map that draws none of its cells (another
-     level) outlines its polygon instead and dims nothing */
+  /* the zone's cells alone keep their colour; where none is filled its outline shows it instead: the hexes in
+     «Усі датасети», the polygon on a map of another level (H3 ids are global: the zone survives a switch of dataset) */
   paintDraft(); paintCells();
   const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => G.zone.has(f.properties.id.split(":")[2])) : [];
   const lost = G.poly && !zoneShown() && !hexes.length ? [{ type: "Feature", geometry: G.poly, properties: {} }] : [];
@@ -660,7 +659,8 @@ function wireHud() {
     if (G.zone.size) GeoMap.clearZone(); else setDrawing(true);
   });
   document.addEventListener("keydown", (e) => {  // drawing: Enter closes the polygon, Backspace takes the last vertex back (Esc: app.js)
-    if (!G.draw || !(e.target === document.body || e.target.closest("#map-view")) || e.target.matches("textarea, input, select")) return;
+    const own = e.target === document.body || e.target.id === "map-draw" || e.target.matches("#map-view canvas");  // another control keeps its keys
+    if (!G.draw || !own) return;
     if (e.key === "Enter") { e.preventDefault(); finishPolygon(); }
     else if (e.key === "Backspace") { e.preventDefault(); G.draw.pop(); paintDraft(); }
   });

@@ -106,6 +106,9 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         text, cells, polygon = page.evaluate(empty)
         assert text.startswith("У полігоні немає комірок мапи") and cells == 0 and polygon is None
         page.evaluate("setDrawing(true)")
+        page.focus("#hud-fold")
+        page.keyboard.press("Enter")  # a control of the map keeps its key while a polygon is drawn
+        assert page.evaluate("[Array.isArray(G.draw), $('hud-fold').getAttribute('aria-expanded')]") == [True, "true"]
         page.click("#view-switch button[data-view='table']")
         assert page.evaluate("G.draw") is None  # Enter and Backspace are the other view's again
         page.click("#view-switch button[data-view='map']")
