@@ -94,7 +94,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             resp = _checked(http.post(url, json={"polygon": body.polygon, "resolution": resolution}), "sig_failed", f"SIG rows of {t['filename']}")
             tables.append(t | json.loads(resp.headers["x-aoi"]))
             files[t["file"]] = resp.content
-            resolution = resolution or tables[0]["resolution"]
+            resolution = tables[0]["resolution"]
         return tables, files
 
     def run_ads(query: str, files: dict[str, bytes]) -> str:
