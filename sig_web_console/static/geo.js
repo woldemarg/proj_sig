@@ -8,6 +8,7 @@ const CELL_LINE = 0.32;  // the cells' outline opacity
 const PERIOD_METRIC = "points_in_period";  // a cell's points in the period bar's days (GET /counts), while it holds some
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 const ZONE_DIM = 0.2;  // the cells outside a zone, and every cell while one is drawn
+const POPUP_ROOM = 380;  // the height in px a zone's popup takes with its list
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
@@ -582,9 +583,13 @@ function zonePopup(ring, inside) {
   /* the closed zone: its cells and events, the characteristic insights with an event in it, and its question */
   const x0 = ring[0][0], box = ring.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]);
   const cells = !G.others.length, events = inside.reduce((a, f) => a + (f.properties.points ?? 0), 0);
+  // under the zone, not over it: above it when only there the popup has room, the map moved up when neither side has
+  const x = unwrap((box[0] + box[2]) / 2, 0), room = (y) => G.map.project([x, y]).y, under = $("map").clientHeight - room(box[1]);
+  const below = under >= POPUP_ROOM || room(box[3]) < POPUP_ROOM;
+  if (below && under < POPUP_ROOM) G.map.panBy([0, POPUP_ROOM - under], { duration: 0 });
   const popup = openPopup(`<div class="pp-head"><span>${esc(cap(word("zone")))} · ${esc(plural(inside.length, "комірка", "комірки", "комірок"))}${cells ? ` · ${esc(plural(events, "подія", "події", "подій"))}` : ""}</span></div>` +
     `<div class="pp-scroll">${cells ? `<div class="pp-sub pp-here">Характерні інсайти в зоні</div><div class="pp-list"></div>` : ""}</div>`,
-    [unwrap((box[0] + box[2]) / 2, 0), (box[1] + box[3]) / 2], () => ask($("question").value, { cells: GeoMap.zone() }));
+    [x, below ? box[1] : box[3]], () => ask($("question").value, { cells: GeoMap.zone() }), below ? "top" : "bottom");
   const rows = new Set(inside.map((f) => f.properties.row));
   if (cells) popupInsights(popup, box, (i) => G.patterns[i.id].rows.some((r) => rows.has(r)), (n) => `: ${n}`);
 }
@@ -724,11 +729,11 @@ function regionPopup(id, lngLat) {
     `${esc(plural(f.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div>${by ? `<div class="pp-sub">По датасетах</div><table>${by}</table>` : ""}</div>`, lngLat);
 }
 
-function openPopup(html, lngLat, askZone = null) {
+function openPopup(html, lngLat, askZone = null, anchor) {
   /* one popup at a time; the zone's carries its question button, asked with the text typed, if any */
   GeoMap.closePopup();
   const button = askZone ? `<button type="button" class="pp-ask">Запитати про цю зону</button>` : "";
-  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop" }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${button}</div>`).addTo(G.map);
+  const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${button}</div>`).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });
   if (askZone) popup.getElement().querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); askZone(); });
   return popup;
