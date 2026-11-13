@@ -825,9 +825,12 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
         assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Point", "coordinates": [0, 0]}}).json()["code"] == "invalid_options"
         assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Polygon", "coordinates": [[]]}}).json()["code"] == "invalid_options"
         assert counts["dataset_resolution"] == res and counts["where"] is None and "time" in counts
-        coarse = client.post(f"/api/geo/{ds}/aoi", json={"polygon": h3.h3shape_to_geo(h3.cells_to_h3shape(zone)), "resolution": res - 1})
-        at = json.loads(coarse.headers["x-aoi"])  # another table's resolution: the cell columns to join on, the same in_aoi
-        assert at["columns"][0] == f"h3_r{res - 1}" and at["dataset_resolution"] == res and at["inside"] == counts["inside"]
+        shape, other = h3.h3shape_to_geo(h3.cells_to_h3shape(zone)), ({7, 8} - {res}).pop()  # the upload's other level
+        at = json.loads(client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": other}).headers["x-aoi"])
+        assert (
+            at["columns"][0] == f"h3_r{other}" and at["dataset_resolution"] == res and at["inside"] == counts["inside"]
+        )  # another table's cells, the same in_aoi
+        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.post("/api/geo/ds-unknown/aoi", json={"polygon": {}}).json()["code"] == "unknown_dataset"
 
 
