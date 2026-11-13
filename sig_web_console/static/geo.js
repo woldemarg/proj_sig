@@ -7,7 +7,7 @@ const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold
 const CELL_LINE = 0.32;  // the cells' outline opacity
 const PERIOD_METRIC = "points_in_period";  // a cell's points in the period bar's days (GET /counts), while it holds some
 const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
-const ZONE_DIM = 0.06;  // the cells outside a zone, and every cell while one is drawn
+const ZONE_DIM = 0.2;  // the cells outside a zone, and every cell while one is drawn
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
@@ -556,11 +556,11 @@ function paintDraft(cursor = null) {
 }
 
 function paintCells() {
-  /* the cells' fill and the LISA outlines: nearly clear while a zone is drawn, all but the zone's cells once it is
-     closed; else dimmed under a focused insight */
+  /* the cells' fill and the LISA outlines: dimmed while a zone is drawn, all but the zone's cells once it is closed;
+     else dimmed under a focused insight */
   if (!G.map || !G.map.getLayer("cells-fill")) return;
   const zoned = G.draw || G.zone.size, inZone = ["in", ["get", "h3"], ["literal", [...G.zone]]];
-  G.map.setPaintProperty("cells-fill", "fill-opacity", zoned ? ["case", inZone, 0.8, ZONE_DIM] : G.focus.length ? 0.14 : 0.55);
+  G.map.setPaintProperty("cells-fill", "fill-opacity", zoned ? ["case", inZone, 0.55, ZONE_DIM] : G.focus.length ? 0.14 : 0.55);
   for (const id of ["lisa-hot", "lisa-cold"]) G.map.setPaintProperty(id, "line-opacity", zoned ? ["case", inZone, 0.6, ZONE_DIM] : 0.6);
 }
 
