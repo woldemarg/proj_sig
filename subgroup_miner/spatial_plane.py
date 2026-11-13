@@ -31,6 +31,7 @@ from subgroup_miner.spatial import (
     GEO_REGION_MIN_SHARE,
     SpatialError,
     compactness,
+    distinct_points,
 )
 
 
@@ -375,31 +376,33 @@ def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np
     if polygon.get("type") != "Polygon":
         raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {polygon.get('type')!r}")
     inside = np.zeros(len(lon), dtype=bool)
-    for ring in polygon["coordinates"]:
-        pts = np.asarray(ring, dtype=float)[:, :2]
-        x0 = pts[0, 0]
-        xs, ys, px = x0 + (pts[:, 0] - x0 + 540) % 360 - 180, pts[:, 1], x0 + (lon - x0 + 540) % 360 - 180
-        for i in range(len(pts)):
-            xi, yi, xj, yj = xs[i], ys[i], xs[i - 1], ys[i - 1]
-            if yi != yj:
-                inside ^= ((yi > lat) != (yj > lat)) & (px < (xj - xi) * (lat - yi) / (yj - yi) + xi)
+    try:
+        for ring in polygon["coordinates"]:
+            pts = np.asarray(ring, dtype=float)[:, :2]
+            x0 = pts[0, 0]
+            xs, ys, px = x0 + (pts[:, 0] - x0 + 540) % 360 - 180, pts[:, 1], x0 + (lon - x0 + 540) % 360 - 180
+            for i in range(len(pts)):
+                xi, yi, xj, yj = xs[i], ys[i], xs[i - 1], ys[i - 1]
+                if yi != yj:
+                    inside ^= ((yi > lat) != (yj > lat)) & (px < (xj - xi) * (lat - yi) / (yj - yi) + xi)
+    except (IndexError, KeyError, TypeError, ValueError) as exc:  # an empty or ragged ring
+        raise SpatialError(f"unreadable polygon: {type(exc).__name__}: {exc}") from exc
     return inside
 
 
 def aoi_columns(lat: np.ndarray, lon: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-    """Each point's place against a drawn zone -> (columns, counts). ``h3_r<res>``: its cell at the dataset's
-    resolution and at up to ``AOI_PARENTS`` coarser ones ("" without a valid point); ``in_aoi``: 1 inside the polygon,
-    exactly; ``aoi_zone``: ``inside``, ``adjacent`` (outside it, in a zone cell or one of its ``AOI_RING`` neighbours),
+    """Each point's place against a drawn zone -> (columns, counts). ``h3_r<res>``: its cell at ``resolution`` and at
+    up to ``AOI_PARENTS`` coarser ones ("" without a valid point); ``in_aoi``: 1 inside the polygon, its edges straight
+    in degrees; ``aoi_zone``: ``inside``, ``adjacent`` (outside it, in a zone cell or one of its ``AOI_RING`` neighbours),
     ``far``. The zone's cells are ``geometry_to_cells``'s, as a question reads the polygon."""
     zone = geometry_to_cells(polygon, resolution)
     ok = np.isfinite(lat) & np.isfinite(lon)
-    points = list(zip(lat[ok].tolist(), lon[ok].tolist(), strict=True))
-    cell_of = {p: h3.latlng_to_cell(*p, resolution) for p in set(points)}
+    pairs, back = distinct_points(lat[ok], lon[ok])
     cell = np.full(len(lat), "", dtype=object)
-    cell[ok] = [cell_of[p] for p in points]
+    cell[ok] = np.array([h3.latlng_to_cell(float(a), float(b), resolution) for a, b in pairs], dtype=object)[back]
     columns = {f"h3_r{resolution}": cell}
     for r in range(resolution - 1, max(resolution - AOI_PARENTS, 0) - 1, -1):
-        parent = {c: h3.cell_to_parent(c, r) for c in set(cell_of.values())} | {"": ""}
+        parent = {c: h3.cell_to_parent(c, r) for c in set(cell[ok])} | {"": ""}
         columns[f"h3_r{r}"] = np.array([parent[c] for c in cell], dtype=object)
     inside = ok & _in_polygon(lon, lat, polygon)
     near = set().union(*(h3.grid_disk(c, AOI_RING) for c in zone))

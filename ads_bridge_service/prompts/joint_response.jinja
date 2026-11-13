@@ -1,4 +1,4 @@
-{#- AOI demo: the final report's prompt over the ADS report; <User_Domain_Knowledge> holds the zone's methodology and
+{#- The final report's prompt over the ADS report; <User_Domain_Knowledge> holds the zone's methodology and
     the SIG glossary; <grounding_rules> rule 8 keeps the report's section of established insights. -#}
 {%- set is_uk = (query_language | default("en") | lower) == "uk" -%}
 {%- set lang = "Ukrainian" if is_uk else "English" -%}
@@ -250,17 +250,6 @@ If the report is empty or missing, ignore all other rules and reply exactly:
 <Analytical_Report>
 {{ report }}
 </Analytical_Report>
-
-{% if data_load_periods %}
-<data_load_periods>
-These are the actual calendar windows of data loaded from database for this turn.
-They are not findings from the analytical report. Keep them separate from <Analytical_Report>.
-Do not treat them as the analysed period if the report names a different one.
-{% for row in data_load_periods %}
-- {{ row.label }}: {{ row.start }} .. {{ row.end }}
-{% endfor %}
-</data_load_periods>
-{% endif %}
 
 {% if is_uk -%}
 Language: Ukrainian. Answer in Ukrainian even if the report above is in English. Dates and months

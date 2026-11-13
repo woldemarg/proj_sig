@@ -82,15 +82,25 @@ def name_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def select_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
     """The answer's evidence items for the task: the ones the zone weighed as inside (place > 0) first, the most
-    credible first, then the ones outside it the answer also tells; at most MAX_INSIGHTS, in the graph's own words."""
+    credible first, then the ones outside it the answer also tells; at most MAX_INSIGHTS, in the graph's own words. An
+    item folded into another (the same finding at another level of its upload) is told by its host alone, as the
+    graph's own prompt tells it."""
     evidence = (qa.get("view") or {}).get("evidence") or {}
     area = evidence.get("area") or {}
     source = {p["key"]: p for p in evidence.get("provenance") or []}
-    items = sorted(evidence.get("items", []), key=lambda it: (-((area.get(it["key"]) or 0) > 0), CRED_RANK.get(it.get("credibility"), 9)))
+    shown = [it for it in evidence.get("items", []) if not it.get("folded_into")]
+    items = sorted(shown, key=lambda it: (-((area.get(it["key"]) or 0) > 0), CRED_RANK.get(it.get("credibility"), 9)))
+
+    def level(it: dict[str, Any]) -> str:
+        resolution = ((it.get("provenance") or {}).get("spatial") or {}).get("resolution")
+        return "the table level" if resolution is None else f"H3 resolution {resolution}"
+
     return [
         {
             "key": it["key"],
             "pattern_id": it["pattern_id"],
+            "dataset_id": (it.get("provenance") or {}).get("dataset_id") or (source.get(it["key"]) or {}).get("dataset_id", ""),
+            "level": level(it),
             "filename": (source.get(it["key"]) or {}).get("filename", ""),
             "inside": (area.get(it["key"]) or 0) > 0,
             "layer": next((c for c in it.get("scope") or [] if c.startswith("context_")), ""),  # a cross-layer condition
@@ -112,8 +122,9 @@ def finding_files(findings: list[dict[str, Any]]) -> dict[str, list[str]]:
     return out
 
 
-def insight_blocks(findings: list[dict[str, Any]], base_file: str) -> list[str]:
-    """One block per insight: the id and its place, the cell condition, each shift, its validation and its trust."""
+def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list[str]:
+    """One block per insight: the id and its place, the cell condition, each shift, its validation and its trust; an
+    insight of another dataset than the base table's says which: another level of its file, or another file."""
     out = []
     for n, it in enumerate(findings, 1):
         lines = [f"O{n} · in zone: {'yes' if it['inside'] else 'no'}", f"  cells where: {it['scope'] or '—'}"]
@@ -121,15 +132,18 @@ def insight_blocks(findings: list[dict[str, Any]], base_file: str) -> list[str]:
         lines += [f"  {k}: {it[k]}" for k in ("validation", "trust") if it.get(k)]
         if it.get("layer"):
             lines.append(f"  layers: links the base layer's events to the context layer's points in the cell ({it['layer']})")
-        if it["filename"] != base_file:
+        if it["filename"] != base["filename"]:
             lines.append(f"  file: {it['filename'] or '?'} (another dataset of the graph: context only, not a fact about the base layer)")
+        elif it["dataset_id"] != base["dataset_id"]:
+            lines.append(f"  level: {it['level']} of the base table's file (its cells are of that level, not of the base table's h3_r columns)")
         out.append("\n".join(lines))
     return out
 
 
 def _table_line(t: dict[str, Any]) -> str:
     counted = f", {t['total']} rows, {t['inside']} inside the AOI" if "total" in t else ""
-    return f"df_{t['file'].removesuffix('.csv')} ({t['file']}: {t['filename']}{counted})"
+    part = f", only its rows where {t['where']}" if t.get("where") else ""  # a filtered reading of the file
+    return f"df_{t['file'].removesuffix('.csv')} ({t['file']}: {t['filename']}{part}{counted})"
 
 
 def build_query_parts(question: str, tables: list[dict[str, Any]], findings: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -159,7 +173,7 @@ def build_query_parts(question: str, tables: list[dict[str, Any]], findings: lis
     cells = "; ".join(f"{t['file']}: {', '.join(c for c in t['columns'] if c.startswith('h3_r'))}" for t in tables if t.get("columns"))
     data += (
         f"\nGeo columns: h3_r<resolution> are H3 cell ids (strings){f' ({cells})' if cells else ''}; a coarser id is the parent of the finer "
-        "one; group by them, never edit them. in_aoi is 1 for points inside the polygon (exact). aoi_zone is inside (= in_aoi 1) | adjacent "
+        "one; group by them, never edit them. in_aoi is 1 for points inside the polygon. aoi_zone is inside (= in_aoi 1) | adjacent "
         "(outside the polygon but in the zone's cells or their ring-1 neighbours) | far. A point in the same cell as the zone is not inside "
         "the zone. The AOI is the inside rows only; adjacent and far rows are comparison groups, never part of the AOI's own figures."
     )
@@ -170,7 +184,7 @@ def build_query_parts(question: str, tables: list[dict[str, Any]], findings: lis
     if findings is None:
         blocks = "(after the ask)"
     else:
-        blocks = "\n\n".join(insight_blocks(findings, base["filename"])) or "SIG has no insights for this zone."
+        blocks = "\n\n".join(insight_blocks(findings, base)) or "SIG has no insights for this zone."
     return [
         {"kind": "primer", "text": INSIGHT_PRIMER},
         {"kind": "frame", "text": "Analyse the area of interest (AOI): "},
@@ -183,7 +197,8 @@ def build_query_parts(question: str, tables: list[dict[str, Any]], findings: lis
 
 def _zone_span(polygon: dict[str, Any]) -> tuple[int, str, str]:
     ring = polygon["coordinates"][0]
-    lons, lats = [c[0] for c in ring], [c[1] for c in ring]
+    west = (ring[0][0] + 180) % 360 - 180  # a map past ±180° gives longitudes out of range: read around the first, in range
+    lons, lats = [west + (c[0] - ring[0][0] + 540) % 360 - 180 for c in ring], [c[1] for c in ring]
     return len(ring) - 1, f"{min(lons):.4f}…{max(lons):.4f}", f"{min(lats):.4f}…{max(lats):.4f}"
 
 
@@ -199,10 +214,10 @@ def build_aoi_md(polygon: dict[str, Any], tables: list[dict[str, Any]], files: d
             f"- Zone: the user's polygon on the map, {vertices} vertices, lon {lons}, lat {lats}.",
             *(
                 f"- {t['file']} ({t['filename']}): {'the main table, one row = one event' if n == 0 else 'a context layer, one row = one point'}; "
-                f"{t['inside']} of {t['total']} rows inside; columns {', '.join(t['columns'])}; the finest h3_r column (resolution {t['resolution']}) is the level SIG analysed."
+                f"{t['inside']} of {t['total']} rows inside; columns {', '.join(t['columns'])}; SIG analysed this table at H3 resolution {t['dataset_resolution']}."
                 for n, t in enumerate(tables)
             ),
-            "- in_aoi: 1 = the point lies inside the polygon (exact point-in-polygon), 0 = outside.",
+            "- in_aoi: 1 = the point lies inside the polygon (point-in-polygon, its edges straight in degrees), 0 = outside.",
             "- aoi_zone: inside (in_aoi 1) | adjacent (outside the polygon, in a zone cell or one of its six neighbours) | far.",
             "- SIG's cells: one row of SIG's table = one cell with its events; shares and medians per cell exist for cells with enough events.",
             f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",

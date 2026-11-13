@@ -173,18 +173,23 @@ def _zone_scores(
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
 
 
-def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
-    """A geo dataset's rows as CSV with their place against a drawn zone, and the rows per place with the file's name
-    (``ingestion.aoi_rows``): what an analysis outside SIG reads beside the zone's insights."""
+def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
+    """A geo dataset's rows as CSV with their place against a drawn zone, and the rows per place with what the reader
+    must know of the table (``ingestion.aoi_rows``): what an analysis outside SIG reads beside the zone's insights. The
+    cells are of ``resolution``, the dataset's own by default: tables read at one resolution share their cell columns.
+    A hidden layer's dataset is not served, as the map does not offer it."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
-    if not geo:
+    if not geo or dataset_id in hidden_datasets(ws.list_batches()):
         raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
     try:
-        data, counts = aoi_rows(Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), geo["resolution"], polygon)
+        data, counts = aoi_rows(
+            Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), resolution or geo["resolution"], polygon
+        )
     except (SpatialError, IngestionError) as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    return data, counts | {"dataset_id": dataset_id, "filename": record["filename"]}
+    table = {"dataset_id": dataset_id, "filename": record["filename"], "dataset_resolution": geo["resolution"]}
+    return data, counts | table | {"time": record.get("time"), "where": record.get("where")}
 
 
 def point_times(times: Any) -> np.ndarray | None:

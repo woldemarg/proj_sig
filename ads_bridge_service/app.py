@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 JOINT_TEMPLATE = Path(__file__).resolve().parent / "prompts" / "joint_response.jinja"
 JOINT_MAX_TOKENS = 16384  # the prompt keeps every row of the report's tables
 JOBS_KEPT = 20
+STATUS_RETRIES = 5  # failed reads of an ADS job's status in a row before it is given up
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
 
 
@@ -70,7 +72,8 @@ def ads_report(status: dict[str, Any]) -> str:
 def create_app(settings: AdsSettings | None = None) -> FastAPI:
     settings = settings or AdsSettings.from_env()
     http = httpx.Client(timeout=httpx.Timeout(600.0, connect=5.0))
-    jobs: dict[str, dict[str, Any]] = {}  # ponytail: in memory, the last JOBS_KEPT; a store if jobs must survive a restart
+    jobs: dict[str, dict[str, Any]] = {}  # ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
+    jobs_lock = threading.Lock()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -84,31 +87,46 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=body), "sig_failed", "SIG").json())
 
     def read_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-        tables, files = [], {}
+        """Each picked table's rows against the zone, the layers' cells at the base table's resolution: one cell column to join on."""
+        tables, files, resolution = [], {}, None
         for t in name_tables([t.model_dump() for t in body.tables]):
-            resp = http.post(f"{settings.ads_graph_url}/api/geo/{t['dataset_id']}/aoi", json={"polygon": body.polygon})
-            _checked(resp, "sig_failed", f"SIG rows of {t['filename']}")
+            url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/aoi"  # one path segment, whatever the id holds
+            resp = _checked(http.post(url, json={"polygon": body.polygon, "resolution": resolution}), "sig_failed", f"SIG rows of {t['filename']}")
             tables.append(t | json.loads(resp.headers["x-aoi"]))
             files[t["file"]] = resp.content
+            resolution = resolution or tables[0]["resolution"]
         return tables, files
 
-    def run_ads(query: str, files: dict[str, bytes], job: dict[str, Any]) -> str:
+    def run_ads(query: str, files: dict[str, bytes]) -> str:
+        """The task run in a session of its own, closed whatever happens; a status read that fails is read again, a
+        job is given up after STATUS_RETRIES failures in a row or ADS_JOB_TIMEOUT_S."""
         ads = settings.ads_url
-        sid = job["ads_session"] = _checked(http.post(f"{ads}/sessions"), "ads_failed", "ADS session").json()["session_id"]
-        for name, data in files.items():
-            _checked(http.post(f"{ads}/sessions/{sid}/datasets", files={"file": (name, data)}), "ads_failed", f"ADS upload {name}")
-        _checked(http.post(f"{ads}/sessions/{sid}/jobs", json={"user_query": query}), "ads_failed", "ADS job")
-        deadline = time.monotonic() + settings.ads_job_timeout_s
-        while True:
-            status = http.get(f"{ads}/sessions/{sid}/status")
-            if status.status_code == 200:
-                break
-            if status.status_code != 202:
-                _checked(status, "ads_failed", "ADS status")
-            if time.monotonic() > deadline:
-                raise StageError("ads_timeout", f"the ADS job still ran after {settings.ads_job_timeout_s:g} s")
-            time.sleep(settings.ads_poll_s)
-        http.post(f"{ads}/sessions/{sid}/close")
+        sid = _checked(http.post(f"{ads}/sessions"), "ads_failed", "ADS session").json()["session_id"]
+        try:
+            for name, data in files.items():
+                _checked(http.post(f"{ads}/sessions/{sid}/datasets", files={"file": (name, data)}), "ads_failed", f"ADS upload {name}")
+            _checked(http.post(f"{ads}/sessions/{sid}/jobs", json={"user_query": query}), "ads_failed", "ADS job")
+            deadline, failures = time.monotonic() + settings.ads_job_timeout_s, 0
+            while True:
+                try:
+                    status = http.get(f"{ads}/sessions/{sid}/status")
+                    if status.status_code == 200:
+                        break
+                    failures = 0 if status.status_code == 202 else failures + 1
+                    if failures > STATUS_RETRIES:
+                        _checked(status, "ads_failed", "ADS status")
+                except httpx.HTTPError:
+                    failures += 1
+                    if failures > STATUS_RETRIES:
+                        raise
+                if time.monotonic() > deadline:
+                    raise StageError("ads_timeout", f"the ADS job still ran after {settings.ads_job_timeout_s:g} s")
+                time.sleep(settings.ads_poll_s)
+        finally:
+            try:
+                http.post(f"{ads}/sessions/{sid}/close")
+            except httpx.HTTPError as exc:  # the report, if any, stands
+                log.warning("ADS session %s not closed: %s", sid, exc)
         report = ads_report(status.json())
         if not report:
             raise StageError("ads_failed", f"ADS returned no report (outcome {status.json().get('outcome')})")
@@ -143,9 +161,13 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             job["ads_query"] = "".join(p["text"] for p in build_query_parts(body.question, tables, findings))
             files["aoi.md"] = build_aoi_md(body.polygon, tables, sources).encode("utf-8")
             enter("ads")
-            job["ads_report"] = run_ads(job["ads_query"], files, job)
+            job["ads_report"] = run_ads(job["ads_query"], files)
             enter("joint")
-            job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, len(body.cells), sources))
+            try:
+                job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, len(body.cells), sources))
+            except Exception as exc:  # ADS's report stands without the final one
+                log.exception("ADS job %s: no final report", job["job_id"])
+                job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
             enter("done")
         except Exception as exc:  # recorded on the job: the console shows the stage and the reason
             log.exception("ADS job %s failed", job["job_id"])
@@ -181,9 +203,11 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         if not body.polygon or not body.cells:
             return JSONResponse({"detail": "a question to ADS needs a zone drawn on the map", "code": "empty_zone"}, status_code=400)
         job = {"job_id": uuid.uuid4().hex[:12], "stage": "search", "question": body.question, "timings": {}}
-        jobs[job["job_id"]] = job
-        for old in list(jobs)[:-JOBS_KEPT]:
-            del jobs[old]
+        with jobs_lock:  # a running job is never dropped
+            ended = [k for k, j in jobs.items() if j["stage"] in ("done", "error")]
+            for old in ended[: max(0, len(ended) - JOBS_KEPT + 1)]:
+                del jobs[old]
+            jobs[job["job_id"]] = job
         threading.Thread(target=run, args=(job, body), name=f"ads-job-{job['job_id']}", daemon=True).start()
         return JSONResponse({"job_id": job["job_id"]}, status_code=202)
 

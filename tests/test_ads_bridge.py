@@ -20,8 +20,10 @@ POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2
 FINAL = "## Результати аналізу\nу зоні 3 події\n## Методологія\nполігон"
 
 
-def item(key: str, credibility: int) -> dict:
+def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | None = 8, **more) -> dict:
     return {
+        "provenance": {"dataset_id": dataset, "spatial": {"resolution": resolution} if resolution else None},
+        **more,
         "key": key,
         "pattern_id": f"P-{key}",
         "scope": ["lisa_points=hot spot"],
@@ -33,23 +35,33 @@ def item(key: str, credibility: int) -> dict:
     }
 
 
-def upstream(seen: dict, polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str = FINAL) -> FastAPI:
+def upstream(
+    seen: dict, polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str | None = FINAL, flaky: int = 0
+) -> FastAPI:
+    """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is down."""
     app = FastAPI()
-    left = {"polls": polls}
+    left = {"polls": polls, "flaky": flaky}
 
     @app.post("/api/chat/query")
     def chat(body: dict):
         seen.setdefault("chat", []).append(body)
         inside = {} if body["question"] else {"P1": 0.6}  # the text alone finds nothing in the zone
-        provenance = [{"key": "P1", "dataset_id": "ds-a", "filename": "events.csv"}, {"key": "P2", "dataset_id": "ds-x", "filename": "other.csv"}]
-        return {"view": {"evidence": {"items": [item("P2", 1), item("P1", 6)], "area": inside, "provenance": provenance}}}
+        files = {"P1": "events.csv", "P2": "other.csv", "P3": "events.csv", "P4": "events.csv"}
+        provenance = [{"key": k, "filename": f} for k, f in files.items()]
+        # P3: P1 again at another level, folded into it; P4: the base file's table level, a dataset of its own
+        items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6)]
+        return {"view": {"evidence": {"items": items, "area": inside, "provenance": provenance}}}
 
     @app.post("/api/geo/{dataset_id}/aoi")
     def aoi(dataset_id: str, body: dict):
         seen.setdefault("aoi", []).append((dataset_id, body))
-        if dataset_id == "ds-gone":
-            return JSONResponse({"detail": "ds-gone is not a geo dataset", "code": "unknown_dataset"}, status_code=404)
+        if dataset_id != "ds-a" and dataset_id != "ds-b":
+            return JSONResponse({"detail": f"{dataset_id} is not a geo dataset", "code": "unknown_dataset"}, status_code=404)
+        base = dataset_id == "ds-a"  # the base: analysed at 8, with a time column; the layer: at 5, a filtered reading
         counts = {
+            "dataset_resolution": 8 if base else 5,
+            "time": "seen_at" if base else None,
+            "where": None if base else "kind=bar",
             "total": 5,
             "inside": 3,
             "adjacent": 1,
@@ -80,6 +92,9 @@ def upstream(seen: dict, polls: int = 1, report: str = "ADS: 3 events ![plot](/w
 
     @app.get("/sessions/{sid}/status")
     def status(sid: str):
+        if left["flaky"] > 0:
+            left["flaky"] -= 1
+            return JSONResponse({"detail": "bad gateway"}, status_code=502)
         left["polls"] -= 1
         if left["polls"] > 0:
             return JSONResponse({}, status_code=202)
@@ -90,8 +105,15 @@ def upstream(seen: dict, polls: int = 1, report: str = "ADS: 3 events ![plot](/w
         seen["closed"] = sid
         return {}
 
+    @app.post("/api/reset")
+    def reset():
+        seen["reset"] = True
+        return {}
+
     @app.post("/v1/chat/completions")
     async def llm(req: Request):
+        if final is None:
+            return JSONResponse({"detail": "gateway down"}, status_code=503)
         seen["prompt"] = (await req.json())["messages"][0]["content"]
         return {"choices": [{"message": {"content": final}}]}
 
@@ -115,7 +137,7 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
     seen: dict = {}
     tables = [{"dataset_id": "ds-a", "filename": "events.csv"}, {"dataset_id": "ds-b", "filename": "bars.csv"}]
     ask = {"question": "Скільки подій у зоні?", "tables": tables, "polygon": POLYGON, "cells": ["c1", "c2"]}
-    with serve(upstream(seen, polls=3)) as url, TestClient(create_app(settings(url))) as client:
+    with serve(upstream(seen, polls=3, flaky=2)) as url, TestClient(create_app(settings(url))) as client:  # two bad status reads, read again
         assert client.get("/api/ads/health").json()["ok"]
         parts = client.post("/api/ads/preview", json={"question": "Q?", "tables": tables}).json()["parts"]
         assert [p["kind"] for p in parts] == ["primer", "frame", "user", "data", "insights", "guidance"] and parts[2]["text"] == "Q?"
@@ -134,20 +156,26 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
             {"question": ask["question"], "cells": ["c1", "c2"], "use_llm": False},
             {"question": "", "cells": ["c1", "c2"], "use_llm": False},
         ]
-        assert [(i["key"], i["inside"]) for i in job["insights"]] == [("P1", True), ("P2", False)]  # the zone's own first
-        assert seen["aoi"] == [("ds-a", {"polygon": POLYGON}), ("ds-b", {"polygon": POLYGON})]
+        assert [(i["key"], i["inside"]) for i in job["insights"]] == [("P1", True), ("P2", False), ("P4", False)]  # the zone's own first; P3 folded
+        # the layer's cells at the base table's resolution: one column to join on
+        assert seen["aoi"] == [("ds-a", {"polygon": POLYGON, "resolution": None}), ("ds-b", {"polygon": POLYGON, "resolution": 8})]
         assert set(seen["files"]) == {"base_aoi.csv", "context_aoi.csv", "aoi.md"} and seen["files"]["base_aoi.csv"] == "rows of ds-a"
         assert "base_aoi.csv (events.csv)" in seen["files"]["aoi.md"] and "events.csv: O1" in seen["files"]["aoi.md"]
         query = seen["query"]
         assert query == job["ads_query"] and ask["question"] in query and "inside=3, adjacent=1, far=1; cells in the zone: 2" in query
         assert "O1 · in zone: yes" in query and "established: points: strong increase" in query and "O2 · in zone: no" in query
         assert "file: other.csv (another dataset of the graph" in query and query.count("another dataset of the graph") == 1
+        assert "O3 · in zone: no" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
+        assert "bars.csv, only its rows where kind=bar, 5 rows" in query and "Time: seen_at in df_base_aoi" in query
+        assert "SIG analysed this table at H3 resolution 5" in seen["files"]["aoi.md"]
         assert job["ads_report"] == "ADS: 3 events plot" and seen["closed"] == "s1"  # no link into ADS's own workspace
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
 
         assert client.post("/api/ads/jobs", json=ask | {"question": " "}).status_code == 400
         assert client.post("/api/ads/jobs", json=ask | {"cells": []}).json()["code"] == "empty_zone"
         assert client.post("/api/ads/jobs", json=ask | {"tables": []}).status_code == 422
+        escaping = ask | {"tables": [{"dataset_id": "../reset?x=", "filename": "x.csv"}]}  # an id is one path segment, never a path
+        assert finished(client, client.post("/api/ads/jobs", json=escaping).json()["job_id"])["error"]["code"] == "sig_failed" and "reset" not in seen
         assert client.get("/api/ads/jobs/nope").status_code == 404
 
 
@@ -156,6 +184,13 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
     with serve(upstream({}, polls=10**6)) as url, TestClient(create_app(settings(url, ads_job_timeout_s=0.05))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert (job["stage"], job["failed_stage"], job["error"]["code"]) == ("error", "ads", "ads_timeout")
+    seen: dict = {}
+    with serve(upstream(seen, flaky=10**6)) as url, TestClient(create_app(settings(url))) as client:  # the status never reads
+        job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
+        assert (job["failed_stage"], job["error"]["code"]) == ("ads", "ads_failed") and seen["closed"] == "s1"  # the session closed all the same
+    with serve(upstream({}, final=None)) as url, TestClient(create_app(settings(url))) as client:  # no final report: ADS's stands
+        job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
+        assert job["stage"] == "done" and job["joint_report"] == "" and "503" in job["joint_error"] and job["ads_report"]
     with serve(upstream({}, report="")) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["error"]["code"] == "ads_failed" and "no report" in job["error"]["detail"]

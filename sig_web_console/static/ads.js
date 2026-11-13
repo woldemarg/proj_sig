@@ -3,6 +3,7 @@
 
 const ADS_STAGES = [["search", "SIG: питання + зона"], ["ads", "ADS: таблиці з H3, in_aoi і aoi_zone"], ["joint", "Фінальний звіт"]];
 const ADS_POLL_MS = 3000;
+const ADS_POLL_RETRIES = 5;  // failed reads of a job in a row before the turn gives it up
 const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 let adsPreviewTimer = null;
 
@@ -39,16 +40,19 @@ async function askAds() {
   $("ads-dialog").close();
   const turn = { question: body.question, zone: body.cells.length, since: new Date().toISOString(), ads: { stage: "search", timings: {} } };
   S.chat.push(turn); renderThread();
-  try {
-    const { job_id } = await api("/api/ads/jobs", adsPost(body));
-    while (S.chat.includes(turn)) {  // New chat drops the turn: its job is read no more
-      const job = await api(`/api/ads/jobs/${job_id}`), moved = job.stage !== turn.ads.stage;
-      turn.ads = job;
+  const fail = (e) => { turn.ads = { stage: "error", timings: {}, error: { code: e.code || "ads_unavailable", detail: e.message } }; renderThread(); };
+  const started = await api("/api/ads/jobs", adsPost(body)).catch(fail);
+  for (let failures = 0; started && S.chat.includes(turn);) {  // New chat drops the turn: its job is read no more
+    const job = await api(`/api/ads/jobs/${started.job_id}`).catch((e) => (++failures > ADS_POLL_RETRIES ? fail(e) : null));
+    if (failures > ADS_POLL_RETRIES) return;
+    if (job) {  // a read that failed is read again: the job runs on
+      const moved = job.stage !== turn.ads.stage;
+      failures = 0; turn.ads = job;
       if (moved) { turn.since = new Date().toISOString(); renderThread(); }
-      if (job.stage === "done" || job.stage === "error") break;
-      await new Promise((r) => setTimeout(r, ADS_POLL_MS));
+      if (job.stage === "done" || job.stage === "error") return;
     }
-  } catch (e) { turn.ads = { stage: "error", timings: {}, error: { code: "ads_unavailable", detail: e.message } }; renderThread(); }
+    await new Promise((r) => setTimeout(r, ADS_POLL_MS));
+  }
 }
 
 function adsCard(turn) {
@@ -61,10 +65,10 @@ function adsCard(turn) {
   const help = failed ? ERROR_HELP[a.error.code] : null, report = a.joint_report || a.ads_report || "";
   return `<div class="bot-card${failed ? " error" : ""}"><div class="answer-box"><div class="ads-stages">${stages}</div>` +
     (failed ? `<p><b>${esc(help ? help[0] : "Запит до ADS не вдався")}</b></p><p>${esc(help ? help[1] : a.error.detail)}</p>${help ? `<p class="muted" data-dev>${esc(a.error.detail)}</p>` : ""}` : "") +
-    (a.stage === "done" && !a.joint_report ? `<p class="muted">Фінальний звіт не зібрано: нижче звіт ADS як є.</p>` : "") +
+    (a.stage === "done" && !a.joint_report ? `<p class="muted">Фінальний звіт не зібрано: нижче звіт ADS як є.</p>${a.joint_error ? `<p class="muted" data-dev>${esc(a.joint_error)}</p>` : ""}` : "") +
     (a.stage === "done" ? `<div class="ads-report">${md(report, {})}</div>` : "") +
-    (a.joint_report ? `<details class="ads-more"><summary>Звіт ADS</summary><div class="ads-report">${md(a.ads_report, {})}</div></details>` : "") +
-    (a.ads_query ? `<details class="ads-more"><summary>Запит до ADS</summary><pre>${esc(a.ads_query)}</pre></details>` : "") + `</div></div>`;
+    (a.joint_report ? `<details class="ads-more" data-dev><summary>Звіт ADS</summary><div class="ads-report">${md(a.ads_report, {})}</div></details>` : "") +
+    (a.ads_query ? `<details class="ads-more" data-dev><summary>Запит до ADS</summary><pre>${esc(a.ads_query)}</pre></details>` : "") + `</div></div>`;
 }
 
 $("ads-question").addEventListener("input", previewAds);
