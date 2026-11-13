@@ -2,23 +2,29 @@
 "use strict";
 
 function md(text, keyTo) {
-  /* small, safe markdown: escape first, then bold/italic/code, headings, lists, paragraphs, citations */
+  /* small, safe markdown: escape first, then bold/italic/code, headings, lists, pipe tables, paragraphs, citations */
   const cite = (s) => s.replace(/\[(P\d+(?:\s*[,;]\s*P\d+)*)\]/g, (m, g) => g.split(/\s*[,;]\s*/).map((k) => keyTo[k] ? `<a class="cite" data-pid="${esc(keyTo[k])}" tabindex="0" role="button" title="${esc(keyTo[k])}">${k}</a>` : k).join(""));
   const inline = (s) => cite(s.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>"));
   const lines = esc(text).split(/\r?\n/);
-  let html = "", list = null, para = [];
+  let html = "", list = null, para = [], table = [];
+  const cellsOf = (row) => row.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+  const flushTable = () => {  // the first row its head, the |---| row under it dropped
+    const rows = table.filter((r) => !/^\|[\s:|-]+$/.test(r)).map(cellsOf); table = [];
+    if (rows.length) html += `<div class="md-table"><table><tr>${rows[0].map((c) => `<th>${c}</th>`).join("")}</tr>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table></div>`;
+  };
   const flushPara = () => { if (para.length) { html += `<p>${inline(para.join(" "))}</p>`; para = []; } };
   const flushList = () => { if (list) { html += `<${list.tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`; list = null; } };
   for (const raw of lines) {
     const line = raw.trim();
     let m;
+    if (!line.startsWith("|")) flushTable(); else { flushPara(); flushList(); table.push(line); continue; }
     if (!line) { flushPara(); flushList(); continue; }
     if ((m = line.match(/^#{1,4}\s+(.*)$/)) || (m = line.match(/^(?:<b>)?([A-ZА-ЯІЇЄҐ][^:]{2,60}):(?:<\/b>)?$/))) { flushPara(); flushList(); html += `<h4>${inline(m[1])}</h4>`; continue; }
     if ((m = line.match(/^[*\-•]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ul") { flushList(); list = { tag: "ul", items: [] }; } list.items.push(m[1]); continue; }
     if ((m = line.match(/^\d+[.)]\s+(.*)$/))) { flushPara(); if (!list || list.tag !== "ol") { flushList(); list = { tag: "ol", items: [] }; } list.items.push(m[1]); continue; }
     flushList(); para.push(line);
   }
-  flushPara(); flushList();
+  flushPara(); flushList(); flushTable();
   return html;
 }
 
@@ -178,6 +184,7 @@ function insightCard(turn) {
 
 function botTurn(turn, isLast) {
   if (turn.insight) return insightCard(turn);
+  if (turn.ads) return adsCard(turn);
   if (turn.pending) {
     return `<div class="bot-card"><div class="typing"><i></i><i></i><i></i><span>Шукаю в графі${$("use-llm").checked ? " й пишу відповідь" : ""}… <span class="ds-elapsed" data-since="${turn.since}"></span></span>` +
       `<button type="button" class="linkish ask-cancel">Скасувати</button></div></div>`;

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import time
@@ -807,6 +808,30 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
         assert client.post("/api/search", json={"question": " "}).status_code == 400
+        # the dataset's rows against the zone drawn as a polygon: what an analysis outside SIG reads
+        res = h3.get_resolution(zone[0])
+        got = client.post(f"/api/geo/{ds}/aoi", json={"polygon": h3.h3shape_to_geo(h3.cells_to_h3shape(zone))})
+        counts, rows = json.loads(got.headers["x-aoi"]), pd.read_csv(io.BytesIO(got.content), keep_default_na=False)
+        assert got.headers["content-type"].startswith("text/csv") and counts["resolution"] == res and counts["zone_cells"] == len(zone)
+        assert counts["columns"] == [f"h3_r{res}", f"h3_r{res - 1}", f"h3_r{res - 2}", "in_aoi", "aoi_zone"]
+        assert len(rows) == counts["total"] == counts["inside"] + counts["adjacent"] + counts["far"] and counts["inside"] > 0 and counts["far"] > 0
+        assert (rows["in_aoi"] == rows[f"h3_r{res}"].isin(zone)).all()  # the polygon is the cells' outline: inside it is in them
+        assert set(rows.loc[rows["aoi_zone"] == "inside", "in_aoi"]) == {1} and set(rows.loc[rows["aoi_zone"] != "inside", "in_aoi"]) == {0}
+        near = set().union(*(h3.grid_disk(c, 1) for c in zone))
+        assert (rows.loc[rows["aoi_zone"] == "adjacent", f"h3_r{res}"].isin(near)).all() and not rows.loc[
+            rows["aoi_zone"] == "far", f"h3_r{res}"
+        ].isin(near).any()
+        assert (rows[f"h3_r{res - 1}"] == rows[f"h3_r{res}"].map(lambda c: h3.cell_to_parent(c, res - 1))).all()
+        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Point", "coordinates": [0, 0]}}).json()["code"] == "invalid_options"
+        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Polygon", "coordinates": [[]]}}).json()["code"] == "invalid_options"
+        assert counts["dataset_resolution"] == res and counts["where"] is None and "time" in counts
+        shape, other = h3.h3shape_to_geo(h3.cells_to_h3shape(zone)), ({7, 8} - {res}).pop()  # the upload's other level
+        at = json.loads(client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": other}).headers["x-aoi"])
+        assert (
+            at["columns"][0] == f"h3_r{other}" and at["dataset_resolution"] == res and at["inside"] == counts["inside"]
+        )  # another table's cells, the same in_aoi
+        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
+        assert client.post("/api/geo/ds-unknown/aoi", json={"polygon": {}}).json()["code"] == "unknown_dataset"
 
 
 def test_the_graph_exports_as_geosparql(engine, points_csv):

@@ -1,7 +1,8 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a pattern's footprint, cell centres, boundaries and WKT.
+zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points against a drawn zone (``aoi_columns``), a
+pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
 
@@ -30,6 +31,7 @@ from subgroup_miner.spatial import (
     GEO_REGION_MIN_SHARE,
     SpatialError,
     compactness,
+    distinct_points,
 )
 
 
@@ -362,6 +364,52 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         return frozenset(cells)
     except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
+
+
+AOI_RING = 1  # "adjacent": the zone's cells and their first ring, the neighbourhood of the cell table
+AOI_PARENTS = 2  # the coarser cell columns beside the dataset's own
+
+
+def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np.ndarray:
+    """Which points a GeoJSON Polygon holds: an even-odd ray cast over its rings (a hole takes its points out), each
+    longitude taken around the ring's first so a ring across 180° stays whole."""
+    if polygon.get("type") != "Polygon":
+        raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {polygon.get('type')!r}")
+    inside = np.zeros(len(lon), dtype=bool)
+    try:
+        for ring in polygon["coordinates"]:
+            pts = np.asarray(ring, dtype=float)[:, :2]
+            x0 = pts[0, 0]
+            xs, ys, px = x0 + (pts[:, 0] - x0 + 540) % 360 - 180, pts[:, 1], x0 + (lon - x0 + 540) % 360 - 180
+            for i in range(len(pts)):
+                xi, yi, xj, yj = xs[i], ys[i], xs[i - 1], ys[i - 1]
+                if yi != yj:
+                    inside ^= ((yi > lat) != (yj > lat)) & (px < (xj - xi) * (lat - yi) / (yj - yi) + xi)
+    except (IndexError, KeyError, TypeError, ValueError) as exc:  # an empty or ragged ring
+        raise SpatialError(f"unreadable polygon: {type(exc).__name__}: {exc}") from exc
+    return inside
+
+
+def aoi_columns(lat: np.ndarray, lon: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """Each point's place against a drawn zone -> (columns, counts). ``h3_r<res>``: its cell at ``resolution`` and at
+    up to ``AOI_PARENTS`` coarser ones ("" without a valid point); ``in_aoi``: 1 inside the polygon, its edges straight
+    in degrees; ``aoi_zone``: ``inside``, ``adjacent`` (outside it, in a zone cell or one of its ``AOI_RING`` neighbours),
+    ``far``. The zone's cells are ``geometry_to_cells``'s, as a question reads the polygon."""
+    zone = geometry_to_cells(polygon, resolution)
+    ok = np.isfinite(lat) & np.isfinite(lon)
+    pairs, back = distinct_points(lat[ok], lon[ok])
+    cell = np.full(len(lat), "", dtype=object)
+    cell[ok] = np.array([h3.latlng_to_cell(float(a), float(b), resolution) for a, b in pairs], dtype=object)[back]
+    columns = {f"h3_r{resolution}": cell}
+    for r in range(resolution - 1, max(resolution - AOI_PARENTS, 0) - 1, -1):
+        parent = {c: h3.cell_to_parent(c, r) for c in set(cell[ok])} | {"": ""}
+        columns[f"h3_r{r}"] = np.array([parent[c] for c in cell], dtype=object)
+    inside = ok & _in_polygon(lon, lat, polygon)
+    near = set().union(*(h3.grid_disk(c, AOI_RING) for c in zone))
+    place = np.where(inside, "inside", np.where(np.isin(cell, list(near)), "adjacent", "far"))
+    columns |= {"in_aoi": inside.astype(int), "aoi_zone": place}
+    counts = {"total": len(lat), **{k: int((place == k).sum()) for k in ("inside", "adjacent", "far")}}
+    return columns, counts | {"resolution": resolution, "zone_cells": len(zone), "columns": list(columns)}
 
 
 def cells_inside(cells: np.ndarray, area: Iterable[str]) -> np.ndarray:

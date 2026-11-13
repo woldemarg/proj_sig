@@ -1,0 +1,44 @@
+# SIG with ADS, the agentic data-science service a drawn zone's question can go to (docs/08_interface.md §8.8): the
+# suite of compose.yaml, the ADS servers from a local checkout and the bridge between them.
+#   orchestrator, executor, llm   ADS: the agent, its sandbox and its LLM gateway
+#   minio, postgres               ADS's storages: session files, checkpoints
+#   mlflow, mlflow-init           ADS's traces                        -> http://localhost:5050
+#   ads-bridge                    /api/ads/ behind the console: SIG's evidence and rows in, ADS's report out
+#
+#   docker compose -f compose.ads.yaml up -d --build --wait      then open http://127.0.0.1:8765
+#   docker compose -f compose.ads.yaml -f compose.gpu.yaml up -d --build --wait      the embeddings on an NVIDIA GPU
+#
+# ADS_DIR (.env) is the agentic-data-science checkout; its own .env and copilot.env configure ADS. The project is
+# `sig`, so the stack keeps the volumes of a plain `docker compose up`. ADS publishes its usual host ports (8000, 8080,
+# 9000, 9001, 5432, 5050) under fixed container names: stop a standalone ADS stack first.
+# `down -v` would remove ADS's MLflow traces too (the volume is shared with the standalone ADS stack): stop with `down`.
+
+name: sig
+
+include:
+  - path: compose.yaml
+  - path:
+      - ${ADS_DIR:?set ADS_DIR in .env to the agentic-data-science checkout}/docker-compose.full.yml
+      - compose.ads.overrides.yaml
+
+services:
+  ads-bridge:
+    build: { context: ., dockerfile: ads_bridge_service/Dockerfile }
+    image: ${SIG_IMAGE_NAMESPACE:-sig}/ads-bridge
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    init: true
+    restart: unless-stopped
+    environment:  # an allow-list, no env_file: nothing else from .env reaches the bridge; "" keeps the default
+      ADS_URL: http://orchestrator:8000
+      ADS_LLM_URL: http://llm:8080
+      ADS_GRAPH_URL: http://insight-graph:8000
+      ADS_NARRATOR_URL: http://evidence-narrator:8000
+      ADS_JOB_TIMEOUT_S: ${ADS_JOB_TIMEOUT_S:-}
+    depends_on:
+      insight-graph: { condition: service_healthy }
+      evidence-narrator: { condition: service_healthy }
+      orchestrator: { condition: service_started }
+    networks: [internal]

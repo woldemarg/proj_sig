@@ -92,12 +92,34 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         assert not page.evaluate("S.cy.animated()")  # no camera flight
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded() && document.querySelector('#mw-body .mw-i')", timeout=60000)
+        # the zone's edges: a Shift-click selects nothing, a polygon over no cell leaves no zone, a drawing ends with its view,
+        # and a zone none of whose cells the map draws (another level's) is outlined by its polygon and dims nothing
+        at = page.evaluate("""() => { closeDrawer(); const c = G.map.getCenter(), d = (f) => (centre(f)[0] - c.lng) ** 2 + (centre(f)[1] - c.lat) ** 2;
+            const p = G.map.project(centre(G.data.features.reduce((a, f) => (d(f) < d(a) ? f : a)))), r = $('map').getBoundingClientRect();
+            return [r.x + p.x, r.y + p.y]; }""")
+        page.keyboard.down("Shift")
+        page.mouse.click(*at)
+        page.keyboard.up("Shift")
+        page.wait_for_selector(".sig-pop .pp-head")
+        assert not page.query_selector(".sig-pop .pp-ask") and page.evaluate("GeoMap.zone().length") == 0  # the cell's popup, no zone
+        empty = "() => { setDrawing(true); G.draw.push([0, 0], [0.001, 0], [0, 0.001]); finishPolygon(); return [$('map-draw').textContent, GeoMap.zone().length, GeoMap.polygon()]; }"
+        text, cells, polygon = page.evaluate(empty)
+        assert text.startswith("У полігоні немає комірок мапи") and cells == 0 and polygon is None
+        page.evaluate("setDrawing(true)")
+        page.focus("#hud-fold")
+        page.keyboard.press("Enter")  # a control of the map keeps its key while a polygon is drawn
+        assert page.evaluate("[Array.isArray(G.draw), $('hud-fold').getAttribute('aria-expanded')]") == [True, "true"]
+        page.click("#view-switch button[data-view='table']")
+        assert page.evaluate("G.draw") is None  # Enter and Backspace are the other view's again
+        page.click("#view-switch button[data-view='map']")
+        lost = "() => { GeoMap.setPolygon(G.data.features[0].geometry); G.zone = new Set(['8a2a1072b59ffff']); paintZone(); return [G.map.getPaintProperty('cells-fill', 'fill-opacity'), G.map.getSource('zone').serialize().data.features.map((f) => f.geometry.type)]; }"
+        assert page.evaluate(lost) == [0.55, ["Polygon"]]
+        page.evaluate("GeoMap.clearZone()")
         page.evaluate("() => document.querySelector('#mw-body .mw-i').click()")
         page.wait_for_selector("#map-card:not([hidden])")
-        page.evaluate("() => G.data.features.slice(0, 3).forEach((f) => GeoMap.toggleZone(f.properties.h3))")  # the zone bar too
-        page.wait_for_selector("#map-zone:not([hidden])")
+        page.evaluate("() => { GeoMap.setPolygon(G.data.features[0].geometry); GeoMap.closePopup(); }")  # with a zone
         boxes = """() => { const r = (q) => { const e = document.querySelector(q); return e && !e.hidden && e.getClientRects().length ? e.getBoundingClientRect() : null; };
-            const panels = ['.map-hud', '#map-window', '#map-card', '#map-zone'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+            const panels = ['.map-hud', '#map-window', '#map-card'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             return { overlaps: panels.flatMap((a, i) => panels.slice(i + 1).filter((b) => cut(a, b))).length, map: r('#map').height, canvas: r('.canvas').bottom, chat: r('.chat').top }; }"""
         for width, height in ((1500, 844), (1200, 844), (1200, 600), (1001, 600), (1000, 844), (750, 844), (390, 844)):  # a short window too
             page.set_viewport_size({"width": width, "height": height})

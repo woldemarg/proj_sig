@@ -15,6 +15,11 @@ const ERROR_HELP = {
   invalid_schema: ["Таблицю не можна проаналізувати", "Потрібні щонайменше одна колонка для групування, одна числова колонка і достатньо рядків.", "Перевірте файл або позначте колонки з кодами як категорії."],
   no_numeric_targets: ["Немає числових колонок", "SIG вимірює зсуви числових колонок і не знайшов жодної придатної.", "Перевірте, чи числа не збережено як текст."],
   no_viable_insights: ["Стійких знахідок немає", "Сегменти перевірено, але жоден не пройшов перевірок тесту медіани, стабільності й сили зсуву.", "Спробуйте більше рядків або інші колонки для групування."],
+  ads_unavailable: ["ADS недоступний", "Сервіс ADS не відповів. Перевірте його стан угорі сторінки і спробуйте ще раз.", ""],
+  ads_timeout: ["ADS не встиг відповісти", "Аналіз тривав довше за відведений час. Спробуйте вужче питання або меншу зону.", ""],
+  ads_failed: ["ADS не дав звіту", "ADS прийняв запит, але не повернув звіт.", ""],
+  sig_failed: ["SIG не віддав дані зони", "Не вдалося прочитати знахідки або рядки таблиць для цієї зони.", ""],
+  empty_zone: ["Немає зони", "Спершу намалюйте зону на мапі.", ""],
   unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
   unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
   invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, зону мапи не вдалося прочитати, або колонка часу не читається чи дає замало періодів.", "Перевірте назви колонок і формат значень, комірки чи форму зони; для часу — колонку з датами, календарну одиницю сітки (день, тиждень, місяць, квартал — не 7D) і пояс за назвою IANA."],
@@ -233,7 +238,7 @@ const picture = (r) => `${plural(r.patterns, "інсайт", "інсайти", "
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : res.statusText), { status: res.status, code: body.code });
   return body;
 }
 
@@ -243,7 +248,9 @@ const CPU_HINT = "Модель опису інсайтів працює на CPU
 
 async function refreshHealth() {
   try {
-    const [h, chat] = await Promise.all([api("/api/health"), api("/api/chat/health").catch(() => ({}))]);
+    const [h, chat, ads] = await Promise.all([api("/api/health"), api("/api/chat/health").catch(() => ({})), api("/api/ads/health").catch(() => null)]);
+    S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
+    const adsWhy = !ads ? "Стек запущено без ADS (compose.ads.yaml)" : ads.ok ? "ADS готовий: зону на мапі можна спитати в ADS" : `Не відповідає: ${[!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ")}`;
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
@@ -252,6 +259,7 @@ async function refreshHealth() {
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `модель · ${h.embedding_device}`;
     $("health").innerHTML =
       `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"${llmCls === "ok" ? " data-dev" : ""}><i class="dot"></i>${esc(llmTxt)}</span>` +  // the person sees it only when it fails
+      `<span class="pill ${!ads ? "opt" : ads.ok ? "ok" : "bad"}" id="ads-pill" title="${esc(adsWhy)}"><i class="dot"></i>${!ads ? "ADS вимкнено" : ads.ok ? "ADS активний" : "ADS недоступний"}</span>` +
       `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j" data-dev><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
       `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}" data-dev><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `пояснення ${model}`;
@@ -449,11 +457,12 @@ function init() {
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
   });
-  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: the cell popup, the map's focus, the drawer; a text field keeps its own
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
-    if (GeoMap.closePopup()) return;
+    if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
+    if (S.view === "map" && GeoMap.zone().length) { GeoMap.clearZone(); return; }
     closeDrawer();
   });
   initResize();

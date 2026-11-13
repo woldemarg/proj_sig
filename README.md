@@ -31,6 +31,7 @@ browser ──> web-console (nginx: the UI; /api/chat/ -> narrator, /api/ -> gra
 | [`insight_graph_service/`](insight_graph_service) | the graph service: `core/` (engine, workspace, snapshot compiler, Neo4j mirror, model provisioning) and `server/` (HTTP API) |
 | [`evidence_narrator_service/`](evidence_narrator_service) | the chat: the graph's evidence verbalised by the LLM, every citation checked |
 | [`llm_model_broker/`](llm_model_broker) | one OpenAI-compatible endpoint in front of the upstream model |
+| [`ads_bridge_service/`](ads_bridge_service) | a drawn zone's question handed to ADS, the agentic data-science service, with the zone's insights as established facts |
 | [`sig_web_console/`](sig_web_console) | the static UI and its nginx edge |
 
 Each library imports only the shared kernel; `tests/test_architecture.py` enforces every allowed import. Bounded contexts, contracts, start order and why these services: [docs/12_architecture.md](docs/12_architecture.md).
@@ -61,6 +62,7 @@ Python **3.12+** (the EDA script uses PEP 701 f-strings).
 copy .env.sample .env                     # then edit: GEMMA_* (the broker's upstream, model and key), tunables
 docker compose up -d --build --wait       # then http://127.0.0.1:8765
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
+docker compose -f compose.ads.yaml up -d --build --wait   # the same with ADS (ADS_DIR in .env): a drawn zone's question can go to it
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
 The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 3 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
@@ -138,7 +140,7 @@ SIG owns its seven node labels in that database, so use one workspace per databa
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
    - The *Промпт* tab shows the exact evidence the model saw.
 
-6. **Мапа** (a geo dataset — rows are points). Upload with the role *Події на мапі*, which sets *Додатково → Просторовий аналіз (комірки H3)* to `auto@auto` (levels read from the points; `auto@7` names one, in the developer mode), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)). *У ВІКНІ* lists the themes and insights characteristic of the view, related themes grouped; picking one opens its card on the map and in the chat, its numbers in words, with *Пов'язані знахідки* to walk on. Cells Shift-clicked into a zone (*ЗОНА · n комірок*) ask about that area, with or without text.
+6. **Мапа** (a geo dataset — rows are points). Upload with the role *Події на мапі*, which sets *Додатково → Просторовий аналіз (комірки H3)* to `auto@auto` (levels read from the points; `auto@7` names one, in the developer mode), with *+ базовий рівень без географії* ticked to mine the rows as a plain table too, placed on the map's regions by their points (or `curl -F geo=auto@auto -F table=true`): the points become H3 cells with counters, medians, shares, neighbourhood bands and LISA hot spots, and the insights are tested with the spatial-autocorrelation correction ([docs/02 §2.9](docs/02_discovery.md#29-spatial-datasets-the-geo-option)). The *Мапа* tab draws the cells over an offline basemap; a citation `[P#]` clicked in the chat paints and focuses that insight, a cell click lists the insights covering it ([docs/08 §8.7](docs/08_interface.md#87-the-map)). *У ВІКНІ* lists the themes and insights characteristic of the view, related themes grouped; picking one opens its card on the map and in the chat, its numbers in words, with *Пов'язані знахідки* to walk on. A polygon drawn on the map (*Намалювати зону*) makes its cells a zone, the rest of the map dimmed, and lists the cells, events and insights there; *Запитати про цю зону* asks about that area, with or without text; *Запитати про це ADS* hands the zone's question, its insights and the picked tables' rows to ADS when the header says *ADS активний* ([docs/08 §8.8](docs/08_interface.md#88-a-zones-question-to-ads)).
 
    *Житло Каліфорнії (мапа)* in that list ingests the shipped California housing table (20,640 block groups with coordinates, `data/demo/california_housing.csv`) as `geo=auto@5` and its base table level, with `bins=median_income_median:4,median_income:4` (the cells' band and the table level's own): 884 cells, 344 of them dense, 18 insights on house values by ocean proximity, income band and neighbourhood density, and 11 at the table level; the welcome card then offers the map demo's questions (*Чому median house value нижчий у зонах INLAND?*, *Де median_house_value вищий?*, …).
 
@@ -273,6 +275,7 @@ sig/
                               Dockerfile (targets runtime, test)
   evidence_narrator_service/  the chat service (Dockerfile)
   llm_model_broker/           the LLM model broker (Dockerfile)
+  ads_bridge_service/         the ADS bridge (Dockerfile)
   sig_web_console/            the static UI, nginx.conf, Dockerfile, PROVENANCE.md (vendored browser libraries)
   compose.yaml, .dockerignore   the service suite in start order
   pyproject.toml, uv.lock     the dependency groups (one per library and service, dev, the torch build) and their exact versions

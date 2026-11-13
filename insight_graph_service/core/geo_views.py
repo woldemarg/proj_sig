@@ -25,10 +25,10 @@ from graph_query_engine.vertical import affinity, restating, scale_chain, scale_
 from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import context_files, hidden_datasets, same_points
+from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.context import points_near
-from subgroup_miner.ingestion import read_context
+from subgroup_miner.ingestion import IngestionError, aoi_rows, read_context
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
@@ -171,6 +171,28 @@ def _zone_scores(
 # cached on its arguments: a dataset id fixes its files (a READY id is never mined again, its duplicate is SKIPPED; one
 # uploaded again after its deletion is mined to the same files), and a commit that changes the datasets changes them
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
+
+
+def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
+    """A geo dataset's rows as CSV with their place against a drawn zone, and the rows per place with what the reader
+    must know of the table (``ingestion.aoi_rows``): what an analysis outside SIG reads beside the zone's insights. The
+    cells are of ``resolution``, the dataset's own by default: tables read at one resolution share their cell columns;
+    only a resolution some geo dataset is analysed at is taken (a finer one over a wide zone is millions of cells).
+    A hidden layer's dataset is not served, as the map does not offer it."""
+    record = _owner(ws, dataset_id)
+    geo = (record.get("profile") or {}).get("geo")
+    if not geo or dataset_id in hidden_datasets(ws.list_batches()):
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset")
+    if resolution is None:
+        resolution = geo["resolution"]
+    elif resolution not in (known := sorted({d["resolution"] for d in geo_datasets(ws)})):
+        raise PipelineError("invalid_options", f"resolution {resolution} is not a geo dataset's: {known}")
+    try:
+        data, counts = aoi_rows(Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), resolution, polygon)
+    except (SpatialError, IngestionError) as exc:
+        raise PipelineError("invalid_options", str(exc)) from exc
+    table = {"dataset_id": dataset_id, "filename": record["filename"], "dataset_resolution": geo["resolution"]}
+    return data, counts | table | {"time": record.get("time"), "where": record.get("where")}
 
 
 def point_times(times: Any) -> np.ndarray | None:

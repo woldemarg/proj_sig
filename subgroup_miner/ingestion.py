@@ -28,6 +28,7 @@ from subgroup_miner.spatial import (
     parse_times,
     select_levels,
 )
+from subgroup_miner.spatial_plane import aoi_columns
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -362,6 +363,19 @@ def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
     """A stored file's rows as the levels of one upload read them (the shared parse), only ``where``'s when given."""
     frame = read_file(Path(path), shared=True)[0]
     return filter_rows(frame, where) if where else frame
+
+
+def aoi_rows(path: Path, locator: str, where: str | None, resolution: int, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    """A stored file's rows as CSV with each row's place against a drawn zone (``spatial_plane.aoi_columns``: the cell
+    columns, ``in_aoi``, ``aoi_zone``), and the rows per place. Read as the upload's levels read it (pandas' reading:
+    a code with leading zeros that parsed as a number comes back as that number); a file that already holds one of the
+    added columns is refused."""
+    frame = read_rows(path, where)
+    lat, lon, _ = locate_points(frame, locator)
+    columns, counts = aoi_columns(lat, lon, resolution, polygon)
+    if taken := sorted(set(columns) & set(frame.columns)):
+        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the zone adds")
+    return frame.assign(**columns).to_csv(index=False).encode("utf-8"), counts
 
 
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:

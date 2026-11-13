@@ -8,6 +8,7 @@ worker, so the ontology is updated strictly sequentially.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
 import time
@@ -78,6 +79,11 @@ class SearchIn(BaseModel):
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
     include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
+
+
+class AoiIn(BaseModel):
+    polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
+    resolution: int | None = Field(default=None, ge=0, le=15)  # the cell columns' resolution; None: the dataset's own
 
 
 class HiddenIn(BaseModel):
@@ -357,6 +363,11 @@ def create_app(engine: Engine) -> FastAPI:
     @app.get("/api/geo/{dataset_id}/window")
     def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "") -> dict[str, Any]:
         return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))))
+
+    @app.post("/api/geo/{dataset_id}/aoi")
+    def geo_aoi_rows(dataset_id: str, body: AoiIn) -> Response:
+        data, counts = engine.geo_aoi_rows(dataset_id, body.polygon, body.resolution)
+        return Response(data, media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})  # ASCII: a header's bytes
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:

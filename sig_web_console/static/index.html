@@ -133,13 +133,13 @@
           </div>
           <div class="hud-keys"><span><i class="lg-up"></i>метрика вища</span><span><i class="lg-down"></i>метрика нижча</span><span><i class="lg-focus"></i>у фокусі</span></div>
           </div>
+          <button type="button" class="map-draw" id="map-draw" title="Клік додає вершину; клік по першій точці або Enter замикає полігон, Backspace прибирає останню, Esc скасовує">Намалювати зону</button>
         </div>
         <div class="map-window" id="map-window" hidden aria-label="Теми й інсайти у вікні">
           <div class="mw-head"><span class="hud-tag">У ВІКНІ</span><span class="mw-meta" id="mw-meta"></span><button type="button" class="mc-x" id="mw-fold" aria-label="Згорнути список">–</button></div>
           <div class="mw-body" id="mw-body"></div>
         </div>
-        <div class="map-bottom">  <!-- the zone bar above the insight card: one stack, never overlapping -->
-          <div class="map-zone" id="map-zone" hidden title="Shift-клік по комірці додає або прибирає її"><span id="map-zone-n"></span><button type="button" id="map-zone-ask">ЗАПИТАТИ</button><button type="button" id="map-zone-clear" aria-label="Прибрати зону">✕</button></div>
+        <div class="map-bottom">
           <div class="map-card" id="map-card" hidden>
             <div class="mc-head"><span id="map-card-key"></span><button type="button" class="mc-x" id="map-card-close" aria-label="Закрити">×</button></div>
             <div id="map-card-body"></div>
@@ -224,6 +224,25 @@
     <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button></div>
   </form>
 </dialog>
+<dialog id="ads-dialog" aria-labelledby="ads-title">
+  <form id="ads-form">
+    <h3 id="ads-title">Запитати ADS про зону</h3>
+    <div class="hint" id="ads-zone"></div>
+    <fieldset class="ads-tables">
+      <legend class="small">Таблиці</legend>
+      <div id="ads-tables"></div>
+    </fieldset>
+    <div class="hint">Перша позначена таблиця базова, решта йдуть як її контекстні шари. В ADS передаються рядки цих таблиць із колонками H3, in_aoi та aoi_zone і знахідки SIG у зоні.</div>
+    <label class="small" for="ads-question">Питання</label>
+    <textarea class="field" id="ads-question" rows="3" placeholder="напр. Як змінювалась кількість подій у цій зоні по днях?"></textarea>
+    <details class="ads-more" data-dev><summary>Запит до ADS</summary><pre id="ads-preview"></pre></details>
+    <div class="link-actions">
+      <button type="button" class="btn ghost" id="ads-cancel">Скасувати</button>
+      <button type="submit" class="btn" id="ads-send" disabled>Запитати</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="upload-dialog" aria-labelledby="upload-title">
   <h3 id="upload-title">Додати дані</h3>
   <form id="upload-form">
@@ -309,5 +328,6 @@
 <script src="/timeline.js"></script>
 <script src="/chat.js"></script>
 <script src="/geo.js"></script>
+<script src="/ads.js"></script>
 </body>
 </html>

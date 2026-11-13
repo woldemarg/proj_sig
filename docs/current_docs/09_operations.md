@@ -64,6 +64,7 @@ SIG has no command-line program of its own. A command line starts the processes,
 | `python -m insight_graph_service.server` | the graph service alone on `WEB_HOST:WEB_PORT` (its API only); reads `.env` |
 | `python -m evidence_narrator_service` | the narrator alone on `NARRATOR_HOST:NARRATOR_PORT` (127.0.0.1:8766), reaching the graph service at `INSIGHT_GRAPH_URL`; reads only the process environment |
 | `python -m llm_model_broker` | the broker on `BROKER_HOST:BROKER_PORT` (127.0.0.1:8080), reading `GEMMA_*` from `.env` ([12.4](12_architecture.md#124-services-and-contracts)) |
+| `python -m ads_bridge_service` | the ADS bridge on `ADS_BRIDGE_HOST:ADS_BRIDGE_PORT` (127.0.0.1:8767), reaching ADS at `ADS_URL` and `ADS_LLM_URL`; reads only the process environment (`scripts/dev.py` mounts it under `/api/ads/`; [12.4](12_architecture.md#124-services-and-contracts)) |
 | `python -m insight_graph_service.core.model_store [MODEL_DIR] [--seed DIR]` | provisions the embedding model and verifies it file by file; without a folder, the service's `MODEL_DIR` (environment, then `.env`); exit 1 unless the result verifies |
 | `docker compose up -d --build --wait` | the whole suite in dependency order ([12.5](12_architecture.md#125-containers-and-start-order)) |
 | `python scripts/experiment.py`, `scripts/multilingual_benchmark.py`, `scripts/eval_answers.py` | measurements on scratch workspaces ([10.4](10_verification.md#104-measurement-scripts)) |
@@ -144,6 +145,8 @@ The narrator's settings are `NarratorSettings` (`evidence_narrator_service/setti
 | `unknown_dataset` (not a batch code) | `Engine.delete_dataset` was given an id no batch carries (HTTP 404) | — |
 | `unknown_pattern` (not a batch code) | `Engine.verify_pattern` was given an id no journal record carries (HTTP 404) | — |
 | `unknown_upload` (not a batch code) | `Engine.delete_upload` was given an upload id no batch carries (HTTP 404) | — |
+| `empty_zone` (not a batch code) | `POST /api/ads/jobs` without a drawn zone (HTTP 400) | — |
+| `ads_unavailable`, `ads_timeout`, `ads_failed`, `sig_failed`, `internal_error` (an ADS job's `error.code`) | ADS did not connect; the ADS job ran past `ADS_JOB_TIMEOUT_S`; ADS refused a call, could not be read `STATUS_RETRIES` times in a row or returned no report; the narrator or the graph service refused the zone's evidence or rows; anything else (the trace is logged). A final report that fails is no error: the job ends `done` with `joint_error`. The job ends `stage = error` with `failed_stage` ([8.8](08_interface.md#88-a-zones-question-to-ads)) | search / ads / joint |
 | warning `graph persistence (Neo4j) failed` | the mirror failed; the batch stays READY | READY |
 | QA `answer_mode = fallback` / `empty` | LLM unavailable or switched off / empty graph | question |
 
