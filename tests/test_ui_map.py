@@ -402,7 +402,9 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
             f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ const s = spread(''); return [s.anchor.dataset_id, s.others]; }} finally {{ G.datasets = keep; }} }})()"
         ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
-        assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
+        assert page.evaluate(
+            f"{finest}.some((f) => Object.values(f.properties.ids).filter((ids) => ids.length).length === 2)"
+        )  # both on the finest level
         assert page.inner_text("#map-title") == "Усі датасети" and "half" in page.inner_text("#map-meta")
         assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
         rows = "W.data.themes.flatMap((t) => t.insights)"
@@ -419,7 +421,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
             "[...document.querySelectorAll('#map-window .mw-i')].every((b) => reading(b.dataset.pid) && b.title.startsWith(reading(b.dataset.pid)))"
         )
         both = page.evaluate(
-            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.by).filter(Boolean).length === 2)"
+            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.ids).filter((ids) => ids.length).length === 2)"
         )
         page.evaluate(
             f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
@@ -494,8 +496,8 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span
         rows = "[...document.querySelectorAll('#map-window .mw-i')].map((b) => [b.dataset.pid, b.classList.contains('off')])"
         page.evaluate("Timeline.setPeriod('2019-03-04T00:00', '2019-03-11T00:00'); Timeline.apply()")  # the first week: every core meets it
-        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
+        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
         counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
         everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
         assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
@@ -503,6 +505,10 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
         held = "['cells-fill', 'cells-line'].map((id) => JSON.stringify(G.map.getFilter(id)))"
         assert page.evaluate(held) == ['["has","points_in_period"]'] * 2  # nor its outline, hover or click, whatever the colour
+        page.evaluate("G.others = ['ds-none']; paintPeriod()")  # «Усі датасети» draws no cell: the days leave the cells
+        assert page.evaluate(held) == [None, None]
+        page.evaluate("refreshPass()")  # back to the dataset without a load: its cells take the days again
+        assert page.evaluate(held) == ['["has","points_in_period"]'] * 2
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
         assert page.text_content("#map-points").replace("\u00a0", "") == f"{sum(counted)} подій за період"  # the HUD counts the days too
         lit = "G.data.features.find((f) => f.properties.points_in_period)"
@@ -512,14 +518,19 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
             page.text_content(".sig-pop .pp-head [data-user]").replace("\u00a0", "")
             == f"Комірка · {n} {'подія' if n == 1 else 'події' if 1 < n % 10 < 5 and not 11 < n % 100 < 15 else 'подій'} за період"
         )
+        if page.locator(".sig-pop .pp-here").count():  # the region's count, the cell's part of it and the part acting: one base
+            page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
+            whole, here, acting = map(int, re.findall(r"\d+", page.text_content(".sig-pop .pp-here").replace("\u00a0", "")))
+            assert whole >= here >= acting
         every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
         page.evaluate(f"GeoMap.setPolygon({{type: 'Polygon', coordinates: [{every}]}})")  # every cell
         assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
         page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
+        page.wait_for_function("G.idle.size > 0 && document.querySelectorAll('#map-window .mw-i.off').length > 0", timeout=10000)
         listed = page.evaluate(rows)
-        assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
+        assert listed and all(off for _, off in listed) and all(page.evaluate(f"G.idle.has('{pid}')") for pid, _ in listed)
         assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
         page.wait_for_function(
             "/у періоді: 0$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000

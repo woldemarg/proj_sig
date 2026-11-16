@@ -702,8 +702,9 @@ class Engine:
         return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
     @_healthy
-    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime]) -> dict[str, Any]:
-        return geo_views.geo_period_counts(self.ws, dataset_id, period)
+    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        idle = geo_views.idle_insights(self.ws, self.graph(), dataset_id, period, self.settings.thresholds, datasets)
+        return geo_views.geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:

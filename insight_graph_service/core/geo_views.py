@@ -211,6 +211,26 @@ def geo_period_counts(ws: Workspace, dataset_id: str, period: tuple[datetime, da
     return {"counts": counts.tolist(), "points": int(counts.sum()), "timed": True}
 
 
+def idle_insights(
+    ws: Workspace,
+    graph: DualGraph,
+    dataset_id: str,
+    period: tuple[datetime, datetime],
+    thresholds: PhenomenonThresholds,
+    datasets: tuple[str, ...] = (),
+) -> list[str]:
+    """The insights the map lists (``geo_overlay``'s region ``ids``) that do not act in ``period``: a trajectory whose core
+    does not meet it and no event inside it (``DualGraph.members``, docs/07_question_answering.md §7.2); one with
+    neither a core nor an event always acts."""
+    listed = {
+        pid for f in geo_overlay(ws, graph, dataset_id, thresholds, datasets)["features"] for ids in f["properties"]["ids"].values() for pid in ids
+    }
+    members = graph.members(period)
+    acting = {*members["active"], *(pid for pid, _ in members["peaked"]), *(pid for pid, _ in members["dropped"])}
+    timed = {pid for pid, t in graph.trajectories.items() if t.get("core") or t["events"]}
+    return sorted(listed & timed - acting)
+
+
 def points_in_period(ws: Workspace, dataset_id: str, period: tuple[datetime, datetime]) -> np.ndarray | None:
     """Which of the dataset's points lie in ``period`` ([start, end), wall clock, read on the dataset's calendar as an
     asked period is: docs/07_question_answering.md §7.1); None without their times (no time column, or stored before
@@ -360,7 +380,7 @@ def geo_pattern(
     whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it.
     With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
     of this dataset draws and describes it. With a ``period``, the points are those in it (``points_in_period``) when the
-    dataset has their times."""
+    dataset has their times (``in_period``)."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
     if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
@@ -376,7 +396,8 @@ def geo_pattern(
         rows, level = found.events, found.level
         src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
         inside = src[np.isin(geo["point_cell"][src], rows)]
-    if period is not None and (timed := points_in_period(ws, dataset_id, period)) is not None:
+    timed = points_in_period(ws, dataset_id, period) if period is not None else None
+    if timed is not None:
         inside = inside[timed[inside]]
     step = max(1, int(np.ceil(len(inside) / max_points)))
     points = geo["lonlat"][inside[::step]]
@@ -386,6 +407,7 @@ def geo_pattern(
         "cells": [str(c) for c in geo["cells"][rows]],
         "rows": rows.tolist(),
         "n_points": int(len(inside)),
+        "in_period": timed is not None,  # the points are those of the asked period
         "points": np.round(points.astype(float), 5).tolist(),
         "level": level,
         "effect_size": ins.effect_size,
@@ -400,7 +422,7 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
     """What the map draws over a geo dataset: every region holding a cell of the datasets ``map_set`` keeps, at each
     level of ``_region_sets``, as GeoJSON with the rows of ``dataset_id``'s cells inside it, ``ids``, the IN VIEW rows a
     view of that region alone lists per dataset (``_rows``; the datasets' insights are of different uploads, so they
-    add), ``n``, their number, and ``by``, that count per dataset; and each pattern of the dataset and of the table levels of its upload, and each one
+    add), and ``n``, their number; and each pattern of the dataset and of the table levels of its upload, and each one
     another dataset of the set lists, with its credibility, integrity, scale and reading — the latter with ``map_dataset``,
     the dataset whose ``/patterns`` draws it. Derived once per commit and hidden set (model A: a hidden layer's runs
     are not listed, not counted, not drawn)."""
@@ -420,7 +442,7 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
         features = region_features(geo["cells"], sorted(held))
         for f in features:
             by = held[f["properties"]["id"]]
-            f["properties"].update(n=sum(map(len, by.values())), by={ds: len(rows) for ds, rows in by.items()}, ids=by)
+            f["properties"].update(n=sum(map(len, by.values())), ids=by)
         elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds, hidden)["patterns"]}
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
@@ -647,11 +669,11 @@ def geo_window(
     regions it is characteristic of in its own right — a row a region lists only as a coarser one's comes after —,
     then its best lift there, then weight, and listed under its theme
     (``primary_anchor``). A view of one region lists the ``n`` the overlay draws on it; ``cells`` and ``points`` add over
-    the set's datasets, each of its own grid and file; with a ``period``, ``points`` are those in it of each dataset that
-    has their times (``period_cell_counts``; ``in_period`` says whether any had), a row's ``points`` stay its whole span's."""
+    the set's datasets, each of its own grid and file, over the whole span; with a ``period``, ``period_points`` are the
+    points in it of the datasets that have their times (``period_cell_counts``; None when none has)."""
     rows: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     cells = points = 0
-    in_period = False
+    period_points: int | None = None
     regions: set[str] = set()
     hidden = hidden_datasets(ws.list_batches())
     own_levels = _region_sets(ws, graph, dataset_id, hidden)
@@ -663,9 +685,9 @@ def geo_window(
         if lv not in sets:
             continue
         view, at = window_view(proj["centres"], bbox), sets[lv]
-        counted = period_cell_counts(ws, ds, period) if period is not None else None
-        in_period |= counted is not None
-        cells, points = cells + int(view.sum()), points + int((proj["per_cell"] if counted is None else counted)[view].sum())
+        cells, points = cells + int(view.sum()), points + int(proj["per_cell"][view].sum())
+        if period is not None and (counted := period_cell_counts(ws, ds, period)) is not None:
+            period_points = (period_points or 0) + int(counted[view].sum())
         own: defaultdict[str, list[float]] = defaultdict(list)  # the regions in focus each insight is characteristic of
         wide: defaultdict[str, list[float]] = defaultdict(list)  # those listing it only as a coarser region's
         for r in np.unique(at.idx[view]):
@@ -716,7 +738,15 @@ def geo_window(
         )
         theme["insights"].append(row | {"rank": rank})
     order = sorted(themes.values(), key=lambda t: t["id"] is None)  # by their leading row; the insights without a theme last
-    return {"cells": cells, "points": points, "in_period": in_period, "level": lv, "regions": len(regions), "insights": len(rows), "themes": order}
+    return {
+        "cells": cells,
+        "points": points,
+        "period_points": period_points,
+        "level": lv,
+        "regions": len(regions),
+        "insights": len(rows),
+        "themes": order,
+    }
 
 
 def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> dict[str, list[str]]:

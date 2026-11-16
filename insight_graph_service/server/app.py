@@ -353,8 +353,8 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/counts")
-    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
-        return engine.geo_period_counts(dataset_id, asked_period(start, end))
+    def geo_period_counts(dataset_id: str, start: str, end: str, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, asked_period(start, end), tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:

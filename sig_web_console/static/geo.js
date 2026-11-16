@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), poly: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), poly: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null, idle: new Set(), focusSeq: 0 };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const CELL_LINE = 0.32;  // the cells' outline opacity
@@ -104,10 +104,10 @@ const GeoMap = {
 
   clear() { GeoMap.unfocus(); G.evidence = []; },
 
-  onPeriod() {  // the bar's days on everything the map counts: cells, regions, the IN VIEW list, a focus or a popup
-    if (W.data) renderWindow();
-    scheduleWindow(); paintRegionCounts();
-    paintPeriod().then(() => { if (G.focusId) GeoMap.focusPattern(G.focusId, false); else if (G.popup && G.reopen) G.reopen(); });
+  onPeriod() {  // the bar's days on everything the map counts: cells, regions, the IN VIEW list, a focus and a popup
+    const reopen = G.popup && G.reopen;  // a focus closes the popup: it opens again after it
+    scheduleWindow();
+    paintPeriod().then(() => { if (G.focusId) GeoMap.focusPattern(G.focusId, false); if (reopen) reopen(); });
   },
 
   closePopup() {  // whether a cell popup was open
@@ -135,6 +135,7 @@ const GeoMap = {
 
   async focusPattern(pid, fit = true) {
     const own = G.patterns[pid], away = !own && elsewhere(pid); if (!(own || away) || !G.map) return;
+    const seq = ++G.focusSeq;  // a later focus, or the same one for other days, wins
     GeoMap.unfocus();
     G.focusId = pid;
     const item = G.evidence.find((i) => i.pattern_id === pid);
@@ -146,7 +147,7 @@ const GeoMap = {
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
       const pts = await api(`/api/geo/${encodeURIComponent(away || G.ds)}/patterns/${encodeURIComponent(pid)}?${away ? "rings=1" : ""}${periodQuery("&")}`);
-      if (G.focusId !== pid) return;  // another insight was focused meanwhile
+      if (seq !== G.focusSeq) return;  // focused again meanwhile
       const p = own || { ...pts, reading: G.overlay.patterns[pid].reading, numbers: G.overlay.patterns[pid].numbers, spatial: {} };
       if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of; its cells its place
         const rings = { type: "FeatureCollection", features: pts.rings.map((r) => ({ type: "Feature", geometry: { type: "Polygon", coordinates: [r] }, properties: {} })) };
@@ -197,7 +198,7 @@ async function refreshPass() {
   if (S.view !== "map") G.stale = true;  // the map reads its cells on its tab alone (show)
   else if (want.dataset_id !== (G.loading ? G.target : G.ds) || !G.data) await loadDataset(want.dataset_id);  // a load in flight counts
   else if (!G.loading) {  // a commit changes the graph over the same cells, a filter the mode: a new mode is fitted as a load is
-    await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode();
+    await Promise.all([loadOverlay(G.ds), loadProjected(G.ds)]); paintMode(); await paintPeriod();
     if (G.others.join() !== was) fit(G.box, { padding: viewPadding(), duration: 0 });
     scheduleWindow();
   }
@@ -519,10 +520,8 @@ function regionLevel() {
   return levels.includes(G.level) && Math.abs(want - G.level) - Math.abs(want - best) < 0.5 ? G.level : best;
 }
 
-const regionCount = (f, ds) => {  // a region's characteristic insights (of one dataset), those acting in the bar's days with a period
-  const ids = ds ? f.properties.ids[ds] || [] : Object.values(f.properties.ids).flat();
-  return S.period ? ids.filter(Timeline.inPeriod).length : ids.length;
-};
+const acts = (pid) => !(S.period && G.idle.has(pid));  // whether an insight acts in the bar's days, as /counts reads it (docs/07 §7.2)
+const regionCount = (f, ds) => (ds ? f.properties.ids[ds] || [] : Object.values(f.properties.ids).flat()).filter(acts).length;  // of one dataset, or all
 
 function paintRegionCounts() {
   /* the regions and their counts as the bar's days read them; a 0 is not written */
@@ -643,11 +642,13 @@ async function paintPeriod() {
   /* the period bar's days on the cells: each one's points in them (GET /counts) as a colour choice, taken when the
      colour showed every point, and given back with the whole span; a cell with none is gone; the insights' numbers stay the whole span's */
   const seq = ++G.periodSeq, ds = G.ds, p = S.period;
-  if (G.others.length) { $("map-period").hidden = true; holdPeriodCells(null); }  // «Усі датасети» draws no cell: no period on them either
-  if (!G.data || G.others.length) return;
-  if (!p && $("map-period").hidden) return;  // the whole span, nothing of a period on the cells
-  const got = p ? await api(`/api/geo/${encodeURIComponent(ds)}/counts?start=${encodeURIComponent(p.start)}&end=${encodeURIComponent(p.end)}`).catch(() => null) : null;
+  if (!G.data) return;
+  const got = p ? await api(`/api/geo/${encodeURIComponent(ds)}/counts?${periodQuery("")}${alongside("&")}`).catch(() => null) : null;
   if (seq !== G.periodSeq || ds !== G.ds) return;  // the days or the dataset changed meanwhile
+  G.idle = new Set((got && got.idle) || []);
+  paintRegionCounts(); renderWindow();
+  if (G.others.length) { $("map-period").hidden = true; holdPeriodCells(null); return; }  // «Усі датасети» draws no cell: no period on them either
+  if (!p && $("map-period").hidden) return;  // the whole span, nothing of a period on the cells
   const counts = got && got.counts, was = G.metric;
   G.data.features.forEach((f, i) => { if (counts && counts[i]) f.properties[PERIOD_METRIC] = counts[i]; else delete f.properties[PERIOD_METRIC]; });
   G.map.getSource("cells").setData(G.data);
@@ -659,7 +660,7 @@ async function paintPeriod() {
   listMetrics(); colorBy(G.metric);
   const note = $("map-period");
   note.hidden = !p;
-  note.textContent = !p ? "" : counts ? `${cap(word("points"))} за ${Timeline.words()}: ${num(got.points, 0)}. Гарячі точки та числа інсайтів — за весь час.`
+  note.textContent = !p ? "" : counts ? `${cap(word("points"))} за ${Timeline.words()}: ${num(got.points, 0)}. Гарячі точки та статистика інсайтів — за весь час.`
     : got && !got.timed ? "У датасеті мапи немає колонки часу: комірки — за весь час."
     : got ? "Мапа не знає часу подій цього датасету: завантажте той самий файл ще раз із тими самими параметрами, і комірки фарбуватимуться за періодом." : "Не вдалося порахувати події за період.";
 }
@@ -676,7 +677,7 @@ function holdPeriodCells(counts) {
 
 function colorBy(metric) {
   G.metric = metric;
-  const vals = G.data.features.map((f) => f.properties[metric]).filter((v) => typeof v === "number").sort((a, b) => a - b);
+  const vals = G.data.features.filter((f) => !G.periodOn || f.properties[PERIOD_METRIC]).map((f) => f.properties[metric]).filter((v) => typeof v === "number").sort((a, b) => a - b);  // the cells drawn
   const stops = [];
   for (let i = 1; i < RAMP.length; i++) { const q = vals[Math.floor((i / RAMP.length) * (vals.length - 1))]; if (q !== undefined && (!stops.length || q > stops[stops.length - 1])) stops.push(q); }
   const step = ["step", ["get", metric], RAMP[0]];
@@ -724,8 +725,8 @@ function renderCard(p, item, pts) {
     `<div class="mc-scope">${esc(p.reading.where)}</div>` +
     `<div class="mc-shift"><span class="${p.phenomenon_type === "covariance" ? "cov" : p.effect_size >= 0 ? "up" : "down"}">${esc(p.reading.what)}</span></div>` +
     `<div class="mc-grid">${(p.level  // found at another level: drawn by every cell holding one of its located events
-      ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
-      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness), true], [term("points"), pts ? num(pts.n_points, 0) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
+      ? [["де знайдено", esc(levelName(p.level))], [term("cells_events"), num(p.rows.length, 0)], [term("points"), pts ? cardPoints(pts) : "…"], [term("support"), num(p.support, 0)], [term("weight"), num(p.weight)]]
+      : [[term("cells_extent"), num(p.rows.length, 0)], [term("compactness"), num(sp.compactness), true], [term("points"), pts ? cardPoints(pts) : "…"], [term("n_eff"), num(sp.n_eff, 1), true], [term("moran_i"), num(sp.moran_i), true], [term("weight"), num(p.weight)]])
       .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
     (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
@@ -741,6 +742,8 @@ function trustTags(pid) {
   return `<i class="pp-tag ${cls}">${TERMS[`credibility_${t.credibility}`] ? term(`credibility_${t.credibility}`) : esc(words)}</i>` + (t.scale ? `<i class="pp-tag">${term(`scale_${t.scale}`)}</i>` : "");
 }
 
+const cardPoints = (pts) => `${num(pts.n_points, 0)}${pts.in_period ? " за період" : ""}`;  // an insight's points, the bar's days' when /patterns read them
+
 const LISA_WORDS = { "hot spot": "гаряча точка", "cold spot": "холодна точка" };
 
 function cellPopup(f, lngLat) {
@@ -749,7 +752,7 @@ function cellPopup(f, lngLat) {
   const rows = Object.entries(p).filter(([k, v]) => !skip.has(k) && v !== null && v !== "missing" && !k.endsWith("_band"))
     .map(([k, v]) => `<tr><th>${esc(human(k))}</th><td>${typeof v === "number" ? num(v, 3) : esc(v)}</td></tr>`).join("");
   const region = level != null && G.overlay ? G.overlay.features.find((r) => r.properties.resolution === level && r.properties.rows.includes(row)) : null;
-  const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(regionCount(region), "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}${S.period ? " у періоді" : ""}</div><div class="pp-list"></div>` : "";
+  const reg = region ? `<div class="pp-sub pp-here">${cap(word("region"))}: ${esc(plural(region.properties.n, "характерний інсайт", "характерні інсайти", "характерних інсайтів"))}</div><div class="pp-list"></div>` : "";
   const spot = LISA_WORDS[p.lisa_points];  // the person reads a hot or cold spot in words, the developer every label
   const popup = openPopup(`<div class="pp-head"><span data-dev>${esc(p.h3)}</span><span data-user>${esc(cap(word("cell")))} · ${esc(plural(cellPoints(G.data.features[row].properties), "подія", "події", "подій"))}${G.periodOn ? " за період" : ""}</span>` +
     `<span class="lisa ${esc(String(p.lisa_points).replace(" ", "-"))}"${spot ? "" : " data-dev"}>${esc(spot || p.lisa_points)}</span></div>` +
@@ -790,7 +793,7 @@ async function popupInsights(popup, box, here, count, level = G.level ?? regionL
   const bbox = [unwrap(box[0], 0), box[1], unwrap(box[2], 0), box[3]].map((v) => v.toFixed(6)).join(",");
   const d = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?bbox=${bbox}${level == null ? "" : `&level=${level}`}`).catch(() => null);
   if (G.popup !== popup || !d || d.error) return;  // closed or replaced meanwhile
-  const out = (i) => !Timeline.inPeriod(i.id);  // set aside by the period bar, as the IN VIEW list sets it aside
+  const out = (i) => !acts(i.id);  // set aside by the period bar, as the IN VIEW list sets it aside
   const kept = d.themes.flatMap((t) => t.insights).filter((i) => G.patterns[i.id] && here(i)).sort((x, y) => out(x) - out(y) || x.rank - y.rank);
   const el = popup.getElement();
   el.querySelector(".pp-here").textContent += count(kept.length) + (S.period ? ` · у періоді: ${kept.filter((i) => !out(i)).length}` : "");
@@ -801,7 +804,7 @@ async function popupInsights(popup, box, here, count, level = G.level ?? regionL
 
 // the IN VIEW list (docs/08 §8.7), the map as a window on the hidden graph (GET /api/geo/{ds}/window): the themes and insights of the view,
 // re-read after every pan or zoom; a click draws the insight and describes it in the chat, whose links walk the graph on
-const W = { seq: 0, timer: null, data: null, fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
+const W = { seq: 0, timer: null, data: null, days: "", fold: {}, folded: null, all: false };  // folded: decided by the map's width at the first render
 const ROWS_SHOWN = 8;  // the rows listed before «показати всі»: those characteristic of the most regions in focus
 const FOCUS_INSET = 0.2;  // the share of the map left out at each edge, where the eye rarely rests (docs/08 §8.7)
 
@@ -823,7 +826,7 @@ async function loadWindow() {
   const query = `bbox=${[w, lat(s), e, lat(n)].join(",")}${level == null ? "" : `&level=${level}`}${alongside("&")}${periodQuery("&")}`;
   const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?${query}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
-  W.data = data; renderWindow();
+  W.data = data; W.days = periodQuery(""); renderWindow();
 }
 
 const windowItem = (pid) => ((W.data && W.data.themes) || []).flatMap((t) => t.insights).find((i) => i.id === pid) || null;
@@ -847,9 +850,11 @@ function renderWindow() {
   if (W.folded === null) W.folded = $("map").clientWidth < 800;  // a narrow map starts with the header alone: the list would cover its cells
   el.classList.toggle("folded", W.folded); $("mw-fold").textContent = W.folded ? "+" : "–";
   if (d.error) { $("mw-meta").textContent = ""; $("mw-body").innerHTML = `<div class="mw-err">${esc(d.error)}</div>`; return; }
-  const out = new Set(d.themes.flatMap((t) => t.insights).filter((i) => !Timeline.inPeriod(i.id)).map((i) => i.id));  // set aside by the period bar
+  const out = new Set(d.themes.flatMap((t) => t.insights).filter((i) => !acts(i.id)).map((i) => i.id));  // set aside by the period bar
+  const days = W.days === periodQuery("") ? d.period_points : undefined;  // undefined: read for other days, the new answer comes
+  const points = days === undefined ? "" : ` · ${days === null ? plural(d.points, "подія", "події", "подій") : `${plural(days, "подія", "події", "подій")} за період`}`;
   $("mw-meta").textContent = `${plural(d.insights, "інсайт", "інсайти", "інсайтів")}${S.period ? ` · у періоді: ${d.insights - out.size}` : ""} · ` +
-    `${plural(d.themes.length, "тема", "теми", "тем")} · ${plural(d.points, "подія", "події", "подій")}${d.in_period ? " за період" : ""}`;
+    `${plural(d.themes.length, "тема", "теми", "тем")}${points}`;
   const row = (i) => `<button type="button" class="mw-i${i.id === G.focusId ? " on" : ""}${out.has(i.id) ? " off" : ""}" data-pid="${esc(i.id)}" title="${esc(reading(i.id) || i.label)}${out.has(i.id) ? ` · не діє в періоді ${Timeline.words()}` : ""} · ${word("points")} у вікні${S.period ? " за весь час" : ""}: ${num(i.points, 0)} (${num(i.share * 100, 0)}% усіх) · ${word("cells_in_view")}: ${num(i.cells, 0)} · характерний для регіонів у фокусі: ${num(i.regions, 0)}${i.wider ? " · характерний для ширшої ділянки: тут замало подій, щоб це перевірити" : ""}">` +
     `${G.others.length ? `<i class="mw-ds" title="${esc(fileOf(i.dataset_id))}">${esc(fileOf(i.dataset_id).replace(/\.[^.]+$/, ""))}</i>` : ""}<i class="lvl${i.level === "table" ? " tbl" : ""}"${i.also.length ? ` title="також знайдено: ${esc(i.also.map((a) => levelName(a.level)).join(", "))}"` : ""}>${esc(levelName(i.level))}${i.also.length ? " +" + i.also.length : ""}</i><span class="mw-nm">${esc(i.values.map(human).join(" · "))}` +
     `<em class="${i.ptype === "covariance" ? "cov" : i.effect >= 0 ? "up" : "down"}">${esc((readingOf(i.id) || {}).headline || human(insightTail(i)))}</em></span>` +  // the reading's headline in the declared words; the label's tail without one
