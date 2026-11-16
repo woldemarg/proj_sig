@@ -288,6 +288,10 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.input_value("#ads-question") == "Період: 2026-08-09 06:00 — 2026-08-10 18:00 (кінець не включно)\n"
                 page.evaluate("S.period = null")
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
+                coarser = "G.datasets.push({...G.datasets[0], dataset_id: 'coarser', resolution: G.datasets[0].resolution - 1}); openAds()"
+                page.evaluate(coarser)  # another level of the same upload: its rows go once
+                assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.value)") == [page.evaluate("GeoMap.current()")]
+                page.evaluate("G.datasets.pop(); openAds()")
                 page.wait_for_function("$('ads-preview').textContent.includes('Період:')")  # previewed: the period line alone asks nothing
                 assert page.is_disabled("#ads-send")
                 page.fill("#ads-question", "Скільки подій у зоні?")
