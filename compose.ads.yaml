@@ -42,3 +42,7 @@ services:
       evidence-narrator: { condition: service_healthy }
       orchestrator: { condition: service_started }
     networks: [internal]
+
+  web-console:  # merged into compose.yaml's: the console opens once the bridge answers, so the header never reads a starting bridge as no ADS
+    depends_on:
+      ads-bridge: { condition: service_healthy }
