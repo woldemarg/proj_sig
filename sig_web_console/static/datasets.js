@@ -268,6 +268,11 @@ function syncTable() {  // a table's geo is held, not sent: its field disabled
 function fillOptions(o = {}) {  // the fields a shipped set's manifest fills: as it says, or their defaults for a file of one's own
   for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
   $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
+  mirrorTime();
+}
+
+function mirrorTime() {  // the person's switch and column show the time column the upload sends (#time)
+  $("time-user").value = $("time").value; $("use-time").checked = Boolean($("time").value.trim());
 }
 
 const sampleItem = (d) => `<option value="${esc(d.key)}">${esc(d.title)} · ${num(d.rows, 0)} рядків</option>`;

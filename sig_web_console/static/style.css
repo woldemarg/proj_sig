@@ -74,6 +74,7 @@ label.chk { display: flex; align-items: center; gap: 6px; } label.chk:has(input:
 .drop .big { font-weight: 620; } .drop .muted { font-size: 12.5px; }
 .drop svg { color: var(--accent); margin-bottom: 2px; }
 .drop .file { font-size: 13px; color: var(--accent); font-weight: 600; word-break: break-all; }
+.time-opt { margin-top: 8px; } .time-opt:not(:has(#use-time:checked)) .field { display: none; }  /* the column asked once time is ticked */
 .roles { border: 0; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; } .roles legend { width: 100%; }
 .role-card { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-xs); cursor: pointer; font-size: 13px; } .role-card b { font-weight: 560; }
 .adv-h { margin: 14px 0 0; font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
