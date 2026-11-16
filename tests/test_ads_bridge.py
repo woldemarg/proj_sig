@@ -14,8 +14,9 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.testclient import TestClient
 
-from ads_bridge_service.app import create_app, error_code
+from ads_bridge_service.app import _PERIODS, create_app, error_code
 from ads_bridge_service.settings import AdsSettings
+from insight_contracts.wording import PERIOD
 
 POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2, 50.1], [30.0, 50.1], [30.0, 50.0]]]}
 FINAL = "## Результати аналізу\nу зоні 3 події\n## Методологія\nполігон"
@@ -181,15 +182,22 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
         }
         job = finished(client, client.post("/api/ads/jobs", json=dated).json()["job_id"])
         sent = seen["chat"][0]
-        assert sent["period"] == dated["period"] and sent["question"].split() == ["Період:", "—", "(включно)", "Скільки", "подій", "у", "чи", "?"]
+        assert sent["period"] == dated["period"] and sent["question"].split() == ["Скільки", "подій", "у", "чи", "?"]
         assert dated["question"] in job["ads_query"] and "A period the question names bounds every figure" in job["ads_query"]
 
         assert client.post("/api/ads/jobs", json=ask | {"question": " "}).status_code == 400
+        assert client.post("/api/ads/jobs", json=ask | {"question": "Період: 2026-08-09 — 2026-08-17 (включно)\n "}).status_code == 400
         assert client.post("/api/ads/jobs", json=ask | {"polygon": None}).json()["code"] == "empty_zone"
         assert client.post("/api/ads/jobs", json=ask | {"tables": []}).status_code == 422
         escaping = ask | {"tables": [{"dataset_id": "../reset?x=", "filename": "x.csv"}]}  # an id is one path segment, never a path
         assert finished(client, client.post("/api/ads/jobs", json=escaping).json()["job_id"])["error"]["code"] == "sig_failed" and "reset" not in seen
         assert client.get("/api/ads/jobs/nope").status_code == 404
+
+
+def test_the_bridge_strips_the_periods_the_graph_reads():
+    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period, so none overrides the bar's."""
+    samples = "2031-W13, 2031-q1, Q1 2031, 2031-03-24 10:00, 2031-03; not 2019-20, x2031-03, 2031-03-24-1, 12031-03"
+    assert [m.group(0) for m in _PERIODS.finditer(samples)] == [m.group(0) for m in PERIOD.finditer(samples)]
 
 
 def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
@@ -235,7 +243,7 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
     engine = make_engine(cfg)
-    upload_levels(engine, points_csv, geo="auto@8")
+    upload_levels(engine, points_csv, geo="auto@8", time="when")  # timed: the period bar is shown
     seen: dict = {}
     table = "## Результати аналізу\n\n| група | рядків |\n|---|---|\n| у зоні | 3 |\n\n## Методологія\n\nполігон"
     # the first cell's hexagon at 1.5 times its size: the zone is that cell, the ring round it lies in the polygon off the zone's cells
@@ -264,13 +272,24 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.evaluate("GeoMap.zone().length") == 1 and page.evaluate("GeoMap.closePopup()")
                 page.mouse.move(box["x"] + spot["x"], box["y"] + spot["y"])
                 page.wait_for_function("G.map.getCanvas().style.cursor === 'pointer'")  # the polygon says it can be clicked
+                page.evaluate("G.zone = new Set(['8a2a1072b59ffff'])")  # a zone this map draws no cell of, as on another level
+                page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])  # the polygon is no popup there and keeps its zone
+                assert page.evaluate("GeoMap.zone()") == ["8a2a1072b59ffff"] and not page.evaluate("GeoMap.closePopup()")
+                page.evaluate(draw)
+                assert page.evaluate("GeoMap.closePopup()")
                 page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])  # anywhere in the polygon opens the zone's popup, not only on its cells
-                page.evaluate("S.period = {start: '2026-08-09T00:00', end: '2026-08-18T00:00'}")
                 page.click(".sig-pop .pp-ads")
-                assert page.input_value("#ads-question") == "Період: 2026-08-09 — 2026-08-17 (включно)\n"  # the bar's days, the last included
+                whole = page.input_value("#ads-question")  # no period chosen: the bar's whole span, its last day included
+                assert whole.startswith("Період: 2019-03-04 — 2019-0") and whole.endswith(" (включно)\n"), whole
+                page.click("#ads-cancel")
+                page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")
+                page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])
+                page.click(".sig-pop .pp-ads")
+                assert page.input_value("#ads-question") == "Період: 2026-08-09 06:00 — 2026-08-10 18:00 (кінець не включно)\n"
                 page.evaluate("S.period = null")
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
-                assert page.is_disabled("#ads-send")  # no question yet
+                page.wait_for_function("$('ads-preview').textContent.includes('Період:')")  # previewed: the period line alone asks nothing
+                assert page.is_disabled("#ads-send")
                 page.fill("#ads-question", "Скільки подій у зоні?")
                 page.wait_for_function("$('ads-preview').textContent.includes('Скільки подій у зоні?') && !$('ads-send').disabled")
                 assert "(after the ask)" in page.text_content("#ads-preview")  # folded: read, not shown

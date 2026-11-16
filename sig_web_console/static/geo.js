@@ -361,8 +361,8 @@ function ensureMap() {
       });
       pointer = e;
     });
-    // a click in the drawn polygon or on a cell of its zone opens the zone's popup again, wherever it lands
-    const inZone = (e) => G.poly && (holds(G.poly.coordinates[0], [e.lngLat.lng, e.lngLat.lat]) ||
+    // a click in the drawn polygon or on a cell of its zone opens the zone's popup again, while the map draws the zone's cells
+    const inZone = (e) => G.poly && zoneShown() && (holds(G.poly.coordinates[0], [e.lngLat.lng, e.lngLat.lat]) ||
       m.queryRenderedFeatures(e.point, { layers: ["cells-fill"] }).some((f) => G.zone.has(f.properties.h3)));
     m.on("click", "cells-fill", (e) => { if (!G.draw && !inZone(e)) cellPopup(e.features[0], e.lngLat); });
     m.on("click", "regions-hit", (e) => { if (!G.draw && !inZone(e)) regionPopup(e.features[0].properties.id, e.lngLat); });

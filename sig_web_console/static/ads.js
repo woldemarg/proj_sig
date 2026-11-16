@@ -6,6 +6,7 @@ const ADS_POLL_MS = 3000;
 const ADS_POLL_RETRIES = 5;  // failed reads of a job in a row before the turn gives it up
 const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 let adsPreviewTimer = null;
+const PERIOD_LINE = /^Період:[^\n]*\n?/;  // the line openAds heads the question with: no question of its own
 
 function adsBody() {
   /* the ask as the form holds it: the first ticked table is the base, the rest its context layers; the zone is the
@@ -19,15 +20,15 @@ function periodHeader(p) {
   /* the period bar's [start, end) as the question's first line, ISO dates with the last day included */
   const lo = wall(p.start), hi = wall(p.end);
   if (lo % DAY === 0 && hi % DAY === 0) return `Період: ${isoDay(lo)} — ${isoDay(hi - DAY)} (включно)`;
-  return `Період: ${p.start.replace("T", " ")} — ${p.end.replace("T", " ")}`;
+  return `Період: ${p.start.replace("T", " ")} — ${p.end.replace("T", " ")} (кінець не включно)`;
 }
 
 function previewAds() {
   /* the task ADS will get, but for the zone's figures and insights, which the ask brings */
+  const body = adsBody();
+  $("ads-send").disabled = !body.question.replace(PERIOD_LINE, "").trim() || !body.tables.length;
   clearTimeout(adsPreviewTimer);
   adsPreviewTimer = setTimeout(async () => {
-    const body = adsBody();
-    $("ads-send").disabled = !body.question || !body.tables.length;
     if (!body.tables.length) { $("ads-preview").textContent = "Позначте хоча б одну таблицю."; return; }
     const d = await api("/api/ads/preview", adsPost(body)).catch((e) => ({ parts: [{ text: e.message }] }));
     $("ads-preview").textContent = d.parts.map((p) => p.text).join("");
