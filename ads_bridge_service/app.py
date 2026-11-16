@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -59,6 +60,15 @@ def _checked(resp: httpx.Response, code: str, what: str) -> httpx.Response:
     return resp
 
 
+def error_code(exc: Exception, stage: str) -> str:
+    """A failed job's code (docs/09_operations.md §9.4): its stage's own, else a service that did not answer, else a fault here."""
+    if isinstance(exc, StageError):
+        return exc.code
+    if isinstance(exc, httpx.HTTPError):
+        return "sig_failed" if stage == "search" else "ads_unavailable"
+    return "internal_error"
+
+
 def ads_report(status: dict[str, Any]) -> str:
     """The report of a finished ADS job, the links into ADS's own workspace taken out."""
     last = (status.get("result") or {}).get("last_execute_response") or {}
@@ -71,8 +81,14 @@ def ads_report(status: dict[str, Any]) -> str:
 def create_app(settings: AdsSettings | None = None) -> FastAPI:
     settings = settings or AdsSettings.from_env()
     http = httpx.Client(timeout=httpx.Timeout(600.0, connect=5.0))
-    jobs: dict[str, dict[str, Any]] = {}  # ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
+    # each job's state as last published; ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
+    jobs: dict[str, dict[str, Any]] = {}
     jobs_lock = threading.Lock()
+
+    def publish(job: dict[str, Any]) -> None:
+        """The job's state for the console: a copy, so a read never meets the worker's own dict half-changed."""
+        with jobs_lock:
+            jobs[job["job_id"]] = copy.deepcopy(job)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -143,12 +159,14 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return out if "## Результати аналізу" in out and "## Методологія" in out else ""
 
     def run(job: dict[str, Any], body: AskIn) -> None:
+        """The job's stages; ``job`` is this worker's alone, the console reads what each stage's end publishes."""
         started = time.monotonic()
 
         def enter(stage: str) -> None:
             nonlocal started
             job["timings"][job["stage"]] = round(time.monotonic() - started, 1)
             started, job["stage"] = time.monotonic(), stage
+            publish(job)
 
         try:
             findings = ask_graph(body.question, body.polygon)
@@ -171,15 +189,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             enter("done")
         except Exception as exc:  # recorded on the job: the console shows the stage and the reason
             log.exception("ADS job %s failed", job["job_id"])
-            unreachable = isinstance(exc, httpx.HTTPError)
-            code = (
-                exc.code
-                if isinstance(exc, StageError)
-                else ("ads_unavailable" if job["stage"] != "search" else "sig_failed")
-                if unreachable
-                else "internal_error"
-            )
-            job.update(failed_stage=job["stage"], stage="error", error={"code": code, "detail": f"{type(exc).__name__}: {exc}"})
+            error = {"code": error_code(exc, job["stage"]), "detail": f"{type(exc).__name__}: {exc}"}
+            job.update(failed_stage=job["stage"], stage="error", error=error)
+            publish(job)
 
     @app.get("/api/ads/health")
     def health() -> dict[str, Any]:
@@ -207,7 +219,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             ended = [k for k, j in jobs.items() if j["stage"] in ("done", "error")]
             for old in ended[: max(0, len(ended) - JOBS_KEPT + 1)]:
                 del jobs[old]
-            jobs[job["job_id"]] = job
+        publish(job)
         threading.Thread(target=run, args=(job, body), name=f"ads-job-{job['job_id']}", daemon=True).start()
         return JSONResponse({"job_id": job["job_id"]}, status_code=202)
 

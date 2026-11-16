@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import time
 
+import httpx
 import pytest
 from conftest import make_engine, serve, stack, upload_levels
 from dev import chromium
@@ -13,7 +14,7 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.testclient import TestClient
 
-from ads_bridge_service.app import create_app
+from ads_bridge_service.app import create_app, error_code
 from ads_bridge_service.settings import AdsSettings
 
 POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2, 50.1], [30.0, 50.1], [30.0, 50.0]]]}
@@ -209,6 +210,8 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         }
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert (job["failed_stage"], job["error"]["code"]) == ("ads", "ads_unavailable")
+    # a service that does not answer is SIG's while the graph is asked, ADS's after; any other fault is the bridge's own
+    assert (error_code(httpx.ConnectError("down"), "search"), error_code(ValueError("bug"), "ads")) == ("sig_failed", "internal_error")
 
 
 @pytest.mark.browser
