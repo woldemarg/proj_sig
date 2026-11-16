@@ -67,7 +67,7 @@ def upstream(
             "adjacent": 1,
             "far": 1,
             "resolution": 8,
-            "zone_cells": 2,
+            "zone_cells": 5,
             "columns": ["h3_r8", "h3_r7", "in_aoi", "aoi_zone"],
         }
         return Response(f"rows of {dataset_id}".encode(), media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})
@@ -136,7 +136,7 @@ def settings(url: str, **over) -> AdsSettings:
 def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
     seen: dict = {}
     tables = [{"dataset_id": "ds-a", "filename": "events.csv"}, {"dataset_id": "ds-b", "filename": "bars.csv"}]
-    ask = {"question": "Скільки подій у зоні?", "tables": tables, "polygon": POLYGON, "cells": ["c1", "c2"]}
+    ask = {"question": "Скільки подій у зоні?", "tables": tables, "polygon": POLYGON}
     with serve(upstream(seen, polls=3, flaky=2)) as url, TestClient(create_app(settings(url))) as client:  # two bad status reads, read again
         assert client.get("/api/ads/health").json()["ok"]
         parts = client.post("/api/ads/preview", json={"question": "Q?", "tables": tables}).json()["parts"]
@@ -151,10 +151,10 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
         assert started.status_code == 202
         job = finished(client, started.json()["job_id"])
         assert job["stage"] == "done" and set(job["timings"]) == {"search", "ads", "joint"}, job
-        # the graph is asked with the zone and no model; the text found nothing inside, so the zone alone stands
+        # the graph is asked with the polygon the rows are read against, and no model; the text found nothing inside, so the zone alone stands
         assert seen["chat"] == [
-            {"question": ask["question"], "cells": ["c1", "c2"], "use_llm": False},
-            {"question": "", "cells": ["c1", "c2"], "use_llm": False},
+            {"question": ask["question"], "geometry": POLYGON, "use_llm": False},
+            {"question": "", "geometry": POLYGON, "use_llm": False},
         ]
         assert [(i["key"], i["inside"]) for i in job["insights"]] == [("P1", True), ("P2", False), ("P4", False)]  # the zone's own first; P3 folded
         # the layer's cells at the base table's resolution: one column to join on
@@ -162,7 +162,7 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
         assert set(seen["files"]) == {"base_aoi.csv", "context_aoi.csv", "aoi.md"} and seen["files"]["base_aoi.csv"] == "rows of ds-a"
         assert "base_aoi.csv (events.csv)" in seen["files"]["aoi.md"] and "events.csv: O1" in seen["files"]["aoi.md"]
         query = seen["query"]
-        assert query == job["ads_query"] and ask["question"] in query and "inside=3, adjacent=1, far=1; cells in the zone: 2" in query
+        assert query == job["ads_query"] and ask["question"] in query and "inside=3, adjacent=1, far=1; cells in the zone: 5" in query
         assert "O1 · in zone: yes" in query and "established: points: strong increase" in query and "O2 · in zone: no" in query
         assert "file: other.csv (another dataset of the graph" in query and query.count("another dataset of the graph") == 1
         assert "O3 · in zone: no" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
@@ -170,9 +170,10 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
         assert "SIG analysed this table at H3 resolution 5" in seen["files"]["aoi.md"]
         assert job["ads_report"] == "ADS: 3 events plot" and seen["closed"] == "s1"  # no link into ADS's own workspace
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
+        assert "на рівні H3 8 базового шару таких комірок 5" in seen["prompt"]  # the methodology counts the zone the rows were read against
 
         assert client.post("/api/ads/jobs", json=ask | {"question": " "}).status_code == 400
-        assert client.post("/api/ads/jobs", json=ask | {"cells": []}).json()["code"] == "empty_zone"
+        assert client.post("/api/ads/jobs", json=ask | {"polygon": None}).json()["code"] == "empty_zone"
         assert client.post("/api/ads/jobs", json=ask | {"tables": []}).status_code == 422
         escaping = ask | {"tables": [{"dataset_id": "../reset?x=", "filename": "x.csv"}]}  # an id is one path segment, never a path
         assert finished(client, client.post("/api/ads/jobs", json=escaping).json()["job_id"])["error"]["code"] == "sig_failed" and "reset" not in seen
@@ -180,7 +181,7 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
 
 
 def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
-    ask = {"question": "Q?", "tables": [{"dataset_id": "ds-a", "filename": "events.csv"}], "polygon": POLYGON, "cells": ["c1"]}
+    ask = {"question": "Q?", "tables": [{"dataset_id": "ds-a", "filename": "events.csv"}], "polygon": POLYGON}
     with serve(upstream({}, polls=10**6)) as url, TestClient(create_app(settings(url, ads_job_timeout_s=0.05))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert (job["stage"], job["failed_stage"], job["error"]["code"]) == ("error", "ads", "ads_timeout")

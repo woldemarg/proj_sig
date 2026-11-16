@@ -42,8 +42,7 @@ class TableIn(BaseModel):
 class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
-    polygon: dict[str, Any] | None = None  # the drawn zone (GeoJSON Polygon)
-    cells: list[str] = []  # its cells on the open map: the zone the graph is asked about
+    polygon: dict[str, Any] | None = None  # the drawn zone (GeoJSON Polygon): the graph's evidence and the tables' rows both read it
 
 
 class StageError(RuntimeError):
@@ -82,8 +81,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, cells: list[str]) -> list[dict[str, Any]]:
-        body = {"question": question, "cells": cells, "use_llm": False}
+    def ask_graph(question: str, polygon: dict[str, Any]) -> list[dict[str, Any]]:
+        """The zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``), one place."""
+        body = {"question": question, "geometry": polygon, "use_llm": False}
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=body), "sig_failed", "SIG").json())
 
     def read_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
@@ -151,9 +151,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             started, job["stage"] = time.monotonic(), stage
 
         try:
-            findings = ask_graph(body.question, body.cells)
+            findings = ask_graph(body.question, body.polygon)
             if not any(f["inside"] for f in findings):  # the text pulled the seeds out of the zone: the zone alone, if it holds any
-                alone = ask_graph("", body.cells)
+                alone = ask_graph("", body.polygon)
                 findings = alone if any(f["inside"] for f in alone) else findings
             tables, files = read_tables(body)
             sources = finding_files(findings)
@@ -164,7 +164,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             job["ads_report"] = run_ads(job["ads_query"], files)
             enter("joint")
             try:
-                job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, len(body.cells), sources))
+                job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, sources))
             except Exception as exc:  # ADS's report stands without the final one
                 log.exception("ADS job %s: no final report", job["job_id"])
                 job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
@@ -200,7 +200,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     def start(body: AskIn) -> JSONResponse:
         if not body.question.strip():
             raise HTTPException(400, "empty question")
-        if not body.polygon or not body.cells:
+        if not body.polygon:
             return JSONResponse({"detail": "a question to ADS needs a zone drawn on the map", "code": "empty_zone"}, status_code=400)
         job = {"job_id": uuid.uuid4().hex[:12], "stage": "search", "question": body.question, "timings": {}}
         with jobs_lock:  # a running job is never dropped

@@ -8,9 +8,10 @@ const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "applica
 let adsPreviewTimer = null;
 
 function adsBody() {
-  /* the ask as the form holds it: the first ticked table is the base, the rest its context layers */
+  /* the ask as the form holds it: the first ticked table is the base, the rest its context layers; the zone is the
+     polygon, which the bridge's graph question and the tables' rows both read (not the cells the map lights) */
   const tables = [...document.querySelectorAll("#ads-tables input:checked")].map((i) => ({ dataset_id: i.value, filename: i.dataset.file }));
-  return { question: $("ads-question").value.trim(), tables, polygon: GeoMap.polygon(), cells: GeoMap.zone() };
+  return { question: $("ads-question").value.trim(), tables, polygon: GeoMap.polygon() };
 }
 
 function previewAds() {
@@ -38,7 +39,7 @@ function openAds() {
 async function askAds() {
   const body = adsBody();
   $("ads-dialog").close();
-  const turn = { question: body.question, zone: body.cells.length, since: new Date().toISOString(), ads: { stage: "search", timings: {} } };
+  const turn = { question: body.question, zone: GeoMap.zone().length, since: new Date().toISOString(), ads: { stage: "search", timings: {} } };
   S.chat.push(turn); renderThread();
   const fail = (e) => { turn.ads = { stage: "error", timings: {}, error: { code: e.code || "ads_unavailable", detail: e.message } }; renderThread(); };
   const started = await api("/api/ads/jobs", adsPost(body)).catch(fail);
