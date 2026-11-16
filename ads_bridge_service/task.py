@@ -226,11 +226,11 @@ def build_aoi_md(polygon: dict[str, Any], tables: list[dict[str, Any]], files: d
     )
 
 
-def build_domain_md(polygon: dict[str, Any], tables: list[dict[str, Any]], zone_cells: int, files: dict[str, list[str]]) -> str:
-    """The final prompt's domain knowledge, in the report's language: how the zone was applied to the data, where the
-    findings come from, and the glossary."""
+def build_domain_md(polygon: dict[str, Any], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:
+    """The final prompt's domain knowledge, in the report's language: how the zone was applied to the data (its cells
+    counted as the base table's rows were read against them), where the findings come from, and the glossary."""
     vertices, lons, lats = _zone_span(polygon)
-    base = tables[0]["filename"]
+    base, res, zone_cells = tables[0]["filename"], tables[0]["resolution"], tables[0]["zone_cells"]
     by_file = [
         f"- {name}: {', '.join(keys)}, "
         + ("базовий шар цього аналізу." if name == base else "інший датасет графа, не базовий шар; його числа описують інші дані.")
@@ -255,9 +255,10 @@ def build_domain_md(polygon: dict[str, Any], tables: list[dict[str, Any]], zone_
             ),
             "- Колонка in_aoi: 1 означає, що точка лежить усередині полігона, 0 поза ним. Обчислено детерміновано (point-in-polygon), без моделі. "
             "Колонка aoi_zone: inside у полігоні, adjacent поза ним у комірках зони чи їх шести сусідах, far решта.",
-            f"- Зону передано в SIG як {zone_cells} комірок H3 відкритої мапи, чиї центри лежать у полігоні, разом із питанням користувача (або без "
-            "нього, якщо відповідь із питанням не мала знахідок у зоні). Від цих комірок ретривер SIG увійшов у граф, обійшов його і зібрав знахідки "
-            "в зоні та пов'язані з ними; ADS отримав їх як встановлені факти.",
+            "- Зону передано в SIG як цей полігон разом із питанням користувача (або без нього, якщо відповідь із питанням не мала знахідок у "
+            "зоні). Граф прочитав його так само, як прочитано рядки таблиць: як комірки H3, чиї центри лежать у полігоні (на рівні H3 "
+            f"{res} базового шару таких комірок {zone_cells}). Від цих комірок ретривер SIG увійшов у граф, обійшов його і зібрав знахідки в зоні "
+            "та пов'язані з ними; ADS отримав їх як встановлені факти.",
             "",
             *(sources if by_file else []),
             SIG_GLOSSARY,

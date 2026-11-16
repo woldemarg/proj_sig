@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -42,8 +43,7 @@ class TableIn(BaseModel):
 class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
-    polygon: dict[str, Any] | None = None  # the drawn zone (GeoJSON Polygon)
-    cells: list[str] = []  # its cells on the open map: the zone the graph is asked about
+    polygon: dict[str, Any] | None = None  # the drawn zone (GeoJSON Polygon): the graph's evidence and the tables' rows both read it
 
 
 class StageError(RuntimeError):
@@ -60,6 +60,15 @@ def _checked(resp: httpx.Response, code: str, what: str) -> httpx.Response:
     return resp
 
 
+def error_code(exc: Exception, stage: str) -> str:
+    """A failed job's code (docs/09_operations.md §9.4): its stage's own, else a service that did not answer, else a fault here."""
+    if isinstance(exc, StageError):
+        return exc.code
+    if isinstance(exc, httpx.HTTPError):
+        return "sig_failed" if stage == "search" else "ads_unavailable"
+    return "internal_error"
+
+
 def ads_report(status: dict[str, Any]) -> str:
     """The report of a finished ADS job, the links into ADS's own workspace taken out."""
     last = (status.get("result") or {}).get("last_execute_response") or {}
@@ -72,8 +81,14 @@ def ads_report(status: dict[str, Any]) -> str:
 def create_app(settings: AdsSettings | None = None) -> FastAPI:
     settings = settings or AdsSettings.from_env()
     http = httpx.Client(timeout=httpx.Timeout(600.0, connect=5.0))
-    jobs: dict[str, dict[str, Any]] = {}  # ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
+    # each job's state as last published; ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
+    jobs: dict[str, dict[str, Any]] = {}
     jobs_lock = threading.Lock()
+
+    def publish(job: dict[str, Any]) -> None:
+        """The job's state for the console: a copy, so a read never meets the worker's own dict half-changed."""
+        with jobs_lock:
+            jobs[job["job_id"]] = copy.deepcopy(job)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -82,8 +97,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, cells: list[str]) -> list[dict[str, Any]]:
-        body = {"question": question, "cells": cells, "use_llm": False}
+    def ask_graph(question: str, polygon: dict[str, Any]) -> list[dict[str, Any]]:
+        """The zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``), one place."""
+        body = {"question": question, "geometry": polygon, "use_llm": False}
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=body), "sig_failed", "SIG").json())
 
     def read_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
@@ -143,17 +159,19 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return out if "## Результати аналізу" in out and "## Методологія" in out else ""
 
     def run(job: dict[str, Any], body: AskIn) -> None:
+        """The job's stages; ``job`` is this worker's alone, the console reads what each stage's end publishes."""
         started = time.monotonic()
 
         def enter(stage: str) -> None:
             nonlocal started
             job["timings"][job["stage"]] = round(time.monotonic() - started, 1)
             started, job["stage"] = time.monotonic(), stage
+            publish(job)
 
         try:
-            findings = ask_graph(body.question, body.cells)
+            findings = ask_graph(body.question, body.polygon)
             if not any(f["inside"] for f in findings):  # the text pulled the seeds out of the zone: the zone alone, if it holds any
-                alone = ask_graph("", body.cells)
+                alone = ask_graph("", body.polygon)
                 findings = alone if any(f["inside"] for f in alone) else findings
             tables, files = read_tables(body)
             sources = finding_files(findings)
@@ -164,22 +182,16 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             job["ads_report"] = run_ads(job["ads_query"], files)
             enter("joint")
             try:
-                job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, len(body.cells), sources))
+                job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(body.polygon, tables, sources))
             except Exception as exc:  # ADS's report stands without the final one
                 log.exception("ADS job %s: no final report", job["job_id"])
                 job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
             enter("done")
         except Exception as exc:  # recorded on the job: the console shows the stage and the reason
             log.exception("ADS job %s failed", job["job_id"])
-            unreachable = isinstance(exc, httpx.HTTPError)
-            code = (
-                exc.code
-                if isinstance(exc, StageError)
-                else ("ads_unavailable" if job["stage"] != "search" else "sig_failed")
-                if unreachable
-                else "internal_error"
-            )
-            job.update(failed_stage=job["stage"], stage="error", error={"code": code, "detail": f"{type(exc).__name__}: {exc}"})
+            error = {"code": error_code(exc, job["stage"]), "detail": f"{type(exc).__name__}: {exc}"}
+            job.update(failed_stage=job["stage"], stage="error", error=error)
+            publish(job)
 
     @app.get("/api/ads/health")
     def health() -> dict[str, Any]:
@@ -200,14 +212,14 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     def start(body: AskIn) -> JSONResponse:
         if not body.question.strip():
             raise HTTPException(400, "empty question")
-        if not body.polygon or not body.cells:
+        if not body.polygon:
             return JSONResponse({"detail": "a question to ADS needs a zone drawn on the map", "code": "empty_zone"}, status_code=400)
         job = {"job_id": uuid.uuid4().hex[:12], "stage": "search", "question": body.question, "timings": {}}
         with jobs_lock:  # a running job is never dropped
             ended = [k for k, j in jobs.items() if j["stage"] in ("done", "error")]
             for old in ended[: max(0, len(ended) - JOBS_KEPT + 1)]:
                 del jobs[old]
-            jobs[job["job_id"]] = job
+        publish(job)
         threading.Thread(target=run, args=(job, body), name=f"ads-job-{job['job_id']}", daemon=True).start()
         return JSONResponse({"job_id": job["job_id"]}, status_code=202)
 
