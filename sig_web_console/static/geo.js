@@ -356,7 +356,7 @@ function ensureMap() {
         pointer = null;
         $("map-cursor").textContent = `${ev.lngLat.lat.toFixed(4)}°N ${ev.lngLat.lng.toFixed(4)}°E · z${m.getZoom().toFixed(1)}` +
           (!f ? "" : f.properties.h3 ? ` · ${f.properties.h3} · ${plural(f.properties.points, "подія", "події", "подій")}` : ` · ${f.properties.id}`);
-        m.getCanvas().style.cursor = G.draw ? (nearFirst(ev.point) ? "pointer" : "crosshair") : f ? "pointer" : "";
+        m.getCanvas().style.cursor = G.draw ? (nearFirst(ev.point) ? "pointer" : "crosshair") : f || inZone(ev) ? "pointer" : "";  // a cell, or anywhere in the zone's polygon: a click opens a popup
         if (G.draw && G.draw.length) paintDraft([ev.lngLat.lng, ev.lngLat.lat]);
       });
       pointer = e;

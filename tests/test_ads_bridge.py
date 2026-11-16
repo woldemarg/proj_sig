@@ -262,6 +262,8 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.inner_text("#ads-pill") == "ADS активний"
                 spot, box = page.evaluate(off), page.locator("#map").bounding_box()
                 assert page.evaluate("GeoMap.zone().length") == 1 and page.evaluate("GeoMap.closePopup()")
+                page.mouse.move(box["x"] + spot["x"], box["y"] + spot["y"])
+                page.wait_for_function("G.map.getCanvas().style.cursor === 'pointer'")  # the polygon says it can be clicked
                 page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])  # anywhere in the polygon opens the zone's popup, not only on its cells
                 page.evaluate("S.period = {start: '2026-08-09T00:00', end: '2026-08-18T00:00'}")
                 page.click(".sig-pop .pp-ads")
