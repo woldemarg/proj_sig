@@ -49,6 +49,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --group dev --group ${TORCH}
 COPY evidence_narrator_service ./evidence_narrator_service
 COPY llm_model_broker ./llm_model_broker
+COPY ads_bridge_service ./ads_bridge_service
 COPY sig_web_console ./sig_web_console
 COPY tests ./tests
 COPY scripts ./scripts
