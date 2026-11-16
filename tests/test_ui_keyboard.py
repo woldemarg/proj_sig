@@ -118,6 +118,8 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.evaluate("() => document.querySelector('#mw-body .mw-i').click()")
         page.wait_for_selector("#map-card:not([hidden])")
         page.evaluate("() => { GeoMap.setPolygon(G.data.features[0].geometry); GeoMap.closePopup(); }")  # with a zone
+        outline = "G.map.getSource('zone').serialize().data.features.map((f) => f.geometry.type)"
+        assert page.evaluate(outline) == ["Polygon"]  # outlined over its cells
         boxes = """() => { const r = (q) => { const e = document.querySelector(q); return e && !e.hidden && e.getClientRects().length ? e.getBoundingClientRect() : null; };
             const panels = ['.map-hud', '#map-window', '#map-card'].map(r).filter(Boolean), cut = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             return { overlaps: panels.flatMap((a, i) => panels.slice(i + 1).filter((b) => cut(a, b))).length, map: r('#map').height, canvas: r('.canvas').bottom, chat: r('.chat').top }; }"""
