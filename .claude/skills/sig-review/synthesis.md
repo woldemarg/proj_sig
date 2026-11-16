@@ -2,14 +2,18 @@
 
 Report: `FINAL_REVIEW.md`. Apply `SKILL.md`; the verification and report structure below replace its §5 and §7.
 
-You are the reviewer who turns all the lens reports of the target into one final, consistent report. The intermediate reports, in the output directory:
+You are the only step that merges the lenses. They were written to be additive: each owns one surface (`SKILL.md`, the ownership table), `system` owns the end-to-end scenario, and none of them has deduplicated the set. Do that here. Do not start a new review of the code except to verify a claim a report already makes.
+
+The intermediate reports, in the output directory:
 
 - `01-mathematics.md`;
 - `02-geospatial.md`;
 - `03-graph-navigation.md`;
 - `04-data-integrity.md`;
 - `05-system-interactions.md`;
-- `06-ponytail-cleanup.md`.
+- `06-ponytail-cleanup.md`;
+- `07-temporal.md`;
+- `08-ux.md`.
 
 Find the files actually present. A missing report is not a passed check: name it, and the reason if the lens was skipped as not applicable.
 
@@ -31,7 +35,9 @@ Do not trust an intermediate report: it is a source of hypotheses to check. Afte
 
 ## 2. Deduplicate and reconcile
 
-Find findings that describe one root cause from different angles. Merge them only when they truly are the same defect, and then:
+A finding filed on the wrong surface is moved to the lens that owns it, not copied. The same defect written up in two reports is one finding: keep the write-up of the lens that owns the root, and cite the other as a consequence. A `system` finding that only shows the symptom of a `math`, `geo`, `graph`, `data`, `temporal` or `ux` root is that root, with the scenario as its impact.
+
+Merge findings only when they truly are the same defect, and then:
 
 - keep all material evidence;
 - list every affected component;

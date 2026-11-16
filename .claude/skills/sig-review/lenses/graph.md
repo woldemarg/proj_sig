@@ -4,7 +4,7 @@ Report: `03-graph-navigation.md`. Apply the rules of `../SKILL.md`.
 
 Review the graph-navigation logic of the target: does the system model the links between nodes, the moves between them, path search and the rules for reaching the wanted nodes or results correctly? `docs/06_graph_and_storage.md` and `docs/07_question_answering.md` define the graph and its traversal grammar.
 
-Establish the actual graph model first. Do not assume it is directed, weighted, acyclic, or even backed by a graph library.
+Establish the actual graph model first. Do not assume it is directed, weighted, acyclic, or even backed by a graph library. How a weight, a cosine or a lattice relation is computed is the `math` lens. Time relations are the `temporal` lens. Serialisation is the `data` lens. Whether the path is still intact after it leaves this code is the `system` lens. Here, check the move.
 
 ## What to check
 
@@ -29,7 +29,7 @@ For the algorithms actually present:
 - cycle handling;
 - behaviour on disconnected graphs;
 - choice among alternative paths;
-- correctness of weights and move costs, if used.
+- the walk uses the cost the grammar names for that move (the formula of the cost is the `math` lens).
 
 ### 3. Reachability and completeness
 
@@ -44,13 +44,10 @@ If the search is deliberately heuristic or bounded, judge it against its declare
 - Is path length mixed up with weight, similarity or another metric?
 - Are repeated nodes and edges handled correctly?
 - Is the result stable under the same conditions, if that is expected?
-- Is context from earlier moves, needed for the next decision, lost?
 
-### 5. Integration with other components
+### 5. What the next move needs
 
-Follow how traversal results reach the next stages. Check that information about the path, weight, link type, previous state or move source is not lost where later logic depends on it.
-
-General serialisation and long-term storage belong to the `data` lens.
+If a later move in the same walk needs the path, the link type or the previous node, check that this walk still has it. A field lost in storage, or a result lost between services, is not this lens.
 
 ## Expected result
 

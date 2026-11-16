@@ -45,11 +45,11 @@ If the change uses a store, cache, files, a database or serialisation:
 
 Check for situations where components use incompatible versions of the same data. Consider transactions, update order, caching, concurrent changes, repeated calls and idempotency — only where relevant to the implementation.
 
-### 5. Actual versus expected meaning
+### 5. Meaning of a stored value
 
-Look for cases where the structure is formally right but the meaning is broken: mixed-up identifiers, wrong links, lost sources, mixed versions, inconsistent units.
+Look for a structure that is formally right but refers to the wrong thing: mixed-up identifiers, a link to a record that was not the one written, a lost source, two versions of one record.
 
-Do not repeat the full review of geographic transformations or graph navigation. Focus on how transfer or storage can break their correctness.
+Whether the value is the right statistic, place, path, period or label is that lens. Whether the scenario called the writer and the reader in the wrong order is `system`. This lens owns the bytes between them.
 
 ## Expected result
 
