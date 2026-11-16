@@ -449,8 +449,9 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
 
 @pytest.mark.browser
 def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
-    """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
-    rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
+    """Days on the period bar colour the cells by their points in them, a cell with none gone, the HUD, the IN VIEW
+    header and the popups counting them, and dim the IN VIEW and popup rows of the insights that do not act in them
+    (core or event), listed after the ones that do, within each theme, the region counts leaving them out;
     the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). The data's calendar is
     Kyiv's: the bar offers its own first and last days, and a preset counts what the server counts for them. A dataset
     filter that drops the stretch gives the cells back. Every insight here lives over the data's first four weeks: its
@@ -500,18 +501,38 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
         counted = [a or 0 for a in counted]
         assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
-        assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
-        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')")[-1] == 0  # nor its outline
+        held = "['cells-fill', 'cells-line'].map((id) => JSON.stringify(G.map.getFilter(id)))"
+        assert page.evaluate(held) == ['["has","points_in_period"]'] * 2  # nor its outline, hover or click, whatever the colour
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
+        assert page.text_content("#map-points").replace("\u00a0", "") == f"{sum(counted)} подій за період"  # the HUD counts the days too
+        lit = "G.data.features.find((f) => f.properties.points_in_period)"
+        page.evaluate(f"(() => {{ const f = {lit}; cellPopup(f, centre(f)); }})()")  # a cell's popup counts its points in the days
+        n = page.evaluate(f"{lit}.properties.points_in_period")
+        assert (
+            page.text_content(".sig-pop .pp-head [data-user]").replace("\u00a0", "")
+            == f"Комірка · {n} {'подія' if n == 1 else 'події' if 1 < n % 10 < 5 and not 11 < n % 100 < 15 else 'подій'} за період"
+        )
+        every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
+        page.evaluate(f"GeoMap.setPolygon({{type: 'Polygon', coordinates: [{every}]}})")  # every cell
+        assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
+        page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
         listed = page.evaluate(rows)
         assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
         assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
+        page.wait_for_function(
+            "/у періоді: 0$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000
+        )  # the open popup follows
+        assert page.locator(".sig-pop .pp-ins").count() == page.locator(".sig-pop .pp-ins.off").count() > 0
+        assert page.evaluate("G.map.getSource('region-labels').serialize().data.features.length") == 0  # no region counts one in the days
+        page.wait_for_function("/у періоді: 0 · .* за період$/.test($('mw-meta').textContent)", timeout=10000)
+        page.evaluate("GeoMap.clearZone(); GeoMap.closePopup()")
         page.click("#pb-clear")
         assert page.locator("#map-window .mw-i.off").count() == 0
         page.wait_for_function("G.metric === 'points'", timeout=10000)
-        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')") == page.evaluate("CELL_LINE")  # every outline back
+        assert page.evaluate(held) == [None, None]  # no filter: every cell back
+        assert page.evaluate("G.map.getSource('region-labels').serialize().data.features.length") > 0
         assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
         assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
         assert not errors, errors
