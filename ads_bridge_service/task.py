@@ -168,7 +168,7 @@ def build_query_parts(question: str, tables: list[dict[str, Any]], findings: lis
     if base.get("time"):
         data += (
             f"\n- Time: {base['time']} in df_base_aoi is the event's timestamp; for figures per day, week or month group by its calendar "
-            "date, never by the raw value."
+            "date, never by the raw value. A period the question names bounds every figure to the rows whose timestamp falls in it."
         )
     cells = "; ".join(f"{t['file']}: {', '.join(c for c in t['columns'] if c.startswith('h3_r'))}" for t in tables if t.get("columns"))
     data += (

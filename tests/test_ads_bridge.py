@@ -173,6 +173,17 @@ def test_a_zones_question_runs_through_the_graph_ads_and_the_final_report():
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
         assert "на рівні H3 8 базового шару таких комірок 5" in seen["prompt"]  # the methodology counts the zone the rows were read against
 
+        # the graph reads the period bar alone: a period in the text is ADS's, the bar's goes beside it
+        seen["chat"].clear()
+        dated = ask | {
+            "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026?",
+            "period": ["2026-08-09T00:00", "2026-08-18T00:00"],
+        }
+        job = finished(client, client.post("/api/ads/jobs", json=dated).json()["job_id"])
+        sent = seen["chat"][0]
+        assert sent["period"] == dated["period"] and sent["question"].split() == ["Період:", "—", "(включно)", "Скільки", "подій", "у", "чи", "?"]
+        assert dated["question"] in job["ads_query"] and "A period the question names bounds every figure" in job["ads_query"]
+
         assert client.post("/api/ads/jobs", json=ask | {"question": " "}).status_code == 400
         assert client.post("/api/ads/jobs", json=ask | {"polygon": None}).json()["code"] == "empty_zone"
         assert client.post("/api/ads/jobs", json=ask | {"tables": []}).status_code == 422
@@ -246,7 +257,10 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                     page.close()
                     continue
                 assert page.inner_text("#ads-pill") == "ADS активний"
+                page.evaluate("S.period = {start: '2026-08-09T00:00', end: '2026-08-18T00:00'}")
                 page.click(".sig-pop .pp-ads")
+                assert page.input_value("#ads-question") == "Період: 2026-08-09 — 2026-08-17 (включно)\n"  # the bar's days, the last included
+                page.evaluate("S.period = null")
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
                 assert page.is_disabled("#ads-send")  # no question yet
                 page.fill("#ads-question", "Скільки подій у зоні?")
