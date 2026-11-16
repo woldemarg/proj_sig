@@ -189,5 +189,6 @@ const Timeline = (() => {
     new ResizeObserver(() => T.span && drawBar()).observe($("pb-ticks"));  // the ticks that fit
   }
 
-  return { load, render, setLevel, inPeriod, setPeriod, words, apply, openPop, init };
+  const shown = () => S.period || (T.span ? { start: isoMinute(T.lo), end: isoMinute(T.hi) } : null);  // the bar's stretch, else its whole span
+  return { load, render, setLevel, inPeriod, setPeriod, words, shown, apply, openPop, init };
 })();

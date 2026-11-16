@@ -39,7 +39,8 @@ function openAds() {
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}"${d.dataset_id === open ? " checked" : ""}> ` +
     `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>`).join("");
   $("ads-zone").textContent = `Зона: ${plural(GeoMap.zone().length, "комірка", "комірки", "комірок")} мапи.`;
-  $("ads-question").value = (S.period ? `${periodHeader(S.period)}\n` : "") + $("question").value;
+  const shown = Timeline.shown();  // the bar's days head the question even when they are the whole span: ADS reads them, the person may edit them
+  $("ads-question").value = (shown ? `${periodHeader(shown)}\n` : "") + $("question").value;
   $("ads-dialog").showModal();
   previewAds();
 }
