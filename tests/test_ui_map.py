@@ -88,7 +88,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.is_enabled("#table")
         grouped = "uploadGroups([{batch_id: 'g', upload_id: 'u', level: '5'}, {batch_id: 't', upload_id: 'u', level: 'table', locator: 'auto'}, {batch_id: 'p', upload_id: 'u', level: 'table'}]).map((g) => g.map((b) => b.batch_id))"
         assert page.evaluate(grouped) == [["g", "t"], ["p"]]  # a plain upload of the same bytes is no level of it
-        page.click("#upload-cancel")  # the form keeps its fields for the upload below
+        page.click("#upload-cancel")  # closed unsent: the next opening starts from the defaults
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.ds && G.map.loaded() && W.data", timeout=30000)
         held = "G.overlay.features.reduce((a, f) => a + f.properties.n, 0)"
@@ -96,7 +96,12 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         assert page.evaluate("G.projected.length") == 0
         page.evaluate("window.__samePage = true")
         page.click("#add-btn")
+        assert [page.input_value(f) for f in ("#geo", "#bins")] == ["", ""] and not page.evaluate("document.querySelector('.adv').open")
         page.set_input_files("#file", str(housing))
+        page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
+        page.click(".adv summary")
+        page.fill("#geo", "auto@5")
+        page.fill("#bins", f"{bins},median_income:4")
         page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
         page.set_input_files(
             "#metadata", files=[{"name": "housing.md", "mimeType": "text/markdown", "buffer": b"Columns:\nmedian_income\n  Title (uk): dohid\n"}]
