@@ -105,9 +105,12 @@ const GeoMap = {
   clear() { GeoMap.unfocus(); G.evidence = []; },
 
   onPeriod() {  // the bar's days on everything the map counts: cells, regions, the IN VIEW list, a focus and a popup
-    const reopen = G.popup && G.reopen;  // a focus closes the popup: it opens again after it
     scheduleWindow();
-    paintPeriod().then(() => { if (G.focusId) GeoMap.focusPattern(G.focusId, false); if (reopen) reopen(); });
+    paintPeriod().then(() => {
+      const reopen = G.popup && G.reopen;  // the popup open now; a focus closes it, so it opens again after
+      if (G.focusId) GeoMap.focusPattern(G.focusId, false);
+      if (reopen) reopen();
+    });
   },
 
   closePopup() {  // whether a cell popup was open
@@ -147,7 +150,7 @@ const GeoMap = {
     document.querySelectorAll("#map-window .mw-i").forEach((b) => b.classList.toggle("on", b.dataset.pid === pid));
     try {
       const pts = await api(`/api/geo/${encodeURIComponent(away || G.ds)}/patterns/${encodeURIComponent(pid)}?${away ? "rings=1" : ""}${periodQuery("&")}`);
-      if (seq !== G.focusSeq) return;  // focused again meanwhile
+      if (seq !== G.focusSeq || G.focusId !== pid) return;  // focused again, or unfocused, meanwhile
       const p = own || { ...pts, reading: G.overlay.patterns[pid].reading, numbers: G.overlay.patterns[pid].numbers, spatial: {} };
       if (!own) {  // another dataset's: drawn by its own cells' rings, which this map holds no cell of; its cells its place
         const rings = { type: "FeatureCollection", features: pts.rings.map((r) => ({ type: "Feature", geometry: { type: "Polygon", coordinates: [r] }, properties: {} })) };
@@ -820,13 +823,13 @@ function focusBox() {
 
 async function loadWindow() {
   if (!G.map || !G.ds || G.loading || S.view !== "map") return;
-  const [x0, s, x1, n] = focusBox(), seq = ++W.seq, lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
+  const [x0, s, x1, n] = focusBox(), seq = ++W.seq, days = periodQuery(""), lat = (y) => Math.max(-90, Math.min(90, y)).toFixed(4), lon = (x) => unwrap(x, 0).toFixed(4);
   const [w, e] = x1 - x0 >= 360 ? ["-180", "180"] : [lon(x0), lon(x1)];  // west > east: across ±180°
   const level = G.level ?? regionLevel();  // the drawn level, or the one the zoom would draw with the regions switched off
   const query = `bbox=${[w, lat(s), e, lat(n)].join(",")}${level == null ? "" : `&level=${level}`}${alongside("&")}${periodQuery("&")}`;
   const data = await api(`/api/geo/${encodeURIComponent(G.ds)}/window?${query}`).catch((e) => ({ error: e.message }));
   if (seq !== W.seq) return;  // a later view answered first
-  W.data = data; W.days = periodQuery(""); renderWindow();
+  W.data = data; W.days = days; renderWindow();  // the days it was read for
 }
 
 const windowItem = (pid) => ((W.data && W.data.themes) || []).flatMap((t) => t.insights).find((i) => i.id === pid) || null;

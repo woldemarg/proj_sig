@@ -511,17 +511,19 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert page.evaluate(held) == ['["has","points_in_period"]'] * 2
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
         assert page.text_content("#map-points").replace("\u00a0", "") == f"{sum(counted)} подій за період"  # the HUD counts the days too
-        lit = "G.data.features.find((f) => f.properties.points_in_period)"
+        lit = (  # a cell with points in the days whose region lists insights
+            "G.data.features.find((f) => f.properties.points_in_period && G.overlay.features.some((r) => r.properties.resolution === (G.level ?? regionLevel())"
+            " && r.properties.rows.includes(f.properties.row) && r.properties.n))"
+        )
         page.evaluate(f"(() => {{ const f = {lit}; cellPopup(f, centre(f)); }})()")  # a cell's popup counts its points in the days
         n = page.evaluate(f"{lit}.properties.points_in_period")
         assert (
             page.text_content(".sig-pop .pp-head [data-user]").replace("\u00a0", "")
             == f"Комірка · {n} {'подія' if n == 1 else 'події' if 1 < n % 10 < 5 and not 11 < n % 100 < 15 else 'подій'} за період"
         )
-        if page.locator(".sig-pop .pp-here").count():  # the region's count, the cell's part of it and the part acting: one base
-            page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
-            whole, here, acting = map(int, re.findall(r"\d+", page.text_content(".sig-pop .pp-here").replace("\u00a0", "")))
-            assert whole >= here >= acting
+        page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
+        whole, here, acting = map(int, re.findall(r"\d+", page.text_content(".sig-pop .pp-here").replace("\u00a0", "")))
+        assert whole >= here >= acting  # the region's count, the cell's part of it and the part acting: one base
         every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
         page.evaluate(f"GeoMap.setPolygon({{type: 'Polygon', coordinates: [{every}]}})")  # every cell
         assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
