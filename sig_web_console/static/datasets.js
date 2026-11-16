@@ -409,9 +409,13 @@ async function upload() {
   setUploadNote(`Завантажую ${f ? f.name : $("file-name").textContent}…`);
   $("upload-btn").disabled = true;
   try {
-    await api("/api/upload", { method: "POST", body: fd }); setUploadNote(""); $("upload-dialog").close();
-    document.querySelector("#upload-form details.adv").open = false;  // sent: the options fold away
-    $("upload-form").reset(); $("sample-hint").textContent = ""; $("metadata-name").textContent = ""; $("file-name").textContent = ""; setRole(""); refreshBatches();  // the next file starts from the defaults
+    await api("/api/upload", { method: "POST", body: fd }); $("upload-dialog").close(); refreshBatches();
   }
   catch (err) { setUploadNote(err.message, true); $("upload-btn").disabled = false; }
+}
+
+function resetUpload() {  // the dialog closed, sent or not: the next opening starts from the defaults
+  document.querySelector("#upload-form details.adv").open = false;
+  $("upload-form").reset(); setUploadNote(""); $("sample-hint").textContent = ""; $("metadata-name").textContent = ""; $("file-name").textContent = "";
+  setRole(""); $("upload-btn").disabled = true;
 }
