@@ -1,69 +1,56 @@
-# Lens: geospatial correctness
+# Lens: place
 
 Report: `02-geospatial.md`. Apply the rules of `../SKILL.md`.
 
-Review the geographic semantics and spatial-data handling of the target: does the system interpret places, coordinates, geometries, spatial distances and geographic relations correctly?
+Review place: does the system interpret coordinates, cells, geometries and geographic relations as the same place throughout?
 
-Do not assume a GIS library, coordinate system or spatial database until the code or docs confirm it.
+`docs/02_discovery.md` §2.9 and `docs/06_graph_and_storage.md` §6.1 (the spatial plane) are the contract. H3 is the index the code uses; do not assume another. Spatial statistics (Moran's I, `n_eff`, a lift, a false-discovery cut, a band's quarters) belong to the `math` lens. Whether a place fact survives a file or a service call belongs to `data` and `system`. What the map looks like belongs to `ux`.
 
 ## What to check
 
-### 1. Coordinates and reference systems
+### 1. Coordinates
 
-- Are the coordinate system and datum consistent between components?
-- Are latitude and longitude swapped anywhere?
-- Is axis order consistent between input data, libraries and APIs?
-- Are geographic coordinates in degrees mixed with projected coordinates in linear units?
-- Are coordinate-system transformations correct?
-- Is coordinate-system metadata kept where it is needed?
+- Are latitude and longitude in the same order in the input, the cell, GeoJSON and the API (GeoJSON is `[lon, lat]`)?
+- Are degrees mixed with linear units (metres, kilometres) without the conversion the chapter states?
+- Does a missing or invalid coordinate locate a point nowhere, rather than at a default?
+- Is a zone's axis order the one the parser documents (`cells`, `bbox`, a polygon ring, `{center, radius_m}`)?
 
-### 2. Spatial operations
+### 2. Cells and regions
 
-Check the operations actually implemented:
+Check the operations the change actually uses:
 
-- distances between points;
-- containment in an area;
-- nearest-object search;
-- intersection, inclusion and spatial adjacency;
-- bounding boxes;
-- buffering;
-- geometric transformations;
-- spatial filters and indexes.
+- a point's cell at the stated resolution;
+- a coarser region by the cell's centre, including the centre-tie rule;
+- a disk of `ring` 0, 1 or 2 as a set of cells;
+- a footprint, a cell boundary, a ring that crosses ±180°;
+- a zone overlap: which cells a geometry contains.
 
-Establish whether each operation matches the real geographic meaning of the task. For example, Euclidean distance between latitude/longitude values is not automatically a correct geographic distance.
+A parent that does not contain the centre, or a neighbour counted from a different ring than the one stored, is a wrong place. Euclidean distance on raw latitude and longitude is not a ground distance.
 
-### 3. Geographic edge cases
+### 3. Edge cases
 
-Depending on the task:
+- a cell or a bbox across the antimeridian (`west > east`);
+- a centre on a region boundary;
+- an empty or invalid geometry;
+- a resolution the chapter refuses.
 
-- points near the antimeridian;
-- high latitudes;
-- zero or invalid coordinates;
-- empty and invalid geometries;
-- region borders and bounding boxes;
-- ambiguity or loss of spatial precision;
-- geographic units of measurement;
-- spatial-index behaviour for special locations.
+Do not demand a case the chapters exclude. Check that the exclusion still holds.
 
-Do not demand handling of scenarios the requirements explicitly exclude, but check that those exclusions are documented.
+### 4. The same place
 
-### 4. Preserving geographic meaning
+Two operations in this lens's code that decide "where" must agree: the cell a point was indexed to, the region that holds that centre, the cells a zone returns. A grid, a resolution or a ring must not change silently between them.
 
-Follow the geographic information through its transformations. Check that the meaning of coordinates, geometries, coordinate systems or units does not change without an explicit transformation or matching metadata.
-
-### 5. Consistent results
-
-Check that related components treat geographic data the same way — no case where one part of the system considers objects adjacent and another uses incompatible criteria.
+A disagreement that is a dropped field or a stale response is not this lens.
 
 ## Expected result
 
 For each finding:
 
-- the spatial process concerned;
-- the actual coordinate system or geographic semantics, if established;
-- where the error arises;
-- a geographic situation in which the result is wrong;
-- the correct fix;
-- a test or control coordinates that verify correctness.
+- the place operation;
+- the coordinate or cell rule, if established;
+- where it goes wrong;
+- a concrete location (a point, a cell, a bbox) that shows the wrong place;
+- the fix;
+- control coordinates that tell the right cell from the wrong one.
 
-Behaviour that depends on an unknown coordinate system or an undescribed contract is an uncertainty, not a confirmed defect.
+An unknown coordinate contract is an uncertainty, not a confirmed defect.

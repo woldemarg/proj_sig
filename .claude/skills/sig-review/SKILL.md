@@ -1,6 +1,6 @@
 ---
 name: sig-review
-description: Independent, evidence-based technical review of a commit, commit range, pull request, branch or milestone in the SIG repository, across six lenses (mathematics, geospatial, graph navigation, data integrity, component interactions, cleanup) merged into one FINAL_REVIEW.md. Read-only — writes reports, never code. Use when asked to review a commit, a PR/MR, a branch or a milestone, or to run one review lens.
+description: Independent, evidence-based technical review of a commit, commit range, pull request, branch or milestone in the SIG repository. Eight additive lenses (statistics, place, graph navigation, data integrity, time, interface, then the end-to-end flow, then cleanup) are merged by synthesis into one FINAL_REVIEW.md. Read-only — writes reports, never code. Use when asked to review a commit, a PR/MR, a branch or a milestone, or to run one review lens.
 argument-hint: "[commit | A..B | PR number | branch | milestone] [lens]"
 ---
 
@@ -28,7 +28,7 @@ From the request (or the arguments after `/sig-review`). Run `git fetch origin` 
 | milestone | `gh issue list --milestone "<title>" --state all`, then the PRs that close those issues | — | the tip of the branch those PRs merged into |
 | nothing given | the current branch, as a branch | as a branch | as a branch |
 
-Lens — optional: `math`, `geo`, `graph`, `data`, `system`, `cleanup`, or `synthesis` (merges the existing reports). None given means the full review (§4).
+Lens — optional: `math`, `geo`, `graph`, `data`, `system`, `temporal`, `ux`, `cleanup`, or `synthesis` (merges the existing reports). None given means the full review (§4).
 
 Output directory: `review-reports/<target>/` (gitignored), for example `review-reports/pr-118/`, `review-reports/abc1234/`, `review-reports/m9a/`. Record the target, the base and the reviewed revision (its sha).
 
@@ -48,7 +48,19 @@ Do not judge the system from one file when correctness depends on its callers, d
 
 ## 3. Rules for every lens
 
-**One lens per run.** Each run has one primary direction, defined by its lens file. You may note problems from neighbouring lenses, but do not do their full review; put the link in `Cross-domain dependency`. Deep within the lens, narrow in scope.
+**One lens per run, and the lenses are additive.** Each lens owns one surface, listed below. Write a finding only on that surface. A defect owned by another lens is one line in `Cross-domain dependency`, not a second write-up. Do not trace the whole scenario (the `system` lens does) and do not merge reports (synthesis does).
+
+| Lens | Owns | Leaves to |
+|---|---|---|
+| math | estimators, tests, series mathematics, spatial statistics, network measures, and whether a formula matches its chapter | place, calendars, which edge is walked, stored bytes, the scenario, the screen |
+| geo | coordinates, cells, geometries, containment, distance and area units, and place identity | the spatial statistics, the map's look, the bytes of a GeoJSON file |
+| graph | node and edge grammar, which moves are legal, reachability, the path returned | how a weight is computed, time relations, serialisation |
+| data | fields, types, round-trip, journal, snapshot, digests, a partial or mismatched record | whether the value is the right quantity, the order of calls in a scenario |
+| temporal | calendars, intervals, cores and events as relations, who is in a period, alignment | the series estimators, walks that are not time, the screen |
+| ux | focus, the on-screen order, the look, the words a person reads | whether the fact shown is true, the API contract |
+| system | the scenario from the first call to the last result, across services | re-deriving any quantity the lenses above own |
+| cleanup | dead, duplicated and needless code | a wrong behaviour |
+| synthesis | verify, deduplicate and order the fixes | a new review of the code |
 
 **Evidence.** Every finding rests on facts in the repository: current files, line numbers, function and class names, schemas, tests, contracts, concrete code fragments. Do not invent requirements, expected behaviour, test results, performance problems, dependencies, line numbers or external contracts that no available source states. When correctness cannot be established because requirements are ambiguous or data is missing, say so. Separate a confirmed defect from a potential risk and from an improvement idea.
 
@@ -83,15 +95,17 @@ Running commands is allowed when it produces evidence and changes nothing: `git`
 Every lens and the synthesis apply this whole file; where a lens file sets its own self-review or report, that part replaces §5 or §7.
 
 - **One lens** (`/sig-review <target> <lens>`): read `lenses/<lens>.md` (`synthesis` reads `synthesis.md`) and write that report.
-- **Full review** (default): run the lenses `math`, `geo`, `graph`, `data`, `system`, then `cleanup`, then `synthesis.md`. A lens whose surface the change does not touch is skipped — say which and why in `FINAL_REVIEW.md` (a skipped lens is not a passed one). If your agent can start subagents, run the five thematic lenses as parallel subagents, each given this file, its lens file and the target; run `cleanup` after them and `synthesis` last.
+- **Full review** (default): run `math`, `geo`, `graph`, `data`, `temporal`, `ux` (parallel subagents when you can start them, each given this file, its lens file and the target), then `system`, then `cleanup`, then `synthesis.md`. The six are additive and do not read each other's reports. `system` reviews the end-to-end flow of the same target and does not read them either. `cleanup` and `synthesis` run last; only synthesis reads the reports. A lens whose surface the change does not touch is skipped — say which and why in `FINAL_REVIEW.md` (a skipped lens is not a passed one).
 
 | Lens | File | Report | Usually bites in |
 |---|---|---|---|
-| math | `lenses/math.md` | `01-mathematics.md` | `subgroup_miner/` (`discovery`, `selection`, `vendor/eda/`), `attractor_topology/` (`encoder`, `ontology`, `vendor/lac/`), `graph_query_engine/seeds.py` |
-| geo | `lenses/geo.md` | `02-geospatial.md` | `subgroup_miner/spatial.py`, `insight_graph_service/core/geosparql.py`, the console map |
+| math | `lenses/math.md` | `01-mathematics.md` | `subgroup_miner/` (`discovery`, `selection`, `spatial.py` statistics, `temporal.py` series, `lattice.py`), `attractor_topology/`, `graph_query_engine/` (`seeds.py`, score formulas in `traversal.py`) |
+| geo | `lenses/geo.md` | `02-geospatial.md` | `subgroup_miner/spatial.py` (cells, rings, coordinates), `spatial_plane.py`, `insight_graph_service/core/geosparql.py` |
 | graph | `lenses/graph.md` | `03-graph-navigation.md` | `graph_query_engine/` (`graph`, `traversal`, `vertical`, `search`), `core/snapshot.py`, `cypher/` |
 | data | `lenses/data.md` | `04-data-integrity.md` | `insight_contracts/`, `core/workspace.py`, `core/batch.py`, `chunk_journal.py`, `neo4j_mirror.py`, `fileio.py`, `EvidencePayload` |
-| system | `lenses/system.md` | `05-system-interactions.md` | `core/engine.py`, `server/`, `evidence_narrator_service/`, `llm_model_broker/`, `sig_web_console/`, `compose.yaml` |
+| system | `lenses/system.md` | `05-system-interactions.md` | the path across `core/engine.py`, `server/`, `evidence_narrator_service/`, `llm_model_broker/`, `compose.yaml` and the console's API calls |
+| temporal | `lenses/temporal.md` | `07-temporal.md` | `subgroup_miner/temporal.py` (calendar, core, parent period), `graph_query_engine/temporal.py` (the interval), `snapshot._temporal_plane`, `DualGraph.members`, a layer's `align` |
+| ux | `lenses/ux.md` | `08-ux.md` | `sig_web_console/static/` (`index.html`, `app.js`, `graph.js`, `timeline.js`, `chat.js`, `geo.js`, `datasets.js`, `style.css`), words a person reads |
 | cleanup | `lenses/cleanup.md` | `06-ponytail-cleanup.md` | the change's own code |
 | synthesis | `synthesis.md` | `FINAL_REVIEW.md` | all reports above |
 

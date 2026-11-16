@@ -1,6 +1,6 @@
 # Lens: cleanup (ponytail)
 
-Report: `06-ponytail-cleanup.md`. Apply `../SKILL.md`; the self-review and report below replace its §5 and §7. Run it after the five thematic lenses.
+Report: `06-ponytail-cleanup.md`. Apply `../SKILL.md`; the self-review and report below replace its §5 and §7. Run it after the additive lenses and the system pass. A wrong formula, place, path, record, period or screen is that lens's finding, not dead code. Do not re-report it.
 
 ## 1. Task
 
