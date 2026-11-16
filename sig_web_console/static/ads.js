@@ -11,7 +11,15 @@ function adsBody() {
   /* the ask as the form holds it: the first ticked table is the base, the rest its context layers; the zone is the
      polygon, which the bridge's graph question and the tables' rows both read (not the cells the map lights) */
   const tables = [...document.querySelectorAll("#ads-tables input:checked")].map((i) => ({ dataset_id: i.value, filename: i.dataset.file }));
-  return { question: $("ads-question").value.trim(), tables, polygon: GeoMap.polygon() };
+  const p = S.period;  // SIG reads the period bar alone; ADS reads the question's words
+  return { question: $("ads-question").value.trim(), tables, polygon: GeoMap.polygon(), ...(p ? { period: [p.start, p.end] } : {}) };
+}
+
+function periodHeader(p) {
+  /* the period bar's [start, end) as the question's first line, ISO dates with the last day included */
+  const lo = wall(p.start), hi = wall(p.end);
+  if (lo % DAY === 0 && hi % DAY === 0) return `Період: ${isoDay(lo)} — ${isoDay(hi - DAY)} (включно)`;
+  return `Період: ${p.start.replace("T", " ")} — ${p.end.replace("T", " ")}`;
 }
 
 function previewAds() {
@@ -31,7 +39,7 @@ function openAds() {
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}"${d.dataset_id === open ? " checked" : ""}> ` +
     `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>`).join("");
   $("ads-zone").textContent = `Зона: ${plural(GeoMap.zone().length, "комірка", "комірки", "комірок")} мапи.`;
-  $("ads-question").value = $("question").value;
+  $("ads-question").value = (S.period ? `${periodHeader(S.period)}\n` : "") + $("question").value;
   $("ads-dialog").showModal();
   previewAds();
 }

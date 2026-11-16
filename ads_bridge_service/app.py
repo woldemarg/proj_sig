@@ -32,6 +32,8 @@ JOINT_TEMPLATE = Path(__file__).resolve().parent / "prompts" / "joint_response.j
 JOINT_MAX_TOKENS = 16384  # the prompt keeps every row of the report's tables
 JOBS_KEPT = 20
 STATUS_RETRIES = 5  # failed reads of an ADS job's status in a row before it is given up
+# the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD)
+_PERIODS = re.compile(r"(?<![\w-])(?:\d{4}-W\d{2}|\d{4}-Q[1-4]|Q[1-4]\s+\d{4}|\d{4}-\d{2}(?:-\d{2})?)(?![\d-])", re.I)
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
 
 
@@ -44,6 +46,7 @@ class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
     polygon: dict[str, Any] | None = None  # the drawn zone (GeoJSON Polygon): the graph's evidence and the tables' rows both read it
+    period: list[str] | None = Field(None, min_length=2, max_length=2)  # the console's period bar, [start, end): the graph's only period
 
 
 class StageError(RuntimeError):
@@ -97,10 +100,13 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, polygon: dict[str, Any]) -> list[dict[str, Any]]:
-        """The zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``), one place."""
-        body = {"question": question, "geometry": polygon, "use_llm": False}
-        return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=body), "sig_failed", "SIG").json())
+    def ask_graph(question: str, body: AskIn) -> list[dict[str, Any]]:
+        """The zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``), one
+        place, and the period bar's days, never a period the question's text names (that one is ADS's)."""
+        ask = {"question": _PERIODS.sub(" ", question), "geometry": body.polygon, "use_llm": False}
+        if body.period:
+            ask["period"] = body.period
+        return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
 
     def read_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
         """Each picked table's rows against the zone, the layers' cells at the base table's resolution: one cell column to join on."""
@@ -169,9 +175,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             publish(job)
 
         try:
-            findings = ask_graph(body.question, body.polygon)
+            findings = ask_graph(body.question, body)
             if not any(f["inside"] for f in findings):  # the text pulled the seeds out of the zone: the zone alone, if it holds any
-                alone = ask_graph("", body.polygon)
+                alone = ask_graph("", body)
                 findings = alone if any(f["inside"] for f in alone) else findings
             tables, files = read_tables(body)
             sources = finding_files(findings)
