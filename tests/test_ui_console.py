@@ -84,6 +84,8 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         )
         page.select_option("#sample", "x")
         assert (page.input_value("#geo"), page.input_value("#time")) == ("lat,lon@8", "when")  # the set's own options
+        mirror = "[$('use-time').checked, $('time-user').value]"
+        assert page.evaluate(mirror) == [True, "when"]  # the person's time switch shows it
         page.set_input_files("#file", str(tmp_path / "rows.csv"))
         page.wait_for_function("document.getElementById('role-table').checked", timeout=5000)
         assert [page.input_value(f) for f in ("#sample", "#geo", "#time", "#categories")] == [""] * 4  # one's own file: none of the set's
@@ -91,6 +93,15 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.set_input_files("#file", str(tmp_path / "points.csv"))
         page.wait_for_function("document.getElementById('role-events').checked", timeout=5000)
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
+        assert page.evaluate(mirror) == [False, ""]
+        page.evaluate("document.body.classList.remove('dev')")  # the person's time switch: ticked, it asks the column
+        assert not page.is_visible("#time-user")
+        page.check("#use-time")
+        page.fill("#time-user", "when")
+        assert page.input_value("#time") == "when"
+        page.uncheck("#use-time")
+        assert page.input_value("#time") == "" and not page.is_visible("#time-user")
+        page.evaluate("document.body.classList.add('dev')")
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
         for field, value in {"#time": "when", "#where": "kind=a"}.items():
             page.fill(field, value)

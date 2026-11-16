@@ -337,6 +337,12 @@ function init() {
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
   $("geo").addEventListener("input", syncTable);
+  $("time").addEventListener("input", mirrorTime);
+  $("time-user").addEventListener("input", () => { $("time").value = $("time-user").value; });
+  $("use-time").addEventListener("change", () => {  // unticked: no time column sent, the column kept for a tick back
+    $("time").value = $("use-time").checked ? $("time-user").value : "";
+    if ($("use-time").checked) $("time-user").focus();
+  });
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
   $("roles").addEventListener("change", (e) => setRole(e.target.value));  // a set locked to a layer has no other card to change to
