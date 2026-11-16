@@ -300,7 +300,7 @@ function ensureMap() {
     m.addSource("grid", { type: "geojson", data: graticule() });
     m.addSource("cells", cellSource());
     m.addSource("focus", cellSource());  // the focused insight's cells
-    m.addSource("zone", cellSource());  // the zone's outline where no cell shows it: «Усі датасети» hexes, the polygon on another level
+    m.addSource("zone", cellSource());  // the zone's outline: its polygon, and its hexes in «Усі датасети»
     m.addSource("draft", { type: "geojson", data: empty() });  // the polygon being drawn
     m.addSource("pts", { type: "geojson", data: empty() });
     m.addSource("layer-pts", { type: "geojson", data: empty() });  // a focused run insight's layer: its points around it
@@ -602,12 +602,12 @@ function zonePopup(ring, inside) {
 }
 
 function paintZone() {
-  /* the zone's cells alone keep their colour; where none is filled its outline shows it instead: the hexes in
-     «Усі датасети», the polygon on a map of another level (H3 ids are global: the zone survives a switch of dataset) */
+  /* the zone's cells alone keep their colour, its polygon outlined over them; in «Усі датасети» its hexes are outlined too
+     (H3 ids are global: the zone survives a switch of dataset) */
   paintDraft(); paintCells();
   const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => G.zone.has(f.properties.id.split(":")[2])) : [];
-  const lost = G.poly && !zoneShown() && !hexes.length ? [{ type: "Feature", geometry: G.poly, properties: {} }] : [];
-  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: [...hexes, ...lost] });
+  const poly = G.poly ? [{ type: "Feature", geometry: G.poly, properties: {} }] : [];
+  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: [...hexes, ...poly] });
 }
 
 const zoneShown = () => !G.others.length && Boolean(G.data) && G.data.features.some((f) => G.zone.has(f.properties.h3));  // a cell of the zone is drawn
