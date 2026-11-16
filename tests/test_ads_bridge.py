@@ -259,6 +259,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert "зона на мапі" in page.locator(".msg-user").last.inner_text()
                 assert page.evaluate("S.chat.at(-1).ads.ads_query") == seen["query"] and set(seen["files"]) == {"base_aoi.csv", "aoi.md"}
                 assert seen["files"]["base_aoi.csv"].splitlines()[0].endswith("in_aoi,aoi_zone")  # the graph service's rows of the zone
+                page.route("**/api/ads/health", lambda route: route.fulfill(status=502, body="bad gateway"))
+                page.evaluate("refreshHealth()")  # the bridge answered on this page before: no answer now is a failure, not a stack without ADS
+                assert page.inner_text("#ads-pill") == "ADS недоступний"
                 assert not errors, errors
                 page.close()
         browser.close()

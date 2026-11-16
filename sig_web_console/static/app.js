@@ -250,7 +250,11 @@ async function refreshHealth() {
   try {
     const [h, chat, ads] = await Promise.all([api("/api/health"), api("/api/chat/health").catch(() => ({})), api("/api/ads/health").catch(() => null)]);
     S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
-    const adsWhy = !ads ? "Стек запущено без ADS (compose.ads.yaml)" : ads.ok ? "ADS готовий: зону на мапі можна спитати в ADS" : `Не відповідає: ${[!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ")}`;
+    // ponytail: no answer reads as a stack without ADS until the bridge answers once on this page; a page opened while it is down says вимкнено
+    S.adsSeen ||= Boolean(ads);
+    const [adsCls, adsTxt, adsWhy] = ads ? (ads.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
+      : ["bad", "ADS недоступний", `Не відповідає: ${[!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ")}`])
+      : S.adsSeen ? ["bad", "ADS недоступний", "Не відповідає міст до ADS"] : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
@@ -259,7 +263,7 @@ async function refreshHealth() {
     const emb = h.embedding ? `${String(h.embedding.model_id).split("/").pop()} · ${h.embedding_device}` : `модель · ${h.embedding_device}`;
     $("health").innerHTML =
       `<span class="pill ${llmCls}" title="Мовна модель · ${esc(llm.base_url || "")}"${llmCls === "ok" ? " data-dev" : ""}><i class="dot"></i>${esc(llmTxt)}</span>` +  // the person sees it only when it fails
-      `<span class="pill ${!ads ? "opt" : ads.ok ? "ok" : "bad"}" id="ads-pill" title="${esc(adsWhy)}"><i class="dot"></i>${!ads ? "ADS вимкнено" : ads.ok ? "ADS активний" : "ADS недоступний"}</span>` +
+      `<span class="pill ${adsCls}" id="ads-pill" title="${esc(adsWhy)}"><i class="dot"></i>${adsTxt}</span>` +
       `<span class="pill ${h.neo4j.enabled ? "ok" : ""} opt" title="Дзеркало графа в Neo4j" data-dev><i class="dot"></i>${h.neo4j.enabled ? "Neo4j " + esc(h.neo4j.database) : "Neo4j вимкнено"}</span>` +
       `<span class="pill ${cpu ? "warn " : ""}opt" title="${cpu ? CPU_HINT : "Модель опису інсайтів і пристрій"}" data-dev><i class="dot"></i>${esc(emb)}</span>`;
     $("llm-label").textContent = `пояснення ${model}`;
