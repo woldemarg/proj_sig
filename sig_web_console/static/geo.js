@@ -361,13 +361,13 @@ function ensureMap() {
       });
       pointer = e;
     });
-    m.on("click", "cells-fill", (e) => {  // a cell of the zone opens the zone's popup again
-      if (G.draw) return;
-      if (G.poly && G.zone.has(e.features[0].properties.h3)) GeoMap.setPolygon(G.poly); else cellPopup(e.features[0], e.lngLat);
-    });
-    m.on("click", "regions-hit", (e) => { if (!G.draw) regionPopup(e.features[0].properties.id, e.lngLat); });
+    // a click in the drawn polygon or on a cell of its zone opens the zone's popup again, wherever it lands
+    const inZone = (e) => G.poly && (holds(G.poly.coordinates[0], [e.lngLat.lng, e.lngLat.lat]) ||
+      m.queryRenderedFeatures(e.point, { layers: ["cells-fill"] }).some((f) => G.zone.has(f.properties.h3)));
+    m.on("click", "cells-fill", (e) => { if (!G.draw && !inZone(e)) cellPopup(e.features[0], e.lngLat); });
+    m.on("click", "regions-hit", (e) => { if (!G.draw && !inZone(e)) regionPopup(e.features[0].properties.id, e.lngLat); });
     m.on("click", (e) => {  // after the layers' clicks, which a drawing click skips: a vertex, or the polygon closed on its first one
-      if (!G.draw) return;
+      if (!G.draw) { if (inZone(e)) GeoMap.setPolygon(G.poly); return; }
       if (nearFirst(e.point)) return finishPolygon();
       G.draw.push([+e.lngLat.lng.toFixed(6), +e.lngLat.lat.toFixed(6)]);
       paintDraft();
