@@ -34,6 +34,7 @@ JOBS_KEPT = 20
 STATUS_RETRIES = 5  # failed reads of an ADS job's status in a row before it is given up
 # the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD)
 _PERIODS = re.compile(r"(?<![\w-])(?:\d{4}-W\d{2}|\d{4}-Q[1-4]|Q[1-4]\s+\d{4}|\d{4}-\d{2}(?:-\d{2})?)(?![\d-])", re.I)
+_HEADER = re.compile(r"^Період:.*$", re.M)  # the console's period line: ADS's, no words of the question
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
 
 
@@ -103,7 +104,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     def ask_graph(question: str, body: AskIn) -> list[dict[str, Any]]:
         """The zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``), one
         place, and the period bar's days, never a period the question's text names (that one is ADS's)."""
-        ask = {"question": _PERIODS.sub(" ", question), "geometry": body.polygon, "use_llm": False}
+        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "geometry": body.polygon, "use_llm": False}
         if body.period:
             ask["period"] = body.period
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
@@ -216,7 +217,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     @app.post("/api/ads/jobs")
     def start(body: AskIn) -> JSONResponse:
-        if not body.question.strip():
+        if not _HEADER.sub("", body.question).strip():
             raise HTTPException(400, "empty question")
         if not body.polygon:
             return JSONResponse({"detail": "a question to ADS needs a zone drawn on the map", "code": "empty_zone"}, status_code=400)
