@@ -238,7 +238,10 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
     upload_levels(engine, points_csv, geo="auto@8")
     seen: dict = {}
     table = "## Результати аналізу\n\n| група | рядків |\n|---|---|\n| у зоні | 3 |\n\n## Методологія\n\nполігон"
-    draw = "GeoMap.setPolygon(G.data.features[0].geometry)"
+    # the first cell's hexagon at 1.5 times its size: the zone is that cell, the ring round it lies in the polygon off the zone's cells
+    grow = "(k) => { const f = G.data.features[0], [cx, cy] = centre(f); return f.geometry.coordinates[0].map(([x, y]) => [cx + k * (x - cx), cy + k * (y - cy)]); }"
+    draw = f"(() => {{ const grow = {grow}; G.map.jumpTo({{ center: centre(G.data.features[0]), zoom: 14 }}); GeoMap.setPolygon({{ type: 'Polygon', coordinates: [grow(1.5)] }}); }})()"
+    off = f"(() => {{ const grow = {grow}; return G.map.project(grow(1.25)[0]); }})()"
     with serve(upstream(seen, polls=2, final=table)) as ads_url, sync_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=exe)
         for with_ads in (True, False):
@@ -257,6 +260,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                     page.close()
                     continue
                 assert page.inner_text("#ads-pill") == "ADS активний"
+                spot, box = page.evaluate(off), page.locator("#map").bounding_box()
+                assert page.evaluate("GeoMap.zone().length") == 1 and page.evaluate("GeoMap.closePopup()")
+                page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])  # anywhere in the polygon opens the zone's popup, not only on its cells
                 page.evaluate("S.period = {start: '2026-08-09T00:00', end: '2026-08-18T00:00'}")
                 page.click(".sig-pop .pp-ads")
                 assert page.input_value("#ads-question") == "Період: 2026-08-09 — 2026-08-17 (включно)\n"  # the bar's days, the last included
