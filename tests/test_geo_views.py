@@ -11,6 +11,42 @@ from conftest import geo_frame, upload_levels
 from insight_graph_service.core.engine import PipelineError
 
 
+def test_the_period_bar_counts_the_window_and_a_patterns_points_in_its_days(engine, tmp_path):
+    """With the bar's days, the window's points and a pattern's points are those in them; the rows stay the whole span's."""
+    from graph_query_engine.temporal import parse_period
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    (level,) = upload_levels(engine, path, geo="auto@8", time="when")
+    ds, week = level["dataset_id"], parse_period("2019-03-04", "2019-03-10")
+    counts = engine.geo_period_counts(ds, week)["counts"]
+    whole, part = engine.geo_window(ds, "-180,-90,180,90"), engine.geo_window(ds, "-180,-90,180,90", period=week)
+    assert whole["period_points"] is None and part["period_points"] == sum(counts) < part["points"] == whole["points"]
+    assert part["themes"] == whole["themes"]
+    pid = next(iter(engine.ws.load_covers(ds)))
+    full, cut = engine.geo_pattern(ds, pid), engine.geo_pattern(ds, pid, period=week)
+    assert cut["n_points"] == sum(counts[r] for r in full["rows"]) < full["n_points"] and cut["rows"] == full["rows"]
+    assert cut["in_period"] and not full["in_period"]
+
+
+def test_the_insights_idle_in_the_days_are_every_level_the_map_lists(engine, tmp_path):
+    """/counts names the insights the map lists that do not act in the days (``DualGraph.members``), those of the
+    upload's other levels too, which the console's graph may not hold; one with neither a core nor an event never is."""
+    from graph_query_engine.temporal import parse_period
+
+    path = tmp_path / "points.csv"
+    geo_frame().to_csv(path, index=False)
+    levels = upload_levels(engine, path, geo="auto@8,7", time="when", grid="week", tz="Europe/Kyiv")
+    ds = next(r["dataset_id"] for r in levels if (r.get("profile") or {}).get("geo", {}).get("resolution") == 8)
+    graph, late = engine.graph(), parse_period("2019-04-02", "2019-04-04")
+    listed = {p for f in engine.geo_overlay(ds)["features"] for ids in f["properties"]["ids"].values() for p in ids}
+    timed = {p for p in listed if (t := graph.trajectories.get(p)) and (t.get("core") or t["events"])}
+    found = graph.members(late)
+    acting = {*found["active"], *(p for p, _ in found["peaked"]), *(p for p, _ in found["dropped"])}
+    idle = engine.geo_period_counts(ds, late)["idle"]
+    assert set(idle) == timed - acting and {graph.insight(p).dataset_id for p in idle} - {ds}  # another level's too
+
+
 def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp_path):
     """docs/08_interface.md §8.7: an insight is characteristic of a region when its located events in the region's cells
     reach ``link_min_events`` and ``(x + a) / (E + a) ≥ 1``, ``E`` the number its map-wide share puts there (a base insight
@@ -110,11 +146,11 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     coarser = engine.geo_overlay(c, (b,))["features"]
     assert {f["properties"]["resolution"] for f in coarser} <= levels
     assert all(
-        any(f["properties"]["by"].get(b) for f in coarser if f["properties"]["resolution"] == lv) for lv in levels
+        any(f["properties"]["ids"].get(b) for f in coarser if f["properties"]["resolution"] == lv) for lv in levels
     )  # the finer file at every level
     assert engine.geo_window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
     overlay = engine.geo_overlay(a, (b,))  # what «Усі датасети» reads: each region's count per dataset, every listed insight's trust
-    assert all(sum(f["properties"]["by"].values()) == f["properties"]["n"] for f in overlay["features"])
+    assert all(sum(map(len, f["properties"]["ids"].values())) == f["properties"]["n"] for f in overlay["features"])
     away = {pid: t["map_dataset"] for pid, t in overlay["patterns"].items() if "map_dataset" in t}
     assert set(away) == set(_projection(engine.ws, engine.graph(), b)["patterns"]) and set(away.values()) == {b}
     drawn = engine.geo_pattern(b, next(iter(away)), rings=True)  # a map holding none of its cells draws it by their rings

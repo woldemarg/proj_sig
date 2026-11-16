@@ -36,7 +36,11 @@ function previewAds() {
 }
 
 function openAds() {
-  const open = GeoMap.current(), rows = [...GeoMap.datasets()].sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open));
+  /* one row per upload, as its levels share the rows: the level open on the map, else the finest */
+  const open = GeoMap.current(), byUpload = new Map();
+  for (const d of [...GeoMap.datasets()].sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open) || b.resolution - a.resolution))
+    if (!byUpload.has(uploadOf(d))) byUpload.set(uploadOf(d), d);
+  const rows = [...byUpload.values()];
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}"${d.dataset_id === open ? " checked" : ""}> ` +
     `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>`).join("");
   $("ads-zone").textContent = `Зона: ${plural(GeoMap.zone().length, "комірка", "комірки", "комірок")} мапи.`;

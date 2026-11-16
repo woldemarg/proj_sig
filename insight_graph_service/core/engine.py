@@ -690,8 +690,8 @@ class Engine:
         return load_dataset(Path(record["source_path"]), self.settings.miner, shared=shared, **uploads.reading(record))
 
     @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings)
+    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False, period: tuple[datetime, datetime] | None = None) -> dict[str, Any]:
+        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings, period)
 
     @_healthy
     def geo_aoi_rows(self, dataset_id: str, polygon: dict[str, Any], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
@@ -702,16 +702,24 @@ class Engine:
         return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
 
     @_healthy
-    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime]) -> dict[str, Any]:
-        return geo_views.geo_period_counts(self.ws, dataset_id, period)
+    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        idle = geo_views.idle_insights(self.ws, self.graph(), dataset_id, period, self.settings.thresholds, datasets)
+        return geo_views.geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
 
     @_healthy
     def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
         return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
 
     @_healthy
-    def geo_window(self, dataset_id: str, bbox: str, level: int | None = None, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
-        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds, level, datasets)
+    def geo_window(
+        self,
+        dataset_id: str,
+        bbox: str,
+        level: int | None = None,
+        datasets: tuple[str, ...] = (),
+        period: tuple[datetime, datetime] | None = None,
+    ) -> dict[str, Any]:
+        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds, level, datasets, period)
 
     def warm_map(self) -> None:
         """``geo_views.warm`` over the committed graph (the server queues it on the batch thread after a commit and at a

@@ -971,11 +971,8 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         stored = engine.ws.load_geo(ds)  # a dataset stored before the points' times were kept
         np.savez_compressed(engine.ws.dataset_dir(ds) / "geo.npz", **{k: v for k, v in stored.items() if k != "point_time"})
-        assert client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == {
-            "counts": None,
-            "points": 0,
-            "timed": True,
-        }
+        stale = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json()
+        assert (stale["counts"], stale["points"], stale["timed"]) == (None, 0, True)
         assert not engine.ws.add_point_times(ds, stored["point_time"][:-1])  # not of its stored points: nothing written
         (again,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")  # the same file again: skipped, its times added
         assert (
@@ -986,4 +983,9 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
         assert not engine.ws.add_point_times(ds, added["point_time"])  # it has them
     (plain,) = upload_levels(engine, path, geo="auto@7")
     assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
-    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {"counts": None, "points": 0, "timed": False}
+    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {
+        "counts": None,
+        "points": 0,
+        "timed": False,
+        "idle": [],
+    }

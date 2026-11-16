@@ -406,7 +406,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .pp-scroll { max-height: min(300px, 28vh); overflow: auto; padding: 4px 10px; }
 .pp table { width: 100%; border-collapse: collapse; } .pp th { text-align: left; font-weight: 400; color: #7d8aa3; padding: 2px 8px 2px 0; } .pp td { color: #e3e9f6; text-align: right; padding: 2px 0; }
 .pp-sub { color: #ffb000; letter-spacing: .08em; font-size: 10px; margin: 8px 0 3px; text-transform: uppercase; }
-.pp-ins { padding: 4px 6px; margin: 2px 0; border: 1px solid #1f2a3c; border-radius: 3px; cursor: pointer; } .pp-ins:hover { border-color: #ffb000; }
+.pp-ins { padding: 4px 6px; margin: 2px 0; border: 1px solid #1f2a3c; border-radius: 3px; cursor: pointer; } .pp-ins:hover { border-color: #ffb000; } .pp-ins.off { opacity: .4; }
 .pp-ins span { display: block; color: #8592ab; font-size: 10.5px; font-family: var(--font); }
 .pp-ads { width: calc(100% - 20px); margin: 0 10px 10px; padding: 5px; background: none; color: #ffb000; border: 1px solid #ffb000; border-radius: 3px; font: 700 11px var(--mono); letter-spacing: .06em; cursor: pointer; } .pp-ads:disabled { color: #5c6a85; border-color: #263248; cursor: not-allowed; }
 .pp-ask { width: calc(100% - 20px); margin: 6px 10px 10px; padding: 6px; background: #ffb000; color: #05080d; border: 0; border-radius: 3px; font: 700 11px var(--mono); letter-spacing: .06em; cursor: pointer; }

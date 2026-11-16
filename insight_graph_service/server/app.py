@@ -353,16 +353,17 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/counts")
-    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
-        return engine.geo_period_counts(dataset_id, asked_period(start, end))
+    def geo_period_counts(dataset_id: str, start: str, end: str, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, asked_period(start, end), tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
         return engine.geo_projected(dataset_id)
 
     @app.get("/api/geo/{dataset_id}/window")
-    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "") -> dict[str, Any]:
-        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))))
+    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "", start: str = "", end: str = "") -> dict[str, Any]:
+        period = asked_period(start, end) if start or end else None  # the period bar's days: the view's points in them
+        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
 
     @app.post("/api/geo/{dataset_id}/aoi")
     def geo_aoi_rows(dataset_id: str, body: AoiIn) -> Response:
@@ -370,8 +371,8 @@ def create_app(engine: Engine) -> FastAPI:
         return Response(data, media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})  # ASCII: a header's bytes
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
-    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id, rings)
+    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, rings, asked_period(start, end) if start or end else None)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
