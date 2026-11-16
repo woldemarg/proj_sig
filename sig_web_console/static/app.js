@@ -252,9 +252,9 @@ async function refreshHealth() {
     S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
     // ponytail: no answer reads as a stack without ADS until the bridge answers once on this page; a page opened while it is down says вимкнено
     S.adsSeen ||= Boolean(ads);
-    const [adsCls, adsTxt, adsWhy] = ads ? (ads.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
-      : ["bad", "ADS недоступний", `Не відповідає: ${[!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ")}`])
-      : S.adsSeen ? ["bad", "ADS недоступний", "Не відповідає міст до ADS"] : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
+    const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
+      : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
+      : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
