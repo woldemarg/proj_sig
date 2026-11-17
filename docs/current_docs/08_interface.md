@@ -182,7 +182,7 @@ Measured on California `@6,5` with its table level (2,530 cells at r6): r5's 888
 
 ## 8.8 A zone's question to ADS
 
-**Code** `sig_web_console/static/ads.js`, `ads_bridge_service/`, `insight_graph_service/core/geo_views.py::geo_table_rows`, `::geo_zone_rows`, `subgroup_miner/ingestion.py::table_rows`, `::zone_rows`, `subgroup_miner/spatial_plane.py::cell_columns`, `::zone_places` · **Tests** `tests/test_ads_bridge.py`, `tests/test_geo_export.py` · **Decision** [ADR-ADS-Conversation](../decisions/ADR-ADS-Conversation.md)
+**Code** `sig_web_console/static/ads.js`, `ads_bridge_service/`, `insight_graph_service/core/geo_views.py::geo_table_rows`, `::geo_zone_rows`, `subgroup_miner/ingestion.py::table_rows`, `::zone_rows`, `subgroup_miner/spatial_plane.py::cell_columns`, `::zone_places` · **Tests** `tests/test_ads_bridge.py`, `tests/test_geo_export.py` · **Decision** [ADR-356](../decisions/ADR-356-ADS-Conversation.md)
 
 ADS is the agentic data-science service: it takes tables and a task, writes and runs its own analysis and returns a report. SIG hands it a question about drawn zones with the zones' insights as established facts, so its steps go to what the insights do not already state. SIG and ADS stay independent: SIG runs without the bridge, ADS knows nothing of SIG, and the bridge speaks to both over their public HTTP APIs alone; an upload to SIG never goes to ADS — the rows a question needs go when it is asked.
 
