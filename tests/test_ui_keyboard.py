@@ -101,8 +101,8 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.mouse.click(*at)
         page.keyboard.up("Shift")
         page.wait_for_selector(".sig-pop .pp-head")
-        assert not page.query_selector(".sig-pop .pp-ask") and page.evaluate("GeoMap.zone().length") == 0  # the cell's popup, no zone
-        empty = "() => { setDrawing(true); G.draw.push([0, 0], [0.001, 0], [0, 0.001]); finishPolygon(); return [$('map-draw').textContent, GeoMap.zone().length, GeoMap.polygon()]; }"
+        assert not page.query_selector(".sig-pop .pp-ask") and page.evaluate("GeoMap.zones().length") == 0  # the cell's popup, no zone
+        empty = "() => { setDrawing(true); G.draw.push([0, 0], [0.001, 0], [0, 0.001]); finishPolygon(); return [$('map-draw').textContent, GeoMap.zones().length, GeoMap.zones()[0] || null]; }"
         text, cells, polygon = page.evaluate(empty)
         assert text.startswith("У полігоні немає комірок мапи") and cells == 0 and polygon is None
         page.evaluate("setDrawing(true)")
@@ -112,12 +112,12 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.click("#view-switch button[data-view='table']")
         assert page.evaluate("G.draw") is None  # Enter and Backspace are the other view's again
         page.click("#view-switch button[data-view='map']")
-        lost = "() => { GeoMap.setPolygon(G.data.features[0].geometry); G.zone = new Set(['8a2a1072b59ffff']); paintZone(); return [G.map.getPaintProperty('cells-fill', 'fill-opacity'), G.map.getSource('zone').serialize().data.features.map((f) => f.geometry.type)]; }"
+        lost = "() => { GeoMap.addZone(G.data.features[0].geometry); G.zones[0].cells = new Set(['8a2a1072b59ffff']); paintZone(); return [G.map.getPaintProperty('cells-fill', 'fill-opacity'), G.map.getSource('zone').serialize().data.features.map((f) => f.geometry.type)]; }"
         assert page.evaluate(lost) == [0.55, ["Polygon"]]
-        page.evaluate("GeoMap.clearZone()")
+        page.evaluate("GeoMap.clearZones()")
         page.evaluate("() => document.querySelector('#mw-body .mw-i').click()")
         page.wait_for_selector("#map-card:not([hidden])")
-        page.evaluate("() => { GeoMap.setPolygon(G.data.features[0].geometry); GeoMap.closePopup(); }")  # with a zone
+        page.evaluate("() => { GeoMap.addZone(G.data.features[0].geometry); GeoMap.closePopup(); }")  # with a zone
         outline = "G.map.getSource('zone').serialize().data.features.map((f) => f.geometry.type)"
         assert page.evaluate(outline) == ["Polygon"]  # outlined over its cells
         boxes = """() => { const r = (q) => { const e = document.querySelector(q); return e && !e.hidden && e.getClientRects().length ? e.getBoundingClientRect() : null; };

@@ -1,7 +1,7 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zone: new Set(), poly: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null, idle: new Set(), focusSeq: 0 };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zones: [], zoneSeq: 0, zoneTags: {}, active: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null, idle: new Set(), focusSeq: 0 };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const CELL_LINE = 0.32;  // the cells' outline opacity
@@ -11,6 +11,8 @@ const ZONE_DIM = 0.2;  // the cells outside a zone, and every cell while one is 
 const POPUP_ROOM = 380;  // the height in px a zone's popup takes with its list
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
 const TILT = 35;  // the camera's pitch in degrees: the map seen at a slant, as a phone's
+const MAX_ZONES = 5;  // zones on the map at once: what one ADS question compares (the bridge's MAX_FOCUS)
+const ZONE_COLORS = ["#eef3ff", "#ffb000", "#ff9ff3", "#36d6ff", "#ff8a3d"];  // a zone's outline and tag: the first a zone on the map does not hold
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
 const GeoMap = {
@@ -20,25 +22,29 @@ const GeoMap = {
     : G.overlay?.patterns[pid]?.integrity === "mismatch" ? "Не на цій мапі: його запис не пройшов перевірку цілісності."
     : "Не на цій мапі: його рівень тут нічого не малює."),
   current: () => G.want,  // the geo dataset the map holds or opens on (its questions are suggestions())
-  zone: () => [...G.zone],  // the selected cells' H3 ids: the zone a question asks about
-
-  polygon: () => G.poly,  // the zone as drawn (GeoJSON)
+  zones: () => G.zones.map((z) => ({ id: z.id, polygon: z.poly, cells: [...z.cells] })),  // the zones on the map, in drawing order
+  active: () => G.zones.find((z) => z.id === G.active) || G.zones.at(-1),  // the zone the chat box asks about: the last opened, else the last drawn
   datasets: () => G.datasets,  // the geo datasets: the tables a question to ADS picks from
 
-  setPolygon(polygon) {
-    /* the zone: the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the polygon holds, as the graph
-       service reads a geometry; a polygon holding none leaves no zone */
-    const ring = polygon.coordinates[0], level = G.level ?? regionLevel();
-    const drawn = G.others.length ? (G.overlay || empty()).features.filter((f) => f.properties.resolution === level) : G.data ? G.data.features : [];
-    const inside = drawn.filter((f) => holds(ring, centre(f)));
-    G.zone = new Set(inside.map((f) => f.properties.h3 || f.properties.id.split(":")[2]));
-    G.poly = inside.length ? polygon : null;
-    GeoMap.closePopup(); paintZone();
-    if (inside.length) zonePopup(ring, inside);
+  addZone(polygon) {
+    /* a zone: the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the polygon holds, as the graph
+       service reads a geometry; a polygon holding none, or one past MAX_ZONES, adds none. Its id is never reused on the
+       page: an ADS conversation keeps the zones it was asked about */
+    const inside = zoneCells(polygon.coordinates[0]);
+    if (!inside.length || G.zones.length >= MAX_ZONES) return 0;
+    const color = ZONE_COLORS.find((c) => !G.zones.some((x) => x.color === c));  // a zone keeps its colour; a new one takes a freed colour
+    const z = { id: `Z${++G.zoneSeq}`, poly: polygon, cells: new Set(inside.map(cellId)), color };
+    G.zones.push(z); G.active = z.id;
+    GeoMap.closePopup(); paintZone();  // its popup opens on a click in it
     return inside.length;
   },
 
-  clearZone() { G.zone.clear(); G.poly = null; paintZone(); },
+  openZone(id) { const z = G.zones.find((x) => x.id === id); if (z) zonePopup(z); },
+
+  clearZones(id = null) {  // one zone, or every one
+    G.zones = id ? G.zones.filter((z) => z.id !== id) : [];
+    GeoMap.closePopup(); paintZone();
+  },
 
   cancelDraw() {  // whether a polygon was being drawn
     const on = Boolean(G.draw); if (on) setDrawing(false);
@@ -334,7 +340,7 @@ function ensureMap() {
     layer("regions-hit", "fill", "regions", { "fill-color": "#000", "fill-opacity": 0 }, ["==", ["get", "resolution"], -1], { layout: { visibility: "none" } });  // «Усі датасети»: a hex takes the click
     layer("regions-line", "line", "regions", { "line-color": C.region, "line-width": 1.4, "line-opacity": 0.75, "line-dasharray": [4, 2] }, ["==", ["get", "resolution"], -1]);
     layer("regions-n", "symbol", "region-labels", {}, ["==", ["get", "resolution"], -1], { layout: { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true } });
-    layer("zone-line", "line", "zone", { "line-color": "#eef3ff", "line-width": 2, "line-dasharray": [2, 1] });
+    layer("zone-line", "line", "zone", { "line-color": ["get", "color"], "line-width": 2, "line-dasharray": [2, 1] });
     layer("draft-fill", "fill", "draft", { "fill-color": "#eef3ff", "fill-opacity": 0.08 });
     layer("draft-line", "line", "draft", { "line-color": "#eef3ff", "line-width": 1.4 });
     layer("draft-pts", "circle", "draft", { "circle-radius": ["case", ["get", "closable"], 7, 4], "circle-color": ["case", ["get", "closable"], C.cov, "#eef3ff"],
@@ -370,13 +376,15 @@ function ensureMap() {
       });
       pointer = e;
     });
-    // a click in the drawn polygon or on a cell of its zone opens the zone's popup again, while the map draws the zone's cells
-    const inZone = (e) => G.poly && zoneShown() && (holds(G.poly.coordinates[0], [e.lngLat.lng, e.lngLat.lat]) ||
-      m.queryRenderedFeatures(e.point, { layers: ["cells-fill"] }).some((f) => G.zone.has(f.properties.h3)));
+    // a click in a drawn polygon or on a cell of its zone opens that zone's popup again, the last drawn first, while the map draws its cells
+    const inZone = (e) => {
+      const hit = new Set(m.queryRenderedFeatures(e.point, { layers: ["cells-fill"] }).map((f) => f.properties.h3));
+      return G.zones.findLast((z) => zoneShown(z) && (holds(z.poly.coordinates[0], [e.lngLat.lng, e.lngLat.lat]) || [...hit].some((c) => z.cells.has(c))));
+    };
     m.on("click", "cells-fill", (e) => { if (!G.draw && !inZone(e)) cellPopup(e.features[0], e.lngLat); });
     m.on("click", "regions-hit", (e) => { if (!G.draw && !inZone(e)) regionPopup(e.features[0].properties.id, e.lngLat); });
     m.on("click", (e) => {  // after the layers' clicks, which a drawing click skips: a vertex, or the polygon closed on its first one
-      if (!G.draw) { if (inZone(e)) GeoMap.setPolygon(G.poly); return; }
+      if (!G.draw) { const z = inZone(e); if (z) zonePopup(z); return; }
       if (nearFirst(e.point)) return finishPolygon();
       G.draw.push([+e.lngLat.lng.toFixed(6), +e.lngLat.lat.toFixed(6)]);
       paintDraft();
@@ -579,14 +587,16 @@ function paintDraft(cursor = null) {
   if (G.map && G.map.getSource("draft")) G.map.getSource("draft").setData({ type: "FeatureCollection", features });
   const b = $("map-draw");
   b.classList.toggle("active", Boolean(v));
-  b.textContent = v ? (v.length < 3 ? "Скасувати" : "Завершити") : G.zone.size ? "Прибрати зону" : "Намалювати зону";
+  b.textContent = v ? (v.length < 3 ? "Скасувати" : "Завершити") : G.zones.length >= MAX_ZONES ? `Можна додати не більше ${MAX_ZONES} зон` : "Додати зону";
+  b.disabled = !v && G.zones.length >= MAX_ZONES;
+  $("map-clear").hidden = Boolean(v) || !G.zones.length;
 }
 
 function paintCells() {
   /* the cells' fill and the LISA outlines: dimmed while a zone is drawn, all but the zone's cells once it is closed;
      else dimmed under a focused insight */
   if (!G.map || !G.map.getLayer("cells-fill")) return;
-  const zoned = G.draw || zoneShown(), inZone = ["has", ["get", "h3"], ["literal", Object.fromEntries([...G.zone].map((c) => [c, 1]))]];  // a lookup, not a scan per cell
+  const zoned = G.draw || G.zones.some(zoneShown), inZone = ["has", ["get", "h3"], ["literal", Object.fromEntries(G.zones.flatMap((z) => [...z.cells]).map((c) => [c, 1]))]];  // a lookup, not a scan per cell
   G.map.setPaintProperty("cells-fill", "fill-opacity", zoned ? ["case", inZone, 0.55, ZONE_DIM] : G.focus.length ? 0.14 : 0.55);
   for (const id of ["lisa-hot", "lisa-cold"]) G.map.setPaintProperty(id, "line-opacity", zoned ? ["case", inZone, 0.6, ZONE_DIM] : 0.6);
 }
@@ -602,36 +612,56 @@ function finishPolygon() {
   if (!G.draw || G.draw.length < 3) return setDrawing(false);
   const polygon = { type: "Polygon", coordinates: [[...G.draw, G.draw[0]]] };
   setDrawing(false);
-  if (!GeoMap.setPolygon(polygon)) $("map-draw").textContent = "У полігоні немає комірок мапи · намалювати ще";
+  if (!GeoMap.addZone(polygon)) $("map-draw").textContent = "У полігоні немає комірок мапи · намалювати ще";
 }
 
-function zonePopup(ring, inside) {
-  /* the closed zone: its cells and events, the characteristic insights with an event in it, and its question */
+const cellId = (f) => f.properties.h3 || f.properties.id.split(":")[2];
+
+function zoneCells(ring) {
+  /* the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the ring holds */
+  const level = G.level ?? regionLevel();
+  const drawn = G.others.length ? (G.overlay || empty()).features.filter((f) => f.properties.resolution === level) : G.data ? G.data.features : [];
+  return drawn.filter((f) => holds(ring, centre(f)));
+}
+
+function zonePopup(z) {
+  /* a zone: its cells and events, the characteristic insights with an event in it, and its questions; the zone the chat box asks about */
+  G.active = z.id;
+  const ring = z.poly.coordinates[0], inside = (G.others.length ? (G.overlay || empty()).features : G.data ? G.data.features : []).filter((f) => z.cells.has(cellId(f)));
   const x0 = ring[0][0], box = ring.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]);
   const cells = !G.others.length, events = inside.reduce((a, f) => a + cellPoints(f.properties), 0);
   // under the zone, not over it: above it when only there the popup has room, the map moved up when neither side has
   const x = unwrap((box[0] + box[2]) / 2, 0), room = (y) => G.map.project([x, y]).y, under = $("map").clientHeight - room(box[1]);
   const below = under >= POPUP_ROOM || room(box[3]) < POPUP_ROOM;
   if (below && under < POPUP_ROOM) G.map.panBy([0, POPUP_ROOM - under], { duration: 0 });
-  const popup = openPopup(`<div class="pp-head"><span>${esc(cap(word("zone")))} · ${esc(plural(inside.length, "комірка", "комірки", "комірок"))}${cells ? ` · ${esc(plural(events, "подія", "події", "подій"))}${G.periodOn ? " за період" : ""}` : ""}</span></div>` +
+  const popup = openPopup(`<div class="pp-head"><span>${esc(cap(word("zone")))} ${esc(z.id)} · ${esc(plural(inside.length, "комірка", "комірки", "комірок"))}${cells ? ` · ${esc(plural(events, "подія", "події", "подій"))}${G.periodOn ? " за період" : ""}` : ""}</span></div>` +
     `<div class="pp-scroll">${cells ? `<div class="pp-sub pp-here">Характерні інсайти в зоні</div><div class="pp-list"></div>` : ""}</div>`,
-    [x, below ? box[1] : box[3]], true, below ? "top" : "bottom");
-  G.reopen = () => zonePopup(ring, inside);
+    [x, below ? box[1] : box[3]], z, below ? "top" : "bottom");
+  G.reopen = () => zonePopup(z);
   const rows = new Set(inside.map((f) => f.properties.row));
   if (cells) popupInsights(popup, box, (i) => G.patterns[i.id].rows.some((r) => rows.has(r)), (n) => `: ${n}`);
 }
 
 function paintZone() {
-  /* the zone's cells alone keep their colour, its polygon outlined over them; in «Усі датасети» its hexes are outlined too
-     (H3 ids are global: the zone survives a switch of dataset) */
+  /* the zones' cells alone keep their colour, each polygon outlined over them in its colour with its id; in «Усі датасети»
+     their hexes are outlined too (H3 ids are global: a zone survives a switch of dataset) */
   paintDraft(); paintCells();
-  const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => G.zone.has(f.properties.id.split(":")[2])) : [];
-  const poly = G.poly ? [{ type: "Feature", geometry: G.poly, properties: {} }] : [];
-  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features: [...hexes, ...poly] });
+  const features = G.zones.flatMap(({ color, ...z }) => {
+    const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => z.cells.has(cellId(f))).map((f) => ({ ...f, properties: { color } })) : [];
+    return [...hexes, { type: "Feature", geometry: z.poly, properties: { color } }];
+  });
+  if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features });
+  for (const id of Object.keys(G.zoneTags)) if (!G.zones.some((z) => z.id === id)) { G.zoneTags[id].remove(); delete G.zoneTags[id]; }
+  G.zones.forEach((z) => {  // the id at the polygon's northernmost vertex, as the chat and ADS name the zone
+    const top = z.poly.coordinates[0].reduce((a, c) => (c[1] > a[1] ? c : a));
+    const el = G.zoneTags[z.id]?.getElement() || Object.assign(document.createElement("div"), { className: "zone-tag", textContent: z.id });
+    el.style.setProperty("--c", z.color);
+    G.zoneTags[z.id] ||= new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(top).addTo(G.map);
+  });
 }
 
 const cellPoints = (p) => (G.periodOn ? p[PERIOD_METRIC] || 0 : p.points ?? 0);  // a cell's points, in the bar's days while the cells show them
-const zoneShown = () => !G.others.length && Boolean(G.data) && G.data.features.some((f) => G.zone.has(f.properties.h3));  // a cell of the zone is drawn
+const zoneShown = (z) => !G.others.length && Boolean(G.data) && G.data.features.some((f) => z.cells.has(f.properties.h3));  // a cell of the zone is drawn
 
 function listMetrics() {
   /* the cells' numeric columns as the colour choices, the one in use kept when the cells still have it */
@@ -701,11 +731,11 @@ function wireHud() {
   $("lyr-labels").addEventListener("change", placeDensity);
   $("lyr-regions").addEventListener("change", () => { G.level = undefined; paintRegions(); });
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
-  $("map-draw").addEventListener("click", () => {  // closes or drops the drawing, clears the zone, or starts one
+  $("map-draw").addEventListener("click", () => {  // closes or drops the drawing, or starts another zone
     if (G.draw) return finishPolygon();
-    GeoMap.closePopup();
-    if (G.zone.size) GeoMap.clearZone(); else setDrawing(true);
+    GeoMap.closePopup(); setDrawing(true);
   });
+  $("map-clear").addEventListener("click", () => GeoMap.clearZones());
   document.addEventListener("keydown", (e) => {  // drawing: Enter closes the polygon, Backspace takes the last vertex back (Esc: app.js)
     const own = e.target === document.body || e.target.id === "map-draw" || e.target.matches("#map-view canvas");  // another control keeps its keys
     if (!G.draw || !own) return;
@@ -777,17 +807,21 @@ function regionPopup(id, lngLat) {
   G.reopen = () => regionPopup(id, lngLat);
 }
 
-function openPopup(html, lngLat, zone = false, anchor) {
-  /* one popup at a time; the zone's carries its questions: to the graph, with the text typed, if any, and to ADS */
+function openPopup(html, lngLat, zone = null, anchor) {
+  /* one popup at a time; a zone's carries its questions: to the graph about it, with the text typed, if any; to ADS,
+     which may compare it with the others; and its removal */
   GeoMap.closePopup();
+  const trash = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>`;
   const buttons = !zone ? "" : `<button type="button" class="pp-ask">Запитати про цю зону</button>` +
-    `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="ADS недоступний: його стан показано вгорі сторінки"`}>Запитати про це ADS</button>`;
+    `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="ADS недоступний: його стан показано вгорі сторінки"`}>Запитати про це ADS</button>` +
+    `<button type="button" class="pp-drop">${trash}Видалити зону</button>`;
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${buttons}</div>`).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });
   if (!zone) return popup;
   const el = popup.getElement();
-  el.querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); ask($("question").value, { cells: GeoMap.zone() }); });
-  el.querySelector(".pp-ads").addEventListener("click", () => { GeoMap.closePopup(); openAds(); });
+  el.querySelector(".pp-ask").addEventListener("click", () => { GeoMap.closePopup(); ask($("question").value, { cells: [...zone.cells], id: zone.id }); });
+  el.querySelector(".pp-ads").addEventListener("click", () => { GeoMap.closePopup(); openAds(zone.id); });
+  el.querySelector(".pp-drop").addEventListener("click", () => GeoMap.clearZones(zone.id));
   return popup;
 }
 

@@ -1,7 +1,8 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, threads: { graph: [], ads: [] }, tab: "graph", busy: false, period: null, adsSession: null, adsZones: {}, adsLast: null };
+Object.defineProperty(S, "chat", { get: () => S.threads[S.tab] });  // the thread on show: the graph's questions or the ADS conversation
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -19,7 +20,7 @@ const ERROR_HELP = {
   ads_timeout: ["ADS не встиг відповісти", "Аналіз тривав довше за відведений час. Спробуйте вужче питання або меншу зону.", ""],
   ads_failed: ["ADS не дав звіту", "ADS прийняв запит, але не повернув звіт.", ""],
   sig_failed: ["SIG не віддав дані зони", "Не вдалося прочитати знахідки або рядки таблиць для цієї зони.", ""],
-  empty_zone: ["Немає зони", "Спершу намалюйте зону на мапі.", ""],
+  ads_busy: ["ADS ще відповідає", "Попереднє питання цієї розмови ще виконується в ADS. Дочекайтеся відповіді.", ""],
   unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
   unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
   invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, зону мапи не вдалося прочитати, або колонка часу не читається чи дає замало періодів.", "Перевірте назви колонок і формат значень, комірки чи форму зони; для часу — колонку з датами, календарну одиницю сітки (день, тиждень, місяць, квартал — не 7D) і пояс за назвою IANA."],
@@ -252,6 +253,7 @@ async function refreshHealth() {
     S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
     // ponytail: no answer reads as a stack without ADS until the bridge answers once on this page; a page opened while it is down says вимкнено
     S.adsSeen ||= Boolean(ads);
+    document.querySelector(".chat-tabs [data-tab='ads']").hidden = !S.ads && !S.threads.ads.length;  // a conversation held stays in view
     const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
       : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
       : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
@@ -318,6 +320,28 @@ function initResize() {
 function clearAnswer() {
   /* the one "clear the answer" action: its highlight in the graph and on the sphere, the map's focus and evidence */
   S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear();
+}
+
+function showTab(tab) {
+  /* the thread on show: the graph's questions or the ADS conversation */
+  S.tab = tab;
+  document.querySelectorAll(".chat-tabs button").forEach((b) => { b.classList.toggle("active", b.dataset.tab === tab); b.setAttribute("aria-selected", String(b.dataset.tab === tab)); });
+  if (tab === "ads") document.querySelector(".chat-tabs [data-tab='ads']").hidden = false;
+  $("question").placeholder = tab === "ads" ? "Уточніть питання до ADS…" : "Спитайте про метрику, сегмент чи закономірність…";
+  renderThread(); autosize();
+}
+
+function newChat() {
+  /* the thread on show starts again: the graph's pending questions aborted, or the ADS conversation's session closed */
+  if (S.tab === "ads") {
+    if (S.adsSession) api(`/api/ads/sessions/${S.adsSession}/close`, { method: "POST" }).catch(() => {});  // best effort: ADS keeps no table of it
+    Object.assign(S, { adsSession: null, adsZones: {}, adsLast: null });
+  } else {
+    S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat"));
+    clearAnswer();
+  }
+  S.threads[S.tab] = [];
+  renderThread();
 }
 
 function init() {
@@ -463,7 +487,8 @@ function init() {
   $("question").addEventListener("input", autosize);
   Timeline.init();
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
+  $("new-chat").addEventListener("click", newChat);
+  document.querySelectorAll(".chat-tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
@@ -473,7 +498,7 @@ function init() {
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
-    if (S.view === "map" && GeoMap.zone().length) { GeoMap.clearZone(); return; }
+    if (S.view === "map" && GeoMap.zones().length) { GeoMap.clearZones(); return; }
     closeDrawer();
   });
   initResize();

@@ -694,8 +694,11 @@ class Engine:
         return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings, period)
 
     @_healthy
-    def geo_aoi_rows(self, dataset_id: str, polygon: dict[str, Any], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
-        return geo_views.geo_aoi_rows(self.ws, dataset_id, polygon, resolution)
+    def geo_table_rows(self, dataset_id: str, resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
+        return geo_views.geo_table_rows(self.ws, dataset_id, resolution)
+
+    def geo_zone_rows(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
+        return geo_views.geo_zone_rows(self.ws, dataset_id, zones, resolution)
 
     @_healthy
     def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
