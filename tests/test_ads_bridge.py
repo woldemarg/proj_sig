@@ -344,12 +344,12 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 )  # the graph's chat: the developer's
                 page.click(".sig-pop .pp-ads")
                 whole = page.input_value("#ads-question")  # no period chosen: the bar's whole span, its last day included
-                assert whole.startswith("Період: 2019-03-04 — 2019-0") and whole.endswith(" (включно)\n"), whole
+                assert whole.startswith("Період: 2019-03-04 — 2019-0") and whole.endswith(" (включно)\n\n"), whole
                 page.click("#ads-cancel")
                 page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")
                 page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])
                 page.click(".sig-pop .pp-ads")
-                assert page.input_value("#ads-question") == "Період: 2026-08-09 06:00 — 2026-08-10 18:00 (кінець не включно)\n"
+                assert page.input_value("#ads-question") == "Період: 2026-08-09 06:00 — 2026-08-10 18:00 (кінець не включно)\n\n"
                 page.evaluate("S.period = null")
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
                 zone = page.evaluate("GeoMap.zones()[0].id")  # the popup's zone, ticked
@@ -380,6 +380,11 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.press("#question", "Enter")
                 page.wait_for_function("S.chat.length === 2 && S.chat.at(-1).ads.stage === 'done'", timeout=30000)
                 assert seen["sessions"] == 1 and seen["uploads"].count(table) == 1 and seen["query"].count("А по годинах?") == 1
+                page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")  # the period changed: the form again
+                page.fill("#question", "А вночі?")
+                page.press("#question", "Enter")
+                assert page.evaluate("$('ads-dialog').open && S.chat.length === 2") and "Змінилися період" in page.inner_text("#ads-zone")
+                assert page.input_value("#ads-question").endswith("\nА вночі?") and page.evaluate("S.period = null; $('ads-dialog').close()") is None
                 page.click("#new-chat")  # the conversation ends: ADS deletes its tables, the session closes
                 page.wait_for_function("!S.adsSession && S.chat.length === 0")
                 assert page.is_visible(".chat-tabs [data-tab='ads']")

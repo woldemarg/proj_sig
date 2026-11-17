@@ -22,6 +22,12 @@ function adsBody() {
   return { question: $("ads-question").value.trim(), tables, zones, focus, ...(S.adsSession ? { session_id: S.adsSession } : {}), ...(p ? { period: [p.start, p.end] } : {}) };
 }
 
+function adsState() {
+  /* what a follow-up would not see change: the period bar's days, the map's zones, the datasets and their layers */
+  const shown = Timeline.shown(), data = Object.keys(S.datasets).map((id) => [id, ...layersOf(id)].join("+")).sort();
+  return { "період": shown ? `${shown.start}/${shown.end}` : "", "зони": GeoMap.zones().map((z) => z.id).join(), "дані": data.join() };
+}
+
 function periodHeader(p) {
   /* the period bar's [start, end) as the question's first line, ISO dates with the last day included */
   const lo = wall(p.start), hi = wall(p.end);
@@ -41,7 +47,7 @@ function previewAds() {
   }, 250);
 }
 
-function openAds(zoneId) {
+function openAds(zoneId, changed = []) {
   /* one row per upload, as its levels share the rows: the level open on the map, else the finest; the zone asked from
      ticked, the map's others offered beside it (without one, every zone ticked) */
   const open = GeoMap.current(), byUpload = new Map();
@@ -54,16 +60,19 @@ function openAds(zoneId) {
     `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("");
   const asked = Object.keys(S.adsZones);
   $("ads-zone").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
+  if (changed.length) $("ads-zone").textContent += ` Змінилися ${changed.join(", ")}: перевірте таблиці, зони й період.`;
   const shown = Timeline.shown();  // the bar's days head the question even when they are the whole span: ADS reads them, the person may edit them
-  $("ads-question").value = (shown ? `${periodHeader(shown)}\n` : "") + $("question").value;
+  $("ads-question").value = (shown ? `${periodHeader(shown)}\n\n` : "") + $("question").value;
   $("ads-dialog").showModal();
   previewAds();
 }
 
 function askAdsFurther(question) {
-  /* the ADS tab's box: the conversation's next question, with the tables, zones and period of its last one */
+  /* the ADS tab's box: the conversation's next question, with the tables, zones and period of its last one; the form
+     instead when it starts the conversation or the period, the zones or the data changed since */
   if (!question || adsRunning()) return;
-  if (!S.adsLast) { openAds(); return; }  // a conversation starts from the form: its tables, zones and period
+  const now = adsState(), changed = S.adsLast ? Object.keys(now).filter((k) => now[k] !== S.adsState[k]) : [];
+  if (!S.adsLast || changed.length) { openAds(null, changed); return; }
   $("question").value = ""; autosize();
   askAds({ ...S.adsLast, question, ...(S.adsSession ? { session_id: S.adsSession } : {}) });
 }
@@ -71,7 +80,7 @@ function askAdsFurther(question) {
 async function askAds(body) {
   showTab("ads");
   for (const z of body.zones) S.adsZones[z.id] = z.polygon;  // the conversation's zones: a later question may name them
-  S.adsLast = body;
+  S.adsLast = body; S.adsState = adsState();
   const turn = { question: body.question, zones: body.focus, since: new Date().toISOString(), ads: { stage: "search", timings: {} } };
   S.threads.ads.push(turn); renderThread();
   const paint = () => { if (S.tab === "ads") { renderThread(); autosize(); } };
