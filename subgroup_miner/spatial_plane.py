@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``cell_columns``, ``zone_places``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -366,8 +366,8 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
-AOI_RING = 1  # "adjacent": the zone's cells and their first ring, the neighbourhood of the cell table
-AOI_PARENTS = 2  # the coarser cell columns beside the dataset's own
+ZONE_RING = 1  # "adjacent": the zone's cells and their first ring, the neighbourhood of the cell table
+CELL_PARENTS = 2  # the coarser cell columns of an exported table, beside its cells at the asked resolution
 
 
 def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np.ndarray:
@@ -392,31 +392,39 @@ def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np
 
 def cell_column_names(resolution: int) -> list[str]:
     """The cell columns of ``cell_columns`` at ``resolution``, finest first."""
-    return [f"h3_r{r}" for r in range(resolution, max(resolution - AOI_PARENTS, 0) - 1, -1)]
+    return [f"h3_r{r}" for r in range(resolution, max(resolution - CELL_PARENTS, 0) - 1, -1)]
 
 
-def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str, np.ndarray]:
-    """Each point's cell at ``resolution`` and at up to ``AOI_PARENTS`` coarser ones, as ``h3_r<res>`` columns ("" without a
-    valid point); a coarser cell is the finer one's parent."""
+def point_cells(lat: np.ndarray, lon: np.ndarray, resolution: int) -> np.ndarray:
+    """Each point's cell at ``resolution``, "" without a valid point."""
     ok = np.isfinite(lat) & np.isfinite(lon)
     pairs, back = distinct_points(lat[ok], lon[ok])
     cell = np.full(len(lat), "", dtype=object)
     cell[ok] = np.array([h3.latlng_to_cell(float(a), float(b), resolution) for a, b in pairs], dtype=object)[back]
-    columns = {}
-    for name in cell_column_names(resolution):
-        parent = {c: h3.cell_to_parent(c, int(name[4:])) for c in set(cell[ok])} | {"": ""}
+    return cell
+
+
+def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str, np.ndarray]:
+    """Each point's cell at ``resolution`` and at up to ``CELL_PARENTS`` coarser ones, as ``h3_r<res>`` columns ("" without a
+    valid point); a coarser cell is the finer one's parent."""
+    cell = point_cells(lat, lon, resolution)
+    columns = {f"h3_r{resolution}": cell}
+    for name in cell_column_names(resolution)[1:]:
+        parent = {c: h3.cell_to_parent(c, int(name[4:])) for c in set(cell) - {""}} | {"": ""}
         columns[name] = np.array([parent[c] for c in cell], dtype=object)
     return columns
 
 
 def zone_places(lat: np.ndarray, lon: np.ndarray, cell: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[np.ndarray, int]:
     """Each point's place against a drawn zone -> (places, the zone's cell count): ``inside`` the polygon, its edges
-    straight in degrees; ``adjacent``, outside it in a zone cell or one of its ``AOI_RING`` neighbours; ``far``. ``cell``:
-    each point's cell at ``resolution`` (``cell_columns``); the zone's cells are ``geometry_to_cells``'s, as a question reads it."""
+    straight in degrees; ``adjacent``, outside it in a zone cell or one of its ``ZONE_RING`` neighbours; ``far``; and
+    ``unlocated`` without a valid point, in no place. ``cell``: each point's cell at ``resolution`` (``point_cells``); the
+    zone's cells are ``geometry_to_cells``'s, as a question reads it."""
     inside = np.isfinite(lat) & np.isfinite(lon) & _in_polygon(lon, lat, polygon)
     zone = geometry_to_cells(polygon, resolution)
-    near = set().union(*(h3.grid_disk(c, AOI_RING) for c in zone))
-    return np.where(inside, "inside", np.where(np.isin(cell, list(near)), "adjacent", "far")), len(zone)
+    near = set().union(*(h3.grid_disk(c, ZONE_RING) for c in zone))
+    outside = np.where(cell == "", "unlocated", np.where(np.isin(cell, list(near)), "adjacent", "far"))
+    return np.where(inside, "inside", outside), len(zone)
 
 
 def cells_inside(cells: np.ndarray, area: Iterable[str]) -> np.ndarray:

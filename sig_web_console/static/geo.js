@@ -617,18 +617,18 @@ function finishPolygon() {
 }
 
 const cellId = (f) => f.properties.h3 || f.properties.id.split(":")[2];
+const drawnCells = () => (G.others.length ? (G.overlay || empty()).features : G.data ? G.data.features : []);  // the open dataset's cells, or «Усі датасети»'s hexes
 
 function zoneCells(ring) {
   /* the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the ring holds */
   const level = G.level ?? regionLevel();
-  const drawn = G.others.length ? (G.overlay || empty()).features.filter((f) => f.properties.resolution === level) : G.data ? G.data.features : [];
-  return drawn.filter((f) => holds(ring, centre(f)));
+  return drawnCells().filter((f) => (!G.others.length || f.properties.resolution === level) && holds(ring, centre(f)));
 }
 
 function zonePopup(z) {
   /* a zone: its cells and events, the characteristic insights with an event in it, and its questions; the zone the chat box asks about */
   G.active = z.id;
-  const ring = z.poly.coordinates[0], inside = (G.others.length ? (G.overlay || empty()).features : G.data ? G.data.features : []).filter((f) => z.cells.has(cellId(f)));
+  const ring = z.poly.coordinates[0], inside = drawnCells().filter((f) => z.cells.has(cellId(f)));
   const x0 = ring[0][0], box = ring.reduce((a, c) => { const x = unwrap(c[0], x0); return [Math.min(a[0], x), Math.min(a[1], c[1]), Math.max(a[2], x), Math.max(a[3], c[1])]; }, [Infinity, 90, -Infinity, -90]);
   const cells = !G.others.length, events = inside.reduce((a, f) => a + cellPoints(f.properties), 0);
   // under the zone, not over it: above it when only there the popup has room, the map moved up when neither side has
@@ -648,7 +648,7 @@ function paintZone() {
      their hexes are outlined too (H3 ids are global: a zone survives a switch of dataset) */
   paintDraft(); paintCells();
   const features = G.zones.flatMap(({ color, ...z }) => {
-    const hexes = G.others.length ? (G.overlay || empty()).features.filter((f) => z.cells.has(cellId(f))).map((f) => ({ ...f, properties: { color } })) : [];
+    const hexes = G.others.length ? drawnCells().filter((f) => z.cells.has(cellId(f))).map((f) => ({ ...f, properties: { color } })) : [];
     return [...hexes, { type: "Feature", geometry: z.poly, properties: { color } }];
   });
   if (G.map && G.map.getSource("zone")) G.map.getSource("zone").setData({ type: "FeatureCollection", features });

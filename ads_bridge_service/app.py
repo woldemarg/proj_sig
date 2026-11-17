@@ -1,7 +1,8 @@
 """The bridge's HTTP host: ``GET /api/ads/health``, ``POST /api/ads/preview`` (the task's text before the ask),
 ``POST /api/ads/jobs`` (a question about zones run through the graph, ADS and the final report, in the conversation's
-ADS session), ``GET /api/ads/jobs/{id}`` (its stage and results) and ``POST /api/ads/sessions/{id}/close`` (the
-conversation's end: its tables deleted from ADS, its session closed)."""
+ADS session), ``GET /api/ads/jobs/{id}`` (its stage and results), ``POST /api/ads/jobs/{id}/cancel`` (its conversation
+ended: the job stops and closes the session it holds) and ``POST /api/ads/sessions/{id}/close`` (the conversation's end:
+its tables deleted from ADS, its session closed)."""
 
 from __future__ import annotations
 
@@ -46,6 +47,8 @@ JOINT_MAX_TOKENS = 16384  # the prompt keeps every row of the report's tables
 JOBS_KEPT = 20
 STATUS_RETRIES = 5  # failed reads of an ADS job's status in a row before it is given up
 MAX_FOCUS = 5  # the zones one question may compare
+MAX_ZONES = 50  # the zones a conversation may hold (the graph service's MAX_EXPORT_ZONES)
+ZONES_HEADER = "zone_id,row_id,aoi_zone"  # the graph service's zone_rows CSV
 SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # ADS's: a uuid4, a path segment as it is
 ZONE_ID = r"^[A-Za-z0-9_-]{1,16}$"  # the graph service's zone ids
 # the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD)
@@ -68,17 +71,21 @@ class ZoneIn(BaseModel):
 class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
-    zones: list[ZoneIn] = Field(min_length=1)  # every zone of the conversation: a later question may name an earlier one
+    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_ZONES)  # every zone of the conversation: a later question may name an earlier one
     focus: list[str] = Field(min_length=1, max_length=MAX_FOCUS)  # the zones this question is about
     session_id: str | None = Field(None, pattern=SESSION_ID)  # the conversation's ADS session; None: its first question
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # the console's period bar, [start, end): the graph's only period
 
     @model_validator(mode="after")
-    def _focus_in_zones(self) -> AskIn:
-        ids = [z.id for z in self.zones]
-        if len(set(ids)) != len(ids) or not set(self.focus) <= set(ids):
-            raise ValueError("zone ids repeat, or the question names a zone the conversation lacks")
+    def _distinct(self) -> AskIn:
+        ids, tables = [z.id for z in self.zones], [t.dataset_id for t in self.tables]
+        if any(len(set(v)) != len(v) for v in (ids, tables, self.focus)) or not set(self.focus) <= set(ids):
+            raise ValueError("a zone, table or focus repeats, or the question names a zone the conversation lacks")
         return self
+
+
+class Cancelled(Exception):
+    """The job's conversation ended (``POST /api/ads/jobs/{id}/cancel``): it stops at its next step."""
 
 
 class StageError(RuntimeError):
@@ -119,6 +126,11 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     # each job's state as last published; ponytail: in memory, the last JOBS_KEPT ended ones; a store if jobs must survive a restart
     jobs: dict[str, dict[str, Any]] = {}
     jobs_lock = threading.Lock()
+    cancelled: set[str] = set()  # the jobs whose conversation ended
+
+    def check(job: dict[str, Any]) -> None:
+        if job["job_id"] in cancelled:
+            raise Cancelled()
 
     def publish(job: dict[str, Any]) -> None:
         """The job's state for the console: a copy, so a read never meets the worker's own dict half-changed."""
@@ -133,8 +145,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
     def ask_graph(question: str, polygon: dict[str, Any], period: list[str] | None) -> list[dict[str, Any]]:
-        """A zone's evidence: the graph reads the polygon as the tables' rows are read against it (``geometry_to_cells``),
-        one place, and the period bar's days, never a period the question's text names (that one is ADS's)."""
+        """A zone's evidence: the graph reads the polygon as the cells of its finest geo level whose centres it holds, and
+        the period bar's days, never a period the question's text names (that one is ADS's)."""
         ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "geometry": polygon, "use_llm": False}
         if period:
             ask["period"] = period
@@ -160,15 +172,34 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/zone_rows"  # one path segment, whatever the id holds
             resp = _checked(http.post(url, json={"zones": zones, "resolution": t["cells_at"]}), "sig_failed", f"SIG zones of {t['filename']}")
             tables.append(t | json.loads(resp.headers["x-zones"]))
-            for line in resp.text.splitlines()[1:]:  # zone_id,row_id,aoi_zone: an id, a number and a word, no quoting
+            head, *rows = resp.text.splitlines()
+            if head != ZONES_HEADER:
+                raise StageError("sig_failed", f"SIG zones of {t['filename']}: a CSV headed {head[:80]!r}, not {ZONES_HEADER}")
+            for line in rows:  # an id, a number and a word, no quoting
                 zone, _, rest = line.partition(",")
                 lines.append(f"{zone},{t['file']},{rest}")
         return tables, ("\n".join(lines) + "\n").encode("utf-8")
 
-    def session_files(sid: str) -> set[str]:
-        """The files the session holds already: a table sent on an earlier question is not sent again."""
+    def session_files(sid: str) -> dict[str, str]:
+        """The files the bridge sent the session, name -> ADS's path: a table sent on an earlier question is not sent again."""
         files = _checked(http.get(f"{settings.ads_url}/sessions/{sid}/sources"), "ads_failed", "ADS session files").json()["files"]
-        return {f["name"] for f in files if f.get("source_kind") == "uploaded_input"}
+        return {f["name"]: f["path"] for f in files if f.get("source_kind") == "uploaded_input"}
+
+    def close_session(sid: str) -> dict[str, Any]:
+        """The conversation's end: the tables it sent deleted from ADS (its .md files and reports ADS keeps: its API deletes
+        no .md), its session closed. Best effort: what ADS refuses is logged and named in ``kept``."""
+        kept: list[str] = []
+        try:
+            for name, path in session_files(sid).items():
+                if name.endswith(".csv") and http.post(f"{settings.ads_url}/sessions/{sid}/sources/delete", json={"path": path}).status_code != 200:
+                    kept.append(name)
+            http.post(f"{settings.ads_url}/sessions/{sid}/close")
+        except (httpx.HTTPError, StageError) as exc:
+            log.warning("ADS session %s not closed: %s", sid, exc)
+            return {"session_id": sid, "kept": kept, "closed": False}
+        if kept:
+            log.warning("ADS session %s kept %s", sid, kept)
+        return {"session_id": sid, "kept": kept, "closed": True}
 
     def upload(sid: str, tables: list[dict[str, Any]], files: dict[str, bytes]) -> None:
         """The tables the session lacks, read from the graph service, and ``files`` (the zones, replacing their last copy)."""
@@ -181,32 +212,44 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         for name, data in (sent | files).items():
             _checked(http.post(f"{settings.ads_url}/sessions/{sid}/datasets", files={"file": (name, data)}), "ads_failed", f"ADS upload {name}")
 
-    def run_ads(sid: str, query: str) -> str:
+    def busy(sid: str) -> bool:
+        """Whether the session still runs a job: a question waits for it before the bridge writes into the session."""
+        with contextlib.suppress(httpx.HTTPError):
+            return http.get(f"{settings.ads_url}/sessions/{sid}/status").status_code == 202
+        return False
+
+    def run_ads(job: dict[str, Any], sid: str, query: str) -> str:
         """The task run as the session's next job; the session stays open for the conversation's next question. A status
-        read that fails is read again, a job is given up after STATUS_RETRIES failures in a row or ADS_JOB_TIMEOUT_S."""
+        read that fails is read again; a job is given up after STATUS_RETRIES failures in a row, ADS_JOB_TIMEOUT_S or its
+        cancel, and a job given up is cancelled in ADS, so the session takes the next question."""
         ads = settings.ads_url
         started = http.post(f"{ads}/sessions/{sid}/jobs", json={"user_query": query})
         if started.status_code == 409:
             raise StageError("ads_busy", "the conversation's previous question still runs in ADS")
         _checked(started, "ads_failed", "ADS job")
-        deadline, failures = time.monotonic() + settings.ads_job_timeout_s, 0
-        while True:
-            try:
-                status = http.get(f"{ads}/sessions/{sid}/status")
-                if status.status_code == 200:
-                    break
-                failures = 0 if status.status_code == 202 else failures + 1
-                if failures > STATUS_RETRIES:
-                    _checked(status, "ads_failed", "ADS status")
-            except httpx.HTTPError:
-                failures += 1
-                if failures > STATUS_RETRIES:
-                    raise
-            if time.monotonic() > deadline:
-                with contextlib.suppress(httpx.HTTPError):  # the session takes the next question
+        deadline, failures, done = time.monotonic() + settings.ads_job_timeout_s, 0, False
+        try:
+            while True:
+                check(job)
+                try:
+                    status = http.get(f"{ads}/sessions/{sid}/status")
+                    if status.status_code == 200:
+                        done = True
+                        break
+                    failures = 0 if status.status_code == 202 else failures + 1
+                    if failures > STATUS_RETRIES:
+                        _checked(status, "ads_failed", "ADS status")
+                except httpx.HTTPError:
+                    failures += 1
+                    if failures > STATUS_RETRIES:
+                        raise
+                if time.monotonic() > deadline:
+                    raise StageError("ads_timeout", f"the ADS job still ran after {settings.ads_job_timeout_s:g} s")
+                time.sleep(settings.ads_poll_s)
+        finally:
+            if not done:
+                with contextlib.suppress(httpx.HTTPError):
                     http.post(f"{ads}/sessions/{sid}/jobs/cancel")
-                raise StageError("ads_timeout", f"the ADS job still ran after {settings.ads_job_timeout_s:g} s")
-            time.sleep(settings.ads_poll_s)
         report = ads_report(status.json())
         if not report:
             raise StageError("ads_failed", f"ADS returned no report (outcome {status.json().get('outcome')})")
@@ -233,6 +276,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             publish(job)
 
         try:
+            if body.session_id and busy(body.session_id):
+                raise StageError("ads_busy", "the conversation's previous question still runs in ADS")
             zones = {z.id: z.polygon for z in body.zones}
             findings = zone_findings(body, zones)
             tables, placed = place_tables(body)
@@ -240,11 +285,14 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             job["insights"] = findings
             job["ads_query"] = "".join(p["text"] for p in build_query_parts(body.question, tables, body.focus, list(zones), findings))
             enter("ads")
+            check(job)
             if not job["session_id"]:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
+            check(job)
             upload(job["session_id"], tables, {ZONES_FILE: placed, ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
-            job["ads_report"] = run_ads(job["session_id"], job["ads_query"])
+            job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
+            check(job)
             enter("joint")
             try:
                 job["joint_report"] = write_report(body.question, job["ads_report"], build_domain_md(zones, body.focus, tables, sources))
@@ -252,6 +300,11 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 log.exception("ADS job %s: no final report", job["job_id"])
                 job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
             enter("done")
+        except Cancelled:  # its conversation ended: the session it holds is closed (again, if the console closed it first)
+            if job["session_id"]:
+                close_session(job["session_id"])
+            job.update(failed_stage=job["stage"], stage="error", error={"code": "cancelled", "detail": "the conversation ended"})
+            publish(job)
         except Exception as exc:  # recorded on the job: the console shows the stage and the reason
             log.exception("ADS job %s failed", job["job_id"])
             error = {"code": error_code(exc, job["stage"]), "detail": f"{type(exc).__name__}: {exc}"}
@@ -293,19 +346,18 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             raise HTTPException(404, f"no ADS job {job_id}")
         return jobs[job_id]
 
+    @app.post("/api/ads/jobs/{job_id}/cancel")
+    def cancel(job_id: str) -> dict[str, Any]:
+        """The job's conversation ended: a running job stops at its next step and closes the session it holds."""
+        if job_id not in jobs:
+            raise HTTPException(404, f"no ADS job {job_id}")
+        running = jobs[job_id]["stage"] not in ("done", "error")
+        if running:
+            cancelled.add(job_id)  # ponytail: never pruned; a few ids per ended conversation
+        return {"job_id": job_id, "cancelled": running}
+
     @app.post("/api/ads/sessions/{session_id}/close")
     def close(session_id: str = PathParam(pattern=SESSION_ID)) -> dict[str, Any]:
-        """The conversation's end: the tables it sent deleted from ADS (its .md files and reports ADS keeps: its API deletes
-        no .md), its session closed. Best effort: what ADS refuses is logged, the console has moved on."""
-        ads, deleted = settings.ads_url, 0
-        try:
-            for f in _checked(http.get(f"{ads}/sessions/{session_id}/sources"), "ads_failed", "ADS session files").json()["files"]:
-                if f.get("source_kind") == "uploaded_input" and f["name"].endswith(".csv"):
-                    deleted += http.post(f"{ads}/sessions/{session_id}/sources/delete", json={"path": f["path"]}).status_code == 200
-            http.post(f"{ads}/sessions/{session_id}/close")
-        except (httpx.HTTPError, StageError) as exc:
-            log.warning("ADS session %s not closed: %s", session_id, exc)
-            return {"session_id": session_id, "deleted": deleted, "closed": False}
-        return {"session_id": session_id, "deleted": deleted, "closed": True}
+        return close_session(session_id)
 
     return app

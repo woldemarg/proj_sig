@@ -28,7 +28,7 @@ from subgroup_miner.spatial import (
     parse_times,
     select_levels,
 )
-from subgroup_miner.spatial_plane import cell_column_names, cell_columns, zone_places
+from subgroup_miner.spatial_plane import cell_column_names, cell_columns, point_cells, zone_places
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -368,33 +368,39 @@ def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
 ROW_ID = "row_id"  # a row's position in its reading: what ``table_rows`` and ``zone_rows`` join on
 
 
+def _export_frame(path: Path, where: str | None, resolution: int) -> pd.DataFrame:
+    """The rows both exports read; a file that already holds a column ``table_rows`` adds is refused."""
+    frame = read_rows(path, where)
+    if taken := sorted({ROW_ID, *cell_column_names(resolution)} & set(frame.columns)):
+        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the export adds")
+    return frame
+
+
 def table_rows(path: Path, locator: str, where: str | None, resolution: int) -> tuple[bytes, dict[str, Any]]:
     """A stored file's rows as CSV, each with its ``row_id`` first and its cell columns last (``cell_columns``), and what
     was added. Read as the upload's levels read it (pandas' reading: a code with leading zeros that parsed as a number
     comes back as that number); a file that already holds one of the added columns is refused."""
-    frame = read_rows(path, where)
+    frame = _export_frame(path, where, resolution)
     lat, lon, _ = locate_points(frame, locator)
-    columns = cell_columns(lat, lon, resolution)
-    if taken := sorted((set(columns) | {ROW_ID}) & set(frame.columns)):
-        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the export adds")
-    out = frame.assign(**columns)
+    out = frame.assign(**cell_columns(lat, lon, resolution))
     out.insert(0, ROW_ID, np.arange(len(out)))
-    return out.to_csv(index=False).encode("utf-8"), {"total": len(out), "resolution": resolution, "columns": [ROW_ID, *columns]}
+    return out.to_csv(index=False).encode("utf-8"), {"total": len(out), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
 
 
 def zone_rows(path: Path, locator: str, where: str | None, resolution: int, zones: list[tuple[str, dict[str, Any]]]) -> tuple[bytes, dict[str, Any]]:
     """Which rows of a stored file each drawn zone holds: CSV ``zone_id,row_id,aoi_zone`` of its ``inside`` and
-    ``adjacent`` rows (``zone_places``; a row not listed is ``far``), ``row_id`` as ``table_rows`` numbers them; and per
-    zone its rows per place and its cell count at ``resolution``; ``total`` and ``columns`` are ``table_rows``'s."""
-    frame = read_rows(path, where)
+    ``adjacent`` rows (``zone_places``; a row not listed is ``far``, or ``unlocated`` when its cell is empty), ``row_id`` as
+    ``table_rows`` numbers them; and per zone its rows per place and its cell count at ``resolution``; ``total`` and
+    ``columns`` are ``table_rows``'s."""
+    frame = _export_frame(path, where, resolution)
     lat, lon, _ = locate_points(frame, locator)
-    cell = cell_columns(lat, lon, resolution)[f"h3_r{resolution}"]
+    cell = point_cells(lat, lon, resolution)
     parts, counts = [], {}
     for zone_id, polygon in zones:
         place, cells = zone_places(lat, lon, cell, resolution, polygon)
-        near = np.flatnonzero(place != "far")
+        near = np.flatnonzero(np.isin(place, ["inside", "adjacent"]))
         parts.append(pd.DataFrame({"zone_id": zone_id, ROW_ID: near, "aoi_zone": place[near]}))
-        counts[zone_id] = {k: int((place == k).sum()) for k in ("inside", "adjacent", "far")} | {"zone_cells": cells}
+        counts[zone_id] = {k: int((place == k).sum()) for k in ("inside", "adjacent", "far", "unlocated")} | {"zone_cells": cells}
     table = {"total": len(frame), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
     return pd.concat(parts).to_csv(index=False).encode("utf-8"), table | {"zones": counts}
 

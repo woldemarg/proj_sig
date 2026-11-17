@@ -122,6 +122,8 @@ def upstream(
 
     @app.get("/sessions/{sid}/status")
     def status(sid: str):
+        if seen.get("busy"):
+            return JSONResponse({}, status_code=202)
         if left["flaky"] > 0:
             left["flaky"] -= 1
             return JSONResponse({"detail": "bad gateway"}, status_code=502)
@@ -193,7 +195,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert f"{files[0]} (events.csv)" in seen["files"]["zones.md"] and "events.csv: O1" in seen["files"]["zones.md"]
         assert "Zone Z1: a polygon" in seen["files"]["zones.md"] and "SIG analysed this table at H3 resolution 5" in seen["files"]["zones.md"]
         query = seen["query"]
-        assert query == job["ads_query"] and ask["question"] in query and "Z1: inside=3, adjacent=1, far=1, cells=5" in query
+        assert query == job["ads_query"] and ask["question"] in query and "Z1: inside=3, adjacent=1, far=1, no point=0, cells=5" in query
         assert "O1 · in zone: Z1 yes" in query and "established: points: strong increase" in query and "O2 · in zone: Z1 no" in query
         assert "file: other.csv (another dataset of the graph" in query and query.count("another dataset of the graph") == 1
         assert "O3 · in zone: Z1 no" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
@@ -201,7 +203,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert "h3_r8, h3_r7, h3_r6 are H3 cell ids" in query and "left-join them to the table on row_id" in query
         assert job["ads_report"] == "ADS: 3 events plot" and "closed" not in seen  # no link into ADS's own workspace; the session stays
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
-        assert "на рівні H3 8 базового шару: Z1 5" in seen["prompt"]  # the methodology counts the zone the rows were read against
+        assert "рівня H3 8 базового шару (Z1 5)" in seen["prompt"] and "найдрібнішого гео-рівня" in seen["prompt"]  # each reading of the zone named
 
         # the next question of the conversation: the same session, the tables it holds not sent again, the zones replaced
         two = ask | {
@@ -220,8 +222,9 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             "The conversation's other zones (Z2) are in df_zones too"
             in finished(client, client.post("/api/ads/jobs", json=lone).json()["job_id"])["ads_query"]
         )
-        seen["busy"] = True  # the conversation's last question still runs in ADS
+        seen["busy"], sent, asked = True, len(seen["uploads"]), len(seen["chat"])  # the conversation's last question still runs in ADS
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["error"]["code"] == "ads_busy"
+        assert (len(seen["uploads"]), len(seen["chat"])) == (sent, asked)  # refused before the graph is asked or a file replaced
 
         # the graph reads the period bar alone: a period in the text is ADS's, the bar's goes beside it
         seen["chat"].clear()
@@ -236,7 +239,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert dated["question"] in job["ads_query"] and "A period the question names bounds every figure" in job["ads_query"]
 
         # the conversation's end: its tables deleted from ADS, the session closed
-        assert client.post(f"/api/ads/sessions/{SID}/close").json() == {"session_id": SID, "deleted": 3, "closed": True}
+        assert client.post(f"/api/ads/sessions/{SID}/close").json() == {"session_id": SID, "kept": [], "closed": True}
         assert seen["closed"] == SID and sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in (*files, "zones.csv"))
         assert client.post("/api/ads/sessions/..%2Freset/close").status_code in (404, 422) and "reset" not in seen
 
@@ -247,6 +250,10 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert client.post("/api/ads/jobs", json=ask | {"focus": [f"Z{n}" for n in range(6)]}).status_code == 422  # five at most
         assert client.post("/api/ads/jobs", json=ask | {"session_id": "../x"}).status_code == 422
         assert client.post("/api/ads/jobs", json=ask | {"tables": []}).status_code == 422
+        assert client.post("/api/ads/jobs", json=ask | {"tables": TABLES[:1] * 2}).status_code == 422  # a table twice: its rows twice
+        assert client.post("/api/ads/jobs", json=ask | {"focus": ["Z1", "Z1"]}).status_code == 422
+        many = [{"id": f"Z{n}", "polygon": POLYGON} for n in range(51)]
+        assert client.post("/api/ads/jobs", json=ask | {"zones": many}).status_code == 422
         escaping = ask | {"tables": [{"dataset_id": "../reset?x=", "filename": "x.csv", "resolution": 8}]}  # an id is one path segment, never a path
         assert finished(client, client.post("/api/ads/jobs", json=escaping).json()["job_id"])["error"]["code"] == "sig_failed" and "reset" not in seen
         assert client.get("/api/ads/jobs/nope").status_code == 404
@@ -265,9 +272,20 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert (job["stage"], job["failed_stage"], job["error"]["code"]) == ("error", "ads", "ads_timeout")
         assert seen["cancelled"] == SID == job["session_id"]  # the job given up is cancelled: the session takes the next question
-    with serve(upstream({}, flaky=10**6)) as url, TestClient(create_app(settings(url))) as client:  # the status never reads
+    seen = {}
+    with serve(upstream(seen, flaky=10**6)) as url, TestClient(create_app(settings(url))) as client:  # the status never reads
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
-        assert (job["failed_stage"], job["error"]["code"]) == ("ads", "ads_failed")
+        assert (job["failed_stage"], job["error"]["code"]) == ("ads", "ads_failed") and seen["cancelled"] == SID  # given up: cancelled
+    seen = {}
+    with serve(upstream(seen, polls=10**6)) as url, TestClient(create_app(settings(url))) as client:  # the conversation ends meanwhile
+        job_id = client.post("/api/ads/jobs", json=ask).json()["job_id"]
+        while "query" not in seen:
+            time.sleep(0.01)
+        assert client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"] and client.post("/api/ads/jobs/nope/cancel").status_code == 404
+        job = finished(client, job_id)
+        assert (job["failed_stage"], job["error"]["code"]) == ("ads", "cancelled") and seen["cancelled"] == seen["closed"] == SID
+        assert sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in seen["files"] if f.endswith(".csv"))  # its tables gone
+        assert not client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]  # an ended job has nothing to stop
     with serve(upstream({}, final=None)) as url, TestClient(create_app(settings(url))) as client:  # no final report: ADS's stands
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and job["joint_report"] == "" and "503" in job["joint_error"] and job["ads_report"]
@@ -324,8 +342,11 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.click("#view-switch button[data-view='map']")
                 page.wait_for_function("G.data && G.map && G.map.loaded() && G.overlay", timeout=60000)
                 page.evaluate(draw)
-                if not with_ads:
+                if not with_ads:  # the person's one chat is the graph's: no ADS to ask, its form never opens
                     assert page.inner_text("#ads-pill") == "ADS вимкнено" and page.is_disabled(".sig-pop .pp-ads")
+                    assert page.is_visible(".chat-tabs [data-tab='graph']") and not page.is_visible(".chat-tabs [data-tab='ads']")
+                    page.evaluate("openAds()")
+                    assert page.evaluate("S.tab === 'graph' && !$('ads-dialog').open")
                     page.close()
                     continue
                 assert page.inner_text("#ads-pill") == "ADS активний"
@@ -345,7 +366,8 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.click(".sig-pop .pp-ads")
                 whole = page.input_value("#ads-question")  # no period chosen: the bar's whole span, its last day included
                 assert whole.startswith("Період: 2019-03-04 — 2019-0") and whole.endswith(" (включно)\n\n"), whole
-                page.click("#ads-cancel")
+                page.keyboard.press("Escape")  # the form closes alone: the map keeps its zones
+                assert page.evaluate("!$('ads-dialog').open && GeoMap.zones().length === 1")
                 page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")
                 page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])
                 page.click(".sig-pop .pp-ads")
@@ -371,6 +393,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert card.locator(".ads-stage.ok").count() == 3 and card.locator(".md-table td").all_inner_texts() == ["у зоні", "3"]
                 assert f"зона {zone}" in page.locator(".msg-user").last.inner_text() and page.evaluate("S.adsSession") == SID
                 assert page.evaluate("S.chat.at(-1).ads.ads_query") == seen["query"]
+                page.evaluate("GeoMap.pick(Object.keys(G.patterns)[0])")  # the person's insight from the map: the drawer, not the graph's chat
+                page.wait_for_function("!$('drawer').hidden")
+                assert page.evaluate("!S.threads.graph.length")
                 table = next(f for f in seen["files"] if f.startswith("points_"))
                 assert set(seen["files"]) == {table, "zones.csv", "zones.md"} and seen["files"]["zones.csv"].startswith(
                     "zone_id,table,row_id,aoi_zone\n"
@@ -383,7 +408,7 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")  # the period changed: the form again
                 page.fill("#question", "А вночі?")
                 page.press("#question", "Enter")
-                assert page.evaluate("$('ads-dialog').open && S.chat.length === 2") and "Змінилися період" in page.inner_text("#ads-zone")
+                assert page.evaluate("$('ads-dialog').open && S.chat.length === 2") and "Змінилося: період." in page.inner_text("#ads-status")
                 assert page.input_value("#ads-question").endswith("\nА вночі?") and page.evaluate("S.period = null; $('ads-dialog').close()") is None
                 page.click("#new-chat")  # the conversation ends: ADS deletes its tables, the session closes
                 page.wait_for_function("!S.adsSession && S.chat.length === 0")

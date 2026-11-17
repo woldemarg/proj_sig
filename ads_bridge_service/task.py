@@ -138,7 +138,7 @@ def merge_findings(by_zone: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
     merged: dict[str, dict[str, Any]] = {}
     for zone, findings in by_zone.items():
         for it in findings[:share]:
-            merged.setdefault(it["key"], it | {"zones": {}})["zones"][zone] = it["inside"]
+            merged.setdefault(it["key"], {k: v for k, v in it.items() if k != "inside"} | {"zones": {}})["zones"][zone] = it["inside"]
     return list(merged.values())
 
 
@@ -177,7 +177,9 @@ def _table_line(t: dict[str, Any]) -> str:
 
 def _zone_counts(t: dict[str, Any], zones: list[str]) -> str:
     return "; ".join(
-        f"{z}: inside={c['inside']}, adjacent={c['adjacent']}, far={c['far']}, cells={c['zone_cells']}" for z in zones if (c := t["zones"].get(z))
+        f"{z}: inside={c['inside']}, adjacent={c['adjacent']}, far={c['far']}, no point={c.get('unlocated', 0)}, cells={c['zone_cells']}"
+        for z in zones
+        if (c := t["zones"].get(z))
     )
 
 
@@ -214,8 +216,11 @@ def build_query_parts(
         "the finer one; group by them, never edit them."
         f"\nZones: df_zones ({ZONES_FILE}) lists, for every zone of this conversation, the rows it holds: zone_id, table (a table's file "
         "name), row_id, aoi_zone = inside (the point lies inside the zone's polygon) | adjacent (outside it, in the zone's cells or their "
-        "ring-1 neighbours). A row not listed for a zone is far from it. To read a table against zone Z, take the df_zones rows with "
-        "zone_id == Z and table == the table's file, left-join them to the table on row_id and fill a missing aoi_zone with 'far'. "
+        f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} has no point: it is in no zone and in no comparison group. Any "
+        "other row not listed for a zone is far from it. To read a table against zone Z, drop its rows without a point, take the "
+        "df_zones rows with zone_id == Z and table == the table's file, left-join them to the table on row_id and fill a missing "
+        "aoi_zone with 'far'. df_zones lists this question's tables only "
+        f"({', '.join(t['file'] for t in tables)}); a table an earlier question sent is not placed in the zones. "
         "Zones may overlap: a row can be in several. A point in the same cell as a zone is not inside it. A zone's own figures are its "
         "inside rows only; adjacent and far rows are comparison groups, never part of the zone's own figures."
     )
@@ -265,7 +270,8 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
             ),
             "- row_id: a row's number in its table, the key df_zones joins on.",
             f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its edges "
-            "straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row not listed is far.",
+            "straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point not listed "
+            f"is far, a row without one (empty h3 cell) is in no group. It lists the tables {', '.join(t['file'] for t in tables)} only.",
             "- SIG's cells: one row of SIG's table = one cell with its events; shares and medians per cell exist for cells with enough events.",
             f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
             f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
@@ -302,11 +308,12 @@ def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: 
             "- Зони задав користувач як полігони на мапі.",
             *zone_lines,
             "- Належність точки до зони обчислено детерміновано (point-in-polygon), без моделі: inside у полігоні, adjacent поза ним у "
-            "комірках зони чи їх шести сусідах, far решта.",
+            f"комірках зони рівня H3 {res} базового шару ({', '.join(f'{z} {tables[0]["zones"][z]["zone_cells"]}' for z in focus)}) чи "
+            "їх шести сусідах, far решта; рядки без координат не належать жодній групі.",
             "- Кожну зону передано в SIG як цей полігон разом із питанням користувача (або без нього, якщо відповідь із питанням не мала "
-            "знахідок у зоні). Граф прочитав її так само, як прочитано рядки таблиць: як комірки H3, чиї центри лежать у полігоні (на рівні "
-            f"H3 {res} базового шару: {', '.join(f'{z} {tables[0]["zones"][z]["zone_cells"]}' for z in focus)}). Від цих комірок ретривер "
-            "SIG увійшов у граф, обійшов його і зібрав знахідки в зоні та пов'язані з ними; ADS отримав їх як встановлені факти.",
+            "знахідок у зоні). Граф прочитав її як комірки H3 свого найдрібнішого гео-рівня, чиї центри лежать у полігоні, тож на межі "
+            "зони його комірки можуть не збігатися з точками таблиць. Від цих комірок ретривер SIG увійшов у граф, обійшов його і зібрав "
+            "знахідки в зоні та пов'язані з ними; ADS отримав їх як встановлені факти.",
             "",
             *(sources if by_file else []),
             SIG_GLOSSARY,

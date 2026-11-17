@@ -86,8 +86,11 @@ class ZoneIn(BaseModel):
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
 
 
+MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cells and a line of X-Zones
+
+
 class ZonesIn(BaseModel):
-    zones: list[ZoneIn] = Field(min_length=1)
+    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_EXPORT_ZONES)
     resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
 
 

@@ -697,6 +697,7 @@ class Engine:
     def geo_table_rows(self, dataset_id: str, resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
         return geo_views.geo_table_rows(self.ws, dataset_id, resolution)
 
+    @_healthy
     def geo_zone_rows(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
         return geo_views.geo_zone_rows(self.ws, dataset_id, zones, resolution)
 

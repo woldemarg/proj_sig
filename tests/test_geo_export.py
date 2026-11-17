@@ -7,11 +7,13 @@ import io
 import json
 
 import h3
+import numpy as np
 import pandas as pd
 from conftest import make_config, make_engine, upload_levels
 from fastapi.testclient import TestClient
 
 from insight_graph_service.server.app import create_app
+from subgroup_miner.spatial_plane import point_cells, zone_places
 
 
 def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_csv):
@@ -43,7 +45,7 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert (
             placed["resolution"] == res
             and z1["zone_cells"] == len(zone)
-            and placed["total"] == len(rows) == z1["inside"] + z1["adjacent"] + z1["far"]
+            and placed["total"] == len(rows) == z1["inside"] + z1["adjacent"] + z1["far"] + z1["unlocated"]
         )
         assert {k: placed[k] for k in ("columns", "upload_id", "filename", "time", "where")} == {
             k: table[k] for k in ("columns", "upload_id", "filename", "time", "where")
@@ -76,3 +78,11 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert json.loads(client.get(f"/api/geo/{ds}/rows", params={"resolution": other}).headers["x-rows"])["columns"][1] == f"h3_r{other}"
         assert client.get(f"/api/geo/{ds}/rows", params={"resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.get("/api/geo/ds-unknown/rows").json()["code"] == "unknown_dataset"
+
+
+def test_a_row_without_a_point_is_in_no_place():
+    """A row without a valid point is neither in a zone nor far from it: the exports leave it out of every comparison group."""
+    lat, lon = np.array([0.5, np.nan, 5.0]), np.array([0.5, 0.5, 5.0])
+    square = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
+    place, cells = zone_places(lat, lon, point_cells(lat, lon, 5), 5, square)
+    assert list(place) == ["inside", "unlocated", "far"] and cells > 0

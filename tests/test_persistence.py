@@ -332,7 +332,9 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv)
         lambda: engine.geo_overlay("x"),
         lambda: engine.geo_cells_pack("x"),
         lambda: engine.geo_period_counts("x", period),
-    )  # the map too
+        lambda: engine.geo_table_rows("x"),
+        lambda: engine.geo_zone_rows("x", []),
+    )  # the map and its exports too
     for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()

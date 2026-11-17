@@ -39,6 +39,7 @@ function previewAds() {
   /* the task ADS will get, but for the zones' figures and insights, which the ask brings */
   const body = adsBody(), ready = body.tables.length && body.focus.length;
   $("ads-send").disabled = !body.question.replace(PERIOD_LINE, "").trim() || !ready || adsRunning();
+  $("ads-send").title = adsRunning() ? "ADS ще відповідає на попереднє питання розмови" : "";
   clearTimeout(adsPreviewTimer);
   adsPreviewTimer = setTimeout(async () => {
     if (!ready) { $("ads-preview").textContent = "Позначте хоча б одну таблицю й одну зону."; return; }
@@ -48,6 +49,7 @@ function previewAds() {
 }
 
 function openAds(zoneId, changed = []) {
+  if (!S.ads) return;  // as the popup's button: nothing to ask
   /* one row per upload, as its levels share the rows: the level open on the map, else the finest; the zone asked from
      ticked, the map's others offered beside it (without one, every zone ticked) */
   const open = GeoMap.current(), byUpload = new Map();
@@ -59,8 +61,8 @@ function openAds(zoneId, changed = []) {
   $("ads-zones").innerHTML = GeoMap.zones().map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
     `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("");
   const asked = Object.keys(S.adsZones);
-  $("ads-zone").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
-  if (changed.length) $("ads-zone").textContent += ` Змінилися ${changed.join(", ")}: перевірте таблиці, зони й період.`;
+  $("ads-status").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
+  if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;
   const shown = Timeline.shown();  // the bar's days head the question even when they are the whole span: ADS reads them, the person may edit them
   $("ads-question").value = (shown ? `${periodHeader(shown)}\n\n` : "") + $("question").value;
   $("ads-dialog").showModal();
@@ -78,12 +80,11 @@ function askAdsFurther(question) {
 }
 
 async function askAds(body) {
-  showTab("ads");
   for (const z of body.zones) S.adsZones[z.id] = z.polygon;  // the conversation's zones: a later question may name them
   S.adsLast = body; S.adsState = adsState();
   const turn = { question: body.question, zones: body.focus, since: new Date().toISOString(), ads: { stage: "search", timings: {} } };
-  S.threads.ads.push(turn); renderThread();
-  const paint = () => { if (S.tab === "ads") { renderThread(); autosize(); } };
+  S.threads.ads.push(turn); syncTabs(); showTab("ads");
+  const paint = () => { if (S.tab === "ads") { renderThread(); autosize(); } if ($("ads-dialog").open) previewAds(); };
   const fail = (e) => { turn.ads = { stage: "error", timings: {}, error: { code: e.code || "ads_unavailable", detail: e.message } }; paint(); };
   const started = await api("/api/ads/jobs", adsPost(body)).catch(fail);
   for (let failures = 0; started && S.threads.ads.includes(turn);) {  // New chat drops the turn: its job is read no more
@@ -98,6 +99,7 @@ async function askAds(body) {
     }
     await new Promise((r) => setTimeout(r, ADS_POLL_MS));
   }
+  if (started && !S.threads.ads.includes(turn)) api(`/api/ads/jobs/${started.job_id}/cancel`, { method: "POST" }).catch(() => {});  // its conversation ended
 }
 
 function adsCard(turn) {
