@@ -31,7 +31,7 @@ browser ──> web-console (nginx: the UI; /api/chat/ -> narrator, /api/ -> gra
 | [`insight_graph_service/`](insight_graph_service) | the graph service: `core/` (engine, workspace, snapshot compiler, Neo4j mirror, model provisioning) and `server/` (HTTP API) |
 | [`evidence_narrator_service/`](evidence_narrator_service) | the chat: the graph's evidence verbalised by the LLM, every citation checked |
 | [`llm_model_broker/`](llm_model_broker) | one OpenAI-compatible endpoint in front of the upstream model |
-| [`ads_bridge_service/`](ads_bridge_service) | a drawn zone's question handed to ADS, the agentic data-science service, with the zone's insights as established facts |
+| [`ads_bridge_service/`](ads_bridge_service) | a question about drawn zones handed to ADS, the agentic data-science service, with the zones' insights as established facts |
 | [`sig_web_console/`](sig_web_console) | the static UI and its nginx edge |
 
 Each library imports only the shared kernel; `tests/test_architecture.py` enforces every allowed import. Bounded contexts, contracts, start order and why these services: [docs/12_architecture.md](docs/12_architecture.md).
@@ -62,7 +62,7 @@ Python **3.12+** (the EDA script uses PEP 701 f-strings).
 copy .env.sample .env                     # then edit: GEMMA_* (the broker's upstream, model and key), tunables
 docker compose up -d --build --wait       # then http://127.0.0.1:8765
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build --wait   # the same, the embeddings on an NVIDIA GPU
-docker compose -f compose.ads.yaml up -d --build --wait   # the same with ADS (ADS_DIR in .env): a drawn zone's question can go to it
+docker compose -f compose.ads.yaml up -d --build --wait   # the same with ADS (ADS_DIR in .env): a question about drawn zones can go to it
 python scripts\compose_check.py           # verification: its own stack, volumes and ports — runs beside yours
 ```
 The first start fills the `sig-models` volume. It copies a verified `./models/Qwen3-Embedding-0.6B` when there is one, and otherwise downloads the pinned revision. Neo4j Browser runs at http://127.0.0.1:17474; connect to `bolt://127.0.0.1:17687` as `neo4j` with `SIG_NEO4J_PASSWORD` (default `sig-local-password`). The graph service embeds on the CPU (≈ 3 GB RAM) unless `compose.gpu.yaml` builds its CUDA image and gives it an NVIDIA GPU (driver 580 or newer; Docker Desktop on WSL 2, or the NVIDIA Container Toolkit on Linux); the model then takes ≈ 1.2 GB of VRAM. On a GPU host, copy `compose.gpu.yaml` to `compose.override.yaml` (git-ignored) once, and the plain `docker compose up` uses the GPU. The host setup below uses the GPU too when there is one.
@@ -134,7 +134,7 @@ SIG owns its seven node labels in that database, so use one workspace per databa
    - Hovering a legend entry spotlights it.
    - Click any node or row for the details drawer: the insight in words (where it holds and what it shows), shifts, evidence facts, trust, the canonical form, connections and provenance. Every term carries its meaning in a tooltip.
 4. **3D-сфера.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
-5. **Chat** with the data, or click a suggestion.
+5. **Chat** with the data, or click a suggestion. Without the developer mode this is the graph's chat on a stack without ADS; with ADS, the person's chat is the ADS conversation about the zones drawn on the map, and the graph's chat is the developer's ([8.8](docs/current_docs/08_interface.md#88-a-zones-question-to-ads)).
    - Answers are in Ukrainian. Every data literal (`margin`, `phones`, `US`, ids) stays exactly as the data holds it.
    - The answer cites its `[P#]` evidence, and a citation opens the details drawer.
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.
