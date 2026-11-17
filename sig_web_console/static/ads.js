@@ -63,7 +63,7 @@ function openAds(zoneId) {
 function askAdsFurther(question) {
   /* the ADS tab's box: the conversation's next question, with the tables, zones and period of its last one */
   if (!question || adsRunning()) return;
-  if (!S.adsLast) { if (GeoMap.zones().length) openAds(GeoMap.zones()[0].id); return; }  // a conversation starts from a zone
+  if (!S.adsLast) { openAds(); return; }  // a conversation starts from the form: its tables, zones and period
   $("question").value = ""; autosize();
   askAds({ ...S.adsLast, question, ...(S.adsSession ? { session_id: S.adsSession } : {}) });
 }
@@ -114,4 +114,4 @@ $("ads-zones").addEventListener("change", (e) => {  // a question compares at mo
   previewAds();
 });
 $("ads-cancel").addEventListener("click", () => $("ads-dialog").close());
-$("ads-form").addEventListener("submit", (e) => { e.preventDefault(); $("ads-dialog").close(); askAds(adsBody()); });
+$("ads-form").addEventListener("submit", (e) => { e.preventDefault(); $("ads-dialog").close(); $("question").value = ""; autosize(); askAds(adsBody()); });  // the box's text went with the form

@@ -253,7 +253,7 @@ async function refreshHealth() {
     S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
     // ponytail: no answer reads as a stack without ADS until the bridge answers once on this page; a page opened while it is down says вимкнено
     S.adsSeen ||= Boolean(ads);
-    document.querySelector(".chat-tabs [data-tab='ads']").hidden = !S.ads && !S.threads.ads.length;  // a conversation held stays in view
+    document.querySelector(".chat-tabs [data-tab='ads']").hidden = isDev() && !S.ads && !S.threads.ads.length;  // the person's one chat; a conversation held stays in view
     const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
       : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
       : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
@@ -283,11 +283,13 @@ function setLegend(show) {
 
 // the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
 const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
+const isDev = () => document.body.classList.contains("dev");
 function setDev(on) {
   document.body.classList.toggle("dev", on);
   $("dev-btn").setAttribute("aria-pressed", String(on));
   try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
-  if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+  if (!on && ["graph", "sphere", "time"].includes(S.view)) setView(firstView());
+  if (!on && S.tab === "graph") showTab("ads");  // the graph's chat is the developer's: the person talks to ADS
   if (!on) $("use-llm").checked = true;  // the switch is the developer's: the person always gets the explanation
 }
 
@@ -323,7 +325,8 @@ function clearAnswer() {
 }
 
 function showTab(tab) {
-  /* the thread on show: the graph's questions or the ADS conversation */
+  /* the thread on show: the graph's questions (the developer's) or the ADS conversation */
+  if (tab === "graph" && !isDev()) return;
   S.tab = tab;
   document.querySelectorAll(".chat-tabs button").forEach((b) => { b.classList.toggle("active", b.dataset.tab === tab); b.setAttribute("aria-selected", String(b.dataset.tab === tab)); });
   if (tab === "ads") document.querySelector(".chat-tabs [data-tab='ads']").hidden = false;
@@ -393,7 +396,7 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => { S.picked = true; setView(b.dataset.view); }));
-  $("dev-btn").addEventListener("click", () => setDev(!document.body.classList.contains("dev")));
+  $("dev-btn").addEventListener("click", () => setDev(!isDev()));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (b.dataset.key === "region") return toggleRegions();

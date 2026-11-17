@@ -363,7 +363,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         removed = page.evaluate(f"{three}; GeoMap.zones()[1].id")
         page.evaluate(f"GeoMap.clearZones('{removed}'); GeoMap.addZone(G.data.features[2].geometry)")
         colors = page.evaluate("G.zones.map((z) => [z.id, z.color])")  # the others keep theirs; the new zone takes the removed one's, not its id
-        assert [c for _, c in colors] == ["#eef3ff", "#ff9ff3", "#ffb000"] and removed not in [i for i, _ in colors]
+        assert [c for _, c in colors] == ["#eef3ff", "#8fb3ff", "#ffb000"] and removed not in [i for i, _ in colors]
         assert not page.evaluate("GeoMap.closePopup()") and page.evaluate("document.querySelectorAll('.zone-tag').length") == 3
         page.evaluate("GeoMap.openZone(GeoMap.zones()[0].id); GeoMap.closePopup()")
         page.fill("#question", "Де найбільше подій?")

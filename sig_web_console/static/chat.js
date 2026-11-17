@@ -117,7 +117,7 @@ function botCard(turn) {
 }
 
 const fold = (on, html) =>  // an evidence-only answer folded for the person, open for the developer
-  on ? `<details class="answer-fold"${document.body.classList.contains("dev") ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
+  on ? `<details class="answer-fold"${isDev() ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];
@@ -211,8 +211,8 @@ function renderThread() {
   /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
   if (!S.chat.length && S.tab === "ads") {
-    t.innerHTML = `<div class="welcome"><h3>Розмова з ADS</h3><p>Виділіть до ${MAX_ZONES} зон на мапі й натисніть «Запитати про це ADS» у попапі зони. ` +
-      `Уточнення пишіть тут: вони йдуть у ту саму сесію ADS разом із попередніми відповідями й зонами розмови.</p></div>`;
+    t.innerHTML = `<div class="welcome"><h3>Розмова з ADS</h3><p>Виділіть до ${MAX_ZONES} зон на мапі й напишіть питання тут або натисніть «Запитати про це ADS» у попапі зони: ` +
+      `перше питання відкриє вибір таблиць, зон і періоду. Уточнення йдуть у ту саму сесію ADS разом із попередніми відповідями.</p></div>`;
   } else if (!S.chat.length) {
     const chips = suggestions();
     t.innerHTML = `<div class="welcome"><div class="art"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 4z"/></svg></div>` +

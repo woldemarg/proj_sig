@@ -339,6 +339,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.evaluate(draw)
                 assert page.evaluate("GeoMap.closePopup()")
                 page.mouse.click(box["x"] + spot["x"], box["y"] + spot["y"])  # anywhere in the polygon opens the zone's popup, not only on its cells
+                assert not page.is_visible(".sig-pop .pp-ask") and not page.is_visible(
+                    ".chat-tabs [data-tab='graph']"
+                )  # the graph's chat: the developer's
                 page.click(".sig-pop .pp-ads")
                 whole = page.input_value("#ads-question")  # no period chosen: the bar's whole span, its last day included
                 assert whole.startswith("Період: 2019-03-04 — 2019-0") and whole.endswith(" (включно)\n"), whole
@@ -360,8 +363,10 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.fill("#ads-question", "Скільки подій у зоні?")
                 page.wait_for_function("$('ads-preview').textContent.includes('Скільки подій у зоні?') && !$('ads-send').disabled")
                 assert "(after the ask)" in page.text_content("#ads-preview")  # folded: read, not shown
+                page.fill("#question", "Скільки подій у зоні?")  # the box's text, which the form took
                 page.click("#ads-send")
                 page.wait_for_function("S.tab === 'ads' && S.chat.at(-1).ads && S.chat.at(-1).ads.stage === 'done'", timeout=30000)
+                assert page.input_value("#question") == ""
                 card = page.locator(".msg-bot").last
                 assert card.locator(".ads-stage.ok").count() == 3 and card.locator(".md-table td").all_inner_texts() == ["у зоні", "3"]
                 assert f"зона {zone}" in page.locator(".msg-user").last.inner_text() and page.evaluate("S.adsSession") == SID

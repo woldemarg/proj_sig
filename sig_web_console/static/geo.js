@@ -12,7 +12,7 @@ const POPUP_ROOM = 380;  // the height in px a zone's popup takes with its list
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
 const TILT = 35;  // the camera's pitch in degrees: the map seen at a slant, as a phone's
 const MAX_ZONES = 5;  // zones on the map at once: what one ADS question compares (the bridge's MAX_FOCUS)
-const ZONE_COLORS = ["#eef3ff", "#ffb000", "#ff9ff3", "#36d6ff", "#ff8a3d"];  // a zone's outline and tag: the first a zone on the map does not hold
+const ZONE_COLORS = ["#eef3ff", "#ffb000", "#8fb3ff", "#36d6ff", "#ff8a3d"];  // a zone's outline and tag, off the cells' purple-pink ramp: the first one the map does not hold
 const REGION_GAP = 2;  // region levels at least this much coarser than the drawn cells: one level up outlines ~7 cells and crowds them
 
 const GeoMap = {
@@ -193,7 +193,7 @@ function spread(filter) {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
-  if (G.datasets.length && !S.picked && S.view === "table" && !document.body.classList.contains("dev")) setView("map");  // geo data: the map first
+  if (G.datasets.length && !S.picked && S.view === "table" && !isDev()) setView("map");  // geo data: the map first
   if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("table"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();
   G.others = all ? all.others : [];
@@ -340,6 +340,7 @@ function ensureMap() {
     layer("regions-hit", "fill", "regions", { "fill-color": "#000", "fill-opacity": 0 }, ["==", ["get", "resolution"], -1], { layout: { visibility: "none" } });  // «Усі датасети»: a hex takes the click
     layer("regions-line", "line", "regions", { "line-color": C.region, "line-width": 1.4, "line-opacity": 0.75, "line-dasharray": [4, 2] }, ["==", ["get", "resolution"], -1]);
     layer("regions-n", "symbol", "region-labels", {}, ["==", ["get", "resolution"], -1], { layout: { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true } });
+    layer("zone-casing", "line", "zone", { "line-color": "#05080d", "line-width": 4.5, "line-opacity": 0.85 });  // a dark edge: the outline reads over any cell colour
     layer("zone-line", "line", "zone", { "line-color": ["get", "color"], "line-width": 2, "line-dasharray": [2, 1] });
     layer("draft-fill", "fill", "draft", { "fill-color": "#eef3ff", "fill-opacity": 0.08 });
     layer("draft-line", "line", "draft", { "line-color": "#eef3ff", "line-width": 1.4 });
@@ -812,7 +813,7 @@ function openPopup(html, lngLat, zone = null, anchor) {
      which may compare it with the others; and its removal */
   GeoMap.closePopup();
   const trash = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>`;
-  const buttons = !zone ? "" : `<button type="button" class="pp-ask">Запитати про цю зону</button>` +
+  const buttons = !zone ? "" : `<button type="button" class="pp-ask" data-dev>Запитати про цю зону</button>` +
     `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="ADS недоступний: його стан показано вгорі сторінки"`}>Запитати про це ADS</button>` +
     `<button type="button" class="pp-drop">${trash}Видалити зону</button>`;
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${buttons}</div>`).addTo(G.map);
