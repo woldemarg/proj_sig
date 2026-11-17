@@ -61,6 +61,7 @@ class TableIn(BaseModel):
     dataset_id: str
     filename: str
     resolution: int = Field(ge=0, le=15)  # the dataset's own; the base table's is every table's cell columns'
+    layer: str | None = Field(None, min_length=1, max_length=64)  # a layer link run's context layer, by name: its points
 
 
 class ZoneIn(BaseModel):
@@ -71,16 +72,18 @@ class ZoneIn(BaseModel):
 class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
-    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_ZONES)  # every zone of the conversation: a later question may name an earlier one
-    focus: list[str] = Field(min_length=1, max_length=MAX_FOCUS)  # the zones this question is about
+    zones: list[ZoneIn] = Field([], max_length=MAX_ZONES)  # every zone of the conversation: a later question may name an earlier one
+    focus: list[str] = Field([], max_length=MAX_FOCUS)  # the zones this question is about; none: the whole map
     session_id: str | None = Field(None, pattern=SESSION_ID)  # the conversation's ADS session; None: its first question
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # the console's period bar, [start, end): the graph's only period
 
     @model_validator(mode="after")
     def _distinct(self) -> AskIn:
-        ids, tables = [z.id for z in self.zones], [t.dataset_id for t in self.tables]
+        ids, tables = [z.id for z in self.zones], [(t.dataset_id, t.layer) for t in self.tables]
         if any(len(set(v)) != len(v) for v in (ids, tables, self.focus)) or not set(self.focus) <= set(ids):
             raise ValueError("a zone, table or focus repeats, or the question names a zone the conversation lacks")
+        if self.tables[0].layer:
+            raise ValueError("the base table is a dataset's own rows, not a layer")
         return self
 
 
@@ -144,16 +147,19 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, polygon: dict[str, Any], period: list[str] | None) -> list[dict[str, Any]]:
-        """A zone's evidence: the graph reads the polygon as the cells of its finest geo level whose centres it holds, and
-        the period bar's days, never a period the question's text names (that one is ADS's)."""
-        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "geometry": polygon, "use_llm": False}
+    def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
+        """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
+        centres it holds, and the period bar's days, never a period the question's text names (that one is ADS's)."""
+        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "use_llm": False} | ({"geometry": polygon} if polygon else {})
         if period:
             ask["period"] = period
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
 
     def zone_findings(body: AskIn, zones: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone."""
+        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone. No
+        zone asked: the whole map's findings, in no zone."""
+        if not body.focus:
+            return [{k: v for k, v in it.items() if k != "inside"} | {"zones": {}} for it in ask_graph(body.question, None, body.period)]
         by_zone = {}
         for z in body.focus:
             found = ask_graph(body.question, zones[z], body.period)
@@ -170,7 +176,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         tables, lines = [], ["zone_id,table,row_id,aoi_zone"]
         for t in name_tables([t.model_dump() for t in body.tables]):
             url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/zone_rows"  # one path segment, whatever the id holds
-            resp = _checked(http.post(url, json={"zones": zones, "resolution": t["cells_at"]}), "sig_failed", f"SIG zones of {t['filename']}")
+            ask = {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}
+            resp = _checked(http.post(url, json=ask), "sig_failed", f"SIG zones of {t['filename']}")
             tables.append(t | json.loads(resp.headers["x-zones"]))
             head, *rows = resp.text.splitlines()
             if head != ZONES_HEADER:
@@ -207,7 +214,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         for t in tables:
             if t["file"] not in held:
                 url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/rows"
-                rows = _checked(http.get(url, params={"resolution": t["cells_at"]}), "sig_failed", f"SIG rows of {t['filename']}")
+                asked = {"resolution": t["cells_at"]} | ({"layer": t["layer"]} if t.get("layer") else {})
+                rows = _checked(http.get(url, params=asked), "sig_failed", f"SIG rows of {t['filename']}")
                 sent[t["file"]] = rows.content
         for name, data in (sent | files).items():
             _checked(http.post(f"{settings.ads_url}/sessions/{sid}/datasets", files={"file": (name, data)}), "ads_failed", f"ADS upload {name}")
@@ -291,7 +299,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
-            upload(job["session_id"], tables, {ZONES_FILE: placed, ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
+            files = {ZONES_FILE: placed} if zones else {}  # a conversation without a zone has no zones file
+            upload(job["session_id"], tables, files | {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)
             enter("joint")

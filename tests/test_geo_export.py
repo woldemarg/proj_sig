@@ -78,6 +78,21 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert json.loads(client.get(f"/api/geo/{ds}/rows", params={"resolution": other}).headers["x-rows"])["columns"][1] == f"h3_r{other}"
         assert client.get(f"/api/geo/{ds}/rows", params={"resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.get("/api/geo/ds-unknown/rows").json()["code"] == "unknown_dataset"
+        # a layer link run's layer: its points as the run read them, placed by the same zones; none, the counts alone
+        record = engine.ws.ready_batch_for(ds)
+        engine.ws.save_batch(record | {"context": [{"name": "bars", "path": record["source_path"], "geo": "auto"}]})
+        got = client.get(f"/api/geo/{ds}/rows", params={"layer": "bars"})
+        layer = json.loads(got.headers["x-rows"])
+        assert (layer["layer"], layer["filename"], layer["total"]) == ("bars", "bars.csv", len(rows)) and got.content == client.get(
+            f"/api/geo/{ds}/rows"
+        ).content
+        placed = json.loads(
+            client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z1", "polygon": shape}], "layer": "bars"}).headers["x-zones"]
+        )
+        assert placed["zones"]["Z1"] == z1 and placed["layer"] == "bars"
+        bare = client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})
+        assert bare.text.strip() == "zone_id,row_id,aoi_zone" and json.loads(bare.headers["x-zones"])["zones"] == {}
+        assert client.get(f"/api/geo/{ds}/rows", params={"layer": "nope"}).json()["code"] == "unknown_dataset"
 
 
 def test_a_row_without_a_point_is_in_no_place():

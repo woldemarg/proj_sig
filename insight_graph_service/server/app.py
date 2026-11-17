@@ -90,8 +90,9 @@ MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cel
 
 
 class ZonesIn(BaseModel):
-    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_EXPORT_ZONES)
+    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone
     resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
+    layer: str | None = None  # a layer link run's context layer, by name, instead of the dataset's rows
 
 
 class HiddenIn(BaseModel):
@@ -374,13 +375,13 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
 
     @app.get("/api/geo/{dataset_id}/rows")
-    def geo_table_rows(dataset_id: str, resolution: int | None = None) -> Response:
-        data, counts = engine.geo_table_rows(dataset_id, resolution)
+    def geo_table_rows(dataset_id: str, resolution: int | None = None, layer: str | None = None) -> Response:
+        data, counts = engine.geo_table_rows(dataset_id, resolution, layer)
         return Response(data, media_type="text/csv", headers={"X-Rows": json.dumps(counts)})  # ASCII: a header's bytes
 
     @app.post("/api/geo/{dataset_id}/zone_rows")
     def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
-        data, counts = engine.geo_zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], body.resolution)
+        data, counts = engine.geo_zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
         return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")

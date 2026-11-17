@@ -367,6 +367,7 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .hud-layers label { display: block; white-space: nowrap; cursor: pointer; color: #b8c3d9; } .hud-layers label:has(#lyr-lisa) { grid-column: 1 / -1; }  /* one line a switch */
 .hud-layers input { accent-color: #ffb000; margin: 0 5px 0 0; vertical-align: -2px; }
 .hud-keys { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; color: #8592ab; font-size: 10.5px; }
+.ads-layer { margin-left: 18px; }  /* a layer under the table it describes */
 .zone-tag { padding: 1px 6px; border-radius: 3px; background: #0b111a; color: var(--c); border: 1px solid var(--c); font: 11px var(--mono); pointer-events: none; }
 .map-draw { display: block; width: 100%; margin-top: 10px; padding: 5px 10px; background: none; color: #eef3ff; border: 1px dashed #5c6a85; border-radius: 3px; font: 11px var(--mono); letter-spacing: .08em; cursor: pointer; } .map-draw.active { border-color: #ffb000; color: #ffb000; }
 .hud-keys i, .hud-layers i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
