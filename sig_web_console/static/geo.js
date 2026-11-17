@@ -193,6 +193,7 @@ function spread(filter) {
 async function refreshPass() {
   try { G.datasets = await api("/api/geo"); } catch (e) { G.datasets = []; }
   $("map-tab").hidden = !G.datasets.length;
+  syncTabs();  // the person's chat follows the map: ADS asks about zones drawn on it
   if (G.datasets.length && !S.picked && S.view === "table" && !isDev()) setView("map");  // geo data: the map first
   if (!G.datasets.length) { G.others = []; G.loadSeq++; G.loading = false; G.ds = G.want = null; G.data = null; G.patterns = {}; W.data = null; renderWindow(); if (S.view === "map") setView("table"); return; }
   const filter = $("dataset-filter").value, all = spread(filter), was = G.others.join();

@@ -416,6 +416,12 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.route("**/api/ads/health", lambda route: route.fulfill(status=502, body="bad gateway"))
                 page.evaluate("refreshHealth()")  # the bridge answered on this page before: no answer now is a failure, not a stack without ADS
                 assert page.inner_text("#ads-pill") == "ADS недоступний" and seen["closed"] == SID
+                assert page.evaluate("S.tab") == "ads"  # a stack with ADS keeps the person's chat while ADS is down
+                assert page.evaluate("$('map-tab').hidden = true; syncTabs(); S.tab") == "graph"  # no map, no zone to ask ADS about
+                page.evaluate("$('map-tab').hidden = false; syncTabs()")
+                page.fill("#question", "А тепер?")
+                page.press("#question", "Enter")  # ADS down: the turn says so at once, the text not left behind
+                assert page.evaluate("S.chat.at(-1).ads.error.code") == "ads_unavailable" and page.input_value("#question") == ""
                 assert not errors, errors
                 page.close()
         browser.close()

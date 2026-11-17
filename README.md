@@ -134,7 +134,7 @@ SIG owns its seven node labels in that database, so use one workspace per databa
    - Hovering a legend entry spotlights it.
    - Click any node or row for the details drawer: the insight in words (where it holds and what it shows), shifts, evidence facts, trust, the canonical form, connections and provenance. Every term carries its meaning in a tooltip.
 4. **3D-сфера.** The same insights appear as embeddings in the unit ball, projected by the graph service (KernelPCA, cosine) and drawn in the browser with the graph's colours, markers and layers. After a question, the retrieval path, seed, evidence and cross-scope hits are drawn on it.
-5. **Chat** with the data, or click a suggestion. Without the developer mode this is the graph's chat on a stack without ADS; with ADS, the person's chat is the ADS conversation about the zones drawn on the map, and the graph's chat is the developer's ([8.8](docs/current_docs/08_interface.md#88-a-zones-question-to-ads)).
+5. **Chat** with the data, or click a suggestion. Without the developer mode this is the graph's chat on a stack without ADS or without geo data; with ADS, the person's chat is the ADS conversation about the zones drawn on the map, and the graph's chat is the developer's ([8.8](docs/current_docs/08_interface.md#88-a-zones-question-to-ads)).
    - Answers are in Ukrainian. Every data literal (`margin`, `phones`, `US`, ids) stays exactly as the data holds it.
    - The answer cites its `[P#]` evidence, and a citation opens the details drawer.
    - Seeds, visited themes, evidence and **cross-segment** hits are highlighted with the used paths. Click an evidence card to isolate its path.

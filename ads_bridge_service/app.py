@@ -223,6 +223,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         read that fails is read again; a job is given up after STATUS_RETRIES failures in a row, ADS_JOB_TIMEOUT_S or its
         cancel, and a job given up is cancelled in ADS, so the session takes the next question."""
         ads = settings.ads_url
+        check(job)  # the uploads took a while: a conversation ended meanwhile starts no ADS job
         started = http.post(f"{ads}/sessions/{sid}/jobs", json={"user_query": query})
         if started.status_code == 409:
             raise StageError("ads_busy", "the conversation's previous question still runs in ADS")

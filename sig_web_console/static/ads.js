@@ -73,6 +73,10 @@ function askAdsFurther(question) {
   /* the ADS tab's box: the conversation's next question, with the tables, zones and period of its last one; the form
      instead when it starts the conversation or the period, the zones or the data changed since */
   if (!question || adsRunning()) return;
+  if (!S.ads) {  // neither the form nor a job would run: the turn says why
+    S.threads.ads.push({ question, since: new Date().toISOString(), ads: { stage: "error", failed_stage: "search", timings: {}, error: { code: "ads_unavailable", detail: "health: ADS не відповідає" } } });
+    $("question").value = ""; autosize(); renderThread(); return;
+  }
   const now = adsState(), changed = S.adsLast ? Object.keys(now).filter((k) => now[k] !== S.adsState[k]) : [];
   if (!S.adsLast || changed.length) { openAds(null, changed); return; }
   $("question").value = ""; autosize();
@@ -87,6 +91,7 @@ async function askAds(body) {
   const paint = () => { if (S.tab === "ads") { renderThread(); autosize(); } if ($("ads-dialog").open) previewAds(); };
   const fail = (e) => { turn.ads = { stage: "error", timings: {}, error: { code: e.code || "ads_unavailable", detail: e.message } }; paint(); };
   const started = await api("/api/ads/jobs", adsPost(body)).catch(fail);
+  turn.jobId = started?.job_id;  // New chat cancels it
   for (let failures = 0; started && S.threads.ads.includes(turn);) {  // New chat drops the turn: its job is read no more
     const job = await api(`/api/ads/jobs/${started.job_id}`).catch((e) => (++failures > ADS_POLL_RETRIES ? fail(e) : null));
     if (failures > ADS_POLL_RETRIES) return;

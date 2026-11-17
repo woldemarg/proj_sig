@@ -20,6 +20,7 @@ const ERROR_HELP = {
   ads_timeout: ["ADS не встиг відповісти", "Аналіз тривав довше за відведений час. Спробуйте вужче питання або меншу зону.", ""],
   ads_failed: ["ADS не дав звіту", "ADS прийняв запит, але не повернув звіт.", ""],
   sig_failed: ["SIG не віддав дані зони", "Не вдалося прочитати знахідки або рядки таблиць для цієї зони.", ""],
+  cancelled: ["Питання скасовано", "Розмову завершено, поки ADS відповідав на питання.", ""],
   ads_busy: ["ADS ще відповідає", "Попереднє питання цієї розмови ще виконується в ADS. Дочекайтеся відповіді.", ""],
   unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
   unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
@@ -284,7 +285,8 @@ function setLegend(show) {
 // the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
 const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
 const isDev = () => document.body.classList.contains("dev");
-const personTab = () => (S.ads || S.threads.ads.length ? "ads" : "graph");  // the person's one chat: ADS, else (a stack without it) the graph's
+// the person's one chat: ADS on a stack with it (answered once on this page, not flipping with each health read) and a map to draw zones on, else the graph's
+const personTab = () => ((S.adsSeen && !$("map-tab").hidden) || S.threads.ads.length ? "ads" : "graph");
 function setDev(on) {
   document.body.classList.toggle("dev", on);
   $("dev-btn").setAttribute("aria-pressed", String(on));
@@ -327,7 +329,7 @@ function clearAnswer() {
 
 function syncTabs() {
   /* the chat's tabs: the developer's both (ADS once it answers or holds a conversation), the person's one chat */
-  const shown = isDev() ? ["graph", ...(S.ads || S.threads.ads.length ? ["ads"] : [])] : [personTab()];
+  const shown = isDev() ? ["graph", ...(S.adsSeen || S.threads.ads.length ? ["ads"] : [])] : [personTab()];
   document.querySelectorAll(".chat-tabs button").forEach((b) => { b.hidden = !shown.includes(b.dataset.tab); });
   if (!shown.includes(S.tab)) showTab(shown[0]);
 }
@@ -343,8 +345,9 @@ function showTab(tab) {
 
 function newChat() {
   /* the thread on show starts again: the graph's pending questions aborted, or the ADS conversation's session closed (a
-     question still running stops itself: askAds cancels the job it no longer reads) */
+     question still running is cancelled, and askAds cancels one whose job it learns only now) */
   if (S.tab === "ads") {
+    for (const t of S.threads.ads) if (t.jobId && !["done", "error"].includes(t.ads.stage)) api(`/api/ads/jobs/${t.jobId}/cancel`, { method: "POST" }).catch(() => {});
     if (S.adsSession) api(`/api/ads/sessions/${S.adsSession}/close`, { method: "POST" }).catch(() => {});  // best effort: ADS keeps no table of it
     Object.assign(S, { adsSession: null, adsZones: {}, adsLast: null });
   } else {
