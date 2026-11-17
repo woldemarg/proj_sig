@@ -1,7 +1,8 @@
 /* SIG UI — the shell: state, vocabulary, the API helper, health, views' wiring (docs/08_interface.md); datasets.js, graph.js, timeline.js, chat.js and geo.js hold the surfaces. */
 "use strict";
 
-const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, chat: [], busy: false, period: null };
+const S = { datasets: {}, hidden: new Set(), openVariants: new Set(), cy: null, hl: null, poll: null, lastReady: null, options: null, view: "graph", sphere: null, sphereSeq: 0, graphSeq: 0, regionsIn: false, regionCount: 0, nodes: [], sort: { k: "weight", asc: false }, threads: { graph: [], ads: [] }, tab: "graph", busy: false, period: null, adsSession: null, adsZones: {}, adsLast: null };
+Object.defineProperty(S, "chat", { get: () => S.threads[S.tab] });  // the thread on show: the graph's questions or the ADS conversation
 const STAGE_TEXT = {
   UPLOADED: "У черзі", VALIDATING: "Читання файлу", PROFILING: "Опис колонок", DISCOVERING: "Пошук сегментів",
   VALIDATING_INSIGHTS: "Перевірка інсайтів", EMBEDDING: "Індексування інсайтів", UPDATING_ONTOLOGY: "Пошук тем",
@@ -19,7 +20,8 @@ const ERROR_HELP = {
   ads_timeout: ["ADS не встиг відповісти", "Аналіз тривав довше за відведений час. Спробуйте вужче питання або меншу зону.", ""],
   ads_failed: ["ADS не дав звіту", "ADS прийняв запит, але не повернув звіт.", ""],
   sig_failed: ["SIG не віддав дані зони", "Не вдалося прочитати знахідки або рядки таблиць для цієї зони.", ""],
-  empty_zone: ["Немає зони", "Спершу намалюйте зону на мапі.", ""],
+  cancelled: ["Питання скасовано", "Розмову завершено, поки ADS відповідав на питання.", ""],
+  ads_busy: ["ADS ще відповідає", "Попереднє питання цієї розмови ще виконується в ADS. Дочекайтеся відповіді.", ""],
   unsupported_file: ["Файл не підтримується", "Використайте CSV, TSV або Parquet (у межах ліміту завантаження).", ""],
   unreadable_file: ["Не вдалося прочитати файл", "Розбір не вдався — перевірте роздільник і кодування.", ""],
   invalid_options: ["Параметр не прийнято", "Колонки з параметрів немає або вона не числова, значення має неправильний формат, зону мапи не вдалося прочитати, або колонка часу не читається чи дає замало періодів.", "Перевірте назви колонок і формат значень, комірки чи форму зони; для часу — колонку з датами, календарну одиницю сітки (день, тиждень, місяць, квартал — не 7D) і пояс за назвою IANA."],
@@ -252,6 +254,7 @@ async function refreshHealth() {
     S.ads = Boolean(ads && ads.ok);  // whether a zone's question can go to ADS
     // ponytail: no answer reads as a stack without ADS until the bridge answers once on this page; a page opened while it is down says вимкнено
     S.adsSeen ||= Boolean(ads);
+    syncTabs();
     const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
       : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
       : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
@@ -281,11 +284,15 @@ function setLegend(show) {
 
 // the developer mode (docs/08_interface.md §8.2): the graph, the sphere and the technical fields behind one switch
 const firstView = () => ($("map-tab").hidden ? "table" : "map");  // the map for geo data, else the insights
+const isDev = () => document.body.classList.contains("dev");
+// the person's one chat: ADS on a stack with it (answered once on this page, not flipping with each health read) and a map to draw zones on, else the graph's
+const personTab = () => ((S.adsSeen && !$("map-tab").hidden) || S.threads.ads.length ? "ads" : "graph");
 function setDev(on) {
   document.body.classList.toggle("dev", on);
   $("dev-btn").setAttribute("aria-pressed", String(on));
   try { localStorage.setItem("sig-dev", on ? "on" : "off"); } catch (e) { /* private mode */ }
-  if (!on && (S.view === "graph" || S.view === "sphere")) setView(firstView());
+  if (!on && ["graph", "sphere", "time"].includes(S.view)) setView(firstView());
+  syncTabs();
   if (!on) $("use-llm").checked = true;  // the switch is the developer's: the person always gets the explanation
 }
 
@@ -318,6 +325,37 @@ function initResize() {
 function clearAnswer() {
   /* the one "clear the answer" action: its highlight in the graph and on the sphere, the map's focus and evidence */
   S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear();
+}
+
+function syncTabs() {
+  /* the chat's tabs: the developer's both (ADS once it answers or holds a conversation), the person's one chat */
+  const shown = isDev() ? ["graph", ...(S.adsSeen || S.threads.ads.length ? ["ads"] : [])] : [personTab()];
+  document.querySelectorAll(".chat-tabs button").forEach((b) => { b.hidden = !shown.includes(b.dataset.tab); });
+  if (!shown.includes(S.tab)) showTab(shown[0]);
+}
+
+function showTab(tab) {
+  /* the thread on show: the graph's questions or the ADS conversation; the person sees only theirs */
+  if (!isDev() && tab !== personTab()) return;
+  S.tab = tab;
+  document.querySelectorAll(".chat-tabs button").forEach((b) => { b.classList.toggle("active", b.dataset.tab === tab); b.setAttribute("aria-selected", String(b.dataset.tab === tab)); });
+  $("question").placeholder = tab === "graph" ? "Спитайте про метрику, сегмент чи закономірність…" : S.adsLast ? "Уточніть питання до ADS…" : "Спитайте ADS про зони на мапі…";
+  renderThread(); autosize();
+}
+
+function newChat() {
+  /* the thread on show starts again: the graph's pending questions aborted, or the ADS conversation's session closed (a
+     question still running is cancelled, and askAds cancels one whose job it learns only now) */
+  if (S.tab === "ads") {
+    for (const t of S.threads.ads) if (t.jobId && !["done", "error"].includes(t.ads.stage)) api(`/api/ads/jobs/${t.jobId}/cancel`, { method: "POST" }).catch(() => {});
+    if (S.adsSession) api(`/api/ads/sessions/${S.adsSession}/close`, { method: "POST" }).catch(() => {});  // best effort: ADS keeps no table of it
+    Object.assign(S, { adsSession: null, adsZones: {}, adsLast: null });
+  } else {
+    S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat"));
+    clearAnswer();
+  }
+  S.threads[S.tab] = [];
+  syncTabs(); showTab(S.tab);
 }
 
 function init() {
@@ -369,7 +407,7 @@ function init() {
   });
   // canvas
   document.querySelectorAll("#view-switch button").forEach((b) => b.addEventListener("click", () => { S.picked = true; setView(b.dataset.view); }));
-  $("dev-btn").addEventListener("click", () => setDev(!document.body.classList.contains("dev")));
+  $("dev-btn").addEventListener("click", () => setDev(!isDev()));
   document.querySelectorAll(".toggle[data-key]").forEach((b) => b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (b.dataset.key === "region") return toggleRegions();
@@ -463,17 +501,18 @@ function init() {
   $("question").addEventListener("input", autosize);
   Timeline.init();
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); } });
-  $("new-chat").addEventListener("click", () => { S.chat.forEach((t) => t.ctl && t.ctl.abort("new chat")); S.chat = []; clearAnswer(); renderThread(); });
+  $("new-chat").addEventListener("click", newChat);
+  document.querySelectorAll(".chat-tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.addEventListener("keydown", (e) => {  // Enter or Space on a clickable row or link acts as a click
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
   });
   document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer; a text field keeps its own
-    if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]")) return;
+    if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]") || document.querySelector("dialog[open]")) return;  // a dialog closes itself
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
-    if (S.view === "map" && GeoMap.zone().length) { GeoMap.clearZone(); return; }
+    if (S.view === "map" && GeoMap.zones().length) { GeoMap.clearZones(); return; }
     closeDrawer();
   });
   initResize();

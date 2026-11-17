@@ -286,28 +286,28 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         assert page.inner_text("#map-draw") == "Скасувати" and page.evaluate(fill)[3] == 0.2  # every cell dimmed
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)):  # real clicks: four vertices, then the first one again closes it
             page.mouse.click(box["x"] + x, box["y"] + y)
+        page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # closed, the zone opens no popup: a click in it does
         page.wait_for_function("/: \\d+$/.test(document.querySelector('.sig-pop .pp-here')?.textContent || '')", timeout=10000)
-        assert page.inner_text(".sig-pop .pp-head").startswith(f"Зона · {len(cells)} ком") and page.is_visible(".sig-pop .pp-ask")
-        assert page.inner_text("#map-draw") == "Прибрати зону" and page.evaluate("GeoMap.polygon().coordinates[0].length") == 5
+        assert page.inner_text(".sig-pop .pp-head").startswith(f"Зона Z1 · {len(cells)} ком") and page.is_visible(".sig-pop .pp-ask")
+        assert page.inner_text("#map-draw") == "Додати зону" and page.evaluate("GeoMap.zones()[0].polygon.coordinates[0].length") == 5
         lit = page.evaluate(fill)  # the zone's cells alone keep their colour; no outline stays
         assert sorted(lit[1][2][1]) == sorted(cells) and lit[2:] == [0.55, 0.2]
         assert not page.evaluate("G.map.getSource('draft').serialize().data.features.length")
         page.evaluate("GeoMap.closePopup()")  # the popup lies over the panels
-        page.click("#map-draw")  # the button clears the zone, then starts another; Esc drops a polygon being drawn
-        assert page.inner_text("#map-draw") == "Намалювати зону" and not page.evaluate("GeoMap.zone().length || GeoMap.polygon()")
+        page.click("#map-clear")  # shown with a zone: the zones go; the draw button starts another; Esc drops a polygon being drawn
+        assert page.inner_text("#map-draw") == "Додати зону" and not page.evaluate("GeoMap.zones().length") and page.is_hidden("#map-clear")
         page.click("#map-draw")
         page.mouse.click(box["x"] + x0, box["y"] + y0)
         page.keyboard.press("Escape")
-        assert not page.evaluate("G.draw || GeoMap.polygon()") and page.evaluate(fill) == 0.55
+        assert not page.evaluate("G.draw || GeoMap.zones().length") and page.evaluate(fill) == 0.55
         page.click("#map-draw")
         for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y1 + 40)):  # a vertex too many, taken back; Enter closes
             page.mouse.click(box["x"] + x, box["y"] + y)
         page.keyboard.press("Backspace")
         page.keyboard.press("Enter")
-        assert page.evaluate("GeoMap.closePopup()")  # the closed zone's popup was open
-        page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # a cell of the zone opens the zone's popup again
+        page.mouse.click(box["x"] + near[0]["x"], box["y"] + near[0]["y"])  # a cell of the zone opens the zone's popup
         page.wait_for_selector(".sig-pop .pp-ask")
-        page.evaluate("(() => { const f = G.data.features.find((f) => !G.zone.has(f.properties.h3)); cellPopup(f, centre(f)); })()")
+        page.evaluate("(() => { const f = G.data.features.find((f) => !G.zones[0].cells.has(f.properties.h3)); cellPopup(f, centre(f)); })()")
         assert page.query_selector(".sig-pop .pp-head") and not page.query_selector(".sig-pop .pp-ask")  # a cell's popup tells, it asks nothing
         assert page.evaluate("G.map.getFilter('regions-n')[2] === G.level && G.overlay.features.some((f) => f.properties.resolution === G.level)")
         assert page.evaluate("document.querySelectorAll('.maplibregl-marker').length") < 50  # region counts are a symbol layer, places capped
@@ -326,9 +326,9 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.evaluate("loadProjected(G.ds)")
         assert page.is_hidden("#map-projected-error")
         n = len(cells)
-        assert n >= 3 and sorted(page.evaluate("GeoMap.zone()")) == sorted(cells)
+        assert n >= 3 and sorted(page.evaluate("GeoMap.zones()[0].cells")) == sorted(cells)
         answers = page.evaluate("document.querySelectorAll('.answer-box').length")
-        page.evaluate("GeoMap.setPolygon(GeoMap.polygon())")  # the zone's popup again: its button asks
+        page.evaluate("GeoMap.openZone(GeoMap.zones()[0].id)")  # the zone's popup again: its button asks
         page.click(".sig-pop .pp-ask")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == n and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
@@ -339,8 +339,8 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.press("#question", "Enter")
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers + 1}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == n and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
-        page.press("#map canvas", "Escape")  # out of the chat box, no popup, no focused insight: Esc clears the zone
-        assert not page.evaluate("GeoMap.zone().length") and page.inner_text("#map-draw") == "Намалювати зону"
+        page.press("#map canvas", "Escape")  # out of the chat box, no popup, no focused insight: Esc clears the zones
+        assert not page.evaluate("GeoMap.zones().length") and page.inner_text("#map-draw") == "Додати зону"
         drawn = """async () => { for (const p of G.data.patterns) { await inspect(p.id);  // a drawer row of an insight this map draws
             const row = [...document.querySelectorAll('#inspector .nb')].find((r) => r.dataset.id !== p.id && GeoMap.has(r.dataset.id));
             if (row) { row.closest('details').open = true; return row.dataset.id; } } return null; }"""  # its group opened, as a click on it does
@@ -364,14 +364,14 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(
             f"!G.focusId && $('drawer-title').textContent !== {title!r} && document.querySelector('#inspector .drawer-note')", timeout=10000
         )
-        page.evaluate("GeoMap.setPolygon(G.data.features[0].geometry); GeoMap.closePopup()")  # a zone selected for other questions
+        page.evaluate("GeoMap.addZone(G.data.features[0].geometry); GeoMap.closePopup()")  # a zone selected for other questions
         turns = page.evaluate("S.chat.length")
         page.evaluate(f"pickInsight('{off}', null)")  # the card of an insight this map does not draw: it has no place here
         page.wait_for_function(f"S.chat.length === {turns + 1}")
         page.locator(".msg-bot").last.locator(".ic-ask").click()
         page.wait_for_function(f"S.chat.length === {turns + 2} && !S.busy", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == 0  # asked without a zone, never with the one selected
-        page.evaluate("GeoMap.clearZone()")
+        page.evaluate("GeoMap.clearZones()")
         adopted = """async () => { const orig = GeoMap.refresh, inflight = GeoMap.refreshing, done = { map: true }, poll = { pass: true };
             GeoMap.refresh = () => new Promise((r) => setTimeout(() => r(done), 300));  // ask's await refreshBatches() gives the map's
             try { S.lastReady = null; const first = (await refreshBatches()) === done;

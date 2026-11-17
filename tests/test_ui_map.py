@@ -358,6 +358,22 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.evaluate("G.ds") == fine["dataset_id"]  # the map stays on its dataset
         page.click("#new-chat")
         assert page.evaluate("G.focusId") is None and page.locator("#map-window .mw-i.on").count() == 0
+        # two zones: the chat box asks the graph about one, the last drawn until another's popup opens; a removed zone frees its colour
+        three = "GeoMap.addZone(G.data.features[0].geometry); GeoMap.addZone(G.data.features[1].geometry); GeoMap.addZone(G.data.features.at(-1).geometry)"
+        removed = page.evaluate(f"{three}; GeoMap.zones()[1].id")
+        page.evaluate(f"GeoMap.clearZones('{removed}'); GeoMap.addZone(G.data.features[2].geometry)")
+        colors = page.evaluate("G.zones.map((z) => [z.id, z.color])")  # the others keep theirs; the new zone takes the removed one's, not its id
+        assert [c for _, c in colors] == ["#eef3ff", "#8fb3ff", "#ffb000"] and removed not in [i for i, _ in colors]
+        assert not page.evaluate("GeoMap.closePopup()") and page.evaluate("document.querySelectorAll('.zone-tag').length") == 3
+        page.evaluate("GeoMap.openZone(GeoMap.zones()[0].id); GeoMap.closePopup()")
+        page.fill("#question", "Де найбільше подій?")
+        page.press("#question", "Enter")
+        page.wait_for_function("S.chat.at(-1).qa", timeout=30000)
+        first = page.evaluate("GeoMap.zones()[0]")
+        assert page.evaluate("__asked.at(-1)")["cells"] == first["cells"] and page.evaluate("S.chat.at(-1).zones") == [first["id"]]
+        assert "zones" not in page.evaluate("__asked.at(-1)") and f"зона {first['id']}" in page.locator(".msg-user").last.inner_text()
+        page.evaluate("GeoMap.clearZones()")
+        page.click("#new-chat")
         # Show in graph on a base insight under the geo filter: the filter gives way, the node is in the graph
         page.evaluate(f"GeoMap.pick('{base}')")
         page.wait_for_selector(".msg-bot >> nth=-1 >> .ic-graph", timeout=10000)
@@ -525,7 +541,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         whole, here, acting = map(int, re.findall(r"\d+", page.text_content(".sig-pop .pp-here").replace("\u00a0", "")))
         assert whole >= here >= acting  # the region's count, the cell's part of it and the part acting: one base
         every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
-        page.evaluate(f"GeoMap.setPolygon({{type: 'Polygon', coordinates: [{every}]}})")  # every cell
+        page.evaluate(f"GeoMap.addZone({{type: 'Polygon', coordinates: [{every}]}}); GeoMap.openZone(GeoMap.zones()[0].id)")  # every cell
         assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
         page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
@@ -540,7 +556,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert page.locator(".sig-pop .pp-ins").count() == page.locator(".sig-pop .pp-ins.off").count() > 0
         assert page.evaluate("G.map.getSource('region-labels').serialize().data.features.length") == 0  # no region counts one in the days
         page.wait_for_function("/у періоді: 0 · .* за період$/.test($('mw-meta').textContent)", timeout=10000)
-        page.evaluate("GeoMap.clearZone(); GeoMap.closePopup()")
+        page.evaluate("GeoMap.clearZones(); GeoMap.closePopup()")
         page.click("#pb-clear")
         assert page.locator("#map-window .mw-i.off").count() == 0
         page.wait_for_function("G.metric === 'points'", timeout=10000)

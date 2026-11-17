@@ -81,9 +81,17 @@ class SearchIn(BaseModel):
     include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
 
 
-class AoiIn(BaseModel):
+class ZoneIn(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,16}$")  # the zone's name in the rows: a CSV value as it is
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
-    resolution: int | None = Field(default=None, ge=0, le=15)  # the cell columns' resolution; None: the dataset's own
+
+
+MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cells and a line of X-Zones
+
+
+class ZonesIn(BaseModel):
+    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_EXPORT_ZONES)
+    resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
 
 
 class HiddenIn(BaseModel):
@@ -365,10 +373,15 @@ def create_app(engine: Engine) -> FastAPI:
         period = asked_period(start, end) if start or end else None  # the period bar's days: the view's points in them
         return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
 
-    @app.post("/api/geo/{dataset_id}/aoi")
-    def geo_aoi_rows(dataset_id: str, body: AoiIn) -> Response:
-        data, counts = engine.geo_aoi_rows(dataset_id, body.polygon, body.resolution)
-        return Response(data, media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})  # ASCII: a header's bytes
+    @app.get("/api/geo/{dataset_id}/rows")
+    def geo_table_rows(dataset_id: str, resolution: int | None = None) -> Response:
+        data, counts = engine.geo_table_rows(dataset_id, resolution)
+        return Response(data, media_type="text/csv", headers={"X-Rows": json.dumps(counts)})  # ASCII: a header's bytes
+
+    @app.post("/api/geo/{dataset_id}/zone_rows")
+    def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
+        data, counts = engine.geo_zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], body.resolution)
+        return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:

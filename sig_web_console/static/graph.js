@@ -477,7 +477,7 @@ function highlightPath(turn, item, el) {
   const edges = item.path.map((st) => st.edge_id);
   S.hl = { seeds: h.seeds, anchors: item.path.filter((s) => s.target.startsWith("A-")).map((s) => s.target), evidence: [item.pattern_id],
     transversal_only: item.transversal_only ? [item.pattern_id] : [], edges, traversed: [] };
-  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
+  if (S.view === "table" && isDev()) setView("graph");  // the graph is the developer's
   highlight(S.hl);
   if (S.view === "sphere") renderSphere(); else focusNodes([item.pattern_id, ...item.path.map((s) => s.source)]);
   document.querySelectorAll(".ev.on").forEach((x) => x.classList.remove("on"));
@@ -501,7 +501,7 @@ function reveal(id, { isolate = null, walk = false } = {}) {
   if (S.view === "map" && GeoMap.has(id)) return walk ? GeoMap.pick(id, true) : GeoMap.focusPattern(id);
   if (S.view === "map") { GeoMap.unfocus(); return inspect(id, GeoMap.offMap(id)); }  // the old focus goes
   if (isolate) return highlightPath(isolate.turn, isolate.item, isolate.el);
-  if (S.view === "table" && document.body.classList.contains("dev")) setView("graph");  // the graph is the developer's
+  if (S.view === "table" && isDev()) setView("graph");  // the graph is the developer's
   focusNodes([id]);
   inspect(id);
 }
