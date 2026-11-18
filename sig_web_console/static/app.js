@@ -461,9 +461,13 @@ function init() {
   });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
   on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
-  $("link-form").addEventListener("submit", (e) => e.preventDefault());
-  on($("link-opts"), ".link-opt", (el) => runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample }));
-  $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) runLink({ file: $("link-file").files[0] }); });
+  $("link-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = $("link-file").files[0], el = $("link-opts").querySelector(".link-opt.on");
+    if (f) runLink({ file: f }); else if (el) runLink(el.dataset.layer ? { layer: el.dataset.layer } : { sample: el.dataset.sample });
+  });
+  on($("link-opts"), ".link-opt", (el) => pickLink(el));
+  $("link-file").addEventListener("change", () => { if ($("link-file").files[0]) pickLink(null); });
   $("link-cancel").addEventListener("click", () => $("link-dialog").close());
   $("link-types").addEventListener("change", (e) => { if (e.target.matches(".tp")) toggleType(e.target, $("link-counts")); });  // the types' checkboxes and the field they fill
   $("link-counts").addEventListener("input", () => syncTypes($("link-types"), $("link-counts")));

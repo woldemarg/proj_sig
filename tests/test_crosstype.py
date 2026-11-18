@@ -937,6 +937,7 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
         for name in ("chicago_bars.csv", "chicago_l_stations.csv"):  # under the crimes: their finest level, the default disk
             page.click(".ds-link")
             page.click(f".link-opt[data-layer='{layers[name]}']")
+            page.click("#link-go")
             runs[name] = finished(cross=[layers[name]])
             assert (runs[name]["level"], runs[name]["context_ring"]) == ("9", 0)  # the cell alone: the default disk
         page.evaluate("refreshBatches()")

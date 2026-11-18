@@ -43,9 +43,10 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
             time.sleep(0.5)
         return done[-1]
 
-    def link(page, key: str) -> None:  # *+ Додати шар* under the crimes with a shipped set: one click runs it
+    def link(page, key: str) -> None:  # *+ Додати шар* under the crimes with a shipped set, sent by its button
         page.click(".ds-link")
         page.click(f".link-opt[data-sample='{key}']")
+        page.click("#link-go")
 
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})

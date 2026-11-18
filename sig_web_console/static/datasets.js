@@ -355,16 +355,24 @@ function openLink(batchId) {
       .map((d) => opt("sample", d.key, shippedTitle(d), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
   const opts = [...$("link-opts").children];
   $("link-or").hidden = !opts.length; $("link-or").toggleAttribute("data-dev", opts.every((o) => o.hasAttribute("data-dev")));  // no ready layer: no "or"
-  $("link-file").disabled = false;
+  $("link-file").disabled = false; pickLink(null);
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
   renderTypes($("link-types"), $("link-counts"), profileTypes(b));
   $("link-dialog").showModal();
 }
 
+function pickLink(el) {
+  /* one choice, sent by *Додати шар*: a ready layer (``el``) or the file in the drop zone (``null``) */
+  if (el) $("link-file").value = "";
+  $("link-opts").querySelectorAll(".link-opt").forEach((o) => o.classList.toggle("on", o === el));
+  $("link-file-name").textContent = ($("link-file").files[0] || {}).name || "";
+  $("link-go").disabled = !el && !$("link-file").files[0];
+}
+
 async function runLink(src) {
   /* ``src``: a stored upload (layer), a shipped set (sample) or a file; one not stored is kept as *Лише шар* first */
   const o = src.sample ? S.samples[src.sample].options || {} : {}, batchId = $("link-dialog").dataset.batch;
-  $("link-dialog").querySelectorAll(".link-opt, #link-file").forEach((el) => { el.disabled = true; });  // one click, one run
+  $("link-dialog").querySelectorAll(".link-opt, #link-file, #link-go").forEach((el) => { el.disabled = true; });  // one run per send
   $("link-msg").className = "msg"; $("link-msg").textContent = "Запускаю…";
   try {
     let layer = src.layer;
