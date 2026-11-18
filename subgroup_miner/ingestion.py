@@ -376,24 +376,47 @@ def _export_frame(path: Path, where: str | None, resolution: int) -> pd.DataFram
     return frame
 
 
-def table_rows(path: Path, locator: str, where: str | None, resolution: int) -> tuple[bytes, dict[str, Any]]:
+def _export_points(frame: pd.DataFrame, locator: str, window: tuple[str, str | None, str, str] | None) -> tuple[np.ndarray, np.ndarray]:
+    """The rows' points; with a span-aligned layer's ``window`` its events outside the span have none, as ``read_context``
+    reads them."""
+    lat, lon, _ = locate_points(frame, locator)
+    return within_window(lat, lon, read_times(frame, window[0], window[1]), window) if window else (lat, lon)
+
+
+def within_window(lat: np.ndarray, lon: np.ndarray, times: pd.Series, window: tuple[str, str | None, str, str]) -> tuple[np.ndarray, np.ndarray]:
+    """The points of the events within ``window``'s span; the others (a time outside it or unread) have none."""
+    inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
+    return np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+
+
+def table_rows(
+    path: Path, locator: str, where: str | None, window: tuple[str, str | None, str, str] | None, resolution: int
+) -> tuple[bytes, dict[str, Any]]:
     """A stored file's rows as CSV, each with its ``row_id`` first and its cell columns last (``cell_columns``), and what
     was added. Read as the upload's levels read it (pandas' reading: a code with leading zeros that parsed as a number
-    comes back as that number); a file that already holds one of the added columns is refused."""
+    comes back as that number); a file that already holds one of the added columns is refused. ``window``: a span-aligned
+    layer's, its events outside the span without a cell."""
     frame = _export_frame(path, where, resolution)
-    lat, lon, _ = locate_points(frame, locator)
+    lat, lon = _export_points(frame, locator, window)
     out = frame.assign(**cell_columns(lat, lon, resolution))
     out.insert(0, ROW_ID, np.arange(len(out)))
     return out.to_csv(index=False).encode("utf-8"), {"total": len(out), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
 
 
-def zone_rows(path: Path, locator: str, where: str | None, resolution: int, zones: list[tuple[str, dict[str, Any]]]) -> tuple[bytes, dict[str, Any]]:
+def zone_rows(
+    path: Path,
+    locator: str,
+    where: str | None,
+    window: tuple[str, str | None, str, str] | None,
+    resolution: int,
+    zones: list[tuple[str, dict[str, Any]]],
+) -> tuple[bytes, dict[str, Any]]:
     """Which rows of a stored file each drawn zone holds: CSV ``zone_id,row_id,aoi_zone`` of its ``inside`` and
     ``adjacent`` rows (``zone_places``; a row not listed is ``far``, or ``unlocated`` when its cell is empty), ``row_id`` as
     ``table_rows`` numbers them; and per zone its rows per place and its cell count at ``resolution``; ``total`` and
     ``columns`` are ``table_rows``'s."""
     frame = _export_frame(path, where, resolution)
-    lat, lon, _ = locate_points(frame, locator)
+    lat, lon = _export_points(frame, locator, window)
     cell = point_cells(lat, lon, resolution)
     parts, counts = [], {}
     for zone_id, polygon in zones:
@@ -601,9 +624,8 @@ def read_context(
         lat, lon, sha, times = _context_points(str(path), locator, *(window or (None, None))[:2], where, st.st_mtime_ns, st.st_size)
     except (SpatialError, IngestionError) as exc:
         raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
-    if window:  # the events within the span, the others as points without a place
-        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
-        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+    if window:
+        lat, lon = within_window(lat, lon, times, window)
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
         inside = f"no event of it falls within {window[2]}..{window[3]}" if window else f"No valid point in {path.name}"
         raise IngestionError("invalid_options", f"context layer {name!r}: {inside}")

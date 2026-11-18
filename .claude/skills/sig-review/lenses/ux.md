@@ -4,7 +4,7 @@ Report: `08-ux.md`. Apply the rules of `../SKILL.md`.
 
 Review what a person sees and the path they take. Does the change stay focused, move in one natural order, and keep the quiet look the console already has?
 
-`docs/08_interface.md` is the contract: §8.2 for the screens and the look, §8.3 for one visual language, §8.5 for the words. Whether a number, a place or a period is true is that lens. Whether the request that leaves the page is the one the server answered is the `system` lens. Judge only the surface.
+`docs/current_docs/08_interface.md` is the contract: §8.2 for the screens and the look, §8.3 for one visual language, §8.5 for the words. Whether a number, a place or a period is true is that lens. Whether the request that leaves the page is the one the server answered is the `system` lens. Judge only the surface.
 
 Do not invent a design system. The look is already specified: neutral greys, one blue accent for links, focus, selection and switches, primary buttons in the text colour, icon buttons without a frame, radii of 3–6 px, no gradients or glows. Data colours (themes, shifts, layers, the map) keep their meaning. A control the chapter places behind developer mode (`data-dev`, off by default) is not clutter on the person's screens.
 

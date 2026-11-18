@@ -38,7 +38,7 @@ For a milestone with no name given, take the first milestone in the plan that is
 
 Before any analysis:
 
-1. Read `AGENTS.md` (the repository rules), `README.md`, the owning docs chapter of each touched module (`AGENTS.md` §6 maps code to chapters), `docs/12_architecture.md` for the import rules, and any other instructions the repository gives.
+1. Read `AGENTS.md` (the repository rules), `README.md`, the owning docs chapter of each touched module (`AGENTS.md` §6 maps code to chapters), `docs/current_docs/12_architecture.md` for the import rules, and any other instructions the repository gives.
 2. Find the description of the target: the PR body, the linked issues and their acceptance checkboxes, the milestone description.
 3. Find the related PRs (for a milestone, every one) and check which were merged, rejected, superseded or abandoned. A Closed PR is not integrated code — if its change never reached the reviewed revision, do not review it as existing behaviour without a stated reason.
 4. Map the history to the code at the reviewed revision: the files, modules, functions and tests that implement the change.

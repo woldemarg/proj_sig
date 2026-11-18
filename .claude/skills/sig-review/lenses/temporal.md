@@ -4,7 +4,7 @@ Report: `07-temporal.md`. Apply the rules of `../SKILL.md`.
 
 Review the temporal semantics of the target: does the system interpret calendars, intervals, cores, events and the time relations between nodes correctly, and traverse and align them as specified?
 
-`docs/02_discovery.md` §2.10, `docs/06_graph_and_storage.md` §6.1 (the temporal plane), `docs/07_question_answering.md` §7.1–§7.4 and the time rows of `docs/11_reference.md` are the contract. Do not assume a time library, a timezone or an interval algebra until the code or those chapters confirm it. The series estimators (the bin z, the smoother, the event gate, `time_score`) are the `math` lens. Walks that are not time are the `graph` lens. A dropped field is `data`. The screen is `ux`. This lens owns the calendar and the relations.
+`docs/current_docs/02_discovery.md` §2.10, `docs/current_docs/06_graph_and_storage.md` §6.1 (the temporal plane), `docs/current_docs/07_question_answering.md` §7.1–§7.4 and the time rows of `docs/current_docs/11_reference.md` are the contract. Do not assume a time library, a timezone or an interval algebra until the code or those chapters confirm it. The series estimators (the bin z, the smoother, the event gate, `time_score`) are the `math` lens. Walks that are not time are the `graph` lens. A dropped field is `data`. The screen is `ux`. This lens owns the calendar and the relations.
 
 ## What to check
 

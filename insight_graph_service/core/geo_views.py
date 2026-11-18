@@ -173,10 +173,14 @@ def _zone_scores(
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
 
 
-def _export_reading(ws: Workspace, dataset_id: str, resolution: int | None) -> tuple[dict[str, Any], tuple[Path, str, str | None], int]:
+def _export_reading(
+    ws: Workspace, dataset_id: str, resolution: int | None, layer: str | None = None
+) -> tuple[dict[str, Any], tuple[Path, str, str | None], int]:
     """What the reader of a geo dataset's export must know of its table, the reading of its rows and the cell resolution
     of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
-    over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it."""
+    over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
+    ``layer``: a layer link run's context layer by its name, its points read as the run read them (its filter, an aligned
+    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
     if not geo or dataset_id in hidden_datasets(ws.list_batches()):
@@ -186,15 +190,28 @@ def _export_reading(ws: Workspace, dataset_id: str, resolution: int | None) -> t
     elif resolution not in (known := sorted({d["resolution"] for d in geo_datasets(ws)})):
         raise PipelineError("invalid_options", f"resolution {resolution} is not a geo dataset's: {known}")
     table = {"dataset_id": dataset_id, "upload_id": record.get("upload_id"), "filename": record["filename"], "dataset_resolution": geo["resolution"]}
-    reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"))
+    if layer is not None:
+        entry = next((c for c in context_files(record) if c[0] == layer), None)
+        if entry is None:
+            raise PipelineError("unknown_dataset", f"{dataset_id} holds no layer {layer!r}")
+        _, path, locator, window, where = entry
+        table |= {
+            "layer": layer,
+            "filename": f"{layer}{path.suffix}",
+            "upload_id": None,
+            "ring": record.get("context_ring", 1),
+        }  # a run before #307 counted a ring
+        span = {"window": list(window[2:])} if window else {}
+        return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
+    reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)
     return table | {"time": record.get("time"), "where": record.get("where")}, reading, resolution
 
 
-def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
+def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
     """A geo dataset's rows as CSV with a ``row_id`` and their cell columns of ``resolution`` (``ingestion.table_rows``),
     and what the reader must know of the table: what an analysis outside SIG reads; tables exported at one resolution share
     their cell columns. It does not depend on a zone: ``geo_zone_rows`` places the rows."""
-    table, reading, resolution = _export_reading(ws, dataset_id, resolution)
+    table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
         data, counts = table_rows(*reading, resolution)
     except (SpatialError, IngestionError) as exc:
@@ -203,14 +220,14 @@ def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None
 
 
 def geo_zone_rows(
-    ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None
+    ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
 ) -> tuple[bytes, dict[str, Any]]:
     """Which of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) holds, by the ``row_id`` of ``geo_table_rows``
     at the same ``resolution`` (``ingestion.zone_rows``), per zone its rows per place and its cells, and what
     ``geo_table_rows`` tells of the table: a reader that holds the table already reads the zones alone."""
     if len({z for z, _ in zones}) != len(zones):
         raise PipelineError("invalid_options", "two zones share an id")
-    table, reading, resolution = _export_reading(ws, dataset_id, resolution)
+    table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
         data, counts = zone_rows(*reading, resolution, zones)
     except (SpatialError, IngestionError) as exc:

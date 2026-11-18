@@ -4,7 +4,7 @@ Report: `01-mathematics.md`. Apply the rules of `../SKILL.md`.
 
 Review the mathematical and statistical correctness of the target: are the estimators, tests, time-series operations, spatial statistics, network measures and the algorithms that combine them the ones the chapters define, and are they computed as specified?
 
-`docs/02`–`docs/05` and `docs/07` state the quantities. `docs/11_reference.md` §11.4 is their index. The planted phenomena in `insight_graph_service/core/demo.py` are the reference cases. Do not replace a declared estimator with a textbook default (a mean for a median, a t-test for the median test, Pearson for the correlation the code uses) unless the chapter says that default.
+`docs/current_docs/02`–`05` and `07` state the quantities. `docs/current_docs/11_reference.md` §11.4 is their index. The planted phenomena in `insight_graph_service/core/demo.py` are the reference cases. Do not replace a declared estimator with a textbook default (a mean for a median, a t-test for the median test, Pearson for the correlation the code uses) unless the chapter says that default.
 
 This lens owns the quantity. Place, calendars, which edge is walked, stored bytes, the scenario and the screen are other lenses (`../SKILL.md`, the ownership table). A second computation that returns a different value is this lens; a repeated call with the same result is `system`; unused code is `cleanup`.
 

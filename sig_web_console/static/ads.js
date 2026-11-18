@@ -11,16 +11,24 @@ const PERIOD_LINE = /^Період:[^\n]*\n?/;  // the line openAds heads the qu
 const adsRunning = () => S.threads.ads.some((t) => !["done", "error"].includes(t.ads.stage));  // ADS runs one question of a session at a time
 
 function adsBody() {
-  /* the ask as the form holds it: the first ticked table is the base, the rest its context layers; the ticked zones are
-     the question's, none the whole map's, sent with every zone the conversation asked before (a later question may name
-     one); each zone is its polygon, which the bridge's graph question and the tables' rows both read (not the cells the
-     map lights) */
-  const tables = [...document.querySelectorAll("#ads-tables input:checked")].map((i) => ({ dataset_id: i.value, filename: i.dataset.file, resolution: +i.dataset.res }));
+  /* the ask as the form holds it: the first ticked table is the base, the rest its context layers (a link run's layer
+     by its name, only with its own table ticked); the ticked zones are the question's, none the whole map's, sent with every zone the conversation asked
+     before (a later question may name one); each zone is its polygon, which the bridge's graph question and the tables'
+     rows both read (not the cells the map lights) */
+  const own = new Set([...document.querySelectorAll("#ads-tables input:checked:not([data-layer])")].map((i) => i.value));
+  const tables = [...document.querySelectorAll("#ads-tables input:checked")].filter((i) => !i.dataset.of || own.has(i.dataset.of)).map((i) =>
+    ({ dataset_id: i.value, filename: i.dataset.file, resolution: +i.dataset.res, ...(i.dataset.layer ? { layer: i.dataset.layer } : {}) }));
   const focus = [...document.querySelectorAll("#ads-zones input:checked")].map((i) => i.value);
   const drawn = Object.fromEntries(GeoMap.zones().filter((z) => focus.includes(z.id)).map((z) => [z.id, z.polygon]));
   const zones = Object.entries({ ...S.adsZones, ...drawn }).map(([id, polygon]) => ({ id, polygon }));
   const p = S.period;  // SIG reads the period bar alone; ADS reads the question's words
   return { question: $("ads-question").value.trim(), tables, zones, focus, ...(S.adsSession ? { session_id: S.adsSession } : {}), ...(p ? { period: [p.start, p.end] } : {}) };
+}
+
+function syncLayers() {
+  /* a layer's box is off while its own table is not ticked: it goes with that table alone */
+  const own = new Set([...document.querySelectorAll("#ads-tables input:checked:not([data-layer])")].map((i) => i.value));
+  for (const i of document.querySelectorAll("#ads-tables input[data-layer]")) i.disabled = !own.has(i.dataset.of);
 }
 
 function adsState() {
@@ -38,7 +46,7 @@ function periodHeader(p) {
 
 function previewAds() {
   /* the task ADS will get, but for the zones' figures and insights, which the ask brings */
-  const body = adsBody(), ready = body.tables.length;  // no zone ticked: the whole map
+  const body = adsBody(), ready = body.tables.length;  // a layer goes with its table alone, so never as the base; no zone: the whole map
   $("ads-send").disabled = !body.question.replace(PERIOD_LINE, "").trim() || !ready || adsRunning();
   $("ads-send").title = adsRunning() ? "ADS ще відповідає на попереднє питання розмови" : "";
   clearTimeout(adsPreviewTimer);
@@ -51,14 +59,22 @@ function previewAds() {
 
 function openAds(zoneId, changed = []) {
   if (!S.ads) return;  // as the popup's button: nothing to ask
-  /* one row per upload, as its levels share the rows: the level open on the map, else the finest; the zone asked from
-     ticked, the map's others offered beside it (without one, every zone ticked; none ticked asks about the whole map) */
+  /* one row per upload, as its levels share the rows: the level open on the map, else the finest; under it the layers
+     of the upload's layer link runs, ticked with the open table; the zone asked from ticked, the map's others offered
+     beside it (without one, every zone ticked; none ticked asks about the whole map) */
   const open = GeoMap.current(), byUpload = new Map();
   for (const d of [...GeoMap.datasets()].sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open) || b.resolution - a.resolution))
     if (!byUpload.has(uploadOf(d))) byUpload.set(uploadOf(d), d);
   const rows = [...byUpload.values()];
+  const layers = (d) => {  // each layer once, read by the run that holds it (the open one first)
+    const runs = new Map();
+    for (const x of GeoMap.datasets().filter((x) => uploadOf(x) === uploadOf(d)).sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open)))
+      for (const name of layersOf(x.dataset_id)) if (!runs.has(name)) runs.set(name, x);
+    return [...runs].map(([name, x]) => `<label class="small chk ads-layer"><input type="checkbox" value="${esc(x.dataset_id)}" data-file="${esc(name)}" data-res="${esc(x.resolution)}" ` +
+      `data-layer="${esc(name)}" data-of="${esc(d.dataset_id)}"${d.dataset_id === open ? " checked" : ""}> шар ${esc(layerName(name))} · до ${esc(d.filename)}</label>`).join("");
+  };
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}" data-res="${esc(d.resolution)}"${d.dataset_id === open ? " checked" : ""}> ` +
-    `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>`).join("");
+    `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>${layers(d)}`).join("");
   const zones = GeoMap.zones();
   $("ads-zones").innerHTML = zones.map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
     `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("") +
@@ -68,6 +84,7 @@ function openAds(zoneId, changed = []) {
   if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;
   const shown = Timeline.shown();  // the bar's days head the question even when they are the whole span: ADS reads them, the person may edit them
   $("ads-question").value = (shown ? `${periodHeader(shown)}\n\n` : "") + $("question").value;
+  syncLayers();
   $("ads-dialog").showModal();
   previewAds();
 }
@@ -127,7 +144,7 @@ function adsCard(turn) {
 }
 
 $("ads-question").addEventListener("input", previewAds);
-$("ads-tables").addEventListener("change", previewAds);
+$("ads-tables").addEventListener("change", () => { syncLayers(); previewAds(); });
 $("ads-zones").addEventListener("change", (e) => {  // a question compares at most MAX_ZONES
   if ([...document.querySelectorAll("#ads-zones input:checked")].length > MAX_ZONES) e.target.checked = false;
   previewAds();

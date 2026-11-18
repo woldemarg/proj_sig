@@ -78,6 +78,21 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert json.loads(client.get(f"/api/geo/{ds}/rows", params={"resolution": other}).headers["x-rows"])["columns"][1] == f"h3_r{other}"
         assert client.get(f"/api/geo/{ds}/rows", params={"resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.get("/api/geo/ds-unknown/rows").json()["code"] == "unknown_dataset"
+        # a layer link run's layer: its own file's points as an aligned run read them (outside its window: no cell), placed by the same zones
+        bars = busy[["longitude", "latitude"]].head(4).assign(t=["2031-03-02", "2031-03-30", "2031-04-02", "2031-02-01"])
+        bars.to_csv(tmp_path / "bars.csv", index=False)
+        record = engine.ws.ready_batch_for(ds)
+        span = {"time": "t", "window": ["2031-03-01T00:00:00+00:00", "2031-03-31T00:00:00+00:00"]}  # as a run stores its target's span
+        engine.ws.save_batch(record | {"context_ring": 1, "context": [{"name": "bars", "path": str(tmp_path / "bars.csv"), "geo": "auto"} | span]})
+        got = client.get(f"/api/geo/{ds}/rows", params={"layer": "bars"})
+        layer, points = json.loads(got.headers["x-rows"]), pd.read_csv(io.BytesIO(got.content), keep_default_na=False)
+        assert (layer["layer"], layer["filename"], layer["total"], layer["ring"], layer["window"]) == ("bars", "bars.csv", 4, 1, span["window"])
+        assert list(points[f"h3_r{res}"] != "") == [True, True, False, False]  # the run counted the window's points alone
+        placed = json.loads(
+            client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z1", "polygon": shape}], "layer": "bars"}).headers["x-zones"]
+        )
+        assert placed["layer"] == "bars" and (placed["zones"]["Z1"]["inside"], placed["zones"]["Z1"]["unlocated"]) == (2, 2)
+        assert client.get(f"/api/geo/{ds}/rows", params={"layer": "nope"}).json()["code"] == "unknown_dataset"
         bare = client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})  # no zone: the table's counts alone
         assert bare.text.strip() == "zone_id,row_id,aoi_zone" and json.loads(bare.headers["x-zones"])["zones"] == {}
 
