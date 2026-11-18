@@ -313,6 +313,7 @@ def test_a_second_writer_process_is_refused(cfg, demo_csv):
     finally:
         holder.stdin.close()
         holder.wait(timeout=30)
+        holder.stdout.close()
     # the holder is gone: the next writer gets the lock and recovers the orphaned upload
     make_engine(cfg)
     assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"

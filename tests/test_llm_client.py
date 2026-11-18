@@ -29,6 +29,7 @@ def test_openai_compatible_roundtrip(llm_stub):
     assert check_citations(resp.text, {"P1": "P-abc"})["grounded"]
     resp = llm.generate("s", "fail")
     assert not resp.ok and resp.error is not None and "HTTP 500" in resp.error and "boom" in resp.error  # the upstream's reason, not only a status
+    llm.close()
 
 
 def test_unreachable_endpoint_fails_fast():
@@ -38,6 +39,7 @@ def test_unreachable_endpoint_fails_fast():
     t = time.perf_counter()
     llm.generate("s", "u")  # the refused connection is remembered -> no second attempt
     assert time.perf_counter() - t < 0.5
+    llm.close()
 
 
 def test_citation_check_flags_unknown_keys():

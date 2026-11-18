@@ -428,7 +428,7 @@ def test_a_time_column_makes_each_insight_a_trajectory_signed_with_its_batch(tim
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert all(sum(stored[pid]["rows"]) + stored[pid]["untimed"] == p["support"] for pid, p in patterns.items())
     dataset = next(n["props"] for n in snap["nodes"] if n["kind"] == "Dataset")
-    read = pd.to_datetime(pd.read_csv(record["source_path"])["when"], errors="coerce", utc=True)
+    read = pd.to_datetime(pd.read_csv(record["source_path"])["when"], errors="coerce", utc=True, format="ISO8601")
     assert dataset["temporal"] == {"column": "when", "grid": "week", "tz": None, "span": [read.min().isoformat(), read.max().isoformat()]}
     assert dataset["temporal"]["span"][0][:10] == "2031-03-03" and dataset["temporal"]["span"][1][:10] == "2031-04-13"  # the data's, not the bins'
     pid = phones_us(snap)

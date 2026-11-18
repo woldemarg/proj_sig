@@ -120,7 +120,7 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
     x_min = link_min_events(n_loc)
     links = {
         "S": share >= SHARE_MIN,
-        "E": (x / np.minimum(n_loc, n_r) >= SHARE_MIN) & (x >= EVENTS_MIN),
+        "E": (np.divide(x, cap := np.minimum(n_loc, n_r), out=np.zeros(len(x)), where=cap > 0) >= SHARE_MIN) & (x >= EVENTS_MIN),
         "F": fp_in / np.minimum(len(fp), occupied) >= SHARE_MIN,
         "L": (q <= FDR_Q) & (lift >= LIFT_MIN) & (x >= EVENTS_MIN),
         "P": ((q <= FDR_Q) & (lift >= LIFT_MIN) if with_events.sum() >= LIFT_MIN_REGIONS else (share >= SHARE_MIN) & (lift >= 1)) & (x >= x_min),

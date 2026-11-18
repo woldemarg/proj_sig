@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
+import warnings
 import zoneinfo
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -172,7 +173,8 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
         if ext == ".parquet":
             return pd.read_parquet(path), digest
         if ext == ".tsv":
-            frame = pd.read_csv(path, sep="\t", engine="c")
+            with warnings.catch_warnings(action="ignore", category=pd.errors.DtypeWarning):  # the condition checked below
+                frame = pd.read_csv(path, sep="\t", engine="c")
             # a chunk typed a column apart: codes then text leave values of two types, an integer chunk beside a float or
             # an unsigned one makes floats of integers past 2**53; then the whole file decides, else it is read once
             if any(
