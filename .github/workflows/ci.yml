@@ -1,0 +1,142 @@
+# CI (no CD): the stages of scripts/check.py, plus what needs CI's runners — CodeQL and the built images' scan.
+# One tool per concern: docs/current_docs/10_verification.md §10.5.
+name: ci
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+  schedule:
+    - cron: "0 5 * * 1"  # weekly on master: new advisories reach unchanged code
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.17"  # the Dockerfiles' uv; jobs add --group cpu: the CPU torch, as in the CPU image
+  TRIVY_VERSION: "v0.76.2"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - &setup-uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv run --frozen --group cpu python scripts/check.py lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - *checkout
+      - *setup-uv
+      - run: uv run --frozen --group cpu python scripts/check.py types
+
+  # The suite split by marker, without overlap: fast, model-backed, browser.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - *checkout
+      - *setup-uv
+      - run: uv run --frozen --group cpu pytest -m "not model and not browser"
+
+  test-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - *checkout
+      - *setup-uv
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: models
+          key: qwen3-${{ hashFiles('attractor_topology/encoder.py', 'insight_graph_service/core/model_store.py') }}
+      - name: Provision and verify the embedding model
+        run: uv run --frozen --group cpu python -m insight_graph_service.core.model_store
+      - run: uv run --frozen --group cpu pytest -m "model and not browser"
+
+  test-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - *checkout
+      - *setup-uv
+      - run: uv run --frozen --group cpu playwright install --with-deps chromium
+      - run: uv run --frozen --group cpu pytest -m browser
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # gitleaks reads the whole history
+          persist-credentials: false
+      - *setup-uv
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+      - &setup-trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: true
+      - run: uv run --no-project python scripts/check.py security  # check.py needs only the standard library
+
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - *checkout
+      - name: Build the images
+        run: |
+          docker compose build
+          docker build -f ads_bridge_service/Dockerfile -t sig/ads-bridge .
+      - *setup-trivy
+      # Report-only: the base images' OS packages carry fixed HIGH/CRITICAL CVEs their newest tags do not ship yet.
+      - name: Scan the images
+        run: |
+          for image in sig/insight-graph:cpu sig/evidence-narrator sig/llm-model-broker sig/web-console sig/ads-bridge; do
+            trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$image"
+          done
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - *checkout
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066  # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config: |
+            paths-ignore:
+              - tests
+              - "**/vendor"
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066  # v4
+        with:
+          category: /language:${{ matrix.language }}

@@ -1,5 +1,7 @@
 # SIG — Statistical Insight Graph
 
+[![ci](https://github.com/woldemarg/proj_sig/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/woldemarg/proj_sig/actions/workflows/ci.yml)
+
 A research prototype that turns a tabular file into **statistically validated local insights**, embeds them in a structured vector space, and connects them to **latent statistical concepts** (attractors / latent anchors). The result is persisted as a **dual-layer graph**, explored in a web console, and queried in natural language. Answers are grounded in graph evidence and verbalised by **Gemma 4** (on OpenRouter, or a local OpenAI-compatible server).
 
 The hypothesis it makes testable:
@@ -170,11 +172,14 @@ curl -X POST http://127.0.0.1:8765/api/reset                                    
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate: ruff check + ruff format --check + all tests (≈ 2 min)
-.venv\Scripts\python.exe scripts\check.py --quick    # lint + the fast tests
+.venv\Scripts\python.exe scripts\check.py            # the gate = CI: lint, types, all tests, security (≈ 5 min)
+.venv\Scripts\python.exe scripts\check.py lint types # chosen stages (lint, types, test, security)
+.venv\Scripts\python.exe scripts\check.py --quick    # lint, types and the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
 ```
 **Markers.** `model` needs the local embedding model, and `browser` needs Playwright and an installed Chromium; both skip automatically when unavailable.
+
+**CI.** `.github/workflows/ci.yml` runs the same stages on every push and pull request to `master` and `develop`, plus CodeQL and a report-only Trivy scan of the built images; Dependabot opens weekly grouped updates ([10.5](docs/current_docs/10_verification.md#105-quality-gate-and-container-check)). The security stage needs `gitleaks` and `trivy` on PATH; without them it reports `skipped`.
 
 **In containers.** `python scripts\compose_check.py --tests` runs the gate inside the graph service's image as well ([10.5](docs/current_docs/10_verification.md#105-quality-gate-and-container-check)).
 

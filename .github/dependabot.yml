@@ -1,0 +1,35 @@
+# Weekly grouped update PRs into develop; the CI run on each PR is their gate.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly }
+    groups:
+      python: { patterns: ["*"] }
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: docker
+    directories:
+      - /insight_graph_service
+      - /evidence_narrator_service
+      - /llm_model_broker
+      - /ads_bridge_service
+      - /sig_web_console
+    target-branch: develop
+    schedule: { interval: weekly }
+    groups:
+      docker: { patterns: ["*"] }
+
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly }
+    groups:
+      compose: { patterns: ["*"] }
