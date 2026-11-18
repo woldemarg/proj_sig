@@ -6,6 +6,7 @@ import json
 import re
 import time
 from collections import Counter
+from typing import Any
 from unittest import mock
 
 import h3
@@ -52,7 +53,8 @@ def test_parse_geo_and_points():
     assert np.isnan(lat[2:]).all()
     frame = geo_frame()  # columns named longitude then latitude: the names give the roles, in range either way
     swapped, ordered = locate_points(frame, "longitude,latitude"), locate_points(frame, "latitude,longitude")
-    assert np.array_equal(swapped[0], frame["latitude"]) and all(np.array_equal(a, b) for a, b in zip(swapped, ordered))
+    assert np.array_equal(swapped[0], frame["latitude"]) and np.array_equal(swapped[0], ordered[0]) and np.array_equal(swapped[1], ordered[1])
+    assert swapped[2] == ordered[2]
 
 
 def test_cell_table_roles_follow_dtypes():
@@ -100,11 +102,11 @@ def test_subgroup_moran_sees_a_block_not_scattered_cells():
     centre = ctx.cells[int(table["points"].idxmax())]
     block = np.array([pos[c] for c in h3.grid_disk(centre, 2) if c in pos])  # a solid patch of busy cells
     assert subgroup_moran(table["points"].to_numpy(float)[block], block, ctx) > 0.0
-    scattered = []
+    picked: list[int] = []
     for i in range(len(ctx.cells)):  # no two of them neighbours
-        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], scattered).any():
-            scattered.append(i)
-    scattered = np.array(scattered)
+        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], picked).any():
+            picked.append(i)
+    scattered = np.array(picked)
     assert subgroup_moran(table["points"].to_numpy(float)[scattered], scattered, ctx) == 0.0
 
 
@@ -242,9 +244,11 @@ def test_geo_evidence_speaks_plain_language(engine, points_csv):
 def test_spatial_provenance_is_the_ingest_fields():
     stored = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01, "compactness": 0.5, "colocated": []}
     spatial = SpatialProvenance.from_dict(stored)
+    assert spatial is not None
     assert spatial.to_dict() == {k: stored[k] for k in ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")}  # derived keys stay out
     assert SpatialProvenance.from_dict(spatial.to_dict()) == spatial
-    assert SpatialProvenance.from_dict({"resolution": 7, "cells": 40}).moran_i is None  # an older record reads
+    older = SpatialProvenance.from_dict({"resolution": 7, "cells": 40})
+    assert older is not None and older.moran_i is None  # an older record reads
     assert SpatialProvenance.from_dict(None) is None and SpatialProvenance.from_dict({}) is None
     assert tuple(SpatialProvenance.__dataclass_fields__) == SPATIAL_DIGEST_FIELDS  # widening either is a decision about stored digests
 
@@ -593,7 +597,7 @@ def test_the_scale_reads_the_levels_the_upload_has(engine, points_csv):
     by an upload of the same file counts, one deleted alone does not."""
     from graph_query_engine.vertical import scale_chain
 
-    def upload(geo: str) -> list[dict]:
+    def upload(geo: str) -> list[dict[str, Any]]:
         return upload_levels(engine, points_csv, geo=geo)
 
     def levels_and_scales() -> tuple[list[str], set[str]]:
@@ -686,7 +690,7 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
 
     for res, step in ((7, 1e-5), (14, 1e-7)):
         cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
-        features = [
+        features: list[dict[str, Any]] = [
             {
                 "type": "Feature",
                 "id": i,
@@ -734,6 +738,7 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 2 * edge}, 7) == set(h3.grid_disk(centre, 1))  # neighbours' centres √3 edges away
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 1.0}, 7) == {centre}
     assert geometry_to_cells({"bbox": [lon - 1e-4, lat - 1e-4, lon + 1e-4, lat + 1e-4]}, 7) == {centre}
+    bad: Any  # malformed on purpose
     for bad in (
         {"type": "Point", "coordinates": [lon, lat]},
         {"center": [lon]},
@@ -762,8 +767,11 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     fine = "8829aab493fffff"  # its centre lies clearly (no tie) in another resolution-5 cell than its H3 parent
     holder, parent = centre_region(fine, 5), h3.cell_to_parent(fine, 5)
     assert holder != parent
-    assert zone_overlap(np.array([holder, parent]), {"holder": [0], "parent": [1]}, frozenset([fine])) == {"holder": 1.0, "parent": 0.0}
-    assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
+    assert zone_overlap(np.array([holder, parent]), {"holder": np.array([0]), "parent": np.array([1])}, frozenset([fine])) == {
+        "holder": 1.0,
+        "parent": 0.0,
+    }
+    assert zone_overlap(np.array([fine]), {"fine": np.array([0])}, frozenset([holder])) == {"fine": 1.0}
 
 
 def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
@@ -815,6 +823,7 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     and the provenance chain are there."""
     import rdflib
     from pyshacl import validate
+    from rdflib.query import ResultRow
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", source="sensor net", reliability="B")
     assert [r["status"] for r in done] == ["READY", "READY"]
@@ -829,11 +838,12 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     edges = [e for e in graph.edges if e["type"] == "IN_REGION"]
     region = max({e["target"] for e in edges}, key=lambda r: sum(e["target"] == r for e in edges))
     rows = data.query(f"PREFIX sig: <urn:sig:vocab#> SELECT ?p WHERE {{ ?p a sig:Insight ; sig:inRegion <urn:sig:{region}> }}")
-    assert {str(r.p) for r in rows} == {f"urn:sig:{e['source']}" for e in edges if e["target"] == region}
+    assert {str(r.p) for r in rows if isinstance(r, ResultRow)} == {f"urn:sig:{e['source']}" for e in edges if e["target"] == region}
     features = (
         "PREFIX geo: <http://www.opengis.net/ont/geosparql#> SELECT (COUNT(?f) AS ?n) WHERE { ?f a geo:Feature ; geo:hasGeometry/geo:asWKT ?w }"
     )
-    assert int(next(iter(data.query(features))).n) == sum(1 for n in graph.of_kind("Pattern")) + sum(1 for _ in graph.of_kind("Region"))
+    count = next(iter(data.query(features)))
+    assert isinstance(count, ResultRow) and int(count.n) == sum(1 for n in graph.of_kind("Pattern")) + sum(1 for _ in graph.of_kind("Region"))
     sig = rdflib.Namespace("urn:sig:vocab#")
     relation = {"overlaps": sig.extentsOverlap, "adjacent": sig.extentsTouch, "same_region": sig.sameRegion}
     co = [e for e in graph.edges if e["type"] == "CO_LOCATED"]
@@ -844,7 +854,8 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     insight, dataset = rdflib.URIRef(f"urn:sig:{pid}"), rdflib.URIRef(f"urn:sig:DS:{graph.insight(pid).dataset_id}")
     prov = rdflib.Namespace("http://www.w3.org/ns/prov#")
     assert (insight, prov.wasDerivedFrom, dataset) in data and (dataset, sig.sourceReliability, rdflib.Literal("B")) in data
-    assert data.value(insight, sig.credibility).toPython() == graph.nodes[pid]["props"]["credibility"]
+    credibility = data.value(insight, sig.credibility)
+    assert isinstance(credibility, rdflib.Literal) and credibility.toPython() == graph.nodes[pid]["props"]["credibility"]
     assert data.value(dataset, prov.wasDerivedFrom) == rdflib.URIRef(f"urn:sig:{done[0]['upload_id']}")
     geo = rdflib.Namespace("http://www.opengis.net/ont/geosparql#")
     wkt = str(data.value(data.value(insight, geo.hasGeometry), geo.asWKT))
@@ -886,9 +897,14 @@ def test_the_point_columns_are_profiled_once_per_upload(monkeypatch, tmp_path):
     the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
     import subgroup_miner.spatial as sp
 
-    parsed = []
+    parsed: list[str] = []
     real = sp._as_datetime
-    monkeypatch.setattr(sp, "_as_datetime", lambda values: parsed.append(values.name) or real(values))
+
+    def as_datetime(values: pd.Series) -> pd.Series | None:
+        parsed.append(values.name)
+        return real(values)
+
+    monkeypatch.setattr(sp, "_as_datetime", as_datetime)
     sp.forget_profile()
     frame = geo_frame()
     six = build_cells(frame, "latitude,longitude", 6, min_cell_points=5, profile_key="upload")

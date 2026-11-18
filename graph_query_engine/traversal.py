@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
@@ -95,7 +96,7 @@ def _located(graph: DualGraph, node: str, path: list[PathStep]) -> str:
 
 
 def structural_closure(
-    graph: DualGraph, seed_ids: list[str], depth: int, edge_types: set[str] | None = None, hidden: frozenset[str] = frozenset()
+    graph: DualGraph, seed_ids: list[str], depth: int, edge_types: AbstractSet[str] | None = None, hidden: frozenset[str] = frozenset()
 ) -> dict[str, int]:
     """Patterns reachable via structural edges only (BFS -> hop count), never through a ``hidden`` one. Baseline 1 uses
     the traversal's lattice edge set; ``structural_distance`` uses every structural type."""
@@ -119,7 +120,7 @@ def traverse(
     """The walk from the seeds; ``as_of`` (the reference date, None when the question names a period) scales each reached
     pattern's rank by its freshness — a finding without a core keeps its rank."""
     counter = itertools.count()
-    heap: list[tuple] = []
+    heap: list[tuple[float, int, str, str, int, int, str, list[PathStep]]] = []
     for s in seeds:
         # every edge factor is <= 1, so scores must start positive for best-first order to
         # mean "best"; a non-positive seed score (scope conflicts) is floored, not inverted
@@ -173,7 +174,7 @@ def traverse(
     best: dict[str, Retrieved] = {}
     attractors: dict[str, Retrieved] = {}
     for (node, phase, _s, _l), (score, seed, path) in final.items():
-        kind = graph.kind(node)
+        kind = graph.nodes[node]["kind"]  # the walk reaches only nodes of the graph
         if kind == "Attractor":
             r = Retrieved(node, kind, score, len(path), "latent", seed, path)
             if node not in attractors or score > attractors[node].score:

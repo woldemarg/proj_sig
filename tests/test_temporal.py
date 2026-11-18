@@ -6,21 +6,24 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import EPOCH, geo_frame, make_config, make_engine, upload_levels, wait_batch, weekly_retail
+from conftest import EPOCH, geo_frame, make_config, make_engine, toy_insight, upload_levels, wait_batch, weekly_retail
 from fastapi.testclient import TestClient
 
 from graph_query_engine import seeds
 from graph_query_engine.config import QueryConfig
-from graph_query_engine.question import parse_query
+from graph_query_engine.graph import DualGraph
+from graph_query_engine.question import ParsedQuery, parse_query
 from graph_query_engine.seeds import SEED_TIME_WEIGHT, SeedMatch, score_pattern
 from graph_query_engine.temporal import period_interval, time_facts, time_line, time_score
-from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge, wording
+from insight_contracts import LATENT_EDGES, STRUCTURAL_EDGES, UNDIRECTED_EDGES, EdgeType, GraphEdge, Shift, wording
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.snapshot import compute_metadata_integrity, metadata_digest
@@ -53,8 +56,21 @@ from subgroup_miner.vendor.eda.main_upd import calculate_mad
 CFG = MinerConfig()
 
 
-def utc(*stamps: str) -> pd.Series:
+def utc(*stamps: str | None) -> pd.Series:
     return pd.to_datetime(pd.Series(stamps), utc=True, format="mixed")
+
+
+def span_of(label: str) -> tuple[datetime, datetime]:
+    """``period_interval`` of a label that names a period."""
+    span = period_interval(label)
+    assert span is not None
+    return span
+
+
+def bare_graph(*pids: str) -> DualGraph:
+    """Patterns with no edges and no series: what ``resolve_seeds`` walks when ``score_pattern`` is stubbed by id."""
+    shift = Shift("m", 1.0, 1.0, 0.0, 1.0)
+    return DualGraph({"nodes": [{"id": p, "kind": "Pattern", "props": toy_insight([], [shift], id=p).to_record()} for p in pids]})
 
 
 def test_iso_weeks_cross_the_year_by_their_own_calendar():
@@ -122,6 +138,7 @@ def test_a_cohort_that_is_most_of_its_bin_still_differs_from_the_rest():
     )
     z = [e["z"] for e in series_of(frame, codes, bins, {"P": np.flatnonzero(big)}, {"P": ["m"]})["P"]["series"]["m"]]
     scale = reference_scale(frame)["m"]
+    assert scale is not None
     assert min(z) > 0.6 / scale and max(z) < 1.4 / scale  # about the planted +1, in reference units
 
 
@@ -200,7 +217,7 @@ def test_a_carrier_names_the_part_of_an_insight_that_moved_in_its_events_bin():
     rows = np.flatnonzero(frame.g == "a")
     part = (frame.g == "a") & (frame.k == "x")
 
-    def carried(m: pd.Series, kind: str = PEAKED_AT) -> dict:
+    def carried(m: pd.Series, kind: str = PEAKED_AT) -> dict[str, Any]:
         shifted = frame.assign(m=m)
         return carriers(shifted, week, {"P": rows}, {"P": [{"metric": "m", "bin": 3, "kind": kind}]}, reference_scale(shifted), CFG, ["g", "k"])
 
@@ -217,10 +234,10 @@ def test_a_carrier_names_the_part_of_an_insight_that_moved_in_its_events_bin():
 
 
 def test_an_event_a_broader_insight_has_too_is_its_echo():
-    def fired(*bins: int, kind: str = PEAKED_AT) -> dict:
+    def fired(*bins: int, kind: str = PEAKED_AT) -> dict[str, Any]:
         return {"events": [{"metric": "m", "bin": b, "kind": kind} for b in bins]}
 
-    def scope(support: int, **conditions: str) -> dict:
+    def scope(support: int, **conditions: str) -> dict[str, Any]:
         return {"conditions": [{"attribute": a, "value": v} for a, v in conditions.items()], "support": support}
 
     trajectories = {"P": fired(3), "Q": fired(3, 5), "R": fired(3), "S": fired(3), "D": fired(3, kind=DROPPED_AT)}
@@ -261,14 +278,14 @@ def test_a_bin_with_no_spread_takes_the_uploads_spread():
 
 def test_the_smoother_follows_a_constant_series_and_only_predicts_across_a_gap():
     x, p = rts_smooth([1.0, 1.0, None, 1.0, 1.0], [0.01] * 5, 0.1)
-    assert x == pytest.approx([1.0] * 5) and p[2] > max(p[1], p[3])
+    assert x == pytest.approx([1.0] * 5) and p[1] is not None and p[2] is not None and p[3] is not None and p[2] > max(p[1], p[3])
     assert rts_smooth([None, 2.0, None], [None, 0.01, None], 0.1) == ([None, 2.0, None], [None, 0.01, None])
 
 
 def test_a_thin_last_bin_is_pulled_to_its_neighbours_and_marks_no_event():
     y = [0.0, 0.1, -0.1, 0.0, 0.05, 3.0]
     x, p = rts_smooth(y, [0.01] * 5 + [4.0], 0.1)
-    assert x[-1] < 1.0
+    assert x[-1] is not None and x[-1] < 1.0
     assert detect_events(x, p, range(6), 0.05, 0.5) == []
 
 
@@ -303,7 +320,7 @@ def test_a_peak_must_clear_the_least_prominence_and_the_sampling_noise():
     assert detect_events(x, p, range(5), 0.05, 0.5) == []  # large, within the noise of a thin bin
 
 
-def entry(zs: list[float | None], se: float = 0.1) -> dict:
+def entry(zs: list[float | None], se: float = 0.1) -> dict[str, Any]:
     return {"series": {"m": [None if z is None else {"z": z, "n": 100, "se": se} for z in zs]}}
 
 
@@ -338,7 +355,7 @@ def test_the_time_column_is_read_apart_and_its_grid_names_another_analysis(tmp_p
     monthly = load_dataset(path, CFG, time="when", grid="Month")
     by_span = load_dataset(path, CFG, time="when")  # 600 rows over six weeks: days would hold 14 rows each, weeks 100
     assert "when" not in weekly.frame.columns and weekly.grid == "week" and monthly.grid == "month" and by_span.grid == "week"
-    assert weekly.time.isna().sum() == 1 and len(weekly.time) == len(weekly.frame) and str(weekly.time.dt.tz) == "UTC"
+    assert weekly.time is not None and weekly.time.isna().sum() == 1 and len(weekly.time) == len(weekly.frame) and str(weekly.time.dt.tz) == "UTC"
     # auto's unit is fitted after admission (temporal.fit_grid): auto is another analysis than the unit it starts from
     assert len({plain.dataset_id, weekly.dataset_id, monthly.dataset_id, by_span.dataset_id}) == 4
     assert any("without a readable time" in w for w in weekly.warnings)
@@ -386,11 +403,14 @@ def test_time_options_are_refused(tmp_path, options, message):
 # the graph service: the series signed at the commit, the temporal plane derived at every compile
 
 
-def phones_us(snapshot: dict) -> str:
-    return next(
-        n["id"]
-        for n in snapshot["nodes"]
-        if n["kind"] == "Pattern" and {(c["attribute"], c["value"]) for c in n["props"]["conditions"]} == {("category", "phones"), ("region", "US")}
+def phones_us(snapshot: dict[str, Any]) -> str:
+    return str(
+        next(
+            n["id"]
+            for n in snapshot["nodes"]
+            if n["kind"] == "Pattern"
+            and {(c["attribute"], c["value"]) for c in n["props"]["conditions"]} == {("category", "phones"), ("region", "US")}
+        )
     )
 
 
@@ -498,8 +518,9 @@ def test_an_event_inside_a_broader_insight_is_carried_there_and_its_narrower_cop
     broad = scopes[frozenset({("category", "phones"), ("region", "US")})]
     narrow = scopes[frozenset({("category", "phones"), ("region", "US"), ("channel", "online")})]
 
-    def week_13(pid: str) -> dict:
-        (event,) = [e for e in snap["trajectories"][pid]["events"] if (e["metric"], e["period"]) == ("discount", "2031-W13")]
+    def week_13(pid: str) -> dict[str, Any]:
+        events: list[dict[str, Any]] = snap["trajectories"][pid]["events"]
+        (event,) = [e for e in events if (e["metric"], e["period"]) == ("discount", "2031-W13")]
         return event
 
     carrier = week_13(broad)["carrier"]
@@ -768,10 +789,10 @@ def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_l
     engine, _ = timed
     graph = engine.graph()
     pid = phones_us(graph.snapshot)
-    week = period_interval("2031-W13")
+    week = span_of("2031-W13")
     assert time_score(graph.trajectories[pid], week) == 1.0  # measured all week, its peak in it
-    assert time_score(graph.trajectories[pid], period_interval("2031-W40")) == 0.0  # outside the upload
-    assert time_score(graph.trajectories[pid], period_interval("2031-04")) == pytest.approx(13 / 60)  # its bins cover 1–13 April, no event
+    assert time_score(graph.trajectories[pid], span_of("2031-W40")) == 0.0  # outside the upload
+    assert time_score(graph.trajectories[pid], span_of("2031-04")) == pytest.approx(13 / 60)  # its bins cover 1–13 April, no event
     steady = next(t for t in graph.trajectories.values() if not t["events"] and t["bins_measured"] == t["of"])
     assert time_score(steady, week) == 0.5  # present all week, nothing happened: half of one with an event
     ins, config = graph.insight(pid), engine.settings.query
@@ -784,20 +805,20 @@ def test_a_period_in_the_question_raises_the_patterns_measured_in_it_and_never_l
 
 
 def test_a_coarse_event_is_no_peak_of_each_finer_period_and_a_period_is_read_on_the_datasets_calendar():
-    def trajectory(periods: list[str], grid: str, event: str | None, tz: str | None = None) -> dict:
+    def trajectory(periods: list[str], grid: str, event: str | None, tz: str | None = None) -> dict[str, Any]:
         series = {"m": [{"period": p, "z": 0.0, "se": 0.1} for p in periods]}
         bins = [list(period_bounds(p, grid, tz)) for p in periods]  # as the compile stores them: the readers never parse a label
         return {"metric": "m", "tz": tz, "bins": bins, "series": series, "events": [{"bin": periods.index(event), "metric": "m"}] if event else []}
 
     monthly = trajectory([f"2031-{m:02d}" for m in range(1, 7)], "month", "2031-03")
-    assert time_score(monthly, period_interval("2031-W13")) == 0.5  # measured through the week; the event is the month's
-    assert time_score(monthly, period_interval("2031-03")) == 1.0 and time_score(monthly, period_interval("2031-Q1")) == 1.0
+    assert time_score(monthly, span_of("2031-W13")) == 0.5  # measured through the week; the event is the month's
+    assert time_score(monthly, span_of("2031-03")) == 1.0 and time_score(monthly, span_of("2031-Q1")) == 1.0
     weekly = trajectory([f"2031-W{w:02d}" for w in range(9, 15)], "week", "2031-W13")  # 24 February … 6 April
-    assert time_score(weekly, period_interval("2031-03")) == 1.0  # the week's peak lies in the month, measured throughout
-    assert time_score(weekly, period_interval("2031-W13")) == 1.0 and time_score(weekly, period_interval("2031-W10")) == 0.5
+    assert time_score(weekly, span_of("2031-03")) == 1.0  # the week's peak lies in the month, measured throughout
+    assert time_score(weekly, span_of("2031-W13")) == 1.0 and time_score(weekly, span_of("2031-W10")) == 0.5
     day = trajectory(["2031-03-24"], "day", None, "America/Los_Angeles")
-    assert time_score(day, period_interval("2031-03-24")) == 0.5  # its day on its own calendar, not 16 of 24 UTC hours
-    assert time_score(day, period_interval("2031-03-25")) == 0.0
+    assert time_score(day, span_of("2031-03-24")) == 0.5  # its day on its own calendar, not 16 of 24 UTC hours
+    assert time_score(day, span_of("2031-03-25")) == 0.0
 
 
 def test_a_series_never_measured_has_no_trend_and_another_metrics_event_is_named():
@@ -835,10 +856,9 @@ def test_an_events_carrier_is_named_and_an_echo_told_once_as_the_broader_finding
 
 def test_a_periods_bonus_reorders_the_seeds_and_never_drops_one(monkeypatch):
     fixed = {"timed": SeedMatch("timed", 0.6 + SEED_TIME_WEIGHT, {"time": 1.0}), "plain": SeedMatch("plain", 0.6, {})}
-    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
-    graph = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
-    query = SimpleNamespace(conditions=[], targets=[], text="margin in 2031-W13", when=None, when_asked=False, components=lambda: [])
-    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, None)
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins.id])
+    graph, query = bare_graph(*fixed), ParsedQuery(text="margin in 2031-W13")
+    found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())
     assert [s.pattern_id for s in found] == ["timed", "plain"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95
 
 
@@ -851,21 +871,18 @@ def test_a_period_alone_starts_from_the_pattern_with_the_most_of_it(monkeypatch)
         "peaked": SeedMatch("peaked", 0.1 + SEED_TIME_WEIGHT, {"semantic": 0.1, "time": 1.0}),
         "member": SeedMatch("member", 0.05, {"semantic": 0.05, "weight": 0.4}),  # active in the week, no series measured there
     }
-    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
-    held = {"active": [], "peaked": [], "dropped": []}
-    graph = SimpleNamespace(
-        insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
-    )
-    query = SimpleNamespace(
-        conditions=[], targets=[], text="2031-W13", when=period_interval("2031-W13"), when_asked=False, is_lexical=False, components=lambda: []
-    )
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins.id])
+    held: dict[str, list[str]] = {"active": [], "peaked": [], "dropped": []}
+    graph = bare_graph(*fixed)
+    monkeypatch.setattr(graph, "members", lambda asked: held)
+    query = ParsedQuery(text="2031-W13", when=period_interval("2031-W13"))
     ask = lambda: seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())  # noqa: E731
     found = ask()
     assert [s.pattern_id for s in found] == ["peaked"] and found[0].matched["fallback"] == "period"
     held["active"] = ["member"]
     found = ask()  # the period's own pattern first, though measured nowhere
     assert [s.pattern_id for s in found] == ["member"] and found[0].matched["fallback"] == "period"
-    query.is_lexical = True
+    query.targets = ["m"]  # a word the catalog knows
     found = ask()
     assert [s.pattern_id for s in found] == ["steady"] and found[0].matched["fallback"] == "semantic"
 
@@ -967,4 +984,8 @@ def test_a_parquet_upload_keeps_its_timestamps_typed(tmp_path):
     path = tmp_path / "events.parquet"
     frame.to_parquet(path)
     loaded = load_dataset(path, CFG, time="when", grid="week", tz="Europe/Kyiv")
-    assert str(loaded.time.dt.tz) == "UTC" and (loaded.time == (times.dt.tz_localize(None).dt.tz_localize("Europe/Kyiv").dt.tz_convert("UTC"))).all()
+    assert (
+        loaded.time is not None
+        and str(loaded.time.dt.tz) == "UTC"
+        and (loaded.time == (times.dt.tz_localize(None).dt.tz_localize("Europe/Kyiv").dt.tz_convert("UTC"))).all()
+    )

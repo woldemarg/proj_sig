@@ -23,8 +23,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-# scripts run from scripts/; the package lives one level up (not pip-installed)
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# scripts run from scripts/; the packages live one level up (not pip-installed), the test doubles in tests/ (as in pytest.ini)
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[1] / "tests")]
 
 from insight_contracts import Insight  # noqa: E402
 from insight_graph_service.core.batch import admit_insights  # noqa: E402
@@ -141,7 +141,7 @@ def save_result(name: str, label: str, payload: Any) -> Path:
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        return int(s.getsockname()[1])
 
 
 @contextmanager

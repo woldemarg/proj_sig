@@ -49,10 +49,11 @@ def test_weight_bounded_and_monotone():
     assert with_weight(replace(base, p_adjusted=1e-2), cfg).weight == w  # the p-value gates (R2), it does not weigh
     assert with_weight(replace(base, emm_score=0.5), cfg).weight > w  # EMM bonus
     f = weight_factors(base, cfg)
-    assert set(f) == set(WEIGHT_FACTORS) and all(0 <= v <= 1 for v in f.values())
+    measured = {k: v for k, v in f.items() if v is not None}
+    assert set(measured) == set(WEIGHT_FACTORS) and all(0 <= v <= 1 for v in measured.values())
     # formula: weighted geometric mean with floor
     total = sum(cfg.weight_exponents)  # the exponents are relative: renormalised over the measured factors
-    expected = cfg.weight_floor + (1 - cfg.weight_floor) * np.prod([f[k] ** (a / total) for k, a in zip(WEIGHT_FACTORS, cfg.weight_exponents)])
+    expected = cfg.weight_floor + (1 - cfg.weight_floor) * np.prod([measured[k] ** (a / total) for k, a in zip(WEIGHT_FACTORS, cfg.weight_exponents)])
     assert insight_weight(f, cfg) == pytest.approx(expected)
 
 

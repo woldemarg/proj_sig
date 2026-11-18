@@ -7,13 +7,13 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 
 import h3
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import toy_insight, wait_batch
+from conftest import evidence_item, toy_insight, wait_batch
 from fastapi.testclient import TestClient
 
 from graph_query_engine.evidence import Evidence, _datasets
@@ -134,6 +134,7 @@ def test_load_dataset_reads_a_context_file_and_refuses_one_without_points(tmp_pa
     target, context = planted(tmp_path)
     plain = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}")
     loaded = load_dataset(target, MinerConfig(), geo=f"lat,lon@{RES}", context=[("schools", context, "auto")])
+    assert loaded.spatial is not None
     assert BAND in loaded.frame.columns and "schools" in loaded.spatial.context
     assert loaded.dataset_id != plain.dataset_id and loaded.frame.drop(columns=BAND).equals(plain.frame)  # the target's table is unchanged
     blank = tmp_path / "blank.csv"
@@ -157,6 +158,7 @@ def test_the_disk_radius_is_the_uploads_own_and_names_the_dataset(tmp_path):
     schools = {h3.latlng_to_cell(lat, lon, RES) for lat, lon in pd.read_csv(context)[["lat", "lon"]].itertuples(index=False)}
     near = {n for s in schools for n in h3.grid_disk(s, 1)}
     for loaded, counted in ((cell, schools), (disk, near)):  # the cell alone, or the cell and its six neighbours
+        assert loaded.spatial is not None
         assert set(loaded.spatial.cells[loaded.frame[BAND] != NONE_NEARBY]) == counted & set(loaded.spatial.cells)
     for bad in (3, -1, "x"):
         with pytest.raises(IngestionError, match="context_ring") as err:
@@ -259,7 +261,12 @@ def test_a_refused_cohort_stops_drawing_once_no_draw_left_could_pass_the_gate(tm
     weak = max(cross(insights), key=lambda i: i.provenance["spatial"]["p_context"])
     assert weak.provenance["spatial"]["p_context"] >= 0.2  # refused at any family
     deals, band_of = [], discovery.dealt_band
-    monkeypatch.setattr(discovery, "dealt_band", lambda layer, perm: deals.append(1) or band_of(layer, perm))
+
+    def counted(layer, perm):
+        deals.append(1)
+        return band_of(layer, perm)
+
+    monkeypatch.setattr(discovery, "dealt_band", counted)
 
     def drawn(family):
         deals.clear()
@@ -297,10 +304,13 @@ def test_selection_refuses_a_shift_the_dealt_layer_reproduces_and_any_correlatio
 def test_spatial_provenance_reads_records_without_p_context():
     old = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01}
     spatial = SpatialProvenance.from_dict(old)
-    assert spatial.p_context is None and spatial.to_dict() == old  # a record written before M17 reads and writes back the same
+    assert (
+        spatial is not None and spatial.p_context is None and spatial.to_dict() == old
+    )  # a record written before M17 reads and writes back the same
     assert SPATIAL_DIGEST_FIELDS == ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid", "p_context", "context_family", "baseline")
     tested = old | {"p_context": 0.02, "context_family": 12}
-    assert SpatialProvenance.from_dict(tested).to_dict() == tested
+    spatial = SpatialProvenance.from_dict(tested)
+    assert spatial is not None and spatial.to_dict() == tested
 
 
 @pytest.mark.parametrize("ring", [0, 1, 2])
@@ -388,13 +398,13 @@ def test_an_upload_reads_its_layers_on_its_own_disk(engine, tmp_path):
     assert [r["dataset_id"] for r in records] == expected and [r["status"] for r in records] == ["READY", "FAILED"]
 
 
-def upload_file(client, name: str, path: Path, geo: str, **data) -> dict:
+def upload_file(client, name: str, path: Path, geo: str, **data) -> dict[str, Any]:
     """``POST /api/upload`` of one file with its geo option, once every batch it made has finished; a context file is
     counted over the planted fixture's disk (the cell and its six neighbours) unless the call names one."""
     data = ({"context_ring": "1"} if "context" in data or "context_demo" in data else {}) | data
     response = client.post("/api/upload", files=[("file", (name, path.read_bytes(), "text/csv"))], data={"geo": geo, **data})
     assert response.status_code == 202, response.text
-    body = response.json()
+    body: dict[str, Any] = response.json()
     for batch in body.get("levels", {}).values():
         wait_batch(client, batch, timeout=300)
     return body
@@ -489,9 +499,7 @@ def test_two_stored_uploads_cross_at_the_targets_levels_only(engine, tmp_path):
     assert any(r["reason"] == "outside_cross_type" for r in rejections)
     node = engine.graph().nodes[dataset_node_id(record["dataset_id"])]["props"]
     assert (node["cross"], node["cross_layers"]) == ([b], ["schools"])  # the graph names the run with its layer
-    (evidenced,) = _datasets(
-        [SimpleNamespace(provenance={"dataset_id": record["dataset_id"], "batch_id": record["batch_id"]}, scope=[])], engine.graph()
-    )
+    (evidenced,) = _datasets([evidence_item(provenance={"dataset_id": record["dataset_id"], "batch_id": record["batch_id"]})], engine.graph())
     assert evidenced["cross_layers"] == ["schools"]  # what the prompt names the run by
     with TestClient(create_app(engine)) as client:
         served = client.get(f"/api/datasets/{record['dataset_id']}/rejections")
@@ -619,7 +627,7 @@ def test_cross_runs_inherits_only_the_keys_the_target_has_and_warns_on_a_coarse_
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES + 1},{RES}", count_values="kind=a", baseline="zone")["upload_id"]
         p = upload_file(client, "plain.csv", plain, f"lat,lon@{RES}")["upload_id"]
         b = upload_file(client, "schools.csv", context, "lat,lon", layer="true")["upload_id"]
-        asked = [((a, b), {}), ((a, b), {"levels": [RES], "count_values": ""}), ((p, b), {})]
+        asked: list[tuple[tuple[str, str], dict[str, Any]]] = [((a, b), {}), ((a, b), {"levels": [RES], "count_values": ""}), ((p, b), {})]
         kept, coarse, bare = (engine.ws.load_batch(cross_run(client, *pair, **options).json()["batch_id"]) for pair, options in asked)
         refused = cross_run(client, p, b, allow_coarse=False)  # the product's gate: r7 is coarser than r8
         assert refused.status_code == 400 and f"coarser than r{uploads.LINK_MIN_LEVEL}" in refused.json()["detail"], refused.text
@@ -891,8 +899,9 @@ def test_the_shipped_demonstration_runs_from_the_console_and_shows_the_nulls_ver
     engine = make_engine(cfg)
     port, app = stack(engine)
 
-    def finished(**match) -> dict:
+    def finished(**match) -> dict[str, Any]:
         deadline = time.time() + 300
+        done: list[dict[str, Any]]
         while not (done := [b for b in engine.ws.list_batches() if all(b.get(k) == v for k, v in match.items()) and b["status"] in TERMINAL]):
             assert time.time() < deadline, f"no finished batch with {match}"
             time.sleep(0.5)

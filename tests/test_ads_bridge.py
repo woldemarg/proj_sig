@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 import httpx
 import pytest
@@ -26,7 +27,7 @@ TABLES = [{"dataset_id": "ds-a", "filename": "events.csv", "resolution": 8}, {"d
 FINAL = "## Результати аналізу\nу зоні 3 події\n## Методологія\nполігон"
 
 
-def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | None = 8, **more) -> dict:
+def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | None = 8, **more) -> dict[str, Any]:
     return {
         "provenance": {"dataset_id": dataset, "spatial": {"resolution": resolution} if resolution else None},
         **more,
@@ -42,14 +43,14 @@ def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | No
 
 
 def upstream(
-    seen: dict, polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str | None = FINAL, flaky: int = 0
+    seen: dict[str, Any], polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str | None = FINAL, flaky: int = 0
 ) -> FastAPI:
     """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is down."""
     app = FastAPI()
     left = {"polls": polls, "flaky": flaky}
 
     @app.post("/api/chat/query")
-    def chat(body: dict):
+    def chat(body: dict[str, Any]):
         seen.setdefault("chat", []).append(body)
         inside = {} if body["question"] else {"P1": 0.6}  # the text alone finds nothing in the zone
         files = {"P1": "events.csv", "P2": "other.csv", "P3": "events.csv", "P4": "events.csv"}
@@ -58,7 +59,7 @@ def upstream(
         items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6)]
         return {"view": {"evidence": {"items": items, "area": inside, "provenance": provenance}}}
 
-    def table(dataset_id: str) -> dict | None:
+    def table(dataset_id: str) -> dict[str, Any] | None:
         if dataset_id not in ("ds-a", "ds-b"):
             return None
         base = dataset_id == "ds-a"  # the base: analysed at 8, with a time column; the layer: at 5, a filtered reading
@@ -69,7 +70,7 @@ def upstream(
         return JSONResponse({"detail": f"{dataset_id} is not a geo dataset", "code": "unknown_dataset"}, status_code=404)
 
     @app.post("/api/geo/{dataset_id}/zone_rows")
-    def zone_rows(dataset_id: str, body: dict):
+    def zone_rows(dataset_id: str, body: dict[str, Any]):
         seen.setdefault("zone_rows", []).append((dataset_id, body))
         if (meta := table(dataset_id)) is None:
             return unknown(dataset_id)
@@ -105,12 +106,12 @@ def upstream(
         return {"files": [*files, {"name": "report.md", "path": "/x", "source_kind": "generated_artifact"}]}
 
     @app.post("/sessions/{sid}/sources/delete")
-    def delete(sid: str, body: dict):
+    def delete(sid: str, body: dict[str, Any]):
         seen.setdefault("deleted", []).append(body["path"])
         return {"deleted": True}
 
     @app.post("/sessions/{sid}/jobs")
-    def job(sid: str, body: dict):
+    def job(sid: str, body: dict[str, Any]):
         if seen.get("busy"):
             return JSONResponse({"detail": "running"}, status_code=409)
         seen.setdefault("queries", []).append(body["user_query"])
@@ -155,21 +156,22 @@ def upstream(
     return app
 
 
-def finished(client: TestClient, job_id: str) -> dict:
+def finished(client: TestClient, job_id: str) -> dict[str, Any]:
     for _ in range(200):
-        job = client.get(f"/api/ads/jobs/{job_id}").json()
+        job: dict[str, Any] = client.get(f"/api/ads/jobs/{job_id}").json()
         if job["stage"] in ("done", "error"):
             return job
         time.sleep(0.05)
     raise AssertionError(job)
 
 
-def settings(url: str, **over) -> AdsSettings:
-    return AdsSettings(**{"ads_url": url, "ads_llm_url": url, "ads_graph_url": url, "ads_narrator_url": url, "ads_poll_s": 0.01} | over)
+def settings(url: str, **over: Any) -> AdsSettings:
+    values: dict[str, Any] = {"ads_url": url, "ads_llm_url": url, "ads_graph_url": url, "ads_narrator_url": url, "ads_poll_s": 0.01}
+    return AdsSettings(**values | over)
 
 
 def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     ask = {"question": "Скільки подій у зоні?", "tables": TABLES, "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
     files = ("events_dsa_r8.csv", "bars_dsb_r8.csv")  # the name, the dataset and the base table's resolution: one file per session
     with serve(upstream(seen, polls=3, flaky=2)) as url, TestClient(create_app(settings(url))) as client:  # two bad status reads, read again
@@ -265,7 +267,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
 def test_a_layer_goes_as_a_context_table():
     """A layer link run's layer goes to ADS as a context table of its points, its rows and zones read by name and tied
     to the insights' band of it; a layer is never the base table."""
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     bars = {"dataset_id": "ds-a", "filename": "bars", "resolution": 8, "layer": "bars"}
     ask = {"question": "Де більше подій біля барів?", "tables": [TABLES[0], bars], "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
@@ -292,7 +294,7 @@ def test_a_layer_goes_as_a_context_table():
 def test_a_question_needs_no_zone():
     """A question with no zone asks the graph about the whole map, sends no zones file and frames the task and the
     final report's methodology as the whole map's; in a conversation with zones they stay for a question that names one."""
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     ask = {"question": "Де найбільше подій?", "tables": TABLES[:1]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
@@ -322,7 +324,7 @@ def test_the_bridge_strips_the_periods_the_graph_reads():
 
 def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
     ask = {"question": "Q?", "tables": TABLES[:1], "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     with serve(upstream(seen, polls=10**6)) as url, TestClient(create_app(settings(url, ads_job_timeout_s=0.05))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert (job["stage"], job["failed_stage"], job["error"]["code"]) == ("error", "ads", "ads_timeout")
@@ -378,7 +380,7 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
         pytest.skip("no local Chromium for Playwright")
     engine = make_engine(cfg)
     upload_levels(engine, points_csv, geo="auto@8", time="when")  # timed: the period bar is shown
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     table = "## Результати аналізу\n\n| група | рядків |\n|---|---|\n| у зоні | 3 |\n\n## Методологія\n\nполігон"
     # the first cell's hexagon at 1.5 times its size: the zone is that cell, the ring round it lies in the polygon off the zone's cells
     grow = "(k) => { const f = G.data.features[0], [cx, cy] = centre(f); return f.geometry.coordinates[0].map(([x, y]) => [cx + k * (x - cx), cy + k * (y - cy)]); }"

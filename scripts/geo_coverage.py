@@ -30,6 +30,7 @@ A real export prints aggregates only; its result stays in ``.scratch/results/geo
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,7 @@ def upload_insights(engine: Engine, records: list[dict[str, Any]]) -> tuple[dict
         raise SystemExit("no geo level of the upload is READY")
     top = max(geo, key=lambda r: int(r["level"]))
     finest = engine.ws.load_geo(top["dataset_id"], ("cells", "point_cell"))
+    assert finest is not None  # a READY geo level keeps its geo files
     graph = engine.committed().graph
     groups: dict[str, dict[str, np.ndarray]] = {}
     for r in sorted(ready, key=lambda r: r["level"] != "table"):  # the base first
@@ -138,12 +140,14 @@ def level_stats(cell_rows: np.ndarray, fp: np.ndarray, idx: np.ndarray, n_r: np.
     }
 
 
-def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[tuple[str, int], int] | None, per_cell: np.ndarray) -> dict[str, Any]:
+def summarise(
+    measured: dict[str, Any], levels: list[int], in_region: dict[tuple[str, int | None], int] | None, per_cell: np.ndarray
+) -> dict[str | int, Any]:
     """The aggregates of one group: C_members, the distributions' medians, each rule's links, C_insights and C_map."""
     insights = measured["insights"]
     placed = {pid: e for pid, e in insights.items() if "levels" in e}
     c_members = [e["c_members"] for e in insights.values()]
-    out: dict[str, Any] = {
+    out: dict[str | int, Any] = {
         "insights": len(insights),
         "c_members": {"median": _median(c_members), "min": min(c_members, default=None)},
     }
@@ -169,7 +173,7 @@ def summarise(measured: dict[str, Any], levels: list[int], in_region: dict[tuple
     return out
 
 
-def _median(values: list[float]) -> float | None:
+def _median(values: Sequence[float]) -> float | None:
     return float(np.median(values)) if len(values) else None
 
 
@@ -180,7 +184,7 @@ def run(engine: Engine, path: Path, geo: str, bins: str | None = None) -> dict[s
     point_cell, cells = finest["point_cell"], finest["cells"]
     res = h3.get_resolution(str(cells[0]))
     levels = [lv for lv in engine.settings.region_levels if lv <= res]
-    in_region: dict[tuple[str, int], int] = {}
+    in_region: dict[tuple[str, int | None], int] = {}
     graph = engine.committed().graph
     for e in graph.edges:
         if e["type"] == "IN_REGION":  # R:<level>:<h3>
@@ -244,9 +248,8 @@ def _fmt(v: float | None) -> str:
 
 
 def main() -> int:
+    from doubles import HashingEmbedder
     from perf_benchmark import write_synthetic_points
-
-    from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", help="a file, 'synthetic' or 'california'")

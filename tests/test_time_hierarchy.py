@@ -5,17 +5,19 @@ console is sent of them; and the answer's reference date: the findings' freshnes
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from conftest import make_config, make_engine, weekly_retail
 from fastapi.testclient import TestClient
-from test_temporal import entry, phones_us, restarted, utc
+from test_temporal import bare_graph, entry, phones_us, restarted, span_of, utc
 
 from graph_query_engine import seeds
 from graph_query_engine.config import QueryConfig
 from graph_query_engine.graph import DualGraph
+from graph_query_engine.question import ParsedQuery
 from graph_query_engine.seeds import SEED_RECENCY_WEIGHT, SEED_TIME_WEIGHT, SeedMatch
 from graph_query_engine.temporal import core_age, parse_as_of, parse_period, period_interval, recency, time_facts, time_line
 from graph_query_engine.traversal import RECENCY_RANK_WEIGHT, traverse
@@ -68,13 +70,13 @@ def test_a_period_names_the_patterns_active_in_it_or_with_an_event_inside_it_on_
         "P3": traj(weeks, "week", None, []),
     }
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": [], "edges": [], "trajectories": trajectories})
-    assert graph.members(period_interval("2031-W14")) == {"active": ["P2"], "peaked": [("P1", "2031-W14")], "dropped": []}
-    assert graph.members(period_interval("2031-W11"))["active"] == ["P1"]
-    assert graph.members(period_interval("2031-W12"))["active"] == ["P1"]  # P2's week starts at Kyiv's midnight, two hours before UTC's
-    assert graph.members(period_interval("2031-03-26")) == {"active": ["P2"], "peaked": [], "dropped": [("P2", "2031-03-26")]}
-    month = graph.members(period_interval("2031-03"))  # W14 runs into April: its peak is no event of March
+    assert graph.members(span_of("2031-W14")) == {"active": ["P2"], "peaked": [("P1", "2031-W14")], "dropped": []}
+    assert graph.members(span_of("2031-W11"))["active"] == ["P1"]
+    assert graph.members(span_of("2031-W12"))["active"] == ["P1"]  # P2's week starts at Kyiv's midnight, two hours before UTC's
+    assert graph.members(span_of("2031-03-26")) == {"active": ["P2"], "peaked": [], "dropped": [("P2", "2031-03-26")]}
+    month = graph.members(span_of("2031-03"))  # W14 runs into April: its peak is no event of March
     assert month == {"active": ["P1", "P2"], "peaked": [], "dropped": [("P2", "2031-03-26")]}
-    assert graph.members(period_interval("2031-Q3")) == {"active": [], "peaked": [], "dropped": []} and graph.as_of is None
+    assert graph.members(span_of("2031-Q3")) == {"active": [], "peaked": [], "dropped": []} and graph.as_of is None
 
 
 def test_the_graph_payload_carries_the_periods_levels_the_cores_and_the_reference_date(timed):
@@ -133,7 +135,7 @@ def test_freshness_halves_every_half_life_from_the_core_and_a_reference_date_rea
         and recency({"core": None}, inside, 90) is None
         and recency(None, inside, 90) is None
     )
-    assert parse_as_of("2031-04-01T12:00+03:00").utcoffset().total_seconds() == 3 * 3600 and parse_as_of(" 2031-04-01 ").tzinfo is not None
+    assert parse_as_of("2031-04-01T12:00+03:00").utcoffset() == timedelta(hours=3) and parse_as_of(" 2031-04-01 ").tzinfo is not None
     for bad in ("nope", "31.03.2031", "2031-13-01", "2031-02-29"):
         with pytest.raises(ValueError):
             parse_as_of(bad)
@@ -147,20 +149,11 @@ def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_rea
         "other": SeedMatch("other", 0.43, {"semantic": 0.43, "weight": 0.5}),  # the leftover words' best, over the floor, nothing in the week
         "event": SeedMatch("event", 0.185 + SEED_TIME_WEIGHT, {"semantic": 0.1, "weight": 0.3, "time": 1.0}),  # under it, a peak in the week
     }
-    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
-    held = {"active": [], "peaked": [("event", "2031-W13")], "dropped": []}
-    graph = SimpleNamespace(
-        insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [], members=lambda asked: held
-    )
-    query = SimpleNamespace(
-        conditions=[],
-        targets=[],
-        text="what happened in 2031-W13?",
-        when=period_interval("2031-W13"),
-        when_asked=False,
-        is_lexical=False,
-        components=lambda: [],
-    )
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins.id])
+    held: dict[str, list[Any]] = {"active": [], "peaked": [("event", "2031-W13")], "dropped": []}
+    graph = bare_graph(*fixed)
+    monkeypatch.setattr(graph, "members", lambda asked: held)
+    query = ParsedQuery(text="what happened in 2031-W13?", when=period_interval("2031-W13"))
 
     def ask() -> list[tuple[str, str | None]]:
         found = seeds.resolve_seeds(query, graph, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig())
@@ -169,7 +162,7 @@ def test_a_period_alone_seeds_its_own_patterns_before_any_the_leftover_words_rea
     assert ask() == [("event", "period")]
     held["peaked"] = []
     assert ask() == [("other", None)]  # nothing lives or moved in the week: the words' seed stands
-    query.is_lexical, held["peaked"] = True, [("event", "2031-W13")]
+    query.targets, held["peaked"] = ["m"], [("event", "2031-W13")]
     assert ask() == [("other", None)]  # a metric or a condition named: the period reorders, never lifts one over the floor
 
 
@@ -255,8 +248,8 @@ def test_a_period_asked_beside_the_question_reads_as_one_written_in_it_and_yield
     assert not any(s.matched.get("fallback") for s in barred.seeds)
     assert engine.search(plain.rstrip("?") + " in 2031-W13?").seeds[0].matched.get("fallback") == "period"
     with TestClient(create_app(engine)) as client:
-        for bad in (["2031-03-30", "2031-03-24"], ["31.03.2031", "2031-04-01"], ["2031-03-24"]):
-            refused = client.post("/api/search", json={"question": QUESTION, "period": bad})
+        for period in (["2031-03-30", "2031-03-24"], ["31.03.2031", "2031-04-01"], ["2031-03-24"]):
+            refused = client.post("/api/search", json={"question": QUESTION, "period": period})
             assert refused.status_code in (400, 422) and (refused.status_code == 422 or refused.json()["code"] == "invalid_options")
         ok = client.post("/api/search", json={"question": QUESTION, "period": ["2031-03-24", "2031-03-30"]})
         assert ok.status_code == 200 and "PERIOD: 2031-03-24 to 2031-03-30" in ok.json()["evidence_prompt"]
@@ -271,8 +264,8 @@ def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed,
     before = {r.node_id: r.score for r in traverse(graph, start, config).patterns}
     reached = [r for r in traverse(graph, start, config, far).patterns if r.route != "seed" and r.node_id in before]
     assert reached and all(  # the walk's paths are the same; a reached finding's rank is scaled by its freshness
-        r.score
-        == pytest.approx(before[r.node_id] * (1 - RECENCY_RANK_WEIGHT + RECENCY_RANK_WEIGHT * recency(graph.trajectories[r.node_id], far, 90)))
+        (fresh := recency(graph.trajectories[r.node_id], far, 90)) is not None
+        and r.score == pytest.approx(before[r.node_id] * (1 - RECENCY_RANK_WEIGHT + RECENCY_RANK_WEIGHT * fresh))
         for r in reached
     )
     plain = hashed_engine.graph()  # no time column: no core, no change
@@ -281,8 +274,7 @@ def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed,
         (r.node_id, r.score) for r in traverse(plain, found, config).patterns
     ]
     fixed = {"fresh": SeedMatch("fresh", 0.6 + SEED_RECENCY_WEIGHT, {"recency": 1.0}), "stale": SeedMatch("stale", 0.6, {"recency": 0.0})}
-    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins])
-    stub = SimpleNamespace(insights={k: k for k in fixed}, trajectories={}, tampered=lambda pid: False, incident=lambda pid, kinds: [])
-    query = SimpleNamespace(conditions=[], targets=[], text="margin", when=None, when_asked=False, components=lambda: [])
+    monkeypatch.setattr(seeds, "score_pattern", lambda ins, *args: fixed[ins.id])
+    stub, query = bare_graph(*fixed), ParsedQuery(text="margin")
     picked = seeds.resolve_seeds(query, stub, SimpleNamespace(encode_query=lambda *args: None), {}, QueryConfig(), None, far)
     assert [s.pattern_id for s in picked] == ["fresh", "stale"]  # the floor is taken without the bonus: 0.75 · 0.6, not 0.75 · 0.95

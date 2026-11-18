@@ -41,7 +41,7 @@ def period_label(period: pd.Period, grid: str) -> str:
         return f"{year}-W{week:02d}"
     if grid == "quarter":
         return f"{period.year}-Q{period.quarter}"
-    return period.strftime("%Y-%m-%d" if grid == "day" else "%Y-%m")
+    return str(period.strftime("%Y-%m-%d" if grid == "day" else "%Y-%m"))
 
 
 def _period(label: str, grid: str) -> pd.Period:
@@ -57,7 +57,7 @@ def _period(label: str, grid: str) -> pd.Period:
 
 def _localised(wall: pd.Timestamp, tz: str | None) -> str:
     """A wall time of the calendar of ``tz`` (UTC by default), written with that zone's offset."""
-    return wall.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat()
+    return str(wall.tz_localize(tz or "UTC", ambiguous=True, nonexistent="shift_forward").isoformat())
 
 
 def period_bounds(label: str, grid: str, tz: str | None = None) -> tuple[str, str]:
@@ -194,7 +194,8 @@ def annotate(
     fewer than ``min_rows`` rows of the upload, of the insight or of the rest, or covering less than half its period
     (the upload's first or last bin), is None — never a z on an unstable level. A metric without a scale has no series."""
     min_rows = max(min_rows, 1)  # a bin needs a value to have a level
-    population = {m: _population(frame, m, scale[m], tie_share) for m in {m for ms in metrics.values() for m in ms if scale.get(m)}}
+    scales = {m: s for ms in metrics.values() for m in ms if (s := scale.get(m))}
+    population = {m: _population(frame, m, s, tie_share) for m, s in scales.items()}
     sparse = [b["rows"] < min_rows or b["covered"] < 0.5 for b in bins]
     out = {}
     for pid, rows in covers.items():
@@ -205,13 +206,13 @@ def annotate(
             if metric not in population:
                 continue
             values, tied, fallback = population[metric]
-            entries = []
+            entries: list[dict[str, float] | None] = []
             for t, (sub, ref) in enumerate(zip(_by_bin(own, values[rows], len(bins)), _by_bin(rest, values, len(bins)))):
                 if sparse[t] or len(sub) < min_rows or len(ref) < min_rows:
                     entries.append(None)
                     continue
                 (c_s, se_s), (c_r, se_r) = _level(sub, tied, fallback), _level(ref, tied, fallback)
-                entries.append({"z": (c_s - c_r) / scale[metric], "n": len(sub), "se": math.hypot(se_s, se_r) / scale[metric]})
+                entries.append({"z": (c_s - c_r) / scales[metric], "n": len(sub), "se": math.hypot(se_s, se_r) / scales[metric]})
             series[metric] = entries
         timed = own[own >= 0]
         out[pid] = {"rows": np.bincount(timed, minlength=len(bins)).tolist(), "untimed": int((own < 0).sum()), "series": series}
@@ -257,8 +258,8 @@ def annotate_counts(
         timed = own >= 0
         events = np.bincount(own[timed], minlength=len(bins))
         for metric in metrics[pid]:
-            indicator = kinds.get(metric)
-            if indicator is None or not scale.get(metric):  # a share or a median: annotate's
+            indicator, s_ref = kinds.get(metric), scale.get(metric)
+            if indicator is None or not s_ref:  # a share or a median: annotate's
                 continue
             n_all = totals[metric]
             n_s = np.bincount(own[timed], weights=indicator[rows][timed], minlength=len(bins))
@@ -270,9 +271,9 @@ def annotate_counts(
                 s, r = n_s[t] + 0.5, n_all[t] - n_s[t] + 0.5
                 entries.append(
                     {
-                        "z": (math.log(s / k_s) - math.log(r / k_r)) / scale[metric],
+                        "z": (math.log(s / k_s) - math.log(r / k_r)) / s_ref,
                         "n": int(events[t]),
-                        "se": math.sqrt(1 / s + 1 / r) / scale[metric],
+                        "se": math.sqrt(1 / s + 1 / r) / s_ref,
                     }
                 )
             out.setdefault(pid, {})[metric] = entries
@@ -296,19 +297,23 @@ def rts_smooth(y: Sequence[float | None], r: Sequence[float | None], q: float) -
         return xs, ps
     lo, hi = measured[0], measured[-1]
     xf, pf, xp, pp = {}, {}, {}, {}
-    xf[lo], pf[lo] = float(y[lo]), float(r[lo])
+    y_lo, r_lo = y[lo], r[lo]
+    assert y_lo is not None and r_lo is not None  # a measured bin carries its variance
+    xf[lo], pf[lo] = float(y_lo), float(r_lo)
     for t in range(lo + 1, hi + 1):
         xp[t], pp[t] = xf[t - 1], pf[t - 1] + q
-        if y[t] is None:
+        y_t, r_t = y[t], r[t]
+        if y_t is None:
             xf[t], pf[t] = xp[t], pp[t]
         else:
-            gain = pp[t] / (pp[t] + r[t])
-            xf[t], pf[t] = xp[t] + gain * (y[t] - xp[t]), (1 - gain) * pp[t]
-    xs[hi], ps[hi] = xf[hi], pf[hi]
+            assert r_t is not None
+            gain = pp[t] / (pp[t] + r_t)
+            xf[t], pf[t] = xp[t] + gain * (y_t - xp[t]), (1 - gain) * pp[t]
+    x_next, p_next = xs[hi], ps[hi] = xf[hi], pf[hi]
     for t in range(hi - 1, lo - 1, -1):
         c = pf[t] / pp[t + 1]
-        xs[t] = xf[t] + c * (xs[t + 1] - xp[t + 1])
-        ps[t] = pf[t] + c * c * (ps[t + 1] - pp[t + 1])
+        xs[t] = x_next = xf[t] + c * (x_next - xp[t + 1])
+        ps[t] = p_next = pf[t] + c * c * (p_next - pp[t + 1])
     return xs, ps
 
 
@@ -351,8 +356,10 @@ def trend(x: Sequence[float | None], p: Sequence[float | None], measured: Sequen
     significantly at ``alpha`` against sqrt(P̂_first + P̂_last) — a dip that recovers or a hump that falls back moved
     nowhere; else ``spike`` when the series has events, ``flat`` otherwise."""
     first, last = measured[0], measured[-1]
-    change = x[last] - x[first]
-    if first != last and abs(change) >= excess and abs(change) >= norm.isf(alpha / 2) * math.sqrt(p[first] + p[last]):
+    x_first, x_last, p_first, p_last = x[first], x[last], p[first], p[last]
+    assert x_first is not None and x_last is not None and p_first is not None and p_last is not None  # measured bins are smoothed
+    change = x_last - x_first
+    if first != last and abs(change) >= excess and abs(change) >= norm.isf(alpha / 2) * math.sqrt(p_first + p_last):
         return RISING if change > 0 else FALLING
     return SPIKE if events else FLAT
 
@@ -467,6 +474,7 @@ def carriers(
         others[rows] = False
         for e in found:
             metric, sign, s = e["metric"], 1.0 if e["kind"] == PEAKED_AT else -1.0, scale[e["metric"]]
+            assert s is not None  # an event is of a metric with a series, so with a scale (annotate)
             if metric not in population:
                 population[metric] = _population(frame, metric, s, config.temporal_tie_share)
             values, tied, fallback = population[metric]

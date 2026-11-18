@@ -324,7 +324,7 @@ def credibility(
             or batch[pid].get("supersedes") in {dataset, other.get("upload_id")} - {None}
         )
 
-    def overlap(pid: str, q: str, over) -> bool:
+    def overlap(pid: str, q: str, over: Callable[[int, int], int]) -> bool:
         a, b = _common(place_at[pid], place_at.get(q, {}))
         return bool(a and b) and len(a & b) >= GEO_REGION_MIN_SHARE * over(len(a), len(b))
 
@@ -451,7 +451,9 @@ def _temporal_plane(
     one PEAKED_AT / DROPPED_AT edge per hub and kind, its most prominent event there, ``metrics`` naming every metric
     that peaked (or dipped) then, and a STARTS_AT and an ENDS_AT edge to the hubs of its core's first and last bin —
     and so does every period above a hub, WITHIN edges between them (``_hub``)."""
-    edges, trajectories, chained = [], {}, set()
+    edges: list[GraphEdge] = []
+    trajectories: dict[str, Any] = {}
+    chained: set[str] = set()
     for bid, (series, digest) in sorted(temporal.items()):
         signed = batches[bid]["temporal"]
         if integrity.get(bid) == "mismatch":
@@ -580,7 +582,7 @@ def build_snapshot(
     ontology: LatentOntology,
     settings: Settings,
     spatial: SpatialStructure | None = None,
-    temporal: dict[str, tuple[dict[str, Any], str]] | None = None,
+    temporal: dict[str, tuple[dict[str, Any] | None, str]] | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its

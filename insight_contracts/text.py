@@ -8,7 +8,8 @@ context (``subgroup_miner.describe``) are built from these phrases, so the same 
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from insight_contracts.insight import Condition, Insight, PhenomenonThresholds, Shift
 
@@ -71,7 +72,7 @@ def covariance_label(pair: list[str]) -> str:
     return f"correlation between {humanize(a)} and {humanize(b)}"
 
 
-def covariance_change(cov: dict) -> tuple[str, int]:
+def covariance_change(cov: Mapping[str, Any]) -> tuple[str, int]:
     """Word + sign for the change of |corr|: strengthens (+1) / weakens or reverses (-1)."""
     before, after = cov["global_corr"], cov["local_corr"]
     if before * after < 0 and abs(before) > 0.1 and abs(after) > 0.1:
@@ -79,7 +80,7 @@ def covariance_change(cov: dict) -> tuple[str, int]:
     return ("strengthens", 1) if abs(after) > abs(before) else ("weakens", -1)
 
 
-def describe_covariance(cov: dict) -> str:
+def describe_covariance(cov: dict[str, Any]) -> str:
     """'correlation between delivery days and return rate weakens from +0.88 overall to +0.73 in the subgroup'."""
     word, _ = covariance_change(cov)
     return f"{covariance_label(cov['pair'])} {word} from {cov['global_corr']:+.2f} overall to {cov['local_corr']:+.2f} in the subgroup"
@@ -89,6 +90,7 @@ def describe_validation(ins: Insight, thresholds: PhenomenonThresholds) -> str:
     """What validated the insight: '... stability 0.97; adjusted p < 0.001' or the correlation change."""
     if ins.phenomenon_type == "covariance":
         return f"correlation change (divergence score {ins.emm_score:.2f} >= {thresholds.min_emm_score:g}); no median test"
+    assert ins.p_adjusted is not None  # every shift insight carries its median test
     return f"bootstrap stability {ins.stability:.2f}; adjusted p {format_p(ins.p_adjusted)}"
 
 

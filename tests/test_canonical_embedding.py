@@ -199,11 +199,13 @@ class _SlowModel:
         return np.array([[len(t), 1.0, 0.0] for t in texts], dtype=np.float32)
 
 
-def test_a_question_waits_for_one_chunk_of_a_batch_not_all_of_it():
+def test_a_question_waits_for_one_chunk_of_a_batch_not_all_of_it(monkeypatch):
     """The forward passes hold the model lock a chunk at a time: a question asked while a batch embeds 160 texts waits
     for one chunk, the loaded model's dtype for none, and every text gets the vector it gets alone."""
     emb = SentenceTransformerEmbedder(load_settings().topology)
-    emb._model, emb.dim = _SlowModel(), 3
+    slow = _SlowModel()
+    monkeypatch.setattr(emb, "_model", slow)
+    emb.dim = 3
     texts = [f"insight {i:03d}" + " x" * (i % 7) for i in range(160)]
     batch = threading.Thread(target=emb.embed, args=(texts,))
     batch.start()
@@ -214,7 +216,7 @@ def test_a_question_waits_for_one_chunk_of_a_batch_not_all_of_it():
     waited = time.perf_counter() - start
     batch.join()
     assert waited < 1.0, waited  # the whole batch is 10 chunks, 2 s
-    sizes, batch = [len(c) for c in emb._model.calls], [n for c in emb._model.calls if len(c) > 1 for n in c]
-    assert max(sizes) == 16 and sum(sizes) == 161 and batch == sorted(batch, reverse=True)  # chunks of similar length
+    sizes, lengths = [len(c) for c in slow.calls], [n for c in slow.calls if len(c) > 1 for n in c]
+    assert max(sizes) == 16 and sum(sizes) == 161 and lengths == sorted(lengths, reverse=True)  # chunks of similar length
     assert np.allclose(emb.embed(texts[:3]), l2_normalize(np.array([[len(t), 1.0, 0.0] for t in texts[:3]])))
     assert np.allclose(query, l2_normalize(np.array([[len("Чому margin нижчий?"), 1.0, 0.0]])))

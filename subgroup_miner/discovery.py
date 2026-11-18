@@ -564,7 +564,7 @@ def selector_conditions(expression: str) -> list[tuple[str, str]] | None:
     """``a=='x' AND b=='y'`` (an EDA selector) as conditions, a value holding `` AND `` included; None when the
     conditions found do not make up the whole expression."""
     found = list(re.finditer(r"(.+?)=='(.*?)'(?: AND |$)", expression))
-    return [m.groups() for m in found] if found and "".join(m.group(0) for m in found) == expression else None
+    return [(m.group(1), m.group(2)) for m in found] if found and "".join(m.group(0) for m in found) == expression else None
 
 
 def _global_stats(column: pd.Series, mean: bool = False) -> tuple[float, float]:

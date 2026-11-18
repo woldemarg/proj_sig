@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Concatenate
 
 import numpy as np
 
@@ -84,11 +84,11 @@ class _Mined:
     spec: EmbeddingSpec
 
 
-def _healthy(method):
+def _healthy[**P, R](method: Callable[Concatenate[Engine, P], R]) -> Callable[Concatenate[Engine, P], R]:
     """Refuse the call (``workspace_degraded``) while the engine serves a workspace it cannot use (``Engine.problem``)."""
 
     @functools.wraps(method)
-    def guarded(self: Engine, *args: Any, **kwargs: Any) -> Any:
+    def guarded(self: Engine, *args: P.args, **kwargs: P.kwargs) -> R:
         if self.problem:
             raise PipelineError("workspace_degraded", f"{self.problem}; reset the workspace (POST /api/reset)")
         return method(self, *args, **kwargs)
@@ -114,7 +114,7 @@ class Engine:
         self.encoder = InsightEncoder(embedder or SentenceTransformerEmbedder(settings.topology), settings.topology)
         self._lock = threading.RLock()  # batches, deletion, reset and rebuild: one write at a time
         self._mirror = Mirror()  # what this process last wrote to Neo4j: the next sync sends the difference
-        self._spatial_memo: dict[tuple, Any] = {}  # derive_spatial's parts of each READY geo dataset and table placement
+        self._spatial_memo: dict[tuple[Any, ...], Any] = {}  # derive_spatial's parts of each READY geo dataset and table placement
         self._writer = recover  # holds the writer lock: may save derived files (the literal cache)
         self._publishing: str | None = None  # the batch past its commit point whose graph readers do not see yet
         self._open()
@@ -199,7 +199,7 @@ class Engine:
             fingerprint = self.encoder.spec.fingerprint
             known = self.ws.load_literals(fingerprint)
             catalog = build_catalog(graph, self.encoder.embedder, known)
-            if self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
+            if catalog is not None and self._writer and known.keys() != set(catalog.texts):  # new literals, or a deleted dataset's gone
                 self.ws.save_literals(fingerprint, catalog.texts, catalog.vectors)
         except Exception as exc:  # the graph is committed; a missing cache costs the first question, never the workspace
             log.warning("committed state without its literal catalog: %s: %s", type(exc).__name__, exc)
@@ -265,7 +265,7 @@ class Engine:
                 else None
             )
             if stored is not None:
-                arrays = (stored[k] for k in ("cells", "nbr_ptr", "nbr_idx"))
+                arrays = stored["cells"], stored["nbr_ptr"], stored["nbr_idx"]
                 geo.append(GeoDataset(b["dataset_id"], *arrays, self.ws.load_covers(b["dataset_id"]), b.get("upload_id") if "cross" in b else None))
         tables = [t for b in batches.values() if (t := self._table_placement(b, batches)) is not None]
         temporal = {}  # every READY dataset's series and the file's digest: the temporal plane is derived, never journaled
@@ -356,8 +356,8 @@ class Engine:
         if layer:
             asked = {"table": table, "grid": grid, "context": context, "supersedes": supersedes, "where": where}
             asked |= {"count_values": count_values, "baseline": baseline}  # a layer is counted, never mined
-            refused = [k for k, v in asked.items() if v]
-            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, refused, time, tz)]
+            others = [k for k, v in asked.items() if v]
+            return [uploads.store_layer(self.ws, name, stream, geo, self.settings.max_upload_bytes, others, time, tz)]
         uploads.resolve_dataset_metadata(source, reliability, indicators)  # a bad value is refused before the file is stored
         uploads.resolve_declared_metadata(glossary, metadata)
         if (grid or tz) and not time:
@@ -382,8 +382,8 @@ class Engine:
             if auto:
                 selection = auto_levels(path, locator.strip(), self.settings.miner, self.settings.region_levels, where)
             if time:
-                times = read_times(rows, time, tz)
-                s = self.settings  # the file's rows, on the unit their span asks for; a geo level's located points, on theirs, at VALIDATING
+                times, s = read_times(rows, time, tz), self.settings  # the file's rows on their span's unit; a geo level's points at VALIDATING
+                assert grid is not None  # parsed above with the time column
                 check_time(times, time, resolve_grid(times, grid), s.temporal_min_bins, s.temporal_max_bins, tz=tz)
         except IngestionError as exc:
             refused = PipelineError(exc.code, str(exc))
@@ -410,7 +410,7 @@ class Engine:
             path.unlink(missing_ok=True)
             forget_tables()
             raise
-        options = {
+        options: dict[str, Any] = {
             "filename": name,
             "bins": bins,
             "categories": categories,
@@ -545,9 +545,9 @@ class Engine:
                 with self._stage(record, "VALIDATING", timings, "validate_s"):
                     loaded = self._load(record, shared=True)
                     if loaded.time is not None:  # over the rows the series will be of; auto's unit is fitted at the commit
-                        s = self.settings
-                        rows = " over its located points" if loaded.spatial is not None else ""
-                        check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, rows, loaded.tz)
+                        s, over = self.settings, " over its located points" if loaded.spatial is not None else ""
+                        assert loaded.grid is not None  # read with the time column
+                        check_time(series_times(loaded), record["time"], loaded.grid, s.temporal_min_bins, s.temporal_max_bins, over, loaded.tz)
                     record["dataset_id"] = loaded.dataset_id
                     record["warnings"] += loaded.warnings
                     duplicate = self.ws.ready_batch_for(loaded.dataset_id)
@@ -591,7 +591,7 @@ class Engine:
             record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
             kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
             record.update({"indicators": kept} if kept else {})
-        if declared := {k: record.pop(k) for k in ("user_glossary", "metadata_doc") if k in record}:  # kept to the columns the level holds
+        if declared := {k: record.pop(k) for k in ["user_glossary", "metadata_doc"] if k in record}:  # kept to the columns the level holds
             fitted, warnings = uploads.fit_declared(declared, [*result.profile.numerics, *result.profile.categoricals], frame=loaded.frame)
             record["warnings"] += warnings
             record.update({k: v for k, v in fitted.items() if v})
@@ -755,8 +755,8 @@ class Engine:
     def _add_point_times(self, loaded: LoadedDataset) -> None:
         """A geo dataset stored before ``geo.npz`` kept its points' times gets them from the same upload again: the map's
         period counts (``geo_views.geo_period_counts``), display data no digest signs."""
-        if loaded.spatial is not None and loaded.time is not None:
-            self.ws.add_point_times(loaded.dataset_id, geo_views.point_times(loaded.time))
+        if loaded.spatial is not None and (times := geo_views.point_times(loaded.time)) is not None:
+            self.ws.add_point_times(loaded.dataset_id, times)
 
     def _skip(self, record: dict[str, Any], duplicate: dict[str, Any]) -> dict[str, Any]:
         """Same content + options already READY: idempotent skip."""

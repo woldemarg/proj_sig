@@ -26,11 +26,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from crosstype_demo import summary
+from doubles import HashingEmbedder
 from scratch import build_engine, save_result, scratch_dir, upload_all
 
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets
 from insight_graph_service.core.engine import Engine
-from tests.doubles import HashingEmbedder
 
 M_PER_DEGREE = 111_320
 
@@ -120,7 +120,7 @@ def controls(
                 l_path = work / f"{tag}_{seed}_layer.csv"
                 points_of.to_csv(l_path, index=False)
             runs.append(run(engine, t_path, options, l_path, ring, tag) | {"seed": seed})
-    rate = {}
+    rate: dict[str, dict[str, Any]] = {}
     for tag in ("real", "shuffled", "fine", "coarse", "uniform", "half a", "half b"):
         mine = [r for r in runs if r["control"] == tag]
         rate[tag] = {

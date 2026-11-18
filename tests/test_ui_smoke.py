@@ -561,7 +561,7 @@ def test_a_late_answer_never_overwrites_a_newer_view(cfg, demo_csv):
         points = {
             pid: len(httpx.get(f"{url}/api/geo/{geo}/patterns/{pid}").json()["points"]) for pid in page.evaluate("G.data.patterns.map((p) => p.id)")
         }
-        first, second = sorted(points, key=points.get)[-1], sorted(points, key=points.get)[0]
+        first, second = sorted(points, key=points.__getitem__)[-1], sorted(points, key=points.__getitem__)[0]
         assert points[first] != points[second]
         page.evaluate(f"__net.slow = ['/patterns/{first}']; GeoMap.focusPattern('{first}'); GeoMap.focusPattern('{second}')")
         page.wait_for_function(f"{settled} && !$('map-card-body').textContent.includes('…')", timeout=10000)
@@ -628,9 +628,9 @@ def test_the_console_knows_the_empty_level_codes():
     from insight_graph_service.core.uploads import EMPTY_LEVEL, LINK_MIN_LEVEL
 
     js = (PROJECT_ROOT / "sig_web_console" / "static" / "datasets.js").read_text(encoding="utf-8")
-    copied = re.search(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js).group(1)
+    copied = re.findall(r"const EMPTY_LEVEL = new Set\(\[([^\]]*)\]\)", js)[0]
     assert set(re.findall(r'"(\w+)"', copied)) == EMPTY_LEVEL
-    assert int(re.search(r"const LINK_MIN_LEVEL = (\d+);", js).group(1)) == LINK_MIN_LEVEL
+    assert int(re.findall(r"const LINK_MIN_LEVEL = (\d+);", js)[0]) == LINK_MIN_LEVEL
 
 
 # /api/batches with an upload's two levels first, r7 READY and r5 running: its stage and stage_times are what a test sets on window.__run

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import time
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -30,7 +31,7 @@ def test_hidden_datasets_is_a_pure_function_of_the_registry():
     """A run reading a hidden layer is named by it (``hidden_by``) and its dataset is what a search leaves out; a run of
     another layer and the base stay; a repeat (``SKIPPED``, the READY run's dataset) of a second, hidden copy of a layer
     is no run: it hides nothing and counts for nothing (the e2e review's F-25); reading writes nothing."""
-    batches = [
+    batches: list[dict[str, Any]] = [
         {"batch_id": "base", "upload_id": "up-t", "dataset_id": "ds-t", "status": "READY"},
         {"batch_id": "layer", "upload_id": "up-l", "dataset_id": None, "status": "LAYER", "hidden": True},
         {"batch_id": "shown", "upload_id": "up-m", "dataset_id": None, "status": "LAYER"},

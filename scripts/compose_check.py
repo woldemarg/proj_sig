@@ -46,7 +46,7 @@ FILES = ["-f", str(ROOT / "compose.yaml")]  # --gpu adds compose.gpu.yaml
 results: list[tuple[str, bool, str]] = []
 
 
-def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
     cmd = ["docker", "compose", "-p", PROJECT, *FILES, *args]
     print("$", " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, env=ENV, check=check, text=True, capture_output=capture)
@@ -133,7 +133,8 @@ def upload(path: Path) -> dict[str, Any]:
         + path.read_bytes()
         + f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="bins"\r\n\r\n\r\n--{boundary}--\r\n'.encode()
     )
-    return http("POST", "/api/upload", body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    result: dict[str, Any] = http("POST", "/api/upload", body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    return result
 
 
 def wait_for_batch(batch_id: str, timeout: float = 1200) -> tuple[dict[str, Any], float]:

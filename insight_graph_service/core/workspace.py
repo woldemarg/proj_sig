@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 import uuid
 from collections.abc import Iterator
@@ -71,7 +72,7 @@ def _write_npz(path: Path, **arrays: np.ndarray) -> None:
     """``arrays`` as ``path``, replaced atomically: a reader meanwhile reads the old file or the new one whole."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     with os.fdopen(fd, "wb") as handle:
-        np.savez_compressed(handle, **arrays)
+        np.savez_compressed(handle, allow_pickle=True, **arrays)
     replace_file(tmp, path)
 
 
@@ -96,7 +97,7 @@ def writer_lock_path(workspace_dir: Path | str) -> Path:
 
 
 def _lock_byte(handle: BinaryIO) -> None:
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         handle.seek(_LOCK_OFFSET)
@@ -183,7 +184,7 @@ class Workspace:
         """The batch registry and the vector contract, read once and written through: the console polls them, and a
         reader never opens a file the writer is replacing. Merged, not replaced: a record saved meanwhile stays."""
         self._batches.update({b["batch_id"]: b for b in map(read_json, self.registry_dir.glob("*.json")) if b})
-        self._representation = read_json(self.state_dir / "representation.json")
+        self._representation: dict[str, Any] | None = read_json(self.state_dir / "representation.json")
 
     def batch_path(self, batch_id: str) -> Path:
         return self.registry_dir / f"{batch_id}.json"
@@ -255,7 +256,9 @@ class Workspace:
         return f"datasets/{dataset_id}/covers.npz#{pattern_id}"
 
     def save_covers(self, dataset_id: str, covers: dict[str, np.ndarray]) -> None:
-        np.savez_compressed(self.dataset_dir(dataset_id) / "covers.npz", **{k: np.asarray(v, dtype=np.int64) for k, v in covers.items()})
+        np.savez_compressed(
+            self.dataset_dir(dataset_id) / "covers.npz", allow_pickle=True, **{k: np.asarray(v, dtype=np.int64) for k, v in covers.items()}
+        )
 
     def load_covers(self, dataset_id: str) -> dict[str, np.ndarray]:
         path = self.datasets_dir / dataset_id / "covers.npz"
@@ -379,7 +382,7 @@ class Workspace:
         self, patterns: list[dict[str, Any]], vectors: np.ndarray, activations: list[dict[str, Any]], blocks: dict[str, np.ndarray], batch_id: str
     ) -> None:
         self.journal.append_batch(patterns, vectors, activations)
-        np.savez_compressed(self.journal_dir / "blocks" / f"{batch_id}.npz", **blocks)
+        np.savez_compressed(self.journal_dir / "blocks" / f"{batch_id}.npz", allow_pickle=True, **blocks)
 
     def patterns(self) -> list[dict[str, Any]]:
         return self.journal.load_chunks()
@@ -510,7 +513,8 @@ class Workspace:
         atomic_write_json(self.graph_path, snapshot)
 
     def load_graph(self) -> dict[str, Any] | None:
-        return read_json(self.graph_path)
+        snapshot: dict[str, Any] | None = read_json(self.graph_path)
+        return snapshot
 
     def reset(self) -> None:
         """Delete all SIG workspace data (datasets, journals, state, graph, uploads). The folder is renamed aside first —
@@ -519,4 +523,4 @@ class Workspace:
             trash = self.root.with_name(f"{self.root.name}.deleting-{uuid.uuid4().hex[:8]}")
             os.replace(self.root, trash)
             shutil.rmtree(trash, ignore_errors=True)
-        self.__init__(self.settings)
+        Workspace.__init__(self, self.settings)

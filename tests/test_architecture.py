@@ -59,7 +59,8 @@ def _imports(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             found |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
-            found.add(importlib.util.resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module)
+            module = node.module or ""
+            found.add(importlib.util.resolve_name("." * node.level + module, package) if node.level else module)
     return found
 
 

@@ -28,13 +28,13 @@ def test_openai_compatible_roundtrip(llm_stub):
     assert [m["role"] for m in body["messages"]] == ["system", "user"] and "ONLY the evidence" in body["messages"][0]["content"]
     assert check_citations(resp.text, {"P1": "P-abc"})["grounded"]
     resp = llm.generate("s", "fail")
-    assert not resp.ok and "HTTP 500" in resp.error and "boom" in resp.error  # the upstream's reason, not only a status
+    assert not resp.ok and resp.error is not None and "HTTP 500" in resp.error and "boom" in resp.error  # the upstream's reason, not only a status
 
 
 def test_unreachable_endpoint_fails_fast():
     llm = OpenAICompatibleLLM(NarratorSettings(llm_base_url=f"http://127.0.0.1:{free_port()}/v1"))
     resp = llm.generate("s", "u")
-    assert not resp.ok and "unreachable" in resp.error
+    assert not resp.ok and resp.error is not None and "unreachable" in resp.error
     t = time.perf_counter()
     llm.generate("s", "u")  # the refused connection is remembered -> no second attempt
     assert time.perf_counter() - t < 0.5

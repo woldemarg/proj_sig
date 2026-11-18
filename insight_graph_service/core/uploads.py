@@ -286,7 +286,7 @@ def layer_name(filename: str, taken: Collection[str]) -> str:
     return name
 
 
-def save_context(ws: Workspace, files: Sequence[tuple], max_bytes: int) -> list[dict[str, Any]]:
+def save_context(ws: Workspace, files: Sequence[tuple[Any, ...]], max_bytes: int) -> list[dict[str, Any]]:
     """Context files (docs/02_discovery.md §2.9) — ``(filename, stream, locator, where)`` each —, each stored
     (``MAX_UPLOAD_MB`` apiece) or, given as the stored ``Path`` of the target's own file, read in place (``in_place``:
     no copy, never removed by ``discard_context``), named (``layer_name``; ``<stem>_<value>`` under a filter) and its
@@ -347,7 +347,7 @@ def reading(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def check_geo_options(context: Sequence, geo: str | None, ring: int | str | None, count_values: str | None, baseline: str | None) -> None:
+def check_geo_options(context: Sequence[Any], geo: str | None, ring: int | str | None, count_values: str | None, baseline: str | None) -> None:
     """The options of an upload's cells need its geo option — context files and per-type counters are counted into them,
     a zone baseline (``parse_baseline``'s) reads them —; and a disk needs context files."""
     if (context or count_values or baseline) and not geo:
@@ -433,7 +433,9 @@ def store_layer(
         "level": "layer",
         "geo": locator,
         "points": int((np.isfinite(points.lat) & np.isfinite(points.lon)).sum()),
-        **({"time": time, "tz": tz, "span": [t.tz_convert(tz or "UTC").isoformat() for t in (times.min(), times.max())]} if time else {}),
+        **(
+            {"time": time, "tz": tz, "span": [t.tz_convert(tz or "UTC").isoformat() for t in (times.min(), times.max())]} if times is not None else {}
+        ),
         "status": "LAYER",
         "stage_times": {"LAYER": created},
         "created_at": created,
@@ -527,10 +529,10 @@ def cross_runs(
         raise PipelineError("invalid_options", f"cross-type run: {exc}") from exc
     own: dict[int, dict[str, Any]] = {}
     for b in sorted(batches, key=lambda b: b["created_at"]):  # per level its latest reading, a run's own batches and repeats (SKIPPED) aside
-        if b.get("upload_id") == target and resolution(b) is not None and "cross" not in b and b.get("status") != "SKIPPED":
-            own[resolution(b)] = b
-    if clicked:
-        own[resolution(clicked)] = clicked
+        if b.get("upload_id") == target and (r := resolution(b)) is not None and "cross" not in b and b.get("status") != "SKIPPED":
+            own[r] = b
+    if clicked and (r := resolution(clicked)) is not None:
+        own[r] = clicked
     if not own:
         raise PipelineError("invalid_options", f"{target}: no upload with a geo level to read the layers on")
     if stray := sorted(set(layer_where) - set(layers)):
@@ -585,7 +587,8 @@ def cross_runs(
     else:
         warnings = [time_warning(e, target_span) for e in context if e["time_rule"] == "events"] if any(b.get("time") for b in own.values()) else []
     runs = []
-    for b in picked:
+    for r in sorted(chosen, reverse=True):
+        b = own[r]
         keys = ("filename", "bins", "categories", "geo", "time", "grid", "tz", "where", "count_values", "baseline")
         options = {k: b.get(k) for k in keys} | {"strict": b.get("strict", True)} | ({"count_values": counts} if counts is not None else {}) | asked
         inherited = {k: b[k] for k in TRUST_FIELDS if k in b} | {"cross": list(layers)}
@@ -598,16 +601,14 @@ def cross_runs(
                 "context_ring": ring,
                 "inherited": inherited,
                 "warnings": warnings
-                + [
-                    f"r{resolution(b)}: a layer link coarser than r{LINK_MIN_LEVEL}; a zone this wide already holds different places, a link on it is preliminary"
-                ]
-                * (resolution(b) < LINK_MIN_LEVEL),
+                + [f"r{r}: a layer link coarser than r{LINK_MIN_LEVEL}; a zone this wide already holds different places, a link on it is preliminary"]
+                * (r < LINK_MIN_LEVEL),
             }
         )
     return runs
 
 
-def context_files(record: dict[str, Any]) -> list[tuple]:
+def context_files(record: dict[str, Any]) -> list[tuple[Any, ...]]:
     """A record's context layers as ``load_dataset`` reads them: ``(layer, path, locator, window)``, the window an aligned
     run's ``(time, tz, first, last)`` (``cross_runs``), else None, and ``where``, a layer's row filter."""
     return [
@@ -626,8 +627,8 @@ def cross_state(batches: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     reproducible (docs/06_graph_and_storage.md §6.8)."""
     stored, replaced = {b.get("upload_id") for b in batches}, {b.get("supersedes") for b in batches}
     hidden = {b.get("upload_id") for b in batches if b.get("hidden")}
-    runs: dict[str, int] = {}
-    finest: dict[str, int] = {}  # an upload's finest geo level, a run's own aside
+    runs: dict[str | None, int] = {}
+    finest: dict[str | None, int] = {}  # an upload's finest geo level, a run's own aside
     out: dict[str, dict[str, Any]] = {}
     for b in batches:
         crossed = b.get("cross", ()) if b.get("status") != "SKIPPED" else ()  # a repeat is no run: it reads nothing, hides nothing

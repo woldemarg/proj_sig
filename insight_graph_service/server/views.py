@@ -24,7 +24,7 @@ def _short_label(graph: DualGraph, node: dict[str, Any], members: int = 0) -> st
     if node["kind"] == "Region":
         return f"рівень {node['props']['resolution']}\n{members} {wording.plural(members, 'інсайт', 'інсайти', 'інсайтів')}"
     if node["kind"] != "Pattern":
-        return node["label"]
+        return str(node["label"])
     ins = graph.insight(node["id"])
     scope = " · ".join(c.value for c in ins.conditions)
     if ins.phenomenon_type == "covariance" and ins.covariance:
@@ -344,7 +344,7 @@ def project_to_sphere(vectors: np.ndarray, seed: int) -> np.ndarray:
     y = KernelPCA(n_components=3, kernel="cosine", random_state=seed, n_jobs=-1).fit_transform(robust_scale(vectors, quantile_range=(5, 95)))
     y = y - y.mean(axis=0)
     norms = np.linalg.norm(y, axis=1, keepdims=True)
-    return y / norms * minmax_scale(np.log(norms**2), feature_range=(0.1, 1))
+    return np.asarray(y / norms * minmax_scale(np.log(norms**2), feature_range=(0.1, 1)))
 
 
 def _pattern_hover(ins: Insight, reading: dict[str, str], theme: str) -> str:

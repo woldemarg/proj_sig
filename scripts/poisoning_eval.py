@@ -95,7 +95,9 @@ def check(engine: Engine, case: dict[str, Any]) -> dict[str, Any]:
 
 def _reopen(engine: Engine) -> Engine:
     """The workspace after a restart that rebuilds the snapshot from the journal and the batch records."""
-    engine.ws.save_graph({**engine.ws.load_graph(), "version": 0})
+    graph = engine.ws.load_graph()
+    assert graph is not None  # a committed workspace
+    engine.ws.save_graph({**graph, "version": 0})
     return Engine(engine.settings, embedder=engine.encoder.embedder)
 
 
@@ -174,12 +176,13 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
 
 
 def main() -> int:
-    from attractor_topology.encoder import model_folder
+    from doubles import HashingEmbedder
+
+    from attractor_topology.encoder import TextEmbedder, model_folder
     from evidence_narrator_service.llm_client import OpenAICompatibleLLM
     from evidence_narrator_service.settings import NarratorSettings
     from insight_graph_service.core.model_store import problems
     from insight_graph_service.core.settings import load_env_file, load_settings
-    from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=int, default=1)
@@ -194,7 +197,8 @@ def main() -> int:
     llm = OpenAICompatibleLLM(NarratorSettings.from_env()) if args.llm else None
     if llm:
         print(f"LLM: {llm.health()['model']}")
-    embedder, result = HashingEmbedder() if args.encoder == "hashing" else None, {"seed": args.seed, "encoder": args.encoder}
+    embedder: TextEmbedder | None = HashingEmbedder() if args.encoder == "hashing" else None
+    result = {"seed": args.seed, "encoder": args.encoder}
     for name in ("S-poison", "S-two-sources"):
         root = scratch_dir(f"poisoning_eval/{name}", fresh=True)
         engine = build_engine(root / "ws", embedder=embedder)

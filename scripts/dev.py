@@ -32,10 +32,11 @@ def compose(graph_service: Any, narrator: Any, bridge: Any = None) -> Any:
     the rest to the console's static files; responses over 1 KB gzipped for a client that accepts it, as nginx does."""
     from starlette.middleware.gzip import GZipMiddleware
     from starlette.staticfiles import StaticFiles
+    from starlette.types import Receive, Scope, Send
 
     console = StaticFiles(directory=CONSOLE, html=True)
 
-    async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
         target = (
             narrator

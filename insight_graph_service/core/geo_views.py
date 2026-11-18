@@ -175,7 +175,7 @@ _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
 
 def _export_reading(
     ws: Workspace, dataset_id: str, resolution: int | None, layer: str | None = None
-) -> tuple[dict[str, Any], tuple[Path, str, str | None], int]:
+) -> tuple[dict[str, Any], tuple[Path, str, str | None, tuple[str, str | None, str, str] | None], int]:
     """What the reader of a geo dataset's export must know of its table, the reading of its rows and the cell resolution
     of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
     over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
@@ -281,7 +281,7 @@ def points_in_period(ws: Workspace, dataset_id: str, period: tuple[datetime, dat
         return None
     zone = ZoneInfo(temporal["tz"]) if temporal.get("tz") else UTC
     lo_ms, hi_ms = (int(t.replace(tzinfo=zone).timestamp() * 1000) for t in period)
-    return (geo["point_time"] >= lo_ms) & (geo["point_time"] < hi_ms)  # NaT, the int64 minimum, lies before every period
+    return np.asarray((geo["point_time"] >= lo_ms) & (geo["point_time"] < hi_ms))  # NaT, the int64 minimum, lies before every period
 
 
 def period_cell_counts(ws: Workspace, dataset_id: str, period: tuple[datetime, datetime]) -> np.ndarray | None:
@@ -370,7 +370,8 @@ def lon_span(lons: np.ndarray) -> tuple[float, float]:
 
 def _props(graph: DualGraph, pid: str) -> dict[str, Any]:
     """The props of a pattern's Dataset node (empty for a dataset the graph lost)."""
-    return graph.nodes.get(dataset_node_id(graph.insight(pid).dataset_id), {"props": {}})["props"]
+    props: dict[str, Any] = graph.nodes.get(dataset_node_id(graph.insight(pid).dataset_id), {"props": {}})["props"]
+    return props
 
 
 def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any]:
@@ -430,8 +431,8 @@ def geo_pattern(
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = member_rows(ws, batch, ws.ready_batch_for(dataset_id), len(geo["point_cell"])) if batch else None
-        if members is None:  # unknown here, or its dataset deleted since this commit
+        members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
+        if batch is None or members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
         rows, level = found.events, found.level
         src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
@@ -630,7 +631,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: frozen
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
                 if pid not in graph.nodes or graph.tampered(pid):
                     continue
-                if own:
+                if members is None:  # the dataset's own
                     patterns[pid] = Projected(level, rows, per_cell[rows])
                     continue
                 events, counts = footprint(point_cell, members(rows), 1.0)  # every cell holding its located events
@@ -685,7 +686,7 @@ def window_view(centres: np.ndarray, bbox: str) -> np.ndarray:
         raise PipelineError("invalid_options", f"bbox {bbox!r} is not west,south,east,north in degrees")
     lon, lat = centres.T
     across = ((lon >= w) | (lon <= e)) if w > e else ((lon >= w) & (lon <= e))
-    return across & (lat >= s) & (lat <= n)
+    return np.asarray(across & (lat >= s) & (lat <= n))
 
 
 def _restates(graph: DualGraph, pid: str) -> set[str]:
@@ -766,13 +767,13 @@ def geo_window(
     for rank, (_, row) in enumerate(sorted(rows, key=lambda r: r[0])):
         anchor = primary_anchor(graph, row["id"])
         aid = anchor["target"] if anchor else None
-        node = graph.nodes.get(aid)
+        node = graph.nodes.get(anchor["target"]) if anchor else None
         theme = themes.setdefault(
             aid,
             {
                 "id": aid,
                 "label": node["label"] if node else "без теми",
-                "reading": wording.theme_reading(node["props"], theme_glossary(graph, aid)) if node else "",
+                "reading": wording.theme_reading(node["props"], theme_glossary(graph, node["id"])) if node else "",
                 "insights": [],
             },
         )
@@ -793,10 +794,8 @@ def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> d
     """The hosts among the listed geo insights, each with the listed levels it folds (finest first): hosts go the open
     dataset's first, then the finest; a level restated by several (``restating``) goes to the one whose subgroup is
     closest to its own (``affinity``), the earlier host on a tie."""
-    geo = sorted(
-        (q for q in listed if graph.facts(q).resolution is not None),
-        key=lambda q: (graph.insight(q).dataset_id != dataset_id, -graph.facts(q).resolution, q),
-    )
+    res = {q: r for q in listed if (r := graph.facts(q).resolution) is not None}
+    geo = sorted(res, key=lambda q: (graph.insight(q).dataset_id != dataset_id, -res[q], q))
     rank = {q: i for i, q in enumerate(geo)}
     claims: defaultdict[str, list[str]] = defaultdict(list)
     for h in geo:
@@ -808,7 +807,7 @@ def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> d
         if pid in folded:
             continue
         hosts[pid] = []
-        for q in sorted(_restates(graph, pid) & listed.keys(), key=lambda q: (-graph.facts(q).resolution, q)):
+        for q in sorted(_restates(graph, pid) & listed.keys(), key=lambda q: (-res[q], q)):
             live = [h for h in claims[q] if h not in folded]
             if q not in folded and q not in hosts and max(live, key=lambda h: (affinity(graph, h, q), -rank[h])) == pid:
                 hosts[pid].append(q)

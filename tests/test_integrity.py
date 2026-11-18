@@ -4,6 +4,7 @@ and indicators, credibility by anchor and by place (docs/06_graph_and_storage.md
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import make_engine, rewrite_patterns, stale_snapshot, upload_levels
@@ -164,11 +165,11 @@ def test_a_changed_journal_number_is_caught_and_a_record_without_digest_is_unver
     assert {first.graph().nodes[r["id"]]["props"]["integrity"] for r in rows} == {"ok"}
     for field, value in (("emm_score", 9.9), ("support_fraction", 0.9), ("drivers", ["x"]), ("phenomenon_type", "covariance"), ("effect_size", -1.0)):
         assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # every number the prompt shows is covered
-    for field, value in (
+    for field, nested in (
         ("canonical", {**rows[0]["canonical"], "components": [["fraud rate", 9.0]]}),
         ("embedding", {**rows[0]["embedding"], "dim": 1}),
     ):
-        assert record_digest({**rows[0], field: value}) != rows[0]["record_digest"], field  # written once: the anchor labels read the components
+        assert record_digest({**rows[0], field: nested}) != rows[0]["record_digest"], field  # written once: the anchor labels read the components
     assert record_digest({**rows[0], "row_id": 999, "provenance": {}}) == rows[0]["record_digest"]  # what a deletion rewrites is not
     assert record_digest({**rows[0], "retired_field": 1}) != rows[0]["record_digest"]  # the record's own keys, not the class's
     for r in rows:
@@ -310,7 +311,7 @@ def test_credibility_by_place_phase_b():
     here = [f"R:7:h{i}" for i in range(6)] + ["R:5:H"]
 
     def at(ids):  # "R:<res>:<cell>" ids -> {res: cells}
-        out = {}
+        out: dict[int, set[str]] = {}
         for i in ids:
             out.setdefault(int(i.split(":")[1]), set()).add(i)
         return {res: frozenset(cells) for res, cells in out.items()}
@@ -372,7 +373,7 @@ def test_credibility_from_independent_sources_phase_a():
         return GraphEdge(pid, anchor, EdgeType.ACTIVATES, 0.9, {"weak": weak})
 
     registry = {"margin": {"indicator": "gross margin"}}
-    batches = {
+    batches: dict[str, dict[str, Any]] = {
         "b-a": {"source": "Field reports", "indicators": registry},
         "b-b": {"source": "Insurer", "indicators": registry},
         "b-c": {"source": "insurer", "indicators": registry},  # the same source as b, another case

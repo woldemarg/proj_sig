@@ -101,10 +101,10 @@ def centre_region(cell: str, level: int) -> str:
     them. Many centres lie exactly on a coarser boundary, where platforms' floating point would otherwise decide."""
     lat, lng = h3.cell_to_latlng(cell)
     d = CENTRE_TIE_DEG
-    around = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
+    around: set[str] = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
     if len(around) == 1:
         return around.pop()
-    parent = h3.cell_to_parent(cell, level)
+    parent: str = h3.cell_to_parent(cell, level)
     return parent if parent in around else min(around)
 
 
@@ -119,7 +119,8 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
     for lv, names in event_regions(table.cells, levels).items():
         regions, idx = np.unique(names, return_inverse=True)
         per_level[lv] = (regions, idx, np.bincount(idx[located], minlength=len(regions)))
-    edges, partial = [], set()
+    edges: list[tuple[str, str, float, dict[str, Any]]] = []
+    partial = set()
     for pid, rows in table.covers.items():
         cells = point_cell[np.unique(np.asarray(rows, dtype=np.int64))]
         loc = cells[cells >= 0]
@@ -139,7 +140,13 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
             rule = "lift" if occupied.sum() >= GEO_LIFT_MIN_REGIONS else "share"
             hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if rule == "lift" else (share >= GEO_REGION_MIN_SHARE) & (lift >= 1)
             for i in np.flatnonzero(hit & (x >= x_min)):
-                props = {"basis": "events", "rule": rule, "share": round(float(share[i]), 4), "lift": round(float(lift[i]), 4), "n": int(x[i])}
+                props: dict[str, Any] = {
+                    "basis": "events",
+                    "rule": rule,
+                    "share": round(float(share[i]), 4),
+                    "lift": round(float(lift[i]), 4),
+                    "n": int(x[i]),
+                }
                 edges.append(
                     (pid, region_node_id(lv, str(regions[i])), props["share"], props | {"q": float(f"{q[i]:.4g}"), "placed_by": table.placed_by})
                 )
@@ -200,7 +207,7 @@ def _dataset_part(d: GeoDataset, levels: tuple[int, ...]) -> _DatasetPart:
 
 
 def derive_spatial(
-    datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = (), memo: dict[tuple, Any] | None = None
+    datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = (), memo: dict[tuple[Any, ...], Any] | None = None
 ) -> SpatialStructure:
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
@@ -227,7 +234,7 @@ def derive_spatial(
     raw, grown, ring, res_of, dataset_of, shares, kin = {}, {}, {}, {}, {}, {}, {}
     covered: Counter[str] = Counter()
     memo = {} if memo is None else memo
-    used = set()
+    used: set[tuple[Any, ...]] = set()
     for d in datasets:
         if not len(d.cells):
             continue
@@ -250,8 +257,8 @@ def derive_spatial(
         ring.update(part.ring)
         shares.update(part.shares)
     for table in tables:
-        used.add(key := ("table", table.dataset_id, table.placed_by, levels))
-        placed, partial = memo[key] if key in memo else memo.setdefault(key, place_table(table, levels))
+        used.add(table_key := ("table", table.dataset_id, table.placed_by, levels))
+        placed, partial = memo[table_key] if table_key in memo else memo.setdefault(table_key, place_table(table, levels))
         out.partial |= partial
         for pid, rid, share, props in placed:
             out.in_region.append((pid, rid, share))
@@ -264,7 +271,7 @@ def derive_spatial(
     members.update(rid for pid, cells in out.own_cells.items() for c in cells if (rid := region_node_id(res_of[pid], c)) in out.regions)
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])
-        coarser = [x for x in levels if x < props["resolution"]]
+        coarser = [x for x in levels if x < int(props["resolution"])]
         if coarser:
             out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(props["h3"], coarser[0]))))
     regions_of: defaultdict[str, set[str]] = defaultdict(set)

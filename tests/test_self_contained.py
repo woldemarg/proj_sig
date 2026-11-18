@@ -70,11 +70,11 @@ def test_loaded_code_comes_from_the_repository_or_the_environment(hashed_engine)
                 importlib.import_module(mod.name)
     ask(hashed_engine, "Why is margin lower for phones in the US?")  # exercises discovery->ontology->evidence->narration
     allowed = [ROOT, *(Path(r).resolve() for r in ENVIRONMENT if r)]
-    loaded = [m.__name__ for m in list(sys.modules.values()) if getattr(m, "__file__", None) and not _inside(m.__file__, allowed)]
+    loaded = [m.__name__ for m in list(sys.modules.values()) if (file := getattr(m, "__file__", None)) and not _inside(file, allowed)]
     assert loaded == []
     assert not [p for p in sys.path if p and not _inside(p, allowed)]
     for module in (eda, ontology_engine):  # the vendored engines, not an installed copy
-        assert Path(module.__file__).resolve().is_relative_to(ROOT)
+        assert module.__file__ is not None and Path(module.__file__).resolve().is_relative_to(ROOT)
 
 
 def test_config_paths_live_inside_the_project():

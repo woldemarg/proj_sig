@@ -45,7 +45,7 @@ def lies_in(edge: dict[str, Any]) -> bool:
     """Whether an IN_REGION edge makes its pattern lie in the region (a place, a zone's member): a base pattern's always,
     its placement rule decided that; a geo pattern's at a share of at least ``VERTICAL_MIN_SHARE``, as an edge needs
     only ``GEO_REGION_MIN_SHARE`` (docs/07_question_answering.md §7.4)."""
-    return edge["props"].get("basis") == "events" or edge["weight"] >= VERTICAL_MIN_SHARE
+    return bool(edge["props"].get("basis") == "events" or edge["weight"] >= VERTICAL_MIN_SHARE)
 
 
 def place_key(edge: dict[str, Any]) -> tuple[float, float]:
@@ -144,6 +144,8 @@ def _step(graph: DualGraph, pid: str, direction: str, seen: set[str]) -> Vertica
     pattern of the region), then the score."""
     facts = graph.facts(pid)
     res, anchors, upload, own = facts.resolution, facts.anchors, facts.upload, facts.finest
+    if res is None:  # only a geo pattern has a level
+        return None
     kin = {e["source"] for a in anchors for e in graph.inc.get(a, []) if e["type"] == "ACTIVATES" and not e["props"].get("weak")}
     best: tuple[tuple[bool, int, float, float], VerticalStep] | None = None
     # up: a coarser holder of one of its regions, whose finest regions hold it; down: a finer pattern lying in one of its
@@ -179,9 +181,10 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str], hidden: frozenset[str]
     the regions above the top pattern (from the region the last step met in); the ``scale`` label compares the pattern
     with its first step up, budget or not. A ``hidden`` pattern (a hidden layer's run, model A) is never a step: the next
     visible one is taken instead."""
-    chains, reached = [], set()
+    chains: list[ScaleChain] = []
+    reached: set[str] = set()
     for pid in pattern_ids:
-        if graph.facts(pid).resolution is None or not graph.facts(pid).finest:
+        if (res := graph.facts(pid).resolution) is None or not graph.facts(pid).finest:
             continue
         chain, seen = ScaleChain(pid), {pid} | hidden
         nearest = _step(graph, pid, "up", seen)
@@ -198,7 +201,7 @@ def scale_chain(graph: DualGraph, pattern_ids: list[str], hidden: frozenset[str]
             if graph.nodes[region]["props"]["resolution"] < top_res:
                 chain.regions.append(region)
             region = next((e["target"] for e in graph.out.get(region, []) if e["type"] == "PARENT_OF"), None)
-        chain.scale = _scale(graph, pid, nearest)
+        chain.scale = _scale(graph, pid, res, nearest)
         chains.append(chain)
     return chains
 
@@ -215,7 +218,7 @@ def restating(graph: DualGraph, chain: ScaleChain) -> set[str]:
     return out
 
 
-def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
+def _scale(graph: DualGraph, pid: str, res: int, nearest: VerticalStep | None) -> str:
     """The pattern against its nearest coarser level of the same upload: ``nearest`` is its first step up, which ranks
     the same upload and the nearest level first, so a reversal at the next level is never hidden by a farther one."""
     upload = graph.facts(pid).upload
@@ -224,7 +227,7 @@ def _scale(graph: DualGraph, pid: str, nearest: VerticalStep | None) -> str:
     if nearest and graph.facts(nearest.pattern_id).upload == upload:
         return "regional" if nearest.relation == "corresponds" else "scale-dependent"
     planned = graph.nodes[dataset_node_id(graph.insight(pid).dataset_id)]["props"].get("upload_levels", [])
-    coarser = [lv for lv in planned if lv.isdigit() and int(lv) < graph.facts(pid).resolution]  # mined, even if it found nothing
+    coarser = [lv for lv in planned if lv.isdigit() and int(lv) < res]  # mined, even if it found nothing
     return "not_found_coarser" if coarser else "insufficient"
 
 

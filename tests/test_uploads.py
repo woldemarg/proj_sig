@@ -62,8 +62,8 @@ def test_declared_language_is_refused_when_malformed_and_kept_to_the_columns():
             resolve_declared_metadata(glossary, metadata)
         assert refused.value.code == "invalid_options"
     columns = ["margin", "region", "store_size_band", "load_median_band", "share_channel_phone"]
-    glossary = {"region": "регіон", "store_size": "розмір магазину", "load": "навантаження", "channel": "канал", "nosuch": "x", "nosuch=1": "y"}
-    declared, warnings = resolve_declared_metadata(json.dumps(glossary), DOC, columns)
+    terms = {"region": "регіон", "store_size": "розмір магазину", "load": "навантаження", "channel": "канал", "nosuch": "x", "nosuch=1": "y"}
+    declared, warnings = resolve_declared_metadata(json.dumps(terms), DOC, columns)
     assert set(declared["user_glossary"]) == {"region", "store_size", "load", "channel"}  # a band's, a cell median's, a share's column
     assert set(declared["metadata_doc"]["columns"]) == {"margin", "region"} and len(warnings) == 2  # order_id left out, with a warning
     with pytest.raises(PipelineError):

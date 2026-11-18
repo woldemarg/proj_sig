@@ -295,7 +295,9 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.evaluate(f"GeoMap.pick('{chained}')")
         page.wait_for_selector(".insight-card .nb", timeout=10000)
         card = page.locator(".msg-bot").last
-        assert card.locator(".ic-theme").get_attribute("data-id") == primary_anchor(graph, chained)["target"]
+        anchor = primary_anchor(graph, chained)
+        assert anchor is not None
+        assert card.locator(".ic-theme").get_attribute("data-id") == anchor["target"]
         assert any(t.startswith("↑ рівень 5") for t in card.locator(".insight-card .nb").all_inner_texts())
         walk = ["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "SPECIALIZES (in)", "SIBLING", "SIBLING (in)", "CO_LOCATED", "CO_LOCATED (in)"]
         assert page.evaluate("Object.keys(WALK)") == walk and page.evaluate("Object.values(WALK)") == [

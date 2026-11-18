@@ -18,7 +18,8 @@ class Embedder(Protocol):
 
 
 class QueryEncoder(Protocol):
-    embedder: Embedder
+    @property
+    def embedder(self) -> Embedder: ...
 
     def encode_query(self, scope_text: str, target_text: str, components: tuple[tuple[str, float], ...], text: str) -> np.ndarray:
         """A parsed question in the insight vector frame (the same composition as the stored insight vectors)."""
