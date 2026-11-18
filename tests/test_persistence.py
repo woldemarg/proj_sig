@@ -319,6 +319,23 @@ def test_a_second_writer_process_is_refused(cfg, demo_csv):
     assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
 
 
+def test_a_failed_writer_lock_closes_its_file(cfg, monkeypatch):
+    """A failure while taking the writer lock closes the lock file and holds nothing."""
+    from insight_graph_service.core import workspace
+
+    opened: list[Any] = []
+
+    def fail(handle: Any) -> None:
+        opened.append(handle)
+        raise RuntimeError("lock failed")
+
+    monkeypatch.setattr(workspace, "_lock_byte", fail)
+    with pytest.raises(RuntimeError, match="lock failed"):
+        workspace.acquire_writer_lock(cfg.workspace_dir)
+    assert opened[0].closed
+    assert str(workspace.writer_lock_path(cfg.workspace_dir)) not in workspace._HELD_LOCKS
+
+
 def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv, monkeypatch):
     """Journals of another canonical version cannot be served: the engine starts on the empty state with the
     reason, refuses writes and questions, never touches the Neo4j mirror, and a reset makes it usable again."""

@@ -83,8 +83,8 @@ jobs:
     steps:
       - *checkout
       - *setup-uv
-      - run: uv run --frozen --group cpu playwright install --with-deps chromium
-      - run: uv run --frozen --group cpu pytest -m browser
+      - run: uv run --frozen --group cpu playwright install chromium  # the runner image already has its system libraries
+      - run: uv run --frozen --group cpu pytest -m browser -n0  # in one process: in parallel the period-bar map test times out on the runner
 
   security:
     runs-on: ubuntu-24.04

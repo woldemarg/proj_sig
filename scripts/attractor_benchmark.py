@@ -48,7 +48,6 @@ from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
 from graph_query_engine.traversal import traverse
 from insight_graph_service.core.engine import Engine
-from insight_graph_service.core.snapshot import build_snapshot
 
 DIMENSIONS = {
     "region": ["EU", "US", "APAC", "LATAM"],
@@ -183,7 +182,7 @@ def static_graph(engine: Engine, assign: np.ndarray, centroids: np.ndarray, *, c
     if not compile_co_memberships:
         snapshot_module._co_memberships = lambda *args, **kwargs: []  # the walk sees only the memberships it is given
     try:
-        snapshot = build_snapshot(
+        snapshot = snapshot_module.build_snapshot(
             records=records,
             activations=activations,
             vectors=vectors,
