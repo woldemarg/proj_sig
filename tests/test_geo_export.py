@@ -78,6 +78,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert json.loads(client.get(f"/api/geo/{ds}/rows", params={"resolution": other}).headers["x-rows"])["columns"][1] == f"h3_r{other}"
         assert client.get(f"/api/geo/{ds}/rows", params={"resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.get("/api/geo/ds-unknown/rows").json()["code"] == "unknown_dataset"
+        bare = client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})  # no zone: the table's counts alone
+        assert bare.text.strip() == "zone_id,row_id,aoi_zone" and json.loads(bare.headers["x-zones"])["zones"] == {}
 
 
 def test_a_row_without_a_point_is_in_no_place():
