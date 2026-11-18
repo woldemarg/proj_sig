@@ -353,6 +353,9 @@ function openLink(batchId) {
     [...stored.values()].map((x) => opt("layer", x.upload_id, titleOf(x) + (x.where ? ` · ${x.where}` : ""), x.status === "LAYER" ? plural(x.points, "точка", "точки", "точок") : "датасет", linked.has(x.upload_id))).join("") +
     Object.values(S.samples || {}).filter((d) => (d.options || {}).geo && !kept.has(stem(d.file)))
       .map((d) => opt("sample", d.key, shippedTitle(d), `${num(d.rows, 0)} точок`, false, !d.context_only)).join("");
+  const opts = [...$("link-opts").children];
+  $("link-or").hidden = !opts.length; $("link-or").toggleAttribute("data-dev", opts.every((o) => o.hasAttribute("data-dev")));  // no ready layer: no "or"
+  $("link-file").disabled = false;
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
   renderTypes($("link-types"), $("link-counts"), profileTypes(b));
   $("link-dialog").showModal();
@@ -361,7 +364,7 @@ function openLink(batchId) {
 async function runLink(src) {
   /* ``src``: a stored upload (layer), a shipped set (sample) or a file; one not stored is kept as *Лише шар* first */
   const o = src.sample ? S.samples[src.sample].options || {} : {}, batchId = $("link-dialog").dataset.batch;
-  $("link-dialog").querySelectorAll(".link-opt").forEach((el) => { el.disabled = true; });  // one click, one run
+  $("link-dialog").querySelectorAll(".link-opt, #link-file").forEach((el) => { el.disabled = true; });  // one click, one run
   $("link-msg").className = "msg"; $("link-msg").textContent = "Запускаю…";
   try {
     let layer = src.layer;

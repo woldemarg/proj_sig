@@ -221,9 +221,14 @@
       <label class="small" for="link-ring">Що рахувати поруч</label>
       <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
     </div>
+    <label class="drop" id="link-drop">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <span class="big">Перетягніть файл точок сюди</span>
+      <span class="muted">або натисніть, щоб вибрати · CSV, TSV, Parquet</span>
+      <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet" hidden>
+    </label>
+    <label class="small" id="link-or">Або готовий шар</label>
     <div class="link-opts" id="link-opts"></div>
-    <label class="link-opt" for="link-file">Файл точок…<span class="muted">CSV, TSV, Parquet</span></label>
-    <input type="file" id="link-file" accept=".csv,.tsv,.txt,.parquet" hidden>
     <div class="msg" id="link-msg"></div>
     <div class="link-actions"><button type="button" class="btn ghost" id="link-cancel">Скасувати</button></div>
   </form>

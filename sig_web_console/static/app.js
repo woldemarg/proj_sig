@@ -363,17 +363,18 @@ function init() {
     const keys = LEGEND_TERMS[el.dataset.key];
     if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
-  // upload: click or drop
-  const drop = $("drop");
+  // upload and a layer's file: click or drop
   $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
     if (f) { if ($("sample").value) fillOptions(); $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
     $("file-name").textContent = f ? f.name : ""; $("upload-btn").disabled = !f;
   });
-  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) { $("file").files = e.dataTransfer.files; $("file").dispatchEvent(new Event("change")); } });
+  [[$("drop"), $("file")], [$("link-drop"), $("link-file")]].forEach(([drop, input]) => {
+    ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+    drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length && !input.disabled) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event("change")); } });
+  });
   $("geo").addEventListener("input", syncTable);
   $("time").addEventListener("input", mirrorTime);
   $("time-user").addEventListener("input", () => { $("time").value = $("time-user").value; });
