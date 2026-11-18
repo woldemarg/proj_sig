@@ -2,7 +2,7 @@
 
 Report: `05-system-interactions.md`. Apply the rules of `../SKILL.md`.
 
-Review the scenario, not the parts. Walk the change from the first call to the last result a caller can see, across the services it touches. `docs/12_architecture.md` is the service and import contract; `docs/09_operations.md` is the batch and the error codes.
+Review the scenario, not the parts. Walk the change from the first call to the last result a caller can see, across the services it touches. `docs/current_docs/12_architecture.md` is the service and import contract; `docs/current_docs/09_operations.md` is the batch and the error codes.
 
 Run this lens after the additive lenses. Do not read their reports, and do not re-derive what they own: a formula (`math`), a place (`geo`), a legal move (`graph`), a stored field (`data`), a calendar (`temporal`), a screen (`ux`). When the scenario shows one of those is wrong, name it in `Cross-domain dependency` and review only the flow around it. Dead code is `cleanup`.
 

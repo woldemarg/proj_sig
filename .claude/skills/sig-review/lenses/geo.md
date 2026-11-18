@@ -4,7 +4,7 @@ Report: `02-geospatial.md`. Apply the rules of `../SKILL.md`.
 
 Review place: does the system interpret coordinates, cells, geometries and geographic relations as the same place throughout?
 
-`docs/02_discovery.md` §2.9 and `docs/06_graph_and_storage.md` §6.1 (the spatial plane) are the contract. H3 is the index the code uses; do not assume another. Spatial statistics (Moran's I, `n_eff`, a lift, a false-discovery cut, a band's quarters) belong to the `math` lens. Whether a place fact survives a file or a service call belongs to `data` and `system`. What the map looks like belongs to `ux`.
+`docs/current_docs/02_discovery.md` §2.9 and `docs/current_docs/06_graph_and_storage.md` §6.1 (the spatial plane) are the contract. H3 is the index the code uses; do not assume another. Spatial statistics (Moran's I, `n_eff`, a lift, a false-discovery cut, a band's quarters) belong to the `math` lens. Whether a place fact survives a file or a service call belongs to `data` and `system`. What the map looks like belongs to `ux`.
 
 ## What to check
 

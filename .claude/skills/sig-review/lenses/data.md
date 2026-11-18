@@ -2,7 +2,7 @@
 
 Report: `04-data-integrity.md`. Apply the rules of `../SKILL.md`.
 
-Review the integrity of information in the target: is data passed between components, transformed, stored, restored and used in later computations correctly? The contracts live in `insight_contracts/`; storage and the journal formats in `docs/06_graph_and_storage.md`; the batch record in `docs/09_operations.md`.
+Review the integrity of information in the target: is data passed between components, transformed, stored, restored and used in later computations correctly? The contracts live in `insight_contracts/`; storage and the journal formats in `docs/current_docs/06_graph_and_storage.md`; the batch record in `docs/current_docs/09_operations.md`.
 
 The core question: can the system silently lose, corrupt, mix up or misread information between two processing steps?
 

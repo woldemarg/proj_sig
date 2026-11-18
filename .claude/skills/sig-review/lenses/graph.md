@@ -2,7 +2,7 @@
 
 Report: `03-graph-navigation.md`. Apply the rules of `../SKILL.md`.
 
-Review the graph-navigation logic of the target: does the system model the links between nodes, the moves between them, path search and the rules for reaching the wanted nodes or results correctly? `docs/06_graph_and_storage.md` and `docs/07_question_answering.md` define the graph and its traversal grammar.
+Review the graph-navigation logic of the target: does the system model the links between nodes, the moves between them, path search and the rules for reaching the wanted nodes or results correctly? `docs/current_docs/06_graph_and_storage.md` and `docs/current_docs/07_question_answering.md` define the graph and its traversal grammar.
 
 Establish the actual graph model first. Do not assume it is directed, weighted, acyclic, or even backed by a graph library. How a weight, a cosine or a lattice relation is computed is the `math` lens. Time relations are the `temporal` lens. Serialisation is the `data` lens. Whether the path is still intact after it leaves this code is the `system` lens. Here, check the move.
 
