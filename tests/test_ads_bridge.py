@@ -77,8 +77,8 @@ def upstream(
         return Response(f"zone_id,row_id,aoi_zone\n{rows}", media_type="text/csv", headers={"X-Zones": json.dumps(meta | {"zones": zones})})
 
     @app.get("/api/geo/{dataset_id}/rows")
-    def rows(dataset_id: str, resolution: int):
-        seen.setdefault("rows", []).append((dataset_id, resolution))
+    def rows(dataset_id: str, resolution: int, layer: str | None = None):
+        seen.setdefault("rows", []).append((dataset_id, resolution) if layer is None else (dataset_id, resolution, layer))
         return Response(f"rows of {dataset_id}".encode(), media_type="text/csv") if table(dataset_id) else unknown(dataset_id)
 
     @app.get("/health")
@@ -259,6 +259,25 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert client.get("/api/ads/jobs/nope").status_code == 404
 
 
+def test_a_layer_goes_as_a_context_table():
+    """A layer link run's layer goes to ADS as a context table of its points, its rows and zones read by name and tied
+    to the insights' band of it; a layer is never the base table."""
+    seen: dict = {}
+    bars = {"dataset_id": "ds-a", "filename": "bars", "resolution": 8, "layer": "bars"}
+    ask = {"question": "Де більше подій біля барів?", "tables": [TABLES[0], bars], "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
+    with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
+        job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
+        assert job["stage"] == "done" and seen["rows"] == [("ds-a", 8), ("ds-a", 8, "bars")]
+        assert [b.get("layer") for _, b in seen["zone_rows"]] == [None, "bars"]
+        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_r8.csv", "zones.csv", "zones.md"]
+        assert {line.split(",")[1] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"events_dsa_r8.csv", "bars_dsa_r8.csv"}
+        query = job["ads_query"]
+        assert "df_bars_dsa_r8 (bars_dsa_r8.csv: bars" in query and "the points SIG's condition context_bars_band counts per cell" in query
+        assert "is a context layer of the main table" in query and "bars_dsa_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
+        assert client.post("/api/ads/jobs", json=ask | {"tables": [bars, TABLES[0]]}).status_code == 422  # a layer is never the base
+        assert client.post("/api/ads/jobs", json=ask | {"tables": [TABLES[0], bars, bars]}).status_code == 422
+
+
 def test_the_bridge_strips_the_periods_the_graph_reads():
     """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period, so none overrides the bar's."""
     samples = "2031-W13, 2031-q1, Q1 2031, 2031-03-24 10:00, 2031-03; not 2019-20, x2031-03, 2031-03-24-1, 12031-03"
@@ -379,6 +398,13 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 coarser = "G.datasets.push({...G.datasets[0], dataset_id: 'coarser', resolution: G.datasets[0].resolution - 1}); openAds()"
                 page.evaluate(coarser)  # another level of the same upload: its rows go once
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.value)") == [page.evaluate("GeoMap.current()")]
+                page.evaluate(
+                    "S.datasets[GeoMap.current()] = {...S.datasets[GeoMap.current()], cross_layers: ['bars']}; openAds()"
+                )  # a link run's layer
+                assert page.evaluate("[...document.querySelectorAll('#ads-tables input[data-layer]')].map((i) => [i.dataset.layer, i.checked])") == [
+                    ["bars", True]
+                ]
+                page.evaluate("delete S.datasets[GeoMap.current()].cross_layers")
                 page.evaluate("G.datasets.pop(); openAds()")
                 page.wait_for_function("$('ads-preview').textContent.includes('Період:')")  # previewed: the period line alone asks nothing
                 assert page.is_disabled("#ads-send")

@@ -172,7 +172,8 @@ def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list
 def _table_line(t: dict[str, Any]) -> str:
     counted = f", {t['total']} rows" if "total" in t else ""
     part = f", only its rows where {t['where']}" if t.get("where") else ""  # a filtered reading of the file
-    return f"{t['df']} ({t['file']}: {t['filename']}{part}{counted})"
+    layer = f"; the points SIG's condition context_{t['layer']}_band counts per cell" if t.get("layer") else ""
+    return f"{t['df']} ({t['file']}: {t['filename']}{part}{counted}{layer})"
 
 
 def _zone_counts(t: dict[str, Any], zones: list[str]) -> str:
