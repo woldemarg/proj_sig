@@ -156,7 +156,7 @@ def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list
     out = []
     for n, it in enumerate(findings, 1):
         place = ", ".join(f"{z} {'yes' if inside else 'no'}" for z, inside in it["zones"].items())
-        lines = [f"O{n} · in zone: {place}", f"  cells where: {it['scope'] or '—'}"]
+        lines = [f"O{n} · in zone: {place}" if place else f"O{n}", f"  cells where: {it['scope'] or '—'}"]
         lines += [f"  established: {s}" for s in it["shift"]]
         lines += [f"  {k}: {it[k]}" for k in ("validation", "trust") if it.get(k)]
         if it.get("layer"):
@@ -214,6 +214,36 @@ def build_query_parts(
     data += (
         f"\nGeo columns: row_id numbers a table's rows; {cells} are H3 cell ids (strings) in every table; a coarser id is the parent of "
         "the finer one; group by them, never edit them."
+    )
+    if zones:
+        data += _zones_text(base, tables)
+    if others := [z for z in zones if z not in focus]:
+        data += f"\nThe conversation's other zones ({', '.join(others)}) are in df_zones too, for questions that name them."
+    if "zones" in base and focus:
+        data += f"\nZone counts (main table rows): {_zone_counts(base, focus)}."
+    if findings is None:
+        blocks = "(after the ask)"
+    else:
+        blocks = "\n\n".join(insight_blocks(findings, base)) or f"SIG has no insights for {'these zones' if focus else 'this question'}."
+    if not focus:
+        frame = "Analyse the whole map (every row of the tables; no area of interest is asked, so there is no inside, adjacent or far): "
+    elif len(focus) == 1:
+        frame = f"Analyse the area of interest (AOI) {focus[0]}: "
+    else:
+        frame = f"Compare the areas of interest {', '.join(focus)}: "
+    return [
+        {"kind": "primer", "text": INSIGHT_PRIMER},
+        {"kind": "frame", "text": frame},
+        {"kind": "user", "text": question},
+        {"kind": "data", "text": data},
+        {"kind": "insights", "text": "\n\nEstablished insights (computed and validated; do not recompute):\n" + blocks},
+        {"kind": "guidance", "text": GUIDANCE},
+    ]
+
+
+def _zones_text(base: dict[str, Any], tables: list[dict[str, Any]]) -> str:
+    """How the zones file places the tables' rows, and how to join it."""
+    return (
         f"\nZones: df_zones ({ZONES_FILE}) lists, for every zone of this conversation, the rows it holds: zone_id, table (a table's file "
         "name), row_id, aoi_zone = inside (the point lies inside the zone's polygon) | adjacent (outside it, in the zone's cells or their "
         f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} has no point: it is in no zone and in no comparison group. Any "
@@ -224,23 +254,6 @@ def build_query_parts(
         "Zones may overlap: a row can be in several. A point in the same cell as a zone is not inside it. A zone's own figures are its "
         "inside rows only; adjacent and far rows are comparison groups, never part of the zone's own figures."
     )
-    if others := [z for z in zones if z not in focus]:
-        data += f"\nThe conversation's other zones ({', '.join(others)}) are in df_zones too, for questions that name them."
-    if "zones" in base:
-        data += f"\nZone counts (main table rows): {_zone_counts(base, focus)}."
-    if findings is None:
-        blocks = "(after the ask)"
-    else:
-        blocks = "\n\n".join(insight_blocks(findings, base)) or "SIG has no insights for these zones."
-    frame = f"Analyse the area of interest (AOI) {focus[0]}: " if len(focus) == 1 else f"Compare the areas of interest {', '.join(focus)}: "
-    return [
-        {"kind": "primer", "text": INSIGHT_PRIMER},
-        {"kind": "frame", "text": frame},
-        {"kind": "user", "text": question},
-        {"kind": "data", "text": data},
-        {"kind": "insights", "text": "\n\nEstablished insights (computed and validated; do not recompute):\n" + blocks},
-        {"kind": "guidance", "text": GUIDANCE},
-    ]
 
 
 def _zone_span(polygon: dict[str, Any]) -> tuple[int, str, str]:
@@ -268,10 +281,16 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                 f"{t['total']} rows; SIG analysed this table at H3 resolution {t['dataset_resolution']}."
                 for n, t in enumerate(tables)
             ),
-            "- row_id: a row's number in its table, the key df_zones joins on.",
-            f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its edges "
-            "straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point not listed "
-            f"is far, a row without one (empty h3 cell) is in no group. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+            *(
+                [
+                    "- row_id: a row's number in its table, the key df_zones joins on.",
+                    f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its "
+                    "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point "
+                    f"not listed is far, a row without one (empty h3 cell) is in no group. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+                ]
+                if zones
+                else ["- No zone is drawn in this conversation: the questions are about the whole map."]
+            ),
             "- SIG's cells: one row of SIG's table = one cell with its events; shares and medians per cell exist for cells with enough events.",
             f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
             f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
@@ -296,6 +315,19 @@ def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: 
         *by_file,
         "",
     ]
+    if not focus:
+        return "\n".join(
+            [
+                "# Уся мапа: методика",
+                "",
+                "- Зону не задано: питання стосується всіх рядків таблиць.",
+                "- Питання передано в SIG без зони. Ретривер SIG знайшов у графі знахідки, що стосуються питання, по всій мапі; ADS отримав їх "
+                "як встановлені факти.",
+                "",
+                *(sources if by_file else []),
+                SIG_GLOSSARY,
+            ]
+        )
     zone_lines = []
     for z in focus:
         vertices, lons, lats = _zone_span(zones[z])

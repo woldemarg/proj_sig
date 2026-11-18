@@ -90,7 +90,7 @@ MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cel
 
 
 class ZonesIn(BaseModel):
-    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_EXPORT_ZONES)
+    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone
     resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
 
 

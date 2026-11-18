@@ -12,8 +12,9 @@ const adsRunning = () => S.threads.ads.some((t) => !["done", "error"].includes(t
 
 function adsBody() {
   /* the ask as the form holds it: the first ticked table is the base, the rest its context layers; the ticked zones are
-     the question's, sent with every zone the conversation asked before (a later question may name one); each zone is its
-     polygon, which the bridge's graph question and the tables' rows both read (not the cells the map lights) */
+     the question's, none the whole map's, sent with every zone the conversation asked before (a later question may name
+     one); each zone is its polygon, which the bridge's graph question and the tables' rows both read (not the cells the
+     map lights) */
   const tables = [...document.querySelectorAll("#ads-tables input:checked")].map((i) => ({ dataset_id: i.value, filename: i.dataset.file, resolution: +i.dataset.res }));
   const focus = [...document.querySelectorAll("#ads-zones input:checked")].map((i) => i.value);
   const drawn = Object.fromEntries(GeoMap.zones().filter((z) => focus.includes(z.id)).map((z) => [z.id, z.polygon]));
@@ -37,12 +38,12 @@ function periodHeader(p) {
 
 function previewAds() {
   /* the task ADS will get, but for the zones' figures and insights, which the ask brings */
-  const body = adsBody(), ready = body.tables.length && body.focus.length;
+  const body = adsBody(), ready = body.tables.length;  // no zone ticked: the whole map
   $("ads-send").disabled = !body.question.replace(PERIOD_LINE, "").trim() || !ready || adsRunning();
   $("ads-send").title = adsRunning() ? "ADS ще відповідає на попереднє питання розмови" : "";
   clearTimeout(adsPreviewTimer);
   adsPreviewTimer = setTimeout(async () => {
-    if (!ready) { $("ads-preview").textContent = "Позначте хоча б одну таблицю й одну зону."; return; }
+    if (!ready) { $("ads-preview").textContent = "Позначте хоча б одну таблицю."; return; }
     const d = await api("/api/ads/preview", adsPost(body)).catch((e) => ({ parts: [{ text: e.message }] }));
     $("ads-preview").textContent = d.parts.map((p) => p.text).join("");
   }, 250);
@@ -51,15 +52,17 @@ function previewAds() {
 function openAds(zoneId, changed = []) {
   if (!S.ads) return;  // as the popup's button: nothing to ask
   /* one row per upload, as its levels share the rows: the level open on the map, else the finest; the zone asked from
-     ticked, the map's others offered beside it (without one, every zone ticked) */
+     ticked, the map's others offered beside it (without one, every zone ticked; none ticked asks about the whole map) */
   const open = GeoMap.current(), byUpload = new Map();
   for (const d of [...GeoMap.datasets()].sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open) || b.resolution - a.resolution))
     if (!byUpload.has(uploadOf(d))) byUpload.set(uploadOf(d), d);
   const rows = [...byUpload.values()];
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}" data-res="${esc(d.resolution)}"${d.dataset_id === open ? " checked" : ""}> ` +
     `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>`).join("");
-  $("ads-zones").innerHTML = GeoMap.zones().map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
-    `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("");
+  const zones = GeoMap.zones();
+  $("ads-zones").innerHTML = zones.map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
+    `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("") +
+    `<p class="small muted">${zones.length ? "Жодної не позначено — питання про всю мапу." : "Зон на мапі немає: питання про всю мапу."}</p>`;
   const asked = Object.keys(S.adsZones);
   $("ads-status").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
   if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;

@@ -71,8 +71,8 @@ class ZoneIn(BaseModel):
 class AskIn(BaseModel):
     question: str = ""
     tables: list[TableIn] = Field(min_length=1)  # the first is the base table, the rest its context layers
-    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_ZONES)  # every zone of the conversation: a later question may name an earlier one
-    focus: list[str] = Field(min_length=1, max_length=MAX_FOCUS)  # the zones this question is about
+    zones: list[ZoneIn] = Field([], max_length=MAX_ZONES)  # every zone of the conversation: a later question may name an earlier one
+    focus: list[str] = Field([], max_length=MAX_FOCUS)  # the zones this question is about; none: the whole map
     session_id: str | None = Field(None, pattern=SESSION_ID)  # the conversation's ADS session; None: its first question
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # the console's period bar, [start, end): the graph's only period
 
@@ -144,16 +144,19 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, polygon: dict[str, Any], period: list[str] | None) -> list[dict[str, Any]]:
-        """A zone's evidence: the graph reads the polygon as the cells of its finest geo level whose centres it holds, and
-        the period bar's days, never a period the question's text names (that one is ADS's)."""
-        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "geometry": polygon, "use_llm": False}
+    def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
+        """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
+        centres it holds, and the period bar's days, never a period the question's text names (that one is ADS's)."""
+        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "use_llm": False} | ({"geometry": polygon} if polygon else {})
         if period:
             ask["period"] = period
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
 
     def zone_findings(body: AskIn, zones: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone."""
+        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone. No
+        zone asked: the whole map's findings, in no zone."""
+        if not body.focus:
+            return [{k: v for k, v in it.items() if k != "inside"} | {"zones": {}} for it in ask_graph(body.question, None, body.period)]
         by_zone = {}
         for z in body.focus:
             found = ask_graph(body.question, zones[z], body.period)
@@ -291,7 +294,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
-            upload(job["session_id"], tables, {ZONES_FILE: placed, ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
+            files = {ZONES_FILE: placed} if zones else {}  # a conversation without a zone has no zones file
+            upload(job["session_id"], tables, files | {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)
             enter("joint")
