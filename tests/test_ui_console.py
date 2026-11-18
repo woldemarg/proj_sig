@@ -209,9 +209,13 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.fill("#link-counts", "kind=a")
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
         assert page.is_disabled("#link-go")  # nothing picked yet
+        assert not page.is_visible(".link-opt[data-sample='schools']")  # the ready layers start folded
+        page.click("#link-pick summary")
         page.click(".link-opt[data-sample='schools']")  # a pick, not a run: the button sends it
+        assert not page.evaluate("$('link-pick').open") and "schools" in page.inner_text("#link-pick-sum")
         page.set_input_files("#link-file", files=[{"name": "own.csv", "mimeType": "text/csv", "buffer": b"lat,lon\n0,0\n"}])
         assert page.inner_text("#link-file-name") == "own.csv" and not page.locator(".link-opt.on").count()  # a file replaces the pick
+        page.click("#link-pick summary")
         page.click(".link-opt[data-sample='schools']")  # and a pick replaces the file
         assert page.inner_text("#link-file-name") == "" and page.is_enabled("#link-go")
         assert not any(b.get("cross") for b in engine.ws.list_batches())  # no run before the button
@@ -223,6 +227,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
+        page.click("#link-pick summary")
         assert "уже додано" in page.inner_text(f".link-opt[data-layer='{layer}']")
         page.select_option("#link-ring", "1")  # the same disk as the run
         page.click(f".link-opt[data-layer='{layer}']")  # the same layer again: the run exists
@@ -231,6 +236,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.click(".ds-link")
         page.fill("#link-counts", "")  # no types: the composition alone
         page.select_option("#link-ring", "1")
+        page.click("#link-pick summary")
         page.click(".link-opt[data-sample='patrols']")
         page.click("#link-go")
         page.wait_for_function(kids % "patrols", timeout=20000)

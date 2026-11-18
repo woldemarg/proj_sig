@@ -45,6 +45,7 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
 
     def link(page, key: str) -> None:  # *+ Додати шар* under the crimes with a shipped set, sent by its button
         page.click(".ds-link")
+        page.click("#link-pick summary")
         page.click(f".link-opt[data-sample='{key}']")
         page.click("#link-go")
 
