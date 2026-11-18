@@ -17,15 +17,15 @@ python scripts/check.py
 The gate runs the stages CI runs (`.github/workflows/ci.yml`), so a green gate means a green CI:
 - `lint`: `ruff check`, `ruff format --check`, `uv lock --check`;
 - `types`: mypy over the packages, `tests/` and `scripts/` (strict: the packages fully annotated; settings in `pyproject.toml`);
-- `test`: the **whole** pytest suite (≈ 4–5 min; model-backed and browser tests included when the local model and Chromium are present on the host);
-- `security`: gitleaks over the git history and Trivy over `uv.lock` and the Dockerfiles (`brew install gitleaks trivy` or their releases); a tool not on PATH is reported `skipped`, never `ok`.
+- `test`: the **whole** pytest suite, every warning an error (`pytest.ini`) (≈ 4–5 min; model-backed and browser tests included when the local model and Chromium are present on the host);
+- `security`: gitleaks over the git history and Trivy over `uv.lock` (dev groups included) and the Dockerfiles, failing on any severity (`brew install gitleaks trivy` or their releases); a tool not on PATH is reported `skipped`, never `ok`.
 
 `python scripts/check.py lint types` runs chosen stages. CI also runs CodeQL and a report-only Trivy scan of the built images; those need CI's runners and are not part of the local gate.
 
 - `scripts/check.py --quick` (lint, types and the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence, narrator and UI tests are where cross-package regressions show up.
 - "Small / obvious / comment-only" is not an exemption; formatting and import order are exactly what small edits break.
-- Do not silence the gate with `# noqa`, `# type: ignore`, new `ignore` entries in `pyproject.toml`, `.gitleaksignore` entries for real secrets, or skipped tests. Fix the cause.
+- Do not silence the gate with `# noqa`, `# type: ignore`, `filterwarnings` entries, new `ignore` entries in `pyproject.toml`, `.gitleaksignore` entries for real secrets, or skipped tests. Fix the cause.
 - If the gate cannot run fully (no venv, no model, no Chromium, no gitleaks or trivy), say so in the summary and name the stages that were skipped. Never imply it passed.
 
 Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`) may skip the gate; any Python, `pyproject.toml`, `uv.lock` or `pytest.ini` change may not. A change to a `Dockerfile`, `compose.yaml`, `nginx.conf` or `uv.lock` also runs `python scripts/compose_check.py` (Docker must be running).

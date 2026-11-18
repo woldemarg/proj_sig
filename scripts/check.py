@@ -5,7 +5,7 @@
     python scripts/check.py --quick          # mid-change feedback: lint, types and the fast tests
 
 Stages: lint (ruff check, ruff format --check, uv lock --check), types (mypy), test (pytest), security (gitleaks over
-the git history, trivy over the lockfile and the Dockerfiles). A tool missing from PATH is reported as skipped, never as
+the git history, trivy over the lockfile, dev groups included, and the Dockerfiles: any finding of any severity fails). A tool missing from PATH is reported as skipped, never as
 passed (in CI, as failed). Runs every step even after a failure and exits non-zero if any failed. Works on Windows, macOS and Linux.
 """
 
@@ -63,9 +63,7 @@ def build_steps(stages: list[str], quick: bool) -> list[tuple[str, list[str]]]:
                     "fs",
                     "--scanners",
                     "vuln,misconfig",
-                    "--severity",
-                    "HIGH,CRITICAL",
-                    "--ignore-unfixed",
+                    "--include-dev-deps",
                     "--exit-code",
                     "1",
                     *trivy_skip,

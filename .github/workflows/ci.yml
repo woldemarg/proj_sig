@@ -19,12 +19,16 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # checkout's `git init` hint about the default branch name
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: master
   UV_VERSION: "0.11.17"  # the Dockerfiles' uv; jobs add --group cpu: the CPU torch, as in the CPU image
   TRIVY_VERSION: "v0.76.2"
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - &checkout
@@ -40,7 +44,7 @@ jobs:
       - run: uv run --frozen --group cpu python scripts/check.py lint
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - *checkout
@@ -49,7 +53,7 @@ jobs:
 
   # The suite split by marker, without overlap: fast, model-backed, browser.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - *checkout
@@ -57,7 +61,7 @@ jobs:
       - run: uv run --frozen --group cpu pytest -m "not model and not browser"
 
   test-model:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - *checkout
@@ -67,11 +71,13 @@ jobs:
           path: models
           key: qwen3-${{ hashFiles('attractor_topology/encoder.py', 'insight_graph_service/core/model_store.py') }}
       - name: Provision and verify the embedding model
+        env:
+          HF_HUB_VERBOSITY: error  # a public model: no token, so no rate-limit advice
         run: uv run --frozen --group cpu python -m insight_graph_service.core.model_store
       - run: uv run --frozen --group cpu pytest -m "model and not browser"
 
   test-browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - *checkout
@@ -80,7 +86,7 @@ jobs:
       - run: uv run --frozen --group cpu pytest -m browser
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -101,7 +107,7 @@ jobs:
       - run: uv run --no-project python scripts/check.py security  # check.py needs only the standard library
 
   images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - *checkout
@@ -118,7 +124,7 @@ jobs:
           done
 
   codeql:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -133,6 +139,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          queries: security-and-quality
           config: |
             paths-ignore:
               - tests

@@ -370,8 +370,8 @@ Every admitted flash shorter than the upload carries a `PEAKED_AT`; one as long 
 `python scripts/check.py` runs the stages CI runs, each step even after a failure, and exits non-zero if any failed:
 - `lint`: `ruff check` (rules E/F/W/I/UP/B, line length 150; the vendored EDA file keeps its upstream style and is exempt from formatting), `ruff format --check`, and `uv lock --check` (the lockfile matches `pyproject.toml`);
 - `types`: mypy over the eight packages, `tests/` and `scripts/` (`[tool.mypy]` in `pyproject.toml`): `check_untyped_defs`, `warn_return_any`, `disallow_any_generics`, and in the packages `disallow_untyped_defs`; vendored code is outside it; pandas, scipy, scikit-learn, h3, pysubgroup and statsmodels ship no types;
-- `test`: the full pytest run;
-- `security`: gitleaks over the whole git history (triaged false positives in `.gitleaksignore`) and Trivy over the repository (`--scanners vuln,misconfig`: the vulnerabilities of `uv.lock` and the Dockerfiles' misconfigurations; HIGH and CRITICAL with a fix fail).
+- `test`: the full pytest run, where any warning fails its test (`filterwarnings = error` in `pytest.ini`);
+- `security`: gitleaks over the whole git history (triaged false positives in `.gitleaksignore`) and Trivy over the repository (`--scanners vuln,misconfig --include-dev-deps`: the vulnerabilities of every group in `uv.lock` and the Dockerfiles' misconfigurations; a finding of any severity fails, with or without a fix).
 
 Lint and format cover the eight packages (`insight_contracts/`, `subgroup_miner/`, `attractor_topology/`, `graph_query_engine/`, `insight_graph_service/`, `evidence_narrator_service/`, `llm_model_broker/`, `ads_bridge_service/`), `tests/` and `scripts/`. `python scripts/check.py lint types` runs chosen stages. A tool missing from PATH is reported `skipped`, never `ok` (in CI, `failed`). `--quick` runs lint, types and the tests without the `model` and `browser` markers, for feedback during a change; it is not the gate. A change to a contract (fields, formula, schema, path grammar, `EvidencePayload`) updates the owning chapter and its test in the same change; a representation change bumps `REPRESENTATION_VERSION` or `CANONICAL_VERSION` ([11.5](11_reference.md#115-versioned-contracts)).
 
@@ -383,7 +383,7 @@ CI (`.github/workflows/ci.yml`, no CD) runs on every push and pull request to `m
 | `test`, `test-model`, `test-browser` | pytest split by marker without overlap: `not model and not browser`; `model and not browser` with the model provisioned and verified by `model_store` (cached); `browser` with Playwright's Chromium |
 | `security` | `check.py security` (gitleaks, Trivy fs) |
 | `images` | the five built images (`insight-graph:cpu`, `evidence-narrator`, `llm-model-broker`, `web-console`, `ads-bridge`) scanned by Trivy; report-only, since the base images' OS packages carry fixed CVEs their newest tags do not ship yet |
-| `codeql` | CodeQL SAST over Python, the console's JavaScript and the workflows; results in the repository's code scanning |
+| `codeql` | CodeQL's `security-and-quality` queries over Python, the console's JavaScript and the workflows; results in the repository's code scanning |
 
 The jobs install the CPU torch (`--group cpu`), as the CPU image does. Dependabot (`.github/dependabot.yml`) opens weekly grouped updates into `develop` for `uv.lock`, the actions, the Dockerfiles' base images and `compose.yaml`. `compose_check.py` stays outside CI: its broker check needs the provider key.
 
