@@ -281,7 +281,7 @@ def test_a_question_needs_no_zone():
         job = finished(client, client.post("/api/ads/jobs", json=kept).json()["job_id"])
         assert seen["uploads"][-2:] == ["zones.csv", "zones.md"] and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
         assert "unless the question names a zone of df_zones" in job["ads_query"] and "other zones (Z1)" in job["ads_query"]
-        assert "inside vs adjacent" not in job["ads_query"] and "# Уся мапа: методика" in seen["prompt"]
+        assert "inside vs adjacent" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
 
 
 def test_the_bridge_strips_the_periods_the_graph_reads():
