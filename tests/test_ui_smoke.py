@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from conftest import make_engine, pick_dataset, serve, stack
+from conftest import make_engine, pick_dataset, serve, stack, weekly_retail
 from dev import chromium
 
 from insight_contracts.wording import TERMS, name
@@ -763,6 +763,7 @@ def test_a_question_can_be_cancelled_and_a_dropped_one_paints_nothing(cfg, demo_
         assert not errors, errors
 
 
+@pytest.mark.browser
 def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tmp_path):
     """The form sends a time column and its grid; the graph draws the periods of the events behind a legend switch, the
     drawer draws an insight's curve and names its trend, and an evidence card names its dynamics (docs/08_interface.md)."""
@@ -770,7 +771,6 @@ def test_the_console_uploads_a_time_column_and_draws_a_findings_dynamics(cfg, tm
     exe = chromium()
     if exe is None:
         pytest.skip("no local Chromium for Playwright")
-    from conftest import weekly_retail
 
     path = weekly_retail(tmp_path)
     engine = make_engine(cfg)
