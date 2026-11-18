@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from ads_bridge_service.app import _PERIODS, create_app, error_code
 from ads_bridge_service.settings import AdsSettings
+from ads_bridge_service.task import name_tables
 from insight_contracts.wording import PERIOD
 
 POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2, 50.1], [30.0, 50.1], [30.0, 50.0]]]}
@@ -72,6 +73,8 @@ def upstream(
         seen.setdefault("zone_rows", []).append((dataset_id, body))
         if (meta := table(dataset_id)) is None:
             return unknown(dataset_id)
+        if body.get("layer"):  # a layer of an aligned run over one ring
+            meta |= {"layer": body["layer"], "ring": 1, "window": ["2031-03-01", "2031-03-31"]}
         zones = {z["id"]: {"inside": 3, "adjacent": 1, "far": 1, "zone_cells": 5} for z in body["zones"]}
         rows = "".join(f"{z},0,inside\n{z},3,adjacent\n" for z in zones)
         return Response(f"zone_id,row_id,aoi_zone\n{rows}", media_type="text/csv", headers={"X-Zones": json.dumps(meta | {"zones": zones})})
@@ -269,11 +272,19 @@ def test_a_layer_goes_as_a_context_table():
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and seen["rows"] == [("ds-a", 8), ("ds-a", 8, "bars")]
         assert [b.get("layer") for _, b in seen["zone_rows"]] == [None, "bars"]
-        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_r8.csv", "zones.csv", "zones.md"]
-        assert {line.split(",")[1] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"events_dsa_r8.csv", "bars_dsa_r8.csv"}
+        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_layer_r8.csv", "zones.csv", "zones.md"]
+        assert {line.split(",")[1] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"events_dsa_r8.csv", "bars_dsa_layer_r8.csv"}
         query = job["ads_query"]
-        assert "df_bars_dsa_r8 (bars_dsa_r8.csv: bars" in query and "the points SIG's condition context_bars_band counts per cell" in query
-        assert "is a context layer of the main table" in query and "bars_dsa_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
+        assert "df_bars_dsa_layer_r8 (bars_dsa_layer_r8.csv: bars" in query
+        assert "context_bars_band counts per cell with its six neighbours, only its points within 2031-03-01..2031-03-31" in query
+        assert "is a context layer of the main table" in query and "bars_dsa_layer_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
+        same = name_tables(
+            [
+                {"dataset_id": "ds-a", "filename": "crimes_2024_2025_robbery_x.csv", "resolution": 8},
+                bars | {"filename": "crimes_2024_2025_robbery_xy"},
+            ]
+        )
+        assert len({t["file"] for t in same}) == 2  # a layer named as its table's first 24 letters keeps its own file
         assert client.post("/api/ads/jobs", json=ask | {"tables": [bars, TABLES[0]]}).status_code == 422  # a layer is never the base
         assert client.post("/api/ads/jobs", json=ask | {"tables": [TABLES[0], bars, bars]}).status_code == 422
 
@@ -429,6 +440,8 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input[data-layer]')].map((i) => [i.dataset.layer, i.checked])") == [
                     ["bars", True]
                 ]
+                page.uncheck("#ads-tables input:not([data-layer])")
+                assert page.evaluate("adsBody().tables") == []  # a layer goes with its own table alone
                 page.evaluate("delete S.datasets[GeoMap.current()].cross_layers")
                 page.evaluate("G.datasets.pop(); openAds()")
                 page.wait_for_function("$('ads-preview').textContent.includes('Період:')")  # previewed: the period line alone asks nothing

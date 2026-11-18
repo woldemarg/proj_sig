@@ -100,12 +100,13 @@ def df_name(file: str) -> str:
 
 def name_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The picked datasets, the first the base table and the rest its context layers, each with the file it goes to ADS
-    as: its name, its dataset and the base table's resolution, one file per session whatever the zones; and its ``df``."""
+    as: its name, its dataset and the base table's resolution, one file per session whatever the zones; and its ``df``. A
+    layer shares its run's dataset: its whole name and ``layer`` keep its file apart from the table's and the other layers'."""
     resolution = tables[0]["resolution"]
     out = []
     for t in tables:
-        stem = re.sub(r"[^a-z0-9]+", "_", PurePath(t["filename"]).stem.lower()).strip("_")[:24] or "table"
-        file = f"{stem}_{re.sub(r'[^a-z0-9]+', '', t['dataset_id'].lower())}_r{resolution}.csv"
+        stem = re.sub(r"[^a-z0-9]+", "_", PurePath(t["filename"]).stem.lower()).strip("_")[: 64 if t.get("layer") else 24] or "table"
+        file = f"{stem}_{re.sub(r'[^a-z0-9]+', '', t['dataset_id'].lower())}{'_layer' if t.get('layer') else ''}_r{resolution}.csv"
         out.append(t | {"file": file, "df": df_name(file), "cells_at": resolution})
     return out
 
@@ -185,7 +186,9 @@ def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list
 def _table_line(t: dict[str, Any]) -> str:
     counted = f", {t['total']} rows" if "total" in t else ""
     part = f", only its rows where {t['where']}" if t.get("where") else ""  # a filtered reading of the file
-    layer = f"; the points SIG's condition context_{t['layer']}_band counts per cell" if t.get("layer") else ""
+    disk = {0: "per cell", 1: "per cell with its six neighbours"}.get(t.get("ring", 0), f"per cell with its {t.get('ring')} rings of neighbours")
+    span = f", only its points within {t['window'][0]}..{t['window'][1]}" if t.get("window") else ""  # an aligned run's window
+    layer = f"; the points SIG's condition context_{t['layer']}_band counts {disk}{span}" if t.get("layer") else ""
     return f"{t['df']} ({t['file']}: {t['filename']}{part}{counted}{layer})"
 
 

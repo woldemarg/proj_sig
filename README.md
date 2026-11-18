@@ -31,7 +31,7 @@ browser ──> web-console (nginx: the UI; /api/chat/ -> narrator, /api/ -> gra
 | [`insight_graph_service/`](insight_graph_service) | the graph service: `core/` (engine, workspace, snapshot compiler, Neo4j mirror, model provisioning) and `server/` (HTTP API) |
 | [`evidence_narrator_service/`](evidence_narrator_service) | the chat: the graph's evidence verbalised by the LLM, every citation checked |
 | [`llm_model_broker/`](llm_model_broker) | one OpenAI-compatible endpoint in front of the upstream model |
-| [`ads_bridge_service/`](ads_bridge_service) | a question about drawn zones handed to ADS, the agentic data-science service, with the zones' insights as established facts |
+| [`ads_bridge_service/`](ads_bridge_service) | a question about drawn zones, or the whole map, handed to ADS, the agentic data-science service, with the tables, a link run's layers and the insights as established facts |
 | [`sig_web_console/`](sig_web_console) | the static UI and its nginx edge |
 
 Each library imports only the shared kernel; `tests/test_architecture.py` enforces every allowed import. Bounded contexts, contracts, start order and why these services: [docs/12_architecture.md](docs/12_architecture.md).

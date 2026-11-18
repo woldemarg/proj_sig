@@ -179,8 +179,8 @@ def _export_reading(
     """What the reader of a geo dataset's export must know of its table, the reading of its rows and the cell resolution
     of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
     over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
-    ``layer``: a layer link run's context layer by its name, its points read as the run read them, instead of the
-    dataset's own rows."""
+    ``layer``: a layer link run's context layer by its name, its points read as the run read them (its filter, an aligned
+    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
     if not geo or dataset_id in hidden_datasets(ws.list_batches()):
@@ -191,13 +191,14 @@ def _export_reading(
         raise PipelineError("invalid_options", f"resolution {resolution} is not a geo dataset's: {known}")
     table = {"dataset_id": dataset_id, "upload_id": record.get("upload_id"), "filename": record["filename"], "dataset_resolution": geo["resolution"]}
     if layer is not None:
-        entry = next((c for c in record.get("context") or () if c["name"] == layer), None)
+        entry = next((c for c in context_files(record) if c[0] == layer), None)
         if entry is None:
             raise PipelineError("unknown_dataset", f"{dataset_id} holds no layer {layer!r}")
-        path = Path(entry["path"])
-        table |= {"layer": layer, "filename": f"{layer}{path.suffix}", "upload_id": None}
-        return table | {"time": entry.get("time"), "where": entry.get("where")}, (path, entry["geo"], entry.get("where")), resolution
-    reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"))
+        _, path, locator, window, where = entry
+        table |= {"layer": layer, "filename": f"{layer}{path.suffix}", "upload_id": None, "ring": record.get("context_ring", 0)}
+        span = {"window": list(window[2:])} if window else {}
+        return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
+    reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)
     return table | {"time": record.get("time"), "where": record.get("where")}, reading, resolution
 
 
