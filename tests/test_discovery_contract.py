@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import subgroup_miner.vendor.eda.main_upd as eda
-from insight_contracts import Condition, pattern_id
+from insight_contracts import Condition, Insight, pattern_id
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.discovery import (
     Candidate,
@@ -27,6 +29,12 @@ def discovered(demo_df):
     res = run_discovery(demo_df, cfg)
     insights = build_insights(res, cfg, dataset_id="ds-test", batch_id="B-test", filename="retail.csv")
     return cfg, res, insights
+
+
+def _z(ins: Insight, metric: str) -> float:
+    shift = ins.shift_for(metric)
+    assert shift is not None
+    return shift.robust_z
 
 
 def by_scope(insights, **scope):
@@ -84,13 +92,13 @@ def test_selection_keeps_planted_phenomena(discovered):
     # local anomaly + stronger specialization
     parent = kept["category=laptops AND region=EU"]
     child = kept["category=laptops AND channel=online AND region=EU"]
-    assert child.shift_for("margin").robust_z > parent.shift_for("margin").robust_z > 0
+    assert _z(child, "margin") > _z(parent, "margin") > 0
     # contrasting subgroup
-    assert kept["category=laptops AND channel=retail AND region=EU"].shift_for("margin").robust_z < 0
+    assert _z(kept["category=laptops AND channel=retail AND region=EU"], "margin") < 0
     # recurring phenomenon in structurally disjoint scopes
     for scope in ("category=phones AND region=US", "category=tablets AND region=APAC"):
         s = kept[scope]
-        assert s.shift_for("discount").robust_z > 1 and s.shift_for("margin").robust_z < -0.5
+        assert _z(s, "discount") > 1 and _z(s, "margin") < -0.5
     # EMM-only correlation break becomes a covariance insight
     cov = kept["category=phones AND region=EU"]
     assert cov.phenomenon_type == "covariance" and set(cov.covariance["pair"]) == {"discount", "margin"}
@@ -101,7 +109,7 @@ def test_pass1_mask_cache_is_the_selectors_cover(demo_df):
     ``covers`` selects, whatever the order in which conjunctions share a selector."""
     profile = eda.step1_profile_data(demo_df)
     space = eda.step3_generate_search_space(profile, eda.step2_evaluate_macro_groupings(profile, min_categories=3))
-    masks = {}
+    masks: dict[tuple[str, object], Any] = {}
     for selector in [*space, *reversed(space)]:
         assert np.array_equal(eda.cached_covers(selector, profile["data_safe"], masks), selector.covers(profile["data_safe"]))
     assert len(masks) < len(space)  # each (attribute, value) once, not once per conjunction

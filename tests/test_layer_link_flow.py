@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -34,8 +35,9 @@ def test_the_simplified_flow_runs_from_an_empty_workspace_without_the_developer_
     engine = make_engine(cfg)
     port, app = stack(engine)
 
-    def finished(**match) -> dict:
+    def finished(**match) -> dict[str, Any]:
         deadline = time.time() + 300
+        done: list[dict[str, Any]]
         while not (done := [b for b in engine.ws.list_batches() if all(b.get(k) == v for k, v in match.items()) and b["status"] in TERMINAL]):
             assert time.time() < deadline, f"no finished batch with {match}"
             time.sleep(0.5)

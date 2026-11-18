@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from conftest import FakeLLM, ask, make_config, make_engine
 from fastapi.testclient import TestClient
@@ -158,8 +160,11 @@ def test_temporal_ab_apparatus():
     ]
     measure = {"patterns": 4.0, "plain_patterns": 2.0, "edges": 9.0, "temporal_edges": 1.0, "journal_rows": 4.0, "seconds": 1.0}
     measure |= {"discover_seconds": 0.5, "anchors": 2.0, "plain_anchors": 1.0, "patterns_per_anchor": 2.0, "plain_recall": 1.0}
-    chain = {"summary": {**measure, "seeds": [1], "window_only": {"nested": 2.0}}, "per_seed": [{**rows[0], "file_sha256": "f"}]}
-    event = {"summary": {**measure, "seeds": [1], "window_only": {}}, "per_seed": [{**rows[0], "timed": rows[0]["plain"], "file_sha256": "f"}]}
+    chain: dict[str, Any] = {"summary": {**measure, "seeds": [1], "window_only": {"nested": 2.0}}, "per_seed": [{**rows[0], "file_sha256": "f"}]}
+    event: dict[str, Any] = {
+        "summary": {**measure, "seeds": [1], "window_only": {}},
+        "per_seed": [{**rows[0], "timed": rows[0]["plain"], "file_sha256": "f"}],
+    }
     table = compare(chain, event)
     assert (
         "| window-only, nested | 2.00 | 0.00 |" in table and "new         tier=t3  (seeds [1]; target value; holds part of S1, S2, S3, S4)" in table
@@ -332,7 +337,12 @@ def test_answering_embeds_the_question_not_the_corpus(engine, demo_csv, monkeypa
     embedder, seen = engine.encoder.embedder, []
     for name in ("embed", "embed_queries"):
         original = getattr(embedder, name)
-        monkeypatch.setattr(embedder, name, lambda texts, original=original: seen.extend(texts) or original(texts))
+
+        def spy(texts, original=original):
+            seen.extend(texts)
+            return original(texts)
+
+        monkeypatch.setattr(embedder, name, spy)
     assert engine.ingest_file(demo_csv)["status"] == "READY"
     graph = engine.graph()
     documents = {graph.canonical_document(n["id"]) for n in graph.of_kind("Pattern")}
@@ -420,7 +430,8 @@ def test_the_crosstype_demo_script_runs_on_a_tiny_set_and_writes_its_table(engin
     spec = "road_type=local"
     medians = type_medians(target, "lat,lon", spec, (RES, RES - 1))
     assert set(medians["local"]) == {f"r{RES}", f"r{RES - 1}"} and medians["local"][f"r{RES - 1}"] >= medians["local"][f"r{RES}"]
-    assert clq(target, "lat,lon", spec, layer, "lat,lon")["local"] > 0
+    quotient = clq(target, "lat,lon", spec, layer, "lat,lon")["local"]
+    assert isinstance(quotient, float) and quotient > 0
     assert "refused" in clq(target, "lat,lon", spec, layer, "x,y")
     if importlib.util.find_spec("statsmodels"):  # the eval group: the model references, an incidence and an odds ratio
         ref = models(target, "lat,lon", spec, {"schools": layer}, RES)["schools"]["local"]

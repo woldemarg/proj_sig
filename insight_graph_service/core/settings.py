@@ -134,7 +134,7 @@ def load_settings(**overrides: Any) -> Settings:
     used: set[str] = set()
     thresholds = _build(PhenomenonThresholds, overrides, used)
     sections = {name: _build(cls, overrides, used, thresholds=thresholds) for name, cls in SECTIONS}
-    settings = _build(Settings, overrides, used, **sections)
+    settings: Settings = _build(Settings, overrides, used, **sections)
     unknown = set(overrides) - used
     if unknown:
         raise TypeError(f"unknown settings: {sorted(unknown)}")

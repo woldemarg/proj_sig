@@ -118,7 +118,8 @@ def context_bands(
 ) -> tuple[dict[str, np.ndarray], dict[str, ContextLayer], dict[str, str], list[str]]:
     """Each layer of ``sources`` on the target's ``cells`` -> (its band column, the layers, their glossary, warnings); a
     layer that leaves one band at this resolution (too sparse) is left out with a warning."""
-    columns, layers, words, warnings = {}, {}, {}, []
+    columns, layers, warnings = {}, {}, []
+    words: dict[str, str] = {}
     for source in sources:
         layer = context_layer(source, cells, resolution, ring)
         bands = band(disk_sums(layer), layer.edges)

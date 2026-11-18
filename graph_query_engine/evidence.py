@@ -242,7 +242,7 @@ class Evidence:
         lines = ["", "LATENT ANCHORS VISITED (recurring phenomena learned across patterns):"]
         for a in self.attractors:
             rel = ", ".join(f"{r['id']} ({self._links(r)})" for r in a["related"])
-            twin = next((r for r in a["related"] if r["id"] == a.get("same_as")), {})
+            twin: dict[str, Any] = next((r for r in a["related"] if r["id"] == a.get("same_as")), {})
             same = (
                 f" (same description as {a['same_as']}; "
                 + (f"shares {_members(twin['shared'])} with it)" if twin.get("shared") else "a separate anchor with no shared members)")
@@ -269,7 +269,7 @@ class Evidence:
     def _item_lines(self, it: EvidenceItem, plain: list[tuple[str, str]]) -> list[str]:
         s, ds = it.statistics, it.provenance["dataset_id"]
         scope = "; ".join(self.reword_condition(c, ds) for c in it.scope) if plain else it.scope_text
-        area = AREA_TAG[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
+        area = AREA_TAG[bool(self.area[it.key])] if self.area and it.key in self.area else ""
         lines = [f"[{it.key}] role={it.role}{area} | scope: {scope} | support {s['support']:,} rows ({s['support_fraction']:.1%})"]
         lines.append(f"     shifts: {'; '.join(self.reword(t, ds) for t in it.shift_text) or 'no validated median shift'}")
         if it.relationship:
@@ -458,7 +458,7 @@ class Evidence:
             tag = f" ({wording.name(reached)}: {wording.TERMS[reached][1]})" if reached else ""
             tag += f" ({wording.name('scale_' + it.scale)})" if it.scale in SCALE_TEXT else ""
             tag += "".join(f" (також [{key}])" for key in it.also)
-            tag += AREA_WORDS[bool(self.area[it.key])] if it.key in (self.area or {}) else ""
+            tag += AREA_WORDS[bool(self.area[it.key])] if self.area and it.key in self.area else ""
             tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
             tag += f" ({it.time['words']})" if it.time else ""
             n = it.statistics["support"]
@@ -681,7 +681,8 @@ def _item(
 
 def _anchor_section(result: TraversalResult, graph: DualGraph) -> list[dict[str, Any]]:
     """The anchors the walk visited, each with its description and its latent neighbours (``LATENT ANCHORS VISITED``)."""
-    attractors, described = [], {}
+    attractors: list[dict[str, Any]] = []
+    described: dict[str, str] = {}
     for a in result.attractors:
         node = graph.nodes[a.node_id]
         related: dict[str, dict[str, Any]] = {}  # one entry per neighbour, with every edge that joins them
@@ -711,7 +712,8 @@ def _anchor_section(result: TraversalResult, graph: DualGraph) -> list[dict[str,
 
 def _named(it: EvidenceItem) -> list[str]:
     """The columns an item names: its scope's attributes, its shifts' metrics, its correlation's pair."""
-    return [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]] + it.statistics["covariance"].get("pair", [])
+    pair: list[str] = it.statistics["covariance"].get("pair", [])
+    return [c.split("=", 1)[0] for c in it.scope] + [s["metric"] for s in it.statistics["shifts"]] + pair
 
 
 def _quoted(text: str) -> str:
@@ -852,10 +854,11 @@ def build_evidence(
         _add_trust(items, graph)
     datasets = _datasets(items, graph)
     ranked = bool(as_of) and query.when is None and config.temporal_recency_half_life_days > 0
-    for it in items if as_of else ():
-        if it.time.get("core"):
-            age = core_age(it.time["core"], as_of[0])
-            it.time["age"] = age | {"days": round(age["days"], 2)}
+    if as_of:
+        for it in items:
+            if it.time.get("core"):
+                age = core_age(it.time["core"], as_of[0])
+                it.time["age"] = age | {"days": round(age["days"], 2)}
     return Evidence(
         query=query.text,
         parsed=query.to_dict(),

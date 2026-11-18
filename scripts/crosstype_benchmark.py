@@ -56,7 +56,8 @@ def density(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     lat0, lon0, dlat, dlon = BOX
     dy = (lat - (lat0 + dlat / 2)) * 111.0
     dx = (lon - (lon0 + dlon / 2)) * 111.0 * np.cos(np.radians(lat0 + dlat / 2))
-    return 0.2 + np.exp(-(dx**2 + dy**2) / (2 * SIGMA_KM**2))
+    weight: np.ndarray = 0.2 + np.exp(-(dx**2 + dy**2) / (2 * SIGMA_KM**2))
+    return weight
 
 
 def sample(rng: np.random.Generator, n: int, weight) -> tuple[np.ndarray, np.ndarray]:
@@ -64,11 +65,13 @@ def sample(rng: np.random.Generator, n: int, weight) -> tuple[np.ndarray, np.nda
     lat0, lon0, dlat, dlon = BOX
     grid = np.meshgrid(np.linspace(lat0, lat0 + dlat, 60), np.linspace(lon0, lon0 + dlon, 60))
     top = float(np.max(weight(grid[0].ravel(), grid[1].ravel()))) * 1.05
-    lats, lons = [], []
+    lats: list[np.ndarray] = []
+    lons: list[np.ndarray] = []
     while sum(map(len, lats)) < n:
         lat, lon = rng.uniform(lat0, lat0 + dlat, 4 * n), rng.uniform(lon0, lon0 + dlon, 4 * n)
         keep = rng.random(4 * n) * top < weight(lat, lon)
-        lats.append(lat[keep]), lons.append(lon[keep])
+        lats.append(lat[keep])
+        lons.append(lon[keep])
     return np.concatenate(lats)[:n], np.concatenate(lons)[:n]
 
 
@@ -165,6 +168,7 @@ def run_seed(name: str, seed: int, overrides: dict[str, Any], family: bool, ring
     except DiscoveryError as exc:
         return row | {"error": exc.code, **dict.fromkeys(GATES, {"insights": [], "found": False}), "seconds": time.perf_counter() - t0}
     insights = build_insights(result, cfg, dataset_id=loaded.dataset_id, batch_id="bench", filename=target.name)
+    assert loaded.spatial is not None  # a geo reading
     covers, cells, planted = covers_of(result), loaded.spatial.cells, set(upload["planted"])
     marginal = [i for i in insights if i.p_adjusted is not None and i.p_adjusted <= cfg.max_p_adjusted and abs(i.effect_size) >= cfg.min_effect_z]
     row |= {
@@ -238,7 +242,7 @@ def format_summary(summary: dict[str, Any]) -> str:
 def run_engine(name: str, seed: int, overrides: dict[str, Any], library: dict[str, Any], ring: int = 1) -> dict[str, Any]:
     """The same upload through the graph service (``Engine.upload`` with its layers as context files): the admitted
     patterns' ``p_context`` must equal the library's gate B."""
-    from tests.doubles import HashingEmbedder
+    from doubles import HashingEmbedder
 
     folder = scratch_dir(f"crosstype_engine/{name}/{seed}", fresh=True)
     engine = build_engine(folder / "ws", embedder=HashingEmbedder(), **overrides)

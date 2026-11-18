@@ -197,6 +197,7 @@ def test_event_weights_are_the_counts_as_counted_whatever_the_baseline(tmp_path)
     on = MinerConfig(context_permutations=49, weight_by_events=True)
     loaded = load_dataset(target, on, geo=f"lat,lon@{RES}", context=[("schools", context, "auto")], baseline="zone")
     frame, ctx = loaded.frame, loaded.spatial
+    assert ctx is not None and ctx.events is not None
     assert (frame["points"] <= 0).any() and (ctx.events >= 1).all() and ctx.events.sum() == (ctx.point_cell >= 0).sum()
     weights = _event_weights("share_kind_a", on, ctx)
     assert weights is ctx.events and _event_weights("load_median", on, ctx) is None and _event_weights("share_kind_a", on, None) is None
@@ -321,19 +322,20 @@ def test_a_pair_is_the_same_insights_other_question_never_a_second_insight(engin
     shift of the same insight — a count's share, a share's count, of the same value — with its medians, untested on its
     own; none without that shift or for a metric of neither kind. On ``mixed`` with the a's counted, the count insight
     carries its share and the share insight its count (the e2e review's F-31)."""
-    from types import SimpleNamespace as N
+    from conftest import toy_insight
 
+    from graph_query_engine import DualGraph
     from insight_graph_service.server.views import link_pair
 
     def ins(target, *shifts):
-        return N(target=target, shifts=[N(metric=m, robust_z=z, local_median=lo, global_median=hi) for m, z, lo, hi in shifts])
+        return toy_insight([], [Shift(m, z, lo, hi, 1.0) for m, z, lo, hi in shifts], target=target)
 
-    insights = {
+    graph = DualGraph({})
+    graph.insights = {
         "c": ins("count_kind_a", ("count_kind_a", 2.0, 3.0, 1.0), ("share_kind_a", 0.5, 0.12, 0.07)),
         "s": ins("share_kind_a", ("share_kind_a", 1.0, 0.12, 0.07)),
         "p": ins("points", ("points", 1.0, 3.0, 1.0), ("share_kind_a", 0.5, 0.12, 0.07)),
     }
-    graph = N(insight=insights.__getitem__)
     assert link_pair(graph, "c") == {"target": "share_kind_a", "effect": 0.5, "local": 0.12, "baseline": 0.07}
     assert link_pair(graph, "s") is None and link_pair(graph, "p") is None
     target, context = mixed(tmp_path)

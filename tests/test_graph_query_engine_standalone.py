@@ -5,6 +5,7 @@ encoder that only has the ``QueryEncoder`` shape."""
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import numpy as np
 import pytest
@@ -30,7 +31,7 @@ class ShapeOnlyEncoder:
 VECTORS = {"P1": [1.0, 0.0, 0.0], "P2": [0.8, 0.6, 0.0]}  # P1 matches the question; P2 is reached through the anchor
 
 
-def state_of(snap: dict, vectors: dict | None = None) -> CommittedState:
+def state_of(snap: dict[str, Any], vectors: dict[str, Any] | None = None) -> CommittedState:
     """A hand-written snapshot's committed state: its graph and the vectors of the patterns it holds."""
     graph = DualGraph(snap)
     return CommittedState(graph, LatentFrame({p: np.array(v, dtype=float) for p, v in (vectors or VECTORS).items() if p in graph.insights}, {}))
@@ -41,16 +42,16 @@ def searched(state: CommittedState, question: str = QUESTION, config: QueryConfi
     return search(question, state, ShapeOnlyEncoder(), config or QueryConfig(), **kwargs)
 
 
-def region(rid: str, **props) -> dict:
+def region(rid: str, **props) -> dict[str, Any]:
     """A Region node from its id ``R:<resolution>:<cell>``."""
     return {"id": rid, "kind": "Region", "label": rid, "props": {"resolution": int(rid.split(":")[1]), "h3": rid[-1], **props}}
 
 
-def dataset(ds: str, label: str | None = None, **props) -> dict:
+def dataset(ds: str, label: str | None = None, **props) -> dict[str, Any]:
     return {"id": f"DS:{ds}", "kind": "Dataset", "label": label or ds, "props": {"dataset_id": ds, **props}}
 
 
-def snapshot() -> dict:
+def snapshot() -> dict[str, Any]:
     signature = [{"component": "margin", "value": -1.0}]
     return {
         "version": SNAPSHOT_VERSION,
@@ -146,7 +147,7 @@ def _levels(
     upload: str | None = "up-1",
     coarse_regions: tuple[str, ...] = ("R:5:a",),
     coarse_first: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """P1 at resolution 7 and, unless ``coarse_z`` is None, P7 at 5 of ``upload``: one anchor; P1 lies in R:5:a, P7 covers
     ``coarse_regions``."""
 
@@ -179,7 +180,7 @@ def _levels(
     return {"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges}
 
 
-def _levels_search(snap: dict, coarse_first: bool = False):
+def _levels_search(snap: dict[str, Any], coarse_first: bool = False):
     vectors = {"P1": [1.0, 0.0, 0.0], "P7": [0.0, 1.0, 0.0]}
     if coarse_first:  # the coarser level matches the question, the finer one is reached through the anchor
         vectors = {"P1": vectors["P7"], "P7": vectors["P1"]}
@@ -239,7 +240,7 @@ def test_the_scale_holds_for_a_broad_coarser_level_any_rank_and_no_upload(monkey
     assert not chain.up and chain.scale == "regional"  # no step spent, the label still searched
 
 
-def _held_by(edges: list[dict], rids: list[str]) -> list[dict]:
+def _held_by(edges: list[dict[str, Any]], rids: list[str]) -> list[dict[str, Any]]:
     """Region nodes counting their IN_REGION members, as the snapshot does."""
     return [region(r, patterns=sum(e["type"] == "IN_REGION" and e["target"] == r for e in edges)) for r in rids]
 
@@ -251,8 +252,8 @@ def test_the_graphs_regions_are_the_regions_the_map_draws():
     from graph_query_engine.vertical import shown_regions
     from insight_graph_service.server.views import cytoscape_elements
 
-    def geo(pid: str, ds: str) -> dict:
-        node = pattern(pid, [f"district={pid}"], dataset=ds)
+    def geo(pid: str, ds: str) -> dict[str, Any]:
+        node: dict[str, Any] = pattern(pid, [f"district={pid}"], dataset=ds)
         node["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
         return node
 
@@ -272,8 +273,8 @@ def test_the_console_draws_a_patterns_places_and_the_regions_its_scale_chain_nam
     up), each holding an intact pattern; so every region the ZONES name, at whatever level, is drawn."""
     from graph_query_engine.vertical import places, rank_zones, scale_chain, shown_regions
 
-    def geo(pid: str) -> dict:
-        node = pattern(pid, [f"district={pid}"])
+    def geo(pid: str) -> dict[str, Any]:
+        node: dict[str, Any] = pattern(pid, [f"district={pid}"])
         node["props"]["provenance"]["spatial"] = {"resolution": 8, "cells": 40}
         return node
 
@@ -392,7 +393,7 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     0.5 (D's 0.3 in R:5:x is no place) and adds its weight to its places in proportion to their shares; the level is the
     coarsest where the geo findings lie in three or more regions; a relationship question counts the correlation changes of its pair; without
     a target every geo finding counts; a question with scope gets none."""
-    from types import SimpleNamespace
+    from conftest import evidence_item
 
     from graph_query_engine.evidence import _zones
     from graph_query_engine.question import ParsedQuery
@@ -423,7 +424,7 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     )
     edges = [edge(p, r, "IN_REGION", s) for p, r, s in shares] + [edge(p, "R:3:w", "IN_REGION", 1.0) for p in "ABCDEF"]
     graph = DualGraph({"version": SNAPSHOT_VERSION, "nodes": nodes, "edges": edges})
-    items = [SimpleNamespace(pattern_id=p, folded_into="") for p in "ABCDEF"]
+    items = [evidence_item(pattern_id=p) for p in "ABCDEF"]
     zones = _zones(ParsedQuery("where is margin lower?", targets=["margin"], direction=-1), items, graph, QueryConfig())
     assert [(z["id"], z["holds"]) for z in zones] == [("R:5:x", ["A", "B"]), ("R:5:z", ["D"]), ("R:5:v", ["F"])]  # C, E and D's 0.3 out
     assert [z["score"] for z in zones] == [round(0.8 + 0.6, 4), 0.5, 0.4] and zones[0]["resolution"] == 5  # all its weight in its one place
@@ -511,7 +512,7 @@ def test_two_links_to_one_anchor_are_one_entry_and_a_repeated_description_is_exp
     """Anchors joined by both CO_OCCURS and RELATED_TO list each other once with both links; the second anchor of a
     description already shown names the first and how many members they share, or that it shares none."""
     snap = snapshot()
-    snap["nodes"].append({"id": "A-2", "kind": "Attractor", "label": "margin ↓", "props": dict(snap["nodes"][2]["props"])})
+    snap["nodes"].append({"id": "A-2", "kind": "Attractor", "label": "margin ↓", "props": dict[str, Any](snap["nodes"][2]["props"])})
     snap["edges"] = [
         edge("P1", "A-1", "ACTIVATES", 0.9),
         edge("P2", "A-2", "ACTIVATES", 0.8),
@@ -599,7 +600,8 @@ def test_a_theme_is_the_strongest_walkable_membership():
     strong_weak["props"]["weak"] = True
     snap["edges"] = [strong_weak, edge("P1", "A-1", "ACTIVATES", 0.5), {**edge("P2", "A-1", "ACTIVATES", 0.9), "props": {"weak": True}}]
     graph = DualGraph(snap)
-    assert primary_anchor(graph, "P1")["target"] == "A-1" and primary_anchor(graph, "P2") is None
+    anchor = primary_anchor(graph, "P1")
+    assert anchor is not None and anchor["target"] == "A-1" and primary_anchor(graph, "P2") is None
 
 
 def test_a_memoised_fact_is_built_once_however_many_readers_ask():
@@ -643,7 +645,7 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     form gives."""
     from graph_query_engine.vertical import picture, scale_chain
 
-    def chains(snap: dict):
+    def chains(snap: dict[str, Any]):
         graph, found = _levels_search(snap)
         items = {it.pattern_id: it for it in found.evidence.items}
         (up,) = scale_chain(graph, ["P1"])
@@ -657,7 +659,7 @@ def test_a_coarser_level_meets_its_finer_one_in_its_own_cells():
     assert DualGraph(cells_form).holders("R:5:a") == ["P1", "P7"]  # its IN_REGION member, then the pattern whose cell it is
     from insight_graph_service.server.views import node_details
 
-    def panel(snap: dict) -> list[str]:
+    def panel(snap: dict[str, Any]) -> list[str]:
         items = node_details(DualGraph(snap), "R:5:a", PhenomenonThresholds())["neighbors"]["IN_REGION (in)"]
         assert all(set(it) == {"id", "label", "kind", "weight", "props", "integrity"} for it in items)  # one shape for both
         return sorted(it["id"] for it in items)
@@ -704,18 +706,18 @@ def test_reword_matches_whole_names_and_a_band_says_its_place():
     a quantile band's value keeps its literal with its place among its own dataset's bands (a quarter of four), a declared
     source column reads onto the cell columns derived from it and a declared pair onto the cell's mode column, and one
     dataset's glossary never rewords another's lines."""
-    from types import SimpleNamespace
+    from conftest import evidence_item
 
     from graph_query_engine.evidence import Evidence
 
     ev = Evidence.__new__(Evidence)  # the rewording reads only the datasets and the names the items use
     ev.items = [
-        SimpleNamespace(
+        evidence_item(
             scope=["price_band=q2", "kind_mode=INLAND", "load_median_band=q4", "lisa_points=hot spot"],
             statistics={"shifts": [{"metric": "return_rate"}, {"metric": "load_median"}], "covariance": {"pair": ["points", "rate"]}},
             provenance={"dataset_id": "d"},
         ),
-        SimpleNamespace(scope=["price_band=q2"], statistics={"shifts": [{"metric": "rate"}], "covariance": {}}, provenance={"dataset_id": "e"}),
+        evidence_item(scope=["price_band=q2"], statistics={"shifts": [{"metric": "rate"}], "covariance": {}}, provenance={"dataset_id": "e"}),
     ]
     ev.datasets = [
         {

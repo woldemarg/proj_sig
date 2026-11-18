@@ -511,8 +511,8 @@ def build_cells(
         lag_columns.append(name)
         band, by = f"{name}_band", glossary[metric]
         glossary[band] = f"how busy the six surrounding cells are ({by}), in quarters of all cells"
-        for q, words in QUARTERS.items():
-            glossary[f"{band}={q}"] = f"the surrounding cells are {words} ({by})"
+        for q, quarter in QUARTERS.items():
+            glossary[f"{band}={q}"] = f"the surrounding cells are {quarter} ({by})"
         glossary[f"{band}=missing"] = "no surrounding cell has events"
         derived[f"{name}_band"] = list(counters)  # the activity counters; a per-type count is a type's own question (§2.9)
     bands, layers, words, notes = context_bands(context, cells, resolution, context_ring)
@@ -639,9 +639,9 @@ def effective_n_factor(rho: float) -> float:
 
 def sac_summary(insights: list[Insight], alpha: float) -> dict[str, int]:
     """How many validated insights pass the adjusted-p rule with and without the n_eff correction."""
-    spatial = [i for i in insights if "spatial" in i.provenance and i.p_adjusted is not None]
+    spatial = [(i.provenance["spatial"]["p_adjusted_iid"], i.p_adjusted) for i in insights if "spatial" in i.provenance and i.p_adjusted is not None]
     return {
         "validated": len(spatial),
-        "significant_iid": sum(i.provenance["spatial"]["p_adjusted_iid"] <= alpha for i in spatial),
-        "significant_corrected": sum(i.p_adjusted <= alpha for i in spatial),
+        "significant_iid": sum(iid <= alpha for iid, _ in spatial),
+        "significant_corrected": sum(p <= alpha for _, p in spatial),
     }

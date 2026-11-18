@@ -14,13 +14,19 @@ Every task that changes a line of Python ends with the gate passing:
 python scripts/check.py
 ```
 
-The gate is `ruff check` + `ruff format --check` + the **whole** pytest suite (≈ 2 min; model-backed and browser tests included when the local model and Chromium are present on the host).
+The gate runs the stages CI runs (`.github/workflows/ci.yml`), so a green gate means a green CI:
+- `lint`: `ruff check`, `ruff format --check`, `uv lock --check`;
+- `types`: mypy over the packages, `tests/` and `scripts/` (strict: the packages fully annotated; settings in `pyproject.toml`);
+- `test`: the **whole** pytest suite, every warning an error (`pytest.ini`) (≈ 4–5 min; model-backed and browser tests included when the local model and Chromium are present on the host);
+- `security`: gitleaks over the git history and Trivy over `uv.lock` (dev groups included) and the Dockerfiles, failing on any severity (`brew install gitleaks trivy` or their releases); a tool not on PATH is reported `skipped`, never `ok`.
 
-- `scripts/check.py --quick` (lint + the fast tests) is for feedback **mid-change**. It is not the gate.
+`python scripts/check.py lint types` runs chosen stages. CI also runs CodeQL and a report-only Trivy scan of the built images; those need CI's runners and are not part of the local gate.
+
+- `scripts/check.py --quick` (lint, types and the fast tests) is for feedback **mid-change**. It is not the gate.
 - A targeted `pytest tests/test_x.py` is not the gate either: the E2E, persistence, narrator and UI tests are where cross-package regressions show up.
 - "Small / obvious / comment-only" is not an exemption; formatting and import order are exactly what small edits break.
-- Do not silence the gate with `# noqa`, `# type: ignore`, new `ignore` entries in `pyproject.toml`, or skipped tests. Fix the cause.
-- If the gate cannot run (no venv, no model, no Chromium), say so in the summary and name the stages that were skipped. Never imply it passed.
+- Do not silence the gate with `# noqa`, `# type: ignore`, `filterwarnings` entries, new `ignore` entries in `pyproject.toml`, `.gitleaksignore` entries for real secrets, or skipped tests. Fix the cause.
+- If the gate cannot run fully (no venv, no model, no Chromium, no gitleaks or trivy), say so in the summary and name the stages that were skipped. Never imply it passed.
 
 Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`) may skip the gate; any Python, `pyproject.toml`, `uv.lock` or `pytest.ini` change may not. A change to a `Dockerfile`, `compose.yaml`, `nginx.conf` or `uv.lock` also runs `python scripts/compose_check.py` (Docker must be running).
 
@@ -44,9 +50,10 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | `tests/` | pytest suite (`conftest.py` holds the fixtures, `FakeLLM`, `make_engine`, `ask`; `doubles.py` the deterministic 384-d test embedder; `vendor/` vendored test data with its `PROVENANCE.md`); markers `model`, `browser` |
 | `docs/` | the specification in `docs/current_docs/`: eleven chapters read in pipeline order, the architecture chapter and the trust chapter (`docs/README.md` is the reading guide; `11_reference.md` holds the glossary, parameters and formula index) |
 | `docs/init_concepts/` | the theory documents the project started from; read-only |
+| `.github/` | CI (`workflows/ci.yml`: the gate's stages, CodeQL, the images' Trivy scan; no CD) and `dependabot.yml` (weekly grouped updates into `develop`); `.gitleaksignore` holds the triaged gitleaks false positives |
 | `.claude/skills/` | the repository's agent skills (open `SKILL.md` format): `sig-review` |
-| `scripts/check.py` | the quality gate (Rule 0) |
-| `scripts/compose_check.py` | the Docker check: builds and starts the suite on its own volumes and ports, runs the workflow through the console (`--tests`: the gate inside the image; `--fresh`: clean room) |
+| `scripts/check.py` | the quality gate (Rule 0): the stages CI runs |
+| `scripts/compose_check.py` | the Docker check: builds and starts the suite on its own volumes and ports, runs the workflow through the console (`--tests`: the types and tests stages inside the image; `--fresh`: clean room) |
 | `scripts/dev.py` | host development: console, graph service and narrator on one port, routed as `nginx.conf` routes them |
 | `scripts/` (others) | measurements on throwaway workspaces under `.scratch/` (never `workspace/`): `multilingual_benchmark.py`, `eval_answers.py` (live LLM through the broker), `experiment.py` (the hypothesis benchmark), `attractor_benchmark.py` (the attractor lifecycle against static clustering on planted datasets), `temporal_benchmark.py` (planted cohorts' series over the weekly grid, the false-event rate, the flash matrix), `temporal_ab.py` (the event model against the chain model across worktrees), `geo_benchmark.py` (planted point scenarios through the geo option), `geo_coverage.py` (how far an upload's base insights find their place through their events), `poisoning_eval.py` (the red team of the trust model; `--llm` is a paid run), `calibration.py` (chapter 5's calibration sequence under the current settings), `chain_eval.py` (the query-free evidence chains), `export_chain_demo.py` (the demo graph as JSON for the lac chain eval); shared helpers in `scratch.py`; results in `.scratch/results/` |
 | `data/` | local data: `housing.csv` |
@@ -88,6 +95,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 | Task | Command (`python` = the venv interpreter, see the top of this file) |
 |---|---|
 | gate | `python scripts/check.py` |
+| chosen stages | `python scripts/check.py lint types` (`lint`, `types`, `test`, `security`) |
 | quick feedback | `python scripts/check.py --quick` |
 | one test | `python -m pytest tests/test_traversal.py -q` |
 | the model (once) | `python -m insight_graph_service.core.model_store` (verified against the pinned manifest) |
@@ -170,6 +178,8 @@ Consolidation pass (after the implementation todos, before handoff), scoped to t
 - run **`scripts/check.py`** and confirm it passed.
 
 Review: asked to review a commit, a PR, a branch or a milestone, follow `.claude/skills/sig-review/SKILL.md` (in Claude Code `/sig-review <target>`). A review writes reports to `review-reports/`, never code.
+
+After a push to a branch with a pull request, CI has the last word: `gh pr checks --watch`; a red job is fixed (or reported with its log) before the work is called done.
 
 Before handoff: Rule 0 passed in this session; docs updated per §5–6; summary states what changed, why, what was verified (with the real command output, not a paraphrase of success), and any residual risk — including whether the user's `workspace/` will start degraded after a version bump.
 

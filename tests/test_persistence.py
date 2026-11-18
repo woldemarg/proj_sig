@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections import Counter
+from typing import Any
 
 import pytest
 from conftest import Crash, make_config, make_engine, upload_levels
@@ -142,7 +143,8 @@ def test_a_transaction_marker_that_cannot_be_removed(engine, demo_csv, monkeypat
 def test_a_batch_reads_ready_once_readers_see_its_graph(engine, demo_csv, monkeypatch):
     """READY is on disk a moment before readers switch to the new graph (the commit point, then ``_publish``): a poll in
     that moment reads PERSISTING, so a client that acts on READY — the console's one reload — never reads the old graph."""
-    seen, publish = [], engine._publish
+    seen: list[tuple[str, list[str], int]] = []
+    publish = engine._publish
 
     def spy(state, snapshot):  # the moment between the commit point and the switch
         bid = engine.ws.list_batches()[-1]["batch_id"]  # the newest
@@ -301,6 +303,7 @@ def test_a_second_writer_process_is_refused(cfg, demo_csv):
         stdout=subprocess.PIPE,
         text=True,
     )
+    assert holder.stdin is not None and holder.stdout is not None
     try:
         assert holder.stdout.readline().strip() == "locked"
         with pytest.raises(WorkspaceBusy, match="in use by another writer process"):
@@ -310,12 +313,13 @@ def test_a_second_writer_process_is_refused(cfg, demo_csv):
     finally:
         holder.stdin.close()
         holder.wait(timeout=30)
+        holder.stdout.close()
     # the holder is gone: the next writer gets the lock and recovers the orphaned upload
     make_engine(cfg)
     assert make_engine(cfg, recover=False).ws.load_batch(queued["batch_id"])["error"]["code"] == "interrupted"
 
 
-def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv):
+def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv, monkeypatch):
     """Journals of another canonical version cannot be served: the engine starts on the empty state with the
     reason, refuses writes and questions, never touches the Neo4j mirror, and a reset makes it usable again."""
     from insight_graph_service.core.workspace import atomic_write_json
@@ -339,8 +343,13 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv)
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:
             write()
         assert refused.value.code == "workspace_degraded"
-    published = []
-    engine.sync_neo4j = lambda snapshot=None: published.append(snapshot) or {"status": "ok"}
+    published: list[dict[str, Any]] = []
+
+    def sync(snapshot: dict[str, Any]) -> dict[str, Any]:
+        published.append(snapshot)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(engine, "sync_neo4j", sync)
     assert engine.startup_sync() == {"status": "skipped"} and published == []  # a degraded start never wipes the mirror
     engine.reset()
     assert engine.problem is None and engine.ingest_file(demo_csv)["status"] == "READY"
@@ -422,9 +431,12 @@ def test_column_options_are_strict_when_explicit_and_lenient_as_defaults(tmp_pat
     loaded = load_dataset(table, cfg)  # workspace defaults: absent columns are skipped with a warning
     assert loaded.categories == [] and loaded.bins == {}
     assert any("Store" in w and "price" in w for w in loaded.warnings)
-    for option in ({"categories": "Store"}, {"bins": "price:4"}):  # an explicit option must name real columns
+    for load in (
+        lambda: load_dataset(table, cfg, categories="Store"),
+        lambda: load_dataset(table, cfg, bins="price:4"),
+    ):  # an explicit option must name real columns
         with pytest.raises(IngestionError) as exc:
-            load_dataset(table, cfg, **option)
+            load()
         assert exc.value.code == "invalid_options"
 
 
@@ -542,7 +554,7 @@ def test_a_commit_derives_only_the_new_datasets_spatial_part(cfg, points_csv):
         levels = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
     assert [r["status"] for r in levels] == ["READY"] * 3 and part.call_count == 2 and place.call_count == 1
 
-    def derived() -> dict:  # the snapshot but its build time
+    def derived() -> dict[str, Any]:  # the snapshot but its build time
         return {k: v for k, v in engine._derive(engine.ontology())[0].items() if k != "created_at"}
 
     kept = {k: v for k, v in engine.graph().snapshot.items() if k != "created_at"}

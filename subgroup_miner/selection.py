@@ -12,6 +12,7 @@ and does not steer centroids or ranks.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -23,7 +24,7 @@ from subgroup_miner.config import WEIGHT_FACTORS, MinerConfig
 VOLUME_UTILITY_MAX = math.sqrt(1.0 / 3.0) * (2.0 / 3.0)
 
 
-def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
+def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float | None]:
     """Map raw statistics to [0, 1] evidence factors (monotone, dataset-independent).
 
     For ``covariance`` insights the effect is the EMM divergence, and the bootstrap
@@ -36,21 +37,21 @@ def weight_factors(insight: Insight, config: MinerConfig) -> dict[str, float]:
         effect, stability = emm_effect, None
     else:
         effect = 1.0 - math.exp(-abs(insight.effect_size) / config.weight_effect_ref)
-        stability = float(np.clip(insight.stability, 0.0, 1.0))
+        stability = insight.stability
     return {
         "effect": float(effect),
-        "stability": None if stability is None else float(stability),
+        "stability": None if stability is None else float(np.clip(stability, 0.0, 1.0)),
         "support": float(np.clip(insight.volume_utility / VOLUME_UTILITY_MAX, 0.0, 1.0)),
         # EMM is a bonus: no correlation change must not zero the weight -> [0.5, 1]
         "emm": 0.5 + 0.5 * emm_effect,
     }
 
 
-def insight_weight(factors: dict[str, float | None], config: MinerConfig) -> float:
+def insight_weight(factors: Mapping[str, float | None], config: MinerConfig) -> float:
     """w = floor + (1 - floor) * prod_k f_k ** (a_k / sum a), over the measured factors (not None)."""
-    exponents = {k: a for k, a in zip(WEIGHT_FACTORS, config.weight_exponents) if factors.get(k) is not None}
-    total = sum(exponents.values())  # effect, support and emm are always measured, so never 0
-    log_mean = sum((a / total) * math.log(max(factors[k], 1e-3)) for k, a in exponents.items())
+    measured = [(a, f) for k, a in zip(WEIGHT_FACTORS, config.weight_exponents) if (f := factors.get(k)) is not None]
+    total = sum(a for a, _ in measured)  # effect, support and emm are always measured, so never 0
+    log_mean = sum((a / total) * math.log(max(f, 1e-3)) for a, f in measured)
     return float(config.weight_floor + (1.0 - config.weight_floor) * math.exp(log_mean))
 
 
@@ -99,14 +100,16 @@ def select_insights(insights: list[Insight], config: MinerConfig) -> SelectionRe
     survivors: list[Insight] = []
     for ins in insights:
         covariance = ins.phenomenon_type == "covariance"  # its shift tests are None
-        marginal = not covariance and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        marginal = (
+            not covariance and ins.p_adjusted is not None and abs(ins.effect_size) >= config.min_effect_z and ins.p_adjusted <= config.max_p_adjusted
+        )
         # a context-layer cohort (docs/02 §2.9): its shift must also beat the layer dealt at random within its parent cells,
         # and it is never admitted on a correlation change, which that null does not test
         spatial = ins.provenance.get("spatial", {})
         p_context = spatial.get("p_context")  # adjusted below over the upload's context cohorts, as p_adjusted is
         confounded = p_context is not None and min(1.0, p_context * spatial.get("context_family", 1)) > config.max_p_adjusted
         significant = marginal and not confounded
-        stable = not covariance and ins.stability >= config.min_stability
+        stable = not covariance and ins.stability is not None and ins.stability >= config.min_stability
         shift_ok = significant and stable  # R2 + R3: the bootstrap measures the shift score
         emm_ok = ins.emm_score >= config.thresholds.min_emm_score and bool(ins.covariance) and p_context is None
         if not shift_ok and emm_ok:

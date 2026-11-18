@@ -345,7 +345,13 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     def start(body: AskIn) -> JSONResponse:
         if not _HEADER.sub("", body.question).strip():
             raise HTTPException(400, "empty question")
-        job = {"job_id": uuid.uuid4().hex[:12], "stage": "search", "question": body.question, "session_id": body.session_id, "timings": {}}
+        job: dict[str, Any] = {
+            "job_id": uuid.uuid4().hex[:12],
+            "stage": "search",
+            "question": body.question,
+            "session_id": body.session_id,
+            "timings": {},
+        }
         with jobs_lock:  # a running job is never dropped
             ended = [k for k, j in jobs.items() if j["stage"] in ("done", "error")]
             for old in ended[: max(0, len(ended) - JOBS_KEPT + 1)]:

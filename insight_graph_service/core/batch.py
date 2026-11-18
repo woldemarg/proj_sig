@@ -111,6 +111,7 @@ def batch_metrics(
 def series_times(loaded: LoadedDataset) -> pd.Series:
     """The times of the rows a batch's series are of (docs/02_discovery.md §2.10): a table's every row, a geo level's
     located points only (``point_cell >= 0``) — what VALIDATING checks and the commit bins."""
+    assert loaded.time is not None  # a batch with a time column
     if loaded.spatial is None:
         return loaded.time
     return loaded.time[loaded.spatial.point_cell >= 0].reset_index(drop=True)
@@ -147,7 +148,9 @@ def annotate_batch(
     pattern keeps the condition of its ``dimensions`` (the profile's categoricals) that carries each of its events
     (``carriers``) in its series."""
     times, frame, covers = series_times(loaded), loaded.frame, rows
+    assert loaded.grid is not None  # read with the time column
     if loaded.spatial is not None:
+        assert loaded.point_values is not None  # a geo level with a time column
         located = loaded.spatial.point_cell >= 0
         typed = loaded.spatial.levels  # a share's points by their type: its series is the cohort's share in each bin
         frame = loaded.point_values[located].reset_index(drop=True).rename(columns=lambda c: c if c in typed else f"{c}_median")

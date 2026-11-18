@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime
@@ -56,7 +56,8 @@ class RequestTimer:
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] != "http":
-            return await self.app(scope, receive, send)
+            await self.app(scope, receive, send)
+            return
         start, status = time.perf_counter(), [None]
 
         async def sent(message: dict[str, Any]) -> None:
@@ -133,7 +134,7 @@ def _text(upload: UploadFile | None) -> str | None:
         raise PipelineError("invalid_options", "metadata document: not UTF-8 text") from exc
 
 
-def _log_failure(future: Future) -> None:
+def _log_failure(future: Future[Any]) -> None:
     if future.exception() is not None:  # process() records its own failures; this is what escaped it
         log.error("background job failed", exc_info=future.exception())
 
@@ -160,18 +161,21 @@ def create_app(engine: Engine) -> FastAPI:
     app = FastAPI(title="SIG insight graph service", lifespan=lifespan)
     app.add_middleware(RequestTimer)
 
+    refusals = (PipelineError, RepresentationMismatch, RollbackPending, UploadTooLarge)
+
     async def refused(_: Request, exc: Exception) -> JSONResponse:
+        assert isinstance(exc, refusals)  # registered for these only
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=STATUS.get(exc.code, 409))
 
     async def failed(_: Request, exc: Exception) -> JSONResponse:
         log.exception("request failed", exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}", "code": "internal_error"}, status_code=500)
 
-    for error in (PipelineError, RepresentationMismatch, RollbackPending, UploadTooLarge):
+    for error in refusals:
         app.add_exception_handler(error, refused)
     app.add_exception_handler(Exception, failed)
 
-    def run(job, *args: Any) -> None:
+    def run(job: Callable[..., Any], *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
     def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
@@ -268,7 +272,7 @@ def create_app(engine: Engine) -> FastAPI:
         if (file is None) == (shipped is None):
             raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
-        options = {
+        options: dict[str, Any] = {
             "source": source,
             "reliability": reliability,
             "indicators": indicators,
@@ -294,6 +298,7 @@ def create_app(engine: Engine) -> FastAPI:
             options["context"] += [(sets[k]["file"], files.enter_context((DEMO_DIR / sets[k]["file"]).open("rb"))) for k in context_demo or []]
             if shipped:
                 return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
+            assert file is not None  # a file or a shipped dataset, checked above
             return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
 
     @app.post("/api/crosstype")

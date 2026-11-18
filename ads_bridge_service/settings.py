@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from typing import Any
 
 
@@ -22,6 +22,6 @@ class AdsSettings:
         values = {}
         for f in fields(cls):
             raw = os.environ.get(f.name.upper())
-            if raw is not None and (raw != "" or isinstance(f.default, str)):
+            if raw is not None and f.default is not MISSING and (raw != "" or isinstance(f.default, str)):
                 values[f.name] = type(f.default)(raw)
         return cls(**{**values, **overrides})

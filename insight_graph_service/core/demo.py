@@ -42,7 +42,7 @@ def demo_datasets(folder: Path = DEMO_DIR) -> list[dict[str, Any]]:
     return [e for e in json.loads(manifest.read_text(encoding="utf-8")) if (folder / e["file"]).is_file()]
 
 
-GROUND_TRUTH = {
+GROUND_TRUTH: dict[str, dict[str, Any]] = {
     "local_anomaly": {"scope": {"region": "EU", "category": "laptops"}, "metric": "margin", "direction": 1},
     "stronger_specialization": {
         "scope": {"region": "EU", "category": "laptops", "channel": "online"},

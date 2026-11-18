@@ -72,7 +72,7 @@ def capture_seed(seed: int, label: str, embedder: Any) -> dict[str, Any]:
     path = folder / "events.csv"
     generate(seed).to_csv(path, index=False, lineterminator="\n")
     timed = build_engine(folder / "timed", embedder=embedder)
-    option = {"window": "7D"} if "window" in inspect.signature(timed.upload).parameters else {"grid": "week"}  # chain | event
+    option: dict[str, Any] = {"window": "7D"} if "window" in inspect.signature(timed.upload).parameters else {"grid": "week"}  # chain | event
     with path.open("rb") as f:
         uploaded = timed.upload(path.name, f, time="when", **option)
     records = [timed.process(r["batch_id"]) for r in uploaded]
@@ -130,7 +130,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     def mean(f) -> float:
         return float(np.mean([f(r) for r in rows]))
 
-    only = Counter()
+    only: Counter[str] = Counter()
     for r in rows:
         plain = [tuple(s) for s in r["plain"]["scopes"]]
         only.update(classify(tuple(s), plain) for s in r["timed"]["scopes"] if tuple(s) not in plain)
@@ -200,7 +200,7 @@ def main() -> int:
         return 0
     embedder = None
     if args.encoder == "hashing":
-        from tests.doubles import HashingEmbedder
+        from doubles import HashingEmbedder
 
         embedder = HashingEmbedder()
     rows = [capture_seed(seed, args.label, embedder) for seed in parse_seeds(args.seeds)]

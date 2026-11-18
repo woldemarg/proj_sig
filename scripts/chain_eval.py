@@ -65,7 +65,8 @@ def hetero(
 def distances(graph: sp.csr_matrix, n: int) -> np.ndarray:
     """(n x n) shortest distances from content nodes to content nodes, inf beyond the last hop limit (inclusive)."""
     d = dijkstra(graph, directed=True, indices=np.arange(n), limit=HOPS[-1])
-    return np.minimum(d[:, :n], d[:, n : 2 * n])
+    nearest: np.ndarray = np.minimum(d[:, :n], d[:, n : 2 * n])
+    return nearest
 
 
 def layer_measures(d: np.ndarray, sets: list[list[int]], disjoint: list[tuple[int, int]]) -> dict[str, float]:

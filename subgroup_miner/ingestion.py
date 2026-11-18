@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
+import warnings
 import zoneinfo
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -140,7 +141,7 @@ def dataset_fingerprint(
         h.update(b"weights=events")
     if baseline:
         h.update(f"baseline={baseline}".encode())
-    return "ds-" + h.hexdigest()[:12]
+    return f"ds-{h.hexdigest()[:12]}"
 
 
 def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
@@ -172,7 +173,10 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
         if ext == ".parquet":
             return pd.read_parquet(path), digest
         if ext == ".tsv":
-            frame = pd.read_csv(path, sep="\t", engine="c")
+            # the warning is the condition checked below; ponytail: catch_warnings is process-wide until Python 3.14's
+            # context-aware warnings, so a TSV read in another thread meanwhile shares the filter
+            with warnings.catch_warnings(action="ignore", category=pd.errors.DtypeWarning):
+                frame = pd.read_csv(path, sep="\t", engine="c")
             # a chunk typed a column apart: codes then text leave values of two types, an integer chunk beside a float or
             # an unsigned one makes floats of integers past 2**53; then the whole file decides, else it is read once
             if any(
@@ -275,7 +279,7 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
 
     def balance(unit: str) -> float:
         bins = pd.Period(last, GRID_FREQ[unit]).ordinal - pd.Period(first, GRID_FREQ[unit]).ordinal + 1
-        return min(bins / GRID_MIN_BINS, len(naive) / bins / GRID_MIN_ROWS)
+        return float(min(bins / GRID_MIN_BINS, len(naive) / bins / GRID_MIN_ROWS))
 
     return max(("quarter", "month", "week", "day"), key=balance)
 
@@ -332,7 +336,7 @@ def check_counts(frame: pd.DataFrame | None, spec: str | None, min_rows: int) ->
     rows: too few events for a frequency; no counter). A column the frame lacks, a number or one that is no category,
     and a value no row holds are ``invalid_options`` (``filter_rows``). None asked, none (the frame is not read)."""
     out = []
-    for where in dict.fromkeys(parse_where(part) for part in (spec or "").split(",") if part.strip()):
+    for where in dict.fromkeys(w for part in (spec or "").split(",") if (w := parse_where(part))):
         column, _, value = where.partition("=")
         rows = len(filter_rows(frame, where))
         out.append({"column": column, "value": value, "rows": rows, "status": "ok" if rows >= min_rows else "sparse"})
@@ -463,7 +467,7 @@ def load_dataset(
     time: str | None = None,
     grid: str | None = None,
     tz: str | None = None,
-    context: Sequence[tuple] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
+    context: Sequence[tuple[Any, ...]] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
     context_ring: int | str | None = DEFAULT_RING,
     where: str | None = None,
     count_values: Sequence[str] = (),
@@ -537,7 +541,8 @@ def load_dataset(
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
             if spatial.baseline != "zone":  # and each point's type: a zoned share or count is a residual, no point's
                 point_values = pd.concat([point_values, point_types(points, spatial.levels)], axis=1)
-    if time:  # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
+    # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
+    if times is not None and option is not None:
         grid = resolve_grid(times if spatial is None else times[spatial.point_cell >= 0], option)
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)

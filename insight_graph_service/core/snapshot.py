@@ -18,7 +18,7 @@ import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
@@ -47,10 +47,28 @@ from subgroup_miner.spatial import GEO_REGION_MIN_SHARE
 from subgroup_miner.spatial_plane import SpatialStructure
 from subgroup_miner.temporal import dynamics, echoes, parent_period, period_bounds
 
-if TYPE_CHECKING:  # the ontology is passed in, never constructed here
-    from attractor_topology.ontology import LatentOntology
+if TYPE_CHECKING:
+    from attractor_topology.ontology import Attractor
 
 log = logging.getLogger(__name__)
+
+
+class OntologyView(Protocol):
+    """What the graph reads from the ontology, passed in and never constructed here (``LatentOntology``, a fixed set)."""
+
+    @property
+    def attractor_ids(self) -> list[int]:
+        """The live attractors' ids."""
+
+    def attractors(self) -> list[Attractor]:
+        """Every attractor's state."""
+
+    def centroid(self, attractor_id: int) -> np.ndarray:
+        """One attractor's unit centroid."""
+
+    def topology(self) -> list[dict[str, Any]]:
+        """The RELATED_TO edges between attractors."""
+
 
 Member = tuple[dict[str, Any], float, float]  # (pattern record, alignment, strength)
 
@@ -172,7 +190,7 @@ def _schema_plane(
 
 
 def _activation_edges(
-    activations: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology, by_pid: dict[str, dict[str, Any]], settings: Settings
+    activations: list[dict[str, Any]], vectors: np.ndarray, ontology: OntologyView, by_pid: dict[str, dict[str, Any]], settings: Settings
 ) -> tuple[list[GraphEdge], dict[int, list[Member]]]:
     """ACTIVATES edges with alignments recomputed against the current centroids, grouped by attractor."""
     live = set(ontology.attractor_ids)
@@ -211,7 +229,7 @@ def _activation_edges(
 
 
 def _co_memberships(
-    activations: list[dict[str, Any]], by_pid: dict[str, dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology, settings: Settings
+    activations: list[dict[str, Any]], by_pid: dict[str, dict[str, Any]], vectors: np.ndarray, ontology: OntologyView, settings: Settings
 ) -> list[dict[str, Any]]:
     """The memberships the assignment rule gives each insight against the current centroids — its top ``TOP_K_ASSIGN``
     anchors, each within ``MIXTURE_RATIO`` of its best alignment and above the floor — that its journal activations do not
@@ -324,7 +342,7 @@ def credibility(
             or batch[pid].get("supersedes") in {dataset, other.get("upload_id")} - {None}
         )
 
-    def overlap(pid: str, q: str, over) -> bool:
+    def overlap(pid: str, q: str, over: Callable[[int, int], int]) -> bool:
         a, b = _common(place_at[pid], place_at.get(q, {}))
         return bool(a and b) and len(a & b) >= GEO_REGION_MIN_SHARE * over(len(a), len(b))
 
@@ -372,7 +390,7 @@ def credibility(
 
 
 def _attractor_nodes(
-    ontology: LatentOntology, members: dict[int, list[Member]], seq_to_batch: dict[Any, str], rep: dict[str, Any]
+    ontology: OntologyView, members: dict[int, list[Member]], seq_to_batch: dict[Any, str], rep: dict[str, Any]
 ) -> dict[str, GraphNode]:
     """Attractor nodes: label from the member signature, mass, scopes, dispersion, centroid contract."""
     nodes: dict[str, GraphNode] = {}
@@ -451,7 +469,9 @@ def _temporal_plane(
     one PEAKED_AT / DROPPED_AT edge per hub and kind, its most prominent event there, ``metrics`` naming every metric
     that peaked (or dipped) then, and a STARTS_AT and an ENDS_AT edge to the hubs of its core's first and last bin —
     and so does every period above a hub, WITHIN edges between them (``_hub``)."""
-    edges, trajectories, chained = [], {}, set()
+    edges: list[GraphEdge] = []
+    trajectories: dict[str, Any] = {}
+    chained: set[str] = set()
     for bid, (series, digest) in sorted(temporal.items()):
         signed = batches[bid]["temporal"]
         if integrity.get(bid) == "mismatch":
@@ -577,10 +597,10 @@ def build_snapshot(
     vectors: np.ndarray,
     batches: dict[str, dict[str, Any]],
     representation: dict[str, Any],
-    ontology: LatentOntology,
+    ontology: OntologyView,
     settings: Settings,
     spatial: SpatialStructure | None = None,
-    temporal: dict[str, tuple[dict[str, Any], str]] | None = None,
+    temporal: dict[str, tuple[dict[str, Any] | None, str]] | None = None,
 ) -> dict[str, Any]:
     """The dual graph of the committed state. ``records``: journal Pattern records (row = ``row_id`` of
     ``vectors``); ``batches``: batch id -> record (a READY one gives its dataset's schema nodes from its

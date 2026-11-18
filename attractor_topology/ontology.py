@@ -89,7 +89,7 @@ def _recount(activations: Activations, index: dict[int, int], unit: np.ndarray |
     for a in activations:
         i, w = index[int(a["attractor_id"])], _member_weight(a)
         mass[i] += w
-        if pull is not None:
+        if pull is not None and unit is not None:
             pull[i] += w * unit[int(a["row_id"])]
     return mass, pull
 
@@ -160,7 +160,7 @@ class LatentOntology:
         ]
 
     def centroid(self, attractor_id: int) -> np.ndarray:
-        return self.store.embeddings[self.store.concept_ids.index(attractor_id)]
+        return np.asarray(self.store.embeddings[self.store.concept_ids.index(attractor_id)])
 
     def topology(self) -> list[dict[str, Any]]:
         """Mutual k-NN RELATED_TO edges (lac ``calculate_knn_topology``)."""
@@ -190,7 +190,7 @@ class LatentOntology:
         ids = self.attractor_ids  # a fresh list from the store on every access
         mass, pull = _recount(kept_activations, {a: i for i, a in enumerate(ids)}, l2_normalize(kept_vectors) if n_rows else None)
         for i in np.flatnonzero(mass > 0):
-            if ids[i] in lost:
+            if ids[i] in lost and pull is not None:
                 st.embeddings[i] = l2_normalize(pull[i][None])[0].astype(np.float32)
         st.chunk_counts = mass
         st.next_chunk_id = n_rows
@@ -252,7 +252,7 @@ class LatentOntology:
             return np.ones(len(st.concept_ids))
         tau = observability.density_threshold(len(st.concept_ids), self.config)
         share = st.chunk_counts.astype(np.float64) / total
-        return np.minimum(1.0, tau / np.maximum(share, 1e-12))
+        return np.asarray(np.minimum(1.0, tau / np.maximum(share, 1e-12)))
 
     def _clamp_steps(self, before: np.ndarray | None) -> tuple[float | None, int]:
         """Trust region: a pre-existing centroid that moved more than max_centroid_step in this
@@ -273,8 +273,9 @@ class LatentOntology:
     ) -> tuple[Activations, _Extraction]:
         """Later batches: assign (EMA update), buffer orphans, then extract or wire them."""
         st, cfg = self.store, self.config
-        ext = _Extraction(adaptive_thresh=eng.compute_adaptive_threshold(st, cfg))
-        assigned, orphan_embs, orphan_ids = eng.assign_and_update(x_in, row_ids, st, cfg, ext.adaptive_thresh, batch_seq, damping)
+        thresh = eng.compute_adaptive_threshold(st, cfg)
+        ext = _Extraction(adaptive_thresh=thresh)
+        assigned, orphan_embs, orphan_ids = eng.assign_and_update(x_in, row_ids, st, cfg, thresh, batch_seq, damping)
         acts = _tag(assigned, "assign")
         ext.orphaned = len(orphan_ids)
         if orphan_embs:

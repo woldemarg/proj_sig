@@ -38,16 +38,17 @@ class QueryIn(BaseModel):
 
 def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None = None) -> FastAPI:
     settings = settings or NarratorSettings.from_env()
-    built = llm is None  # the app closes only the client it built
-    llm = llm or OpenAICompatibleLLM(settings)  # building the client does no I/O
+    owned: OpenAICompatibleLLM | None = None  # the app closes only the client it built
+    if llm is None:
+        llm = owned = OpenAICompatibleLLM(settings)  # building the client does no I/O
     graph = httpx.Client(base_url=settings.insight_graph_url, timeout=httpx.Timeout(settings.insight_graph_timeout_s, connect=5.0))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
         graph.close()
-        if built:
-            llm.close()
+        if owned is not None:
+            owned.close()
 
     app = FastAPI(title="SIG evidence narrator", lifespan=lifespan)
 

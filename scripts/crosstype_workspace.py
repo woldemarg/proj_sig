@@ -50,7 +50,7 @@ def timed(engine: Engine, step: str, records: list[dict[str, Any]]) -> list[dict
 
 
 def main() -> int:
-    from tests.doubles import HashingEmbedder
+    from doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="current")

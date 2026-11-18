@@ -74,8 +74,8 @@ def measure(
     ``frequency``'s layer over each disk."""
     own = upload_all(engine, target, **options)
     locator = options["geo"].partition("@")[0]
-    for level in sorted({str(lv) for lv, _ in settings} - {r["level"] for r in own}):
-        own += upload_all(engine, target, **options | {"geo": f"{locator}@{level}"})
+    for missing in sorted({str(lv) for lv, _ in settings} - {r["level"] for r in own}):
+        own += upload_all(engine, target, **options | {"geo": f"{locator}@{missing}"})
     kept = {name: upload_all(engine, path, geo=locator, layer=True)[0]["upload_id"] for name, path in layers.items()}
     runs = []
     for name, layer in kept.items():
@@ -111,7 +111,7 @@ def type_medians(path: Path, locator: str, counts: str, levels: tuple[int, int])
 
     frame = read_rows(path)
     lat, lon = (frame[c].to_numpy(float) for c in locator.split(","))
-    out = {}
+    out: dict[str, dict[str, float]] = {}
     for spec in counts.split(","):
         column, _, value = spec.partition("=")
         typed = (frame[column].astype("string") == value).to_numpy()
@@ -138,7 +138,7 @@ def clq(path: Path, locator: str, counts: str, layer: Path, layer_locator: str) 
     pool = np.vstack([events, spots])
     _, nearest = cKDTree(pool).query(events, k=2)
     to_layer = nearest[:, 1] >= len(events)
-    out = {}
+    out: dict[str, float | str] = {}
     for spec in counts.split(","):
         column, _, value = spec.partition("=")
         typed = (frame[column].astype("string") == value).to_numpy()
@@ -219,7 +219,7 @@ def m19(engine: Engine, weighted: Engine, shipped: dict[str, Any]) -> dict[str, 
 
 
 def main() -> int:
-    from tests.doubles import HashingEmbedder
+    from doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="current")

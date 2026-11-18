@@ -17,19 +17,22 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
 from attractor_topology.config import TopologyConfig
 from attractor_topology.models import CANONICAL_VERSION, REPRESENTATION_VERSION, CanonicalInsight, EmbeddingSpec
 
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
 
 def l2_normalize(matrix: np.ndarray) -> np.ndarray:
     matrix = np.asarray(matrix, dtype=np.float64)
     norms = np.linalg.norm(matrix, axis=-1, keepdims=True)
     norms[norms == 0] = 1.0
-    return (matrix / norms).astype(np.float32)
+    return np.asarray((matrix / norms).astype(np.float32))
 
 
 # The one embedder: Qwen3-Embedding-0.6B at a pinned checkpoint; the caller provisions the folder (``model_folder``).
@@ -84,7 +87,7 @@ class SentenceTransformerEmbedder:
     def __init__(self, config: TopologyConfig) -> None:
         self.local = model_folder(config.model_dir)
         self.device_pref = config.embedding_device
-        self._model = None
+        self._model: SentenceTransformer | None = None
         self._lock = threading.Lock()  # the load and each chunk's forward pass
         self._memo_lock = threading.Lock()
         self._memo: dict[tuple[str, str], np.ndarray] = {}
@@ -98,7 +101,7 @@ class SentenceTransformerEmbedder:
     def compute_dtype(self) -> str:
         return str(next(self._load().parameters()).dtype).removeprefix("torch.")
 
-    def _load(self):
+    def _load(self) -> SentenceTransformer:
         if self._model is not None:  # loaded: no lock, so the spec never waits for a batch's forward pass
             return self._model
         with self._lock:  # one load, however many threads ask first
@@ -113,7 +116,9 @@ class SentenceTransformerEmbedder:
                 model = SentenceTransformer(str(self.local), device=device, truncate_dim=self.truncate_dim, model_kwargs={"dtype": "auto"})
                 if model.device.type == "cpu":
                     model.float()
-                self.dim = int(model.get_embedding_dimension())
+                dim = model.get_embedding_dimension()
+                assert dim is not None  # a dense embedding model has one width
+                self.dim = int(dim)
                 self._model = model  # last: the lock-free path above sees a model ready to use
             return self._model
 
@@ -146,7 +151,8 @@ class InsightEncoder:
 
     def __init__(self, embedder: TextEmbedder, config: TopologyConfig) -> None:
         self.embedder = embedder
-        self.block_weights = tuple(float(w) for w in config.block_weights)
+        ws, wt, wp = config.block_weights
+        self.block_weights = (float(ws), float(wt), float(wp))
         self.emm_component_weight = config.emm_component_weight
         # canonicalisation settings that shape the components (recorded in the spec)
         self.min_component_z = config.thresholds.min_component_z
@@ -168,7 +174,7 @@ class InsightEncoder:
             dtype="float32",
             compute_dtype=self.embedder.compute_dtype,
             normalization="l2(block) -> weighted concat -> l2",
-            block_weights=self.block_weights,  # type: ignore[arg-type]
+            block_weights=self.block_weights,
             emm_component_weight=self.emm_component_weight,
             min_component_z=self.min_component_z,
             min_emm_score=self.min_emm_score,
@@ -216,4 +222,4 @@ class InsightEncoder:
         scope = self.embedder.embed([scope_text]) if scope_text else self.embedder.embed_queries([text])
         target = self.embedder.embed([target_text]) if target_text else self.embedder.embed_queries([text])
         phen = self._phenomenon([components], [text], query=True)
-        return self.compose(scope, target, phen)[0]
+        return np.asarray(self.compose(scope, target, phen)[0])

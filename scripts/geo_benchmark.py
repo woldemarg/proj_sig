@@ -382,7 +382,9 @@ def _supersede(engine: Engine, scenario: Scenario, root: Path, before: set[int],
 
 def run_scenario(scenario: Scenario, root: Path, engine: Engine, *, k: int) -> dict[str, Any]:
     """Ingest the scenario's uploads (written to ``root``) into ``engine``'s empty workspace and score them."""
-    files, best, upload_ids, before, new, alone = [], [], [], set(), set(), None
+    files: list[dict[str, Any]] = []
+    upload_ids: list[str] = []
+    best, before, new, alone = [], set(), set(), None
     for upload in scenario.uploads:
         if upload is not scenario.uploads[0] and upload.source and alone is None:  # the first source's levels before the second came
             alone = _credibility(engine, [f["pattern"] for f in files[0]["found"].values()])
@@ -466,10 +468,11 @@ def format_table(results: list[dict[str, Any]]) -> str:
 
 
 def main() -> int:
-    from attractor_topology.encoder import model_folder
+    from doubles import HashingEmbedder
+
+    from attractor_topology.encoder import TextEmbedder, model_folder
     from insight_graph_service.core.model_store import problems
     from insight_graph_service.core.settings import load_env_file, load_settings
-    from tests.doubles import HashingEmbedder
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenarios", default=",".join(SCENARIOS))
@@ -485,7 +488,7 @@ def main() -> int:
         encoders.remove("model")
     results = []
     for encoder in encoders:
-        embedder = HashingEmbedder() if encoder == "hashing" else None
+        embedder: TextEmbedder | None = HashingEmbedder() if encoder == "hashing" else None
         for name in args.scenarios.split(","):
             t0 = time.perf_counter()
             root = scratch_dir(f"geo_benchmark/{encoder}/{name}", fresh=True)

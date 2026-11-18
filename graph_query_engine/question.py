@@ -78,7 +78,7 @@ def _unit_rows(matrix: np.ndarray) -> np.ndarray:
     matrix = np.asarray(matrix, dtype=np.float64)
     norms = np.linalg.norm(matrix, axis=-1, keepdims=True)
     norms[norms == 0] = 1.0
-    return (matrix / norms).astype(np.float32)
+    return np.asarray((matrix / norms).astype(np.float32))
 
 
 @dataclass
@@ -93,8 +93,8 @@ class LiteralCatalog:
     symbols: list[Any]  # metric name | list of attributes
     case_sensitive: list[bool]
     vectors: np.ndarray
+    embedder: Embedder = field(repr=False, compare=False)  # the model that embedded the catalog: spans must use the same
     chars: dict[str, Any] = field(default_factory=dict)  # script -> (TfidfVectorizer, matrix, indices)
-    embedder: Embedder | None = field(default=None, repr=False, compare=False)  # the model that embedded the catalog: spans must use the same
 
     def __post_init__(self) -> None:
         from sklearn.feature_extraction.text import TfidfVectorizer
@@ -177,16 +177,28 @@ def build_catalog(graph: DualGraph, embedder: Embedder, known: dict[str, np.ndar
     literal to its unit vector from an earlier build, so only new literals are embedded. ``None`` for an empty graph."""
     if not graph.insights:
         return None
-    texts, types, symbols, case = [], [], [], []
+    texts: list[str] = []
+    types: list[str] = []
+    symbols: list[str | list[str]] = []
+    case: list[bool] = []
     metrics, values = _vocabulary(graph)
     declared = [n["props"].get("user_glossary", {}) for n in graph.of_kind("Dataset")]
     for name in metrics:
         for text in dict.fromkeys((name, humanize(name))):  # raw and humanised form (once when equal)
-            texts.append(text), types.append("metric"), symbols.append(name), case.append(False)
+            texts.append(text)
+            types.append("metric")
+            symbols.append(name)
+            case.append(False)
         for text in dict.fromkeys(g[name] for g in declared if name in g and g[name] not in (name, humanize(name))):  # as declared
-            texts.append(text), types.append("declared"), symbols.append(name), case.append(False)
+            texts.append(text)
+            types.append("declared")
+            symbols.append(name)
+            case.append(False)
     for value, attrs in sorted(values.items()):
-        texts.append(value), types.append("condition"), symbols.append(attrs), case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
+        texts.append(value)
+        types.append("condition")
+        symbols.append(attrs)
+        case.append(len(value) <= ACRONYM_MAX_LEN and value.isupper())
     vectors = dict(known or {})
     missing = [t for t in dict.fromkeys(texts) if t not in vectors]
     if missing:
@@ -345,7 +357,9 @@ def _bind(q: ParsedQuery, value: str, attrs: list[str], pos: set[int], tokens: l
     return attrs
 
 
-def _register(q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, float], span: str, pos: set[int], claimed: set[int], tokens) -> None:
+def _register(
+    q: ParsedQuery, catalog: LiteralCatalog, hit: tuple[int, str, float], span: str, pos: set[int], claimed: set[int], tokens: list[str]
+) -> None:
     j, layer, score = hit
     text, symbol = catalog.texts[j], catalog.symbols[j]
     if catalog.types[j] in ("metric", "declared"):

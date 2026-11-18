@@ -16,6 +16,8 @@ import argparse
 import itertools
 import math
 import time
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -40,7 +42,7 @@ def levels(column: pd.Series) -> int:
     return int(((share.cumsum().shift(1, fill_value=0.0) < 0.95) & ~share.index.astype(str).isin(["nan", "<NA>", "None"])).sum())
 
 
-def run(name: str, target, geo: str, layers: tuple[str, ...], files: dict, cfg_all) -> dict:
+def run(name: str, target, geo: str, layers: tuple[str, ...], files: dict[str, Path], cfg_all) -> dict[str, Any]:
     cfg = cfg_all.miner
     loaded = load_dataset(target, cfg, geo=geo, context=[(k, files[k], "lat,lon") for k in layers])
     result = run_discovery(loaded.frame, cfg, spatial=loaded.spatial)

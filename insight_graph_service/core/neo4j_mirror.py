@@ -126,7 +126,7 @@ class Mirror:
     None before the first one and after a failed one."""
 
     def __init__(self) -> None:
-        self.written: tuple[dict, dict] | None = None
+        self.written: tuple[dict[tuple[str, ...], int], dict[tuple[str, ...], int]] | None = None
 
     def publish(self, snapshot: dict[str, Any], settings: Settings, driver: Any = None) -> dict[str, Any]:
         """Make ``NEO4J_DATABASE`` equal to the snapshot (an empty one clears it): a full sync while ``written`` is None,
@@ -134,7 +134,7 @@ class Mirror:
         previous, self.written = self.written, None
         nodes, edges = snapshot_rows(snapshot)
         now = (row_hashes(nodes, ("id",)), row_hashes(edges, ("source", "target")))
-        out = {
+        out: dict[str, Any] = {
             "nodes": {k: len(v) for k, v in nodes.items() if v},
             "edges": {k: len(v) for k, v in edges.items() if v},
             "database": settings.neo4j_database,
@@ -175,7 +175,7 @@ class Mirror:
                         if stmt:
                             session.run(stmt)
 
-                def write(tx) -> None:
+                def write(tx: Any) -> None:
                     for label, rows in nodes.items():
                         for i in range(0, len(rows), batch):
                             tx.run(node_query(label), rows=rows[i : i + batch])
