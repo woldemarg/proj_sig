@@ -187,7 +187,9 @@ def test_every_text_is_plain_and_claims_no_cause():
 def test_the_console_copy_is_the_table():
     """``TERMS`` in app.js is this table: JS cannot import it."""
     js = (ROOT / "sig_web_console" / "static" / "app.js").read_text(encoding="utf-8")
-    copied = json.loads(re.search(r"^const TERMS = (\{.*?^\});", js, re.S | re.M).group(1))
+    found = re.search(r"^const TERMS = (\{.*?^\});", js, re.S | re.M)
+    assert found
+    copied = json.loads(found.group(1))
     expected = {k: list(v) for k, v in w.TERMS.items()}
     assert copied == expected, "app.js TERMS differs; paste:\nconst TERMS = " + json.dumps(expected, ensure_ascii=False, indent=0) + ";"
 

@@ -335,9 +335,13 @@ def step4_evaluate_micro_slices(profile, search_vectors, forbidden=None):
 
         shift_profile = {}
         own = set().union(*(forbidden.get(a, ()) for a in extract_dimension_attrs(selector))) if forbidden else set()
-        locations = np.nanmedian(values[row_indices], axis=0)
+        rows = values[row_indices]
+        measured = ~np.isnan(rows).all(axis=0)  # a column without a value in the subgroup keeps a NaN location
+        locations = np.full(rows.shape[1], np.nan)
+        locations[measured] = np.nanmedian(rows[:, measured], axis=0)
         if mean_cols:
-            locations[mean_cols] = np.nanmean(values[row_indices][:, mean_cols], axis=0)
+            measured_means = [c for c in mean_cols if measured[c]]
+            locations[measured_means] = np.nanmean(rows[:, measured_means], axis=0)
         for num_col, s_median in zip(numerics, locations):
             if not np.isnan(s_median) and num_col not in own:
                 shift_profile[num_col] = robust_z_score(
@@ -469,8 +473,8 @@ def step4b_deep_validation(
 
         top_shift_cols = [col for col, _ in row["top_shifts"]]
         for num in numerics:
-            if num not in top_shift_cols and num not in row["restated"]:
-                s_med = location(num, sg_data[num].dropna())
+            if num not in top_shift_cols and num not in row["restated"] and len(values := sg_data[num].dropna()):  # no value, no shift
+                s_med = location(num, values)
                 shift = robust_z_score(
                     s_med, global_medians[num], global_mads[num]
                 )

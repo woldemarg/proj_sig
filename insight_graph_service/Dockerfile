@@ -57,4 +57,5 @@ RUN chown -R sig /app
 USER sig
 ENV WORKSPACE_DIR=/app/workspace
 HEALTHCHECK NONE
-CMD ["python", "scripts/check.py"]
+# the stages the image can change: lint, the lockfile and the secrets are the host's and CI's
+CMD ["python", "scripts/check.py", "types", "test"]

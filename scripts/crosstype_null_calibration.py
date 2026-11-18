@@ -98,6 +98,7 @@ def repeat(seed: int, miner: MinerConfig, config: Any, ring: int = DEFAULT_RING)
     with tempfile.TemporaryDirectory() as tmp:
         target, layer, morans_i = null_field(rng, Path(tmp), ring)
         loaded = load_dataset(target, miner, geo=f"lat,lon@{RES}", context=[("layer", layer, "lat,lon")], context_ring=ring)
+        assert loaded.spatial is not None  # a geo reading
         result = run_discovery(loaded.frame, miner, spatial=loaded.spatial)
         found = build_insights(result, miner, dataset_id="ds", batch_id="b", filename="target.csv")
         band = next(iter(loaded.spatial.context.values())).column

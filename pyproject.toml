@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 # Host: `uv sync` (the dev group). Images: `uv sync --frozen --no-default-groups --group <service> [--group cpu|cu130]`.
 [dependency-groups]
 miner = [
-    "numpy>=1.26",
+    "numpy>=2.2",
     "pandas>=2.2",
     "scipy>=1.11",
     "pysubgroup==0.7.7",
@@ -16,12 +16,12 @@ miner = [
     "pyarrow>=15",  # .parquet uploads
 ]
 topology = [
-    "numpy>=1.26",
+    "numpy>=2.2",
     "scikit-learn>=1.3",
     "sentence-transformers>=5.0",  # SentenceTransformer.get_embedding_dimension
     "transformers>=4.56",  # Qwen3, model_kwargs={"dtype": ...}
 ]
-query = ["numpy>=1.26", "scikit-learn>=1.3"]
+query = ["numpy>=2.2", "scikit-learn>=1.3"]
 graph = [
     { include-group = "miner" },
     { include-group = "topology" },
@@ -52,6 +52,7 @@ dev = [
     "playwright==1.63.0",  # optional: the browser smoke test (uses an installed Chromium)
     "rdflib==7.6.0",  # the GeoSPARQL export test (tests/test_spatial.py)
     "pyshacl==0.40.1",  # its SHACL validation against tests/vendor/geosparql_validator.ttl
+    "mypy==2.4.1",
 ]
 
 [tool.uv]
@@ -100,3 +101,32 @@ ignore = [
 
 [tool.ruff.format]
 exclude = ["subgroup_miner/vendor/eda/main_upd.py"]  # same reason: cosmetic drift from upstream is noise
+
+# Typecheck (AGENTS.md Rule 0: `python scripts/check.py types`), as strict as the ADS service's: the packages fully typed,
+# tests and scripts checked as well (without the relaxations ADS gives its tests). pytest puts tests/ and scripts/ on the path; mypy_path mirrors it.
+[tool.mypy]
+python_version = "3.12"
+files = ["insight_contracts", "subgroup_miner", "attractor_topology", "graph_query_engine", "insight_graph_service", "evidence_narrator_service", "llm_model_broker", "ads_bridge_service", "tests", "scripts"]
+mypy_path = ["tests", "scripts"]
+exclude = ["/vendor/", "conftest\\.py$"]
+cache_dir = ".scratch/mypy"
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+disallow_any_generics = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["insight_contracts.*", "subgroup_miner.*", "attractor_topology.*", "graph_query_engine.*", "insight_graph_service.*", "evidence_narrator_service.*", "llm_model_broker.*", "ads_bridge_service.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = ["subgroup_miner.vendor.*", "attractor_topology.vendor.*"]  # vendored: upstream style (PROVENANCE.md)
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["h3", "pandas", "pandas.*", "pysubgroup", "scipy", "scipy.*", "sklearn.*", "statsmodels", "statsmodels.*"]  # no stubs or py.typed
+ignore_missing_imports = true

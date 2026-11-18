@@ -23,7 +23,7 @@ function periodWords(lo, hi) {
 const spanWords = (lo, hi) => ((hi - lo) % DAY === 0 ? plural((hi - lo) / DAY, "день", "дні", "днів") : plural(Math.round((hi - lo) / HOUR), "година", "години", "годин"));
 
 const Timeline = (() => {
-  const T = { hubs: [], rows: [], byId: {}, level: null, span: false, lo: 0, hi: 0, wlo: 0, whi: Infinity, plo: 0, phi: 0 };  // the bar's span, window, stretch
+  const T = { hubs: [], rows: [], level: null, span: false, lo: 0, hi: 0, wlo: 0, whi: Infinity, plo: 0, phi: 0 };  // the bar's span, window, stretch
   const ms = wall;
 
   function load(g) {
@@ -37,7 +37,6 @@ const Timeline = (() => {
     T.hubs = hubs.sort((a, b) => ms(a.t_start) - ms(b.t_start) || a.id.localeCompare(b.id));  // the ruler in calendar order
     T.rows = data.filter((d) => d.kind === "Pattern" && (d.core || events[d.id])).map((d) => ({ ...d, events: events[d.id] || [] }))
       .sort((a, b) => from(a) - from(b) || b.weight - a.weight);  // in calendar order, the strongest first on a tie
-    T.byId = Object.fromEntries(T.rows.map((r) => [r.id, r]));
     T.span = Boolean(g.span);  // the timed datasets' days: the bar's, [the first's midnight, the midnight after the last)
     $("time-tab").hidden = !hubs.length;
     const was = JSON.stringify(S.period);
@@ -87,15 +86,6 @@ const Timeline = (() => {
   }
 
   function setLevel(level) { T.level = level; render(); }
-
-  function inPeriod(pid) {
-    /* whether an insight acts in the chosen stretch: its core meets it, or one of its events lies inside it, as a period
-       reads an event (docs/07_question_answering.md §7.2); one without either, or not on this graph, is never set aside */
-    const r = T.byId[pid];
-    if (!S.period || !r) return true;
-    const [lo, hi] = [T.plo, T.phi];
-    return Boolean((r.core && ms(r.core.t_start) < hi && lo < ms(r.core.t_end)) || r.events.some((e) => lo <= ms(e.hub.t_start) && ms(e.hub.t_end) <= hi));
-  }
 
   const words = () => S.period && periodWords(T.plo, T.phi);
 
@@ -189,5 +179,6 @@ const Timeline = (() => {
     new ResizeObserver(() => T.span && drawBar()).observe($("pb-ticks"));  // the ticks that fit
   }
 
-  return { load, render, setLevel, inPeriod, setPeriod, words, apply, openPop, init };
+  const shown = () => S.period || (T.span ? { start: isoMinute(T.lo), end: isoMinute(T.hi) } : null);  // the bar's stretch, else its whole span
+  return { load, render, setLevel, setPeriod, words, shown, apply, openPop, init };
 })();

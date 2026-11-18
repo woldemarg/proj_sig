@@ -16,7 +16,7 @@ class TopologyConfig:
     # representation (docs/04_representation.md)
     model_dir: Path = Path("models")  # holds Qwen3-Embedding-0.6B/ (sentence-transformers folder)
     embedding_device: str = "auto"  # auto | cpu | cuda
-    block_weights: tuple = (0.45, 0.55, 1.0)  # scope, target, phenomenon
+    block_weights: tuple[float, float, float] = (0.45, 0.55, 1.0)  # scope, target, phenomenon
     emm_component_weight: float = 0.5
 
     # attractor extraction and assignment (lac)
@@ -48,7 +48,7 @@ class TopologyConfig:
     max_centroid_step: float = 0.10  # max L2 move of one centroid per batch (largest healthy move measured: 0.010; docs/05_latent_anchors.md §5.6)
     warn_orphan_rate: float = 0.50
     warn_min_extraction_yield: float = 0.10
-    warn_avg_degree: tuple = (1.0, 8.0)  # mutual k-NN degree envelope
+    warn_avg_degree: tuple[float, float] = (1.0, 8.0)  # mutual k-NN degree envelope
     # OMP input scale s: lac fits codes with lasso alpha=1; scaling inputs by s is alpha/s
     # (OMP directions and relative error are scale-invariant). EMA updates never see s.
     dictionary_input_scale: float = 10.0

@@ -55,5 +55,6 @@ def test_backend_client_reaches_the_model_through_the_broker(llm_stub):
     with serve(create_app(settings(base))) as broker:
         llm = OpenAICompatibleLLM(NarratorSettings(llm_base_url=f"{broker}/v1"))
         resp = llm.generate("system", "user")
+        llm.close()
     assert resp.ok and resp.text.endswith("[P1].") and resp.model == "google/gemma-4-26b-a4b-it"
     assert seen[-1]["auth"] == "Bearer sk-test"  # the provider key lives in the broker, never in the backend

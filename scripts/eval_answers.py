@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from typing import Any
 
 from scratch import build_engine, ingest_ready, save_result, scratch_dir, weekly_retail, write_demo_csv
 
@@ -22,6 +23,7 @@ from evidence_narrator_service.llm_client import OpenAICompatibleLLM
 from evidence_narrator_service.narration import answer
 from evidence_narrator_service.settings import NarratorSettings
 from insight_contracts import wording
+from insight_graph_service.core.engine import Engine
 from insight_graph_service.core.settings import PROJECT_ROOT
 
 QUESTIONS = [
@@ -97,7 +99,7 @@ def fidelity(qa) -> tuple[int, int, int]:
     return exact, translated, checked
 
 
-def evaluate(engine, llm, question: str, **zone) -> dict:
+def evaluate(engine: Engine, llm: OpenAICompatibleLLM, question: str, **zone: Any) -> dict[str, Any]:
     """One question: answer mode, grounding, citations, analyst words, literal fidelity, latency and token usage."""
     qa = answer(engine.evidence(question, **zone), llm)
     usage = qa.llm.get("usage") or {}
@@ -129,7 +131,7 @@ def evaluate(engine, llm, question: str, **zone) -> dict:
     }
 
 
-def summarise(rows: list[dict]) -> dict:
+def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     answered = [r for r in rows if r["mode"] == "llm"]
     words: dict[str, int] = {}
     for r in rows:
@@ -157,7 +159,7 @@ def summarise(rows: list[dict]) -> dict:
     }
 
 
-def engines() -> dict:
+def engines() -> dict[str, Engine]:
     """The four workspaces, one embedding model: the demo, the demo with its declared language, California at
     resolutions 6 and 5 (its scale chains), the weekly demo with its time column."""
     plain = build_engine(scratch_dir("eval_answers_demo", fresh=True) / "ws")

@@ -127,7 +127,8 @@ def console_reads(client: TestClient) -> list[dict[str, Any]]:
 def watch(app: Any, stop: threading.Event, log: list[dict[str, Any]]) -> None:
     """The open console: the batch list every ``POLL_S``, its reads after each new READY (no lifespan of its own: the
     benchmark's client owns the batch worker)."""
-    client, seen = TestClient(app), set()
+    client = TestClient(app)
+    seen: set[str] = set()
     while not stop.is_set():
         ready = {b["batch_id"] for b in client.get("/api/batches").json() if b["status"] == "READY"}
         if ready - seen:
@@ -143,7 +144,8 @@ def finished(record: dict[str, Any]) -> bool:
 
 def run_upload(client: TestClient, app: Any, path: Path, geo: str | None, table: bool, console: bool) -> dict[str, Any]:
     """The upload through the API and every level to its end; the levels' stage times and the console's reads meanwhile."""
-    stop, log = threading.Event(), []
+    stop = threading.Event()
+    log: list[dict[str, Any]] = []
     watcher = threading.Thread(target=watch, args=(app, stop, log), daemon=True)
     if console:
         watcher.start()

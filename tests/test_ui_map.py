@@ -165,6 +165,8 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.on("pageerror", lambda e: errors.append(str(e)))
         requested: list[str] = []
         page.on("request", lambda r: requested.append(r.url))
+        tiles: list[int] = []
+        page.on("response", lambda r: tiles.append(r.status) if r.url.endswith(".pmtiles") else None)
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
         assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
@@ -193,6 +195,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
         assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
+        page.wait_for_function("G.map.areTilesLoaded()", timeout=30000)
+        assert 206 in tiles and set(tiles) <= {206}  # the basemap read by range requests
+        assert [u for u in requested if not u.startswith((url, "data:", "blob:"))] == []  # nothing fetched from outside the console's origin
         page.wait_for_function("G.overlay", timeout=30000)
         drawn = "[G.levels, [...new Set(G.overlay.features.map((f) => f.properties.resolution))]]"
         assert page.evaluate(drawn) == [[5, 3, 1], [1, 3, 5, 7]]  # r7 outlines ~7 of the r8 cells: not drawn over them
@@ -290,7 +295,9 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         page.evaluate(f"GeoMap.pick('{chained}')")
         page.wait_for_selector(".insight-card .nb", timeout=10000)
         card = page.locator(".msg-bot").last
-        assert card.locator(".ic-theme").get_attribute("data-id") == primary_anchor(graph, chained)["target"]
+        anchor = primary_anchor(graph, chained)
+        assert anchor is not None
+        assert card.locator(".ic-theme").get_attribute("data-id") == anchor["target"]
         assert any(t.startswith("↑ рівень 5") for t in card.locator(".insight-card .nb").all_inner_texts())
         walk = ["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "SPECIALIZES (in)", "SIBLING", "SIBLING (in)", "CO_LOCATED", "CO_LOCATED (in)"]
         assert page.evaluate("Object.keys(WALK)") == walk and page.evaluate("Object.values(WALK)") == [
@@ -358,6 +365,22 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         assert page.evaluate("G.ds") == fine["dataset_id"]  # the map stays on its dataset
         page.click("#new-chat")
         assert page.evaluate("G.focusId") is None and page.locator("#map-window .mw-i.on").count() == 0
+        # two zones: the chat box asks the graph about one, the last drawn until another's popup opens; a removed zone frees its colour
+        three = "GeoMap.addZone(G.data.features[0].geometry); GeoMap.addZone(G.data.features[1].geometry); GeoMap.addZone(G.data.features.at(-1).geometry)"
+        removed = page.evaluate(f"{three}; GeoMap.zones()[1].id")
+        page.evaluate(f"GeoMap.clearZones('{removed}'); GeoMap.addZone(G.data.features[2].geometry)")
+        colors = page.evaluate("G.zones.map((z) => [z.id, z.color])")  # the others keep theirs; the new zone takes the removed one's, not its id
+        assert [c for _, c in colors] == ["#eef3ff", "#8fb3ff", "#ffb000"] and removed not in [i for i, _ in colors]
+        assert not page.evaluate("GeoMap.closePopup()") and page.evaluate("document.querySelectorAll('.zone-tag').length") == 3
+        page.evaluate("GeoMap.openZone(GeoMap.zones()[0].id); GeoMap.closePopup()")
+        page.fill("#question", "Де найбільше подій?")
+        page.press("#question", "Enter")
+        page.wait_for_function("S.chat.at(-1).qa", timeout=30000)
+        first = page.evaluate("GeoMap.zones()[0]")
+        assert page.evaluate("__asked.at(-1)")["cells"] == first["cells"] and page.evaluate("S.chat.at(-1).zones") == [first["id"]]
+        assert "zones" not in page.evaluate("__asked.at(-1)") and f"зона {first['id']}" in page.locator(".msg-user").last.inner_text()
+        page.evaluate("GeoMap.clearZones()")
+        page.click("#new-chat")
         # Show in graph on a base insight under the geo filter: the filter gives way, the node is in the graph
         page.evaluate(f"GeoMap.pick('{base}')")
         page.wait_for_selector(".msg-bot >> nth=-1 >> .ic-graph", timeout=10000)
@@ -402,7 +425,9 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
             f"(() => {{ const keep = G.datasets; G.datasets = {json.dumps(two)}; try {{ const s = spread(''); return [s.anchor.dataset_id, s.others]; }} finally {{ G.datasets = keep; }} }})()"
         ) == ["a8", ["b8"]]  # each upload's finest, not its coarser level, as map_set keeps them
         finest = "G.overlay.features.filter((f) => f.properties.resolution === G.levels[0])"
-        assert page.evaluate(f"{finest}.some((f) => Object.values(f.properties.by).filter(Boolean).length === 2)")  # both on the finest level
+        assert page.evaluate(
+            f"{finest}.some((f) => Object.values(f.properties.ids).filter((ids) => ids.length).length === 2)"
+        )  # both on the finest level
         assert page.inner_text("#map-title") == "Усі датасети" and "half" in page.inner_text("#map-meta")
         assert page.evaluate("G.map.getLayoutProperty('cells-fill', 'visibility')") == "none"
         rows = "W.data.themes.flatMap((t) => t.insights)"
@@ -419,7 +444,7 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
             "[...document.querySelectorAll('#map-window .mw-i')].every((b) => reading(b.dataset.pid) && b.title.startsWith(reading(b.dataset.pid)))"
         )
         both = page.evaluate(
-            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.by).filter(Boolean).length === 2)"
+            "G.overlay.features.find((f) => f.properties.resolution === G.level && Object.values(f.properties.ids).filter((ids) => ids.length).length === 2)"
         )
         page.evaluate(
             f"GeoMap.unfocus(); regionPopup({both['properties']['id']!r}, {{ lng: {both['properties']['centre'][0]}, lat: {both['properties']['centre'][1]} }})"
@@ -449,8 +474,9 @@ def test_all_datasets_reads_every_upload_on_one_map(cfg, tmp_path):
 
 @pytest.mark.browser
 def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_days_do_not_hold(cfg, points_csv):
-    """Days on the period bar colour the cells by their points in them, the HUD saying how many, and dim the IN VIEW
-    rows of the insights that do not act in them (core or event), listed after the ones that do, within each theme;
+    """Days on the period bar colour the cells by their points in them, a cell with none gone, the HUD, the IN VIEW
+    header and the popups counting them, and dim the IN VIEW and popup rows of the insights that do not act in them
+    (core or event), listed after the ones that do, within each theme, the region counts leaving them out;
     the whole span gives the cells' every point back and dims none (docs/08_interface.md §8.7). The data's calendar is
     Kyiv's: the bar offers its own first and last days, and a preset counts what the server counts for them. A dataset
     filter that drops the stretch gives the cells back. Every insight here lives over the data's first four weeks: its
@@ -493,25 +519,56 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert page.locator("#map-window .mw-i.off").count() == 0  # the whole span
         rows = "[...document.querySelectorAll('#map-window .mw-i')].map((b) => [b.dataset.pid, b.classList.contains('off')])"
         page.evaluate("Timeline.setPeriod('2019-03-04T00:00', '2019-03-11T00:00'); Timeline.apply()")  # the first week: every core meets it
-        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)  # the colour showed every point: now the week's
+        assert page.evaluate("S.period") and not any(off for _, off in page.evaluate(rows))
         counted = page.evaluate("G.data.features.map((f) => f.properties.points_in_period)")
         everything = page.evaluate("G.data.features.map((f) => f.properties.points)")
         assert None in counted and 0 not in counted  # a cell with no event in the week has no value: it is not drawn
         counted = [a or 0 for a in counted]
         assert all(0 <= a <= b for a, b in zip(counted, everything, strict=True)) and 0 < sum(counted) < sum(everything)
-        assert "rgba(0, 0, 0, 0)" in json.dumps(page.evaluate("G.map.getPaintProperty('cells-fill', 'fill-color')"))
-        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')")[-1] == 0  # nor its outline
+        held = "['cells-fill', 'cells-line'].map((id) => JSON.stringify(G.map.getFilter(id)))"
+        assert page.evaluate(held) == ['["has","points_in_period"]'] * 2  # nor its outline, hover or click, whatever the colour
+        page.evaluate("G.others = ['ds-none']; paintPeriod()")  # «Усі датасети» draws no cell: the days leave the cells
+        assert page.evaluate(held) == [None, None]
+        page.evaluate("refreshPass()")  # back to the dataset without a load: its cells take the days again
+        assert page.evaluate(held) == ['["has","points_in_period"]'] * 2
         assert f"Події за 04.03.2019 — 10.03.2019: {sum(counted)}." in page.inner_text("#map-period").replace("\u00a0", "")
+        assert page.text_content("#map-points").replace("\u00a0", "") == f"{sum(counted)} подій за період"  # the HUD counts the days too
+        lit = (  # a cell with points in the days whose region lists insights
+            "G.data.features.find((f) => f.properties.points_in_period && G.overlay.features.some((r) => r.properties.resolution === (G.level ?? regionLevel())"
+            " && r.properties.rows.includes(f.properties.row) && r.properties.n))"
+        )
+        page.evaluate(f"(() => {{ const f = {lit}; cellPopup(f, centre(f)); }})()")  # a cell's popup counts its points in the days
+        n = page.evaluate(f"{lit}.properties.points_in_period")
+        assert (
+            page.text_content(".sig-pop .pp-head [data-user]").replace("\u00a0", "")
+            == f"Комірка · {n} {'подія' if n == 1 else 'події' if 1 < n % 10 < 5 and not 11 < n % 100 < 15 else 'подій'} за період"
+        )
+        page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
+        whole, here, acting = map(int, re.findall(r"\d+", page.text_content(".sig-pop .pp-here").replace("\u00a0", "")))
+        assert whole >= here >= acting  # the region's count, the cell's part of it and the part acting: one base
+        every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
+        page.evaluate(f"GeoMap.addZone({{type: 'Polygon', coordinates: [{every}]}}); GeoMap.openZone(GeoMap.zones()[0].id)")  # every cell
+        assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
+        page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
         assert page.locator("#map-metric option[value='points_in_period']").count() == 1
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
+        page.wait_for_function("G.idle.size > 0 && document.querySelectorAll('#map-window .mw-i.off').length > 0", timeout=10000)
         listed = page.evaluate(rows)
-        assert listed and all(off for _, off in listed) and not any(page.evaluate(f"Timeline.inPeriod('{pid}')") for pid, _ in listed)
+        assert listed and all(off for _, off in listed) and all(page.evaluate(f"G.idle.has('{pid}')") for pid, _ in listed)
         assert "не діє в періоді 02.04.2019 — 03.04.2019" in page.get_attribute("#map-window .mw-i", "title")
+        page.wait_for_function(
+            "/у періоді: 0$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000
+        )  # the open popup follows
+        assert page.locator(".sig-pop .pp-ins").count() == page.locator(".sig-pop .pp-ins.off").count() > 0
+        assert page.evaluate("G.map.getSource('region-labels').serialize().data.features.length") == 0  # no region counts one in the days
+        page.wait_for_function("/у періоді: 0 · .* за період$/.test($('mw-meta').textContent)", timeout=10000)
+        page.evaluate("GeoMap.clearZones(); GeoMap.closePopup()")
         page.click("#pb-clear")
         assert page.locator("#map-window .mw-i.off").count() == 0
         page.wait_for_function("G.metric === 'points'", timeout=10000)
-        assert page.evaluate("G.map.getPaintProperty('cells-line', 'line-opacity')") == page.evaluate("CELL_LINE")  # every outline back
+        assert page.evaluate(held) == [None, None]  # no filter: every cell back
+        assert page.evaluate("G.map.getSource('region-labels').serialize().data.features.length") > 0
         assert page.is_hidden("#map-period") and page.locator("#map-metric option[value='points_in_period']").count() == 0
         assert page.evaluate("G.data.features.every((f) => !('points_in_period' in f.properties))")
         assert not errors, errors

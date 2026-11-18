@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -39,8 +40,10 @@ from scratch import build_engine, ingest_ready, parse_overrides, save_result, sc
 from sklearn.cluster import KMeans
 
 import insight_graph_service.core.snapshot as snapshot_module
+from attractor_topology.config import TopologyConfig
 from attractor_topology.ontology import Attractor
 from attractor_topology.vendor.lac import ontology_engine as eng
+from attractor_topology.vendor.lac.storage import ConceptStore
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
 from graph_query_engine.traversal import traverse
@@ -137,18 +140,14 @@ def build_cases(engine: Engine, truth_by_batch: dict[str, Truth], seed_by_batch:
     return cases
 
 
-@dataclass
-class _Store:
-    embeddings: np.ndarray
-    concept_ids: list[int]
-
-
 class StaticOntology:
-    """The ontology interface the snapshot builder reads, over fixed centroids: no lifecycle."""
+    """The ontology the snapshot builder reads (``OntologyView``), over fixed centroids: no lifecycle, no state on disk."""
 
-    def __init__(self, centroids: np.ndarray, config: Any) -> None:
-        self.store = _Store(centroids / np.linalg.norm(centroids, axis=1, keepdims=True), list(range(len(centroids))))
+    def __init__(self, centroids: np.ndarray, config: TopologyConfig) -> None:
         self.config = config
+        self.store = ConceptStore()
+        self.store.embeddings = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
+        self.store.concept_ids = list(range(len(centroids)))
 
     @property
     def attractor_ids(self) -> list[int]:
@@ -158,7 +157,7 @@ class StaticOntology:
         return [Attractor(i, c.copy(), 0, "static", 0) for i, c in zip(self.store.concept_ids, self.store.embeddings, strict=True)]
 
     def centroid(self, attractor_id: int) -> np.ndarray:
-        return self.store.embeddings[attractor_id]
+        return np.asarray(self.store.embeddings[attractor_id])
 
     def topology(self) -> list[dict[str, Any]]:
         return eng.calculate_knn_topology(self.store, self.config)
@@ -217,10 +216,11 @@ def rank_cases(engine: Engine, cases: list[Case], *, k: int, seed: int) -> list[
     weight = {p: g.insight(p).weight for p in ids}
     by_weight = sorted(ids, key=lambda p: -weight[p])
     documents = dict(zip(ids, engine.encoder.embedder.embed([g.canonical_document(p) for p in ids])))  # the naive baseline's
-    rankers = {
-        name: (lambda s, gr=gr: [r.node_id for r in traverse(gr, [SeedMatch(s, 1.0, {})], wide).patterns if r.node_id != s])
-        for name, gr in graphs.items()
-    }
+
+    def walk(gr: DualGraph) -> Callable[[str], list[str]]:
+        return lambda s: [r.node_id for r in traverse(gr, [SeedMatch(s, 1.0, {})], wide).patterns if r.node_id != s]
+
+    rankers = {name: walk(gr) for name, gr in graphs.items()}
     rankers |= {
         "vector_nn": lambda s: cosine_rank(s, state.frame.patterns),
         "text_nn": lambda s: cosine_rank(s, documents),
@@ -270,7 +270,7 @@ def analyse(rows: list[dict[str, Any]], k: int) -> dict[str, Any]:
     """Means per ranker and the paired comparisons of the walk against the others, Holm-corrected."""
     rankers = ["transversal", "static", "random", "vector_nn", "text_nn", "weight_only"]
     means = {m: {key: round(float(np.mean([r[m][key] for r in rows])), 3) for key in ("recall", "precision", "mrr", "reached")} for m in rankers}
-    comparisons = {other: cluster_bootstrap(rows, "transversal", other, "recall") for other in rankers[1:]}
+    comparisons: dict[str, dict[str, Any]] = {other: cluster_bootstrap(rows, "transversal", other, "recall") for other in rankers[1:]}
     for other, adjusted in zip(comparisons, holm([c["p"] for c in comparisons.values()]), strict=True):
         comparisons[other]["p_holm"] = adjusted
         comparisons[other]["mrr"] = cluster_bootstrap(rows, "transversal", other, "mrr")

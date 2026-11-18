@@ -117,7 +117,7 @@ function botCard(turn) {
 }
 
 const fold = (on, html) =>  // an evidence-only answer folded for the person, open for the developer
-  on ? `<details class="answer-fold"${document.body.classList.contains("dev") ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
+  on ? `<details class="answer-fold"${isDev() ? " open" : ""}><summary>Показати знайдені інсайти</summary>${html}</details>` : html;
 
 function followUps(turn) {
   const items = (turn.qa.view.evidence && turn.qa.view.evidence.items) || [];
@@ -154,9 +154,10 @@ const WALK = Object.fromEntries(["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "
 
 async function pickInsight(pid, view) {
   let d;
+  if (!isDev() && personTab() === "ads") { inspect(pid); return; }  // the graph's chat is not the person's: the drawer describes it
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
-  S.chat.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
-  renderThread();
+  S.threads.graph.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
+  showTab("graph");
 }
 
 function askAbout(p) {
@@ -210,14 +211,17 @@ const barPeriod = (turn) => turn.period && turn.qa?.view?.evidence?.parsed?.when
 function renderThread() {
   /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
-  if (!S.chat.length) {
+  if (!S.chat.length && S.tab === "ads") {
+    t.innerHTML = `<div class="welcome"><h3>Розмова з ADS</h3><p>Напишіть питання тут — про всю мапу або про зони, яких можна виділити до ${MAX_ZONES}, — чи натисніть «Запитати про це ADS» у попапі зони: ` +
+      `перше питання відкриє вибір таблиць, зон і періоду. Уточнення йдуть у ту саму сесію ADS разом із попередніми відповідями.</p></div>`;
+  } else if (!S.chat.length) {
     const chips = suggestions();
     t.innerHTML = `<div class="welcome"><div class="art"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 4z"/></svg></div>` +
       `<h3>Спитайте про свої дані</h3><p>Відповіді будуються лише з перевірених інсайтів графа, і кожне твердження має посилання на джерело.</p>` +
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}${turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
+      `<div class="msg-user">${esc(turn.question)}${turn.zones ? `<span class="msg-zone">${!turn.zones.length ? "уся мапа" : turn.zones.length > 1 ? "зони" : "зона"} ${esc(turn.zones.join(", "))}${turn.zone ? ` · ${plural(turn.zone, "комірка", "комірки", "комірок")}` : ""}</span>` : turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
       `${barPeriod(turn) ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(wall(turn.period.start), wall(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
@@ -225,18 +229,21 @@ function renderThread() {
 }
 
 async function ask(question, zone = null) {
-  question = (question || "").trim();  // with a map zone ({cells}) the text may be empty; false: asked without one
-  if (zone === null && GeoMap.zone().length) zone = { cells: GeoMap.zone() };  // a selected zone goes with every question until cleared
+  question = (question || "").trim();  // with a map zone ({cells, id?}) the text may be empty; false: asked without one
+  if (S.tab === "ads" && zone === null) return askAdsFurther(question);  // the ADS tab's box goes on with its conversation
+  const active = GeoMap.active();  // a drawn zone goes with every question until cleared: the one last opened, one at a time
+  if (zone === null && active) zone = { cells: [...active.cells], id: active.id };
   if ((!question && !zone) || S.busy) return;
+  showTab("graph");
   const period = S.period;  // the bar's stretch; none: freshness from the latest data (docs/07_question_answering.md §7.2)
   S.busy = true; $("ask-btn").disabled = true;
   $("question").value = ""; autosize();
-  const turn = { question, period, zone: zone ? zone.cells.length : 0, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
-  const live = () => S.chat.includes(turn);  // New chat drops the turn: its late answer paints nothing
+  const turn = { question, period, zone: zone ? zone.cells.length : 0, zones: zone?.id ? [zone.id] : undefined, pending: true, since: new Date().toISOString(), ctl: new AbortController() };
+  const live = () => S.threads.graph.includes(turn);  // New chat drops the turn: its late answer paints nothing
   const timer = setTimeout(() => turn.ctl.abort("timeout"), CHAT_TIMEOUT_S * 1000);
-  S.chat.push(turn); renderThread();
+  S.threads.graph.push(turn); renderThread();
   try {
-    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...zone, ...(period ? { period: [period.start, period.end] } : {}), use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
+    const qa = await api("/api/chat/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, ...(zone ? { cells: zone.cells } : {}), ...(period ? { period: [period.start, period.end] } : {}), use_llm: $("use-llm").checked }), signal: turn.ctl.signal });
     Object.assign(turn, { pending: false, qa });
     S.hl = qa.view.highlight;
     const evDatasets = ((qa.view.evidence && qa.view.evidence.datasets) || []).map((d) => d.dataset_id);
@@ -245,18 +252,18 @@ async function ask(question, zone = null) {
       await refreshBatches();  // every view, the map and the rail's active card follow the filter
       if (!live()) return;
     }
-    renderThread();
+    if (S.tab === "graph") renderThread();
     highlight(S.hl);
     try { GeoMap.onAnswer(qa); } catch (err) { console.error("map highlight failed", err); }  // the map never breaks an answer
     if (S.view === "graph") focusNodes([...(qa.view.highlight.traversed || [])]);
     renderSphere();
   } catch (e) {
     const why = turn.ctl.signal.reason, late = why === "timeout" || e.status === 504;
-    if (live()) { Object.assign(turn, { pending: false, cancelled: why === "cancel", error: why === "cancel" ? "Скасовано." : late ? ERROR_HELP.chat_timeout.join(" ") : e.message }); renderThread(); }
+    if (live()) { Object.assign(turn, { pending: false, cancelled: why === "cancel", error: why === "cancel" ? "Скасовано." : late ? ERROR_HELP.chat_timeout.join(" ") : e.message }); if (S.tab === "graph") renderThread(); }
   } finally {
     clearTimeout(timer);
     S.busy = false; $("ask-btn").disabled = !$("question").value.trim();
   }
 }
 
-function autosize() { const q = $("question"); q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 140) + "px"; $("ask-btn").disabled = S.busy || !q.value.trim(); }
+function autosize() { const q = $("question"); q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 140) + "px"; $("ask-btn").disabled = (S.tab === "ads" ? adsRunning() : S.busy) || !q.value.trim(); }

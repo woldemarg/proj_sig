@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime
@@ -56,7 +56,8 @@ class RequestTimer:
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] != "http":
-            return await self.app(scope, receive, send)
+            await self.app(scope, receive, send)
+            return
         start, status = time.perf_counter(), [None]
 
         async def sent(message: dict[str, Any]) -> None:
@@ -81,9 +82,18 @@ class SearchIn(BaseModel):
     include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
 
 
-class AoiIn(BaseModel):
+class ZoneIn(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,16}$")  # the zone's name in the rows: a CSV value as it is
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
-    resolution: int | None = Field(default=None, ge=0, le=15)  # the cell columns' resolution; None: the dataset's own
+
+
+MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cells and a line of X-Zones
+
+
+class ZonesIn(BaseModel):
+    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone
+    resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
+    layer: str | None = None  # a layer link run's context layer, by name, instead of the dataset's rows
 
 
 class HiddenIn(BaseModel):
@@ -124,7 +134,7 @@ def _text(upload: UploadFile | None) -> str | None:
         raise PipelineError("invalid_options", "metadata document: not UTF-8 text") from exc
 
 
-def _log_failure(future: Future) -> None:
+def _log_failure(future: Future[Any]) -> None:
     if future.exception() is not None:  # process() records its own failures; this is what escaped it
         log.error("background job failed", exc_info=future.exception())
 
@@ -151,18 +161,21 @@ def create_app(engine: Engine) -> FastAPI:
     app = FastAPI(title="SIG insight graph service", lifespan=lifespan)
     app.add_middleware(RequestTimer)
 
+    refusals = (PipelineError, RepresentationMismatch, RollbackPending, UploadTooLarge)
+
     async def refused(_: Request, exc: Exception) -> JSONResponse:
+        assert isinstance(exc, refusals)  # registered for these only
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=STATUS.get(exc.code, 409))
 
     async def failed(_: Request, exc: Exception) -> JSONResponse:
         log.exception("request failed", exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}", "code": "internal_error"}, status_code=500)
 
-    for error in (PipelineError, RepresentationMismatch, RollbackPending, UploadTooLarge):
+    for error in refusals:
         app.add_exception_handler(error, refused)
     app.add_exception_handler(Exception, failed)
 
-    def run(job, *args: Any) -> None:
+    def run(job: Callable[..., Any], *args: Any) -> None:
         worker.submit(job, *args).add_done_callback(_log_failure)
 
     def accept(name: str, stream: BinaryIO, bins: str | None, categories: str | None, geo: str | None = None, **options: Any) -> JSONResponse:
@@ -259,7 +272,7 @@ def create_app(engine: Engine) -> FastAPI:
         if (file is None) == (shipped is None):
             raise HTTPException(400, "a file or a shipped dataset's key (demo), not both" if file else f"no file and no shipped dataset {demo!r}")
         # empty form fields mean "use the workspace defaults" (BIN_COLUMNS / CATEGORICAL_COLUMNS); no geo = a plain table
-        options = {
+        options: dict[str, Any] = {
             "source": source,
             "reliability": reliability,
             "indicators": indicators,
@@ -285,6 +298,7 @@ def create_app(engine: Engine) -> FastAPI:
             options["context"] += [(sets[k]["file"], files.enter_context((DEMO_DIR / sets[k]["file"]).open("rb"))) for k in context_demo or []]
             if shipped:
                 return accept(shipped["file"], files.enter_context((DEMO_DIR / shipped["file"]).open("rb")), *parsed, **options)
+            assert file is not None  # a file or a shipped dataset, checked above
             return accept(Path(file.filename or "upload.csv").name, file.file, *parsed, **options)
 
     @app.post("/api/crosstype")
@@ -353,25 +367,31 @@ def create_app(engine: Engine) -> FastAPI:
         return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/counts")
-    def geo_period_counts(dataset_id: str, start: str, end: str) -> dict[str, Any]:
-        return engine.geo_period_counts(dataset_id, asked_period(start, end))
+    def geo_period_counts(dataset_id: str, start: str, end: str, datasets: str = "") -> dict[str, Any]:
+        return engine.geo_period_counts(dataset_id, asked_period(start, end), tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
         return engine.geo_projected(dataset_id)
 
     @app.get("/api/geo/{dataset_id}/window")
-    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "") -> dict[str, Any]:
-        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))))
+    def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "", start: str = "", end: str = "") -> dict[str, Any]:
+        period = asked_period(start, end) if start or end else None  # the period bar's days: the view's points in them
+        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
 
-    @app.post("/api/geo/{dataset_id}/aoi")
-    def geo_aoi_rows(dataset_id: str, body: AoiIn) -> Response:
-        data, counts = engine.geo_aoi_rows(dataset_id, body.polygon, body.resolution)
-        return Response(data, media_type="text/csv", headers={"X-Aoi": json.dumps(counts)})  # ASCII: a header's bytes
+    @app.get("/api/geo/{dataset_id}/rows")
+    def geo_table_rows(dataset_id: str, resolution: int | None = None, layer: str | None = None) -> Response:
+        data, counts = engine.geo_table_rows(dataset_id, resolution, layer)
+        return Response(data, media_type="text/csv", headers={"X-Rows": json.dumps(counts)})  # ASCII: a header's bytes
+
+    @app.post("/api/geo/{dataset_id}/zone_rows")
+    def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
+        data, counts = engine.geo_zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
+        return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
-    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False) -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id, rings)
+    def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:
+        return engine.geo_pattern(dataset_id, pattern_id, rings, asked_period(start, end) if start or end else None)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:

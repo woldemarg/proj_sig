@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import TypedDict
 
 import numpy as np
 import pytest
@@ -19,9 +20,17 @@ def unit(v):
 
 
 DIM = 1152  # the production insight vector (3 x 384)
+
+
 # The toy clusters below are drawn for this assignment band and merge threshold (the defaults before the precision tuning
 # of docs/05_latent_anchors.md §5.10); the tests exercise the mechanics, not the production band.
-BAND = {"min_assign_threshold": 0.75, "max_assign_threshold": 0.80, "soft_merge_low": 0.85}
+class _Band(TypedDict):
+    min_assign_threshold: float
+    max_assign_threshold: float
+    soft_merge_low: float
+
+
+BAND: _Band = {"min_assign_threshold": 0.75, "max_assign_threshold": 0.80, "soft_merge_low": 0.85}
 
 
 def clusters(rng, centers, per, noise=0.05):

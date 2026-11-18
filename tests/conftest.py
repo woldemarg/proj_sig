@@ -11,6 +11,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,7 @@ from fastapi.responses import JSONResponse
 from scratch import serve, weekly_retail
 
 from evidence_narrator_service.llm_client import LLMResponse
+from graph_query_engine.evidence import EvidenceItem
 from insight_contracts import Condition, Insight
 from insight_graph_service.core.demo import generate_retail_dataset
 from insight_graph_service.core.settings import load_settings
@@ -33,7 +35,7 @@ def llm_stub():
     records ``{"body", "auth"}`` and answers — a 500 for the message "fail", a 429 with Retry-After for "busy".
     Yields (base URL ending in /v1, the recorded requests)."""
     app = FastAPI()
-    seen: list[dict] = []
+    seen: list[dict[str, Any]] = []
 
     @app.get("/v1/models")
     def models():
@@ -123,21 +125,21 @@ def geo_frame(seed: int = 3) -> pd.DataFrame:
 
 
 @pytest.fixture
-def points_csv(tmp_path) -> Path:
+def points_csv(tmp_path: Path) -> Path:
     """``geo_frame()`` as ``points.csv``: the geo tests' upload."""
     path = tmp_path / "points.csv"
     geo_frame().to_csv(path, index=False)
     return path
 
 
-def upload_levels(engine, path: Path, **options) -> list[dict]:
+def upload_levels(engine, path: Path, **options) -> list[dict[str, Any]]:
     """``Engine.upload`` of ``path`` with ``options`` (``geo``, ``table``, ...), every level processed in turn as the service's
     worker does."""
     with path.open("rb") as f:
         return [engine.process(r["batch_id"]) for r in engine.upload(path.name, f, **options)]
 
 
-def rewrite_patterns(engine, rows: list[dict]) -> None:
+def rewrite_patterns(engine, rows: list[dict[str, Any]]) -> None:
     """Rewrite the journal's pattern records as an attacker editing the file would (``rows`` the records, edited)."""
     engine.ws.journal.chunks_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
 
@@ -204,14 +206,23 @@ def toy_insight(scope, shifts, **fields) -> Insight:
     return Insight(**{**values, **fields})
 
 
+def evidence_item(**fields: Any) -> EvidenceItem:
+    """A test EvidenceItem: the fields a test names, the others empty."""
+    blank: dict[str, Any] = {"key": "", "pattern_id": "", "role": "seed", "headline": "", "scope": [], "target": "", "phenomenon_type": ""}
+    blank |= {"statistics": {}, "scope_text": "", "shift_text": [], "relationship": "", "path": [], "path_text": "", "validation": ""}
+    blank |= {"attractors": [], "transversal_only": False, "provenance": {}}
+    return EvidenceItem(**(blank | fields))
+
+
 class Crash(BaseException):
     """The process dies mid-write: no except-handler runs (the recovery and deletion tests raise it)."""
 
 
-def wait_batch(client, batch_id: str, timeout: float = 60) -> dict:
+def wait_batch(client, batch_id: str, timeout: float = 60) -> dict[str, Any]:
     """``GET /api/batches/{id}`` until the batch is terminal; fails after ``timeout`` seconds. A batch the app's worker
     runs ends inside its test: one running on would meet the next test's patches."""
     deadline = time.monotonic() + timeout
+    record: dict[str, Any]
     while (record := client.get(f"/api/batches/{batch_id}").json())["status"] not in TERMINAL:
         assert time.monotonic() < deadline, f"batch {batch_id} still {record['status']}"
         time.sleep(0.1)

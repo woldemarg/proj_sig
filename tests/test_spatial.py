@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import io
 import json
 import re
 import time
 from collections import Counter
+from typing import Any
 from unittest import mock
 
 import h3
@@ -53,7 +53,8 @@ def test_parse_geo_and_points():
     assert np.isnan(lat[2:]).all()
     frame = geo_frame()  # columns named longitude then latitude: the names give the roles, in range either way
     swapped, ordered = locate_points(frame, "longitude,latitude"), locate_points(frame, "latitude,longitude")
-    assert np.array_equal(swapped[0], frame["latitude"]) and all(np.array_equal(a, b) for a, b in zip(swapped, ordered))
+    assert np.array_equal(swapped[0], frame["latitude"]) and np.array_equal(swapped[0], ordered[0]) and np.array_equal(swapped[1], ordered[1])
+    assert swapped[2] == ordered[2]
 
 
 def test_cell_table_roles_follow_dtypes():
@@ -101,11 +102,11 @@ def test_subgroup_moran_sees_a_block_not_scattered_cells():
     centre = ctx.cells[int(table["points"].idxmax())]
     block = np.array([pos[c] for c in h3.grid_disk(centre, 2) if c in pos])  # a solid patch of busy cells
     assert subgroup_moran(table["points"].to_numpy(float)[block], block, ctx) > 0.0
-    scattered = []
+    picked: list[int] = []
     for i in range(len(ctx.cells)):  # no two of them neighbours
-        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], scattered).any():
-            scattered.append(i)
-    scattered = np.array(scattered)
+        if not np.isin(ctx.nbr_idx[ctx.nbr_ptr[i] : ctx.nbr_ptr[i + 1]], picked).any():
+            picked.append(i)
+    scattered = np.array(picked)
     assert subgroup_moran(table["points"].to_numpy(float)[scattered], scattered, ctx) == 0.0
 
 
@@ -243,9 +244,11 @@ def test_geo_evidence_speaks_plain_language(engine, points_csv):
 def test_spatial_provenance_is_the_ingest_fields():
     stored = {"resolution": 7, "cells": 40, "moran_i": 0.2, "n_eff": 31.5, "p_adjusted_iid": 0.01, "compactness": 0.5, "colocated": []}
     spatial = SpatialProvenance.from_dict(stored)
+    assert spatial is not None
     assert spatial.to_dict() == {k: stored[k] for k in ("resolution", "cells", "moran_i", "n_eff", "p_adjusted_iid")}  # derived keys stay out
     assert SpatialProvenance.from_dict(spatial.to_dict()) == spatial
-    assert SpatialProvenance.from_dict({"resolution": 7, "cells": 40}).moran_i is None  # an older record reads
+    older = SpatialProvenance.from_dict({"resolution": 7, "cells": 40})
+    assert older is not None and older.moran_i is None  # an older record reads
     assert SpatialProvenance.from_dict(None) is None and SpatialProvenance.from_dict({}) is None
     assert tuple(SpatialProvenance.__dataclass_fields__) == SPATIAL_DIGEST_FIELDS  # widening either is a decision about stored digests
 
@@ -594,7 +597,7 @@ def test_the_scale_reads_the_levels_the_upload_has(engine, points_csv):
     by an upload of the same file counts, one deleted alone does not."""
     from graph_query_engine.vertical import scale_chain
 
-    def upload(geo: str) -> list[dict]:
+    def upload(geo: str) -> list[dict[str, Any]]:
         return upload_levels(engine, points_csv, geo=geo)
 
     def levels_and_scales() -> tuple[list[str], set[str]]:
@@ -687,7 +690,7 @@ def test_the_cell_package_keeps_every_ring_at_any_resolution(tmp_path):
 
     for res, step in ((7, 1e-5), (14, 1e-7)):
         cells = [h3.latlng_to_cell(36.5 + i * 1e-4, -119.2, res) for i in range(3)]
-        features = [
+        features: list[dict[str, Any]] = [
             {
                 "type": "Feature",
                 "id": i,
@@ -735,6 +738,7 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 2 * edge}, 7) == set(h3.grid_disk(centre, 1))  # neighbours' centres √3 edges away
     assert geometry_to_cells({"center": [lon, lat], "radius_m": 1.0}, 7) == {centre}
     assert geometry_to_cells({"bbox": [lon - 1e-4, lat - 1e-4, lon + 1e-4, lat + 1e-4]}, 7) == {centre}
+    bad: Any  # malformed on purpose
     for bad in (
         {"type": "Point", "coordinates": [lon, lat]},
         {"center": [lon]},
@@ -763,8 +767,11 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     fine = "8829aab493fffff"  # its centre lies clearly (no tie) in another resolution-5 cell than its H3 parent
     holder, parent = centre_region(fine, 5), h3.cell_to_parent(fine, 5)
     assert holder != parent
-    assert zone_overlap(np.array([holder, parent]), {"holder": [0], "parent": [1]}, frozenset([fine])) == {"holder": 1.0, "parent": 0.0}
-    assert zone_overlap(np.array([fine]), {"fine": [0]}, frozenset([holder])) == {"fine": 1.0}
+    assert zone_overlap(np.array([holder, parent]), {"holder": np.array([0]), "parent": np.array([1])}, frozenset([fine])) == {
+        "holder": 1.0,
+        "parent": 0.0,
+    }
+    assert zone_overlap(np.array([fine]), {"fine": np.array([0])}, frozenset([holder])) == {"fine": 1.0}
 
 
 def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
@@ -808,30 +815,6 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
         assert client.post("/api/search", json={"question": " "}).status_code == 400
-        # the dataset's rows against the zone drawn as a polygon: what an analysis outside SIG reads
-        res = h3.get_resolution(zone[0])
-        got = client.post(f"/api/geo/{ds}/aoi", json={"polygon": h3.h3shape_to_geo(h3.cells_to_h3shape(zone))})
-        counts, rows = json.loads(got.headers["x-aoi"]), pd.read_csv(io.BytesIO(got.content), keep_default_na=False)
-        assert got.headers["content-type"].startswith("text/csv") and counts["resolution"] == res and counts["zone_cells"] == len(zone)
-        assert counts["columns"] == [f"h3_r{res}", f"h3_r{res - 1}", f"h3_r{res - 2}", "in_aoi", "aoi_zone"]
-        assert len(rows) == counts["total"] == counts["inside"] + counts["adjacent"] + counts["far"] and counts["inside"] > 0 and counts["far"] > 0
-        assert (rows["in_aoi"] == rows[f"h3_r{res}"].isin(zone)).all()  # the polygon is the cells' outline: inside it is in them
-        assert set(rows.loc[rows["aoi_zone"] == "inside", "in_aoi"]) == {1} and set(rows.loc[rows["aoi_zone"] != "inside", "in_aoi"]) == {0}
-        near = set().union(*(h3.grid_disk(c, 1) for c in zone))
-        assert (rows.loc[rows["aoi_zone"] == "adjacent", f"h3_r{res}"].isin(near)).all() and not rows.loc[
-            rows["aoi_zone"] == "far", f"h3_r{res}"
-        ].isin(near).any()
-        assert (rows[f"h3_r{res - 1}"] == rows[f"h3_r{res}"].map(lambda c: h3.cell_to_parent(c, res - 1))).all()
-        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Point", "coordinates": [0, 0]}}).json()["code"] == "invalid_options"
-        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": {"type": "Polygon", "coordinates": [[]]}}).json()["code"] == "invalid_options"
-        assert counts["dataset_resolution"] == res and counts["where"] is None and "time" in counts
-        shape, other = h3.h3shape_to_geo(h3.cells_to_h3shape(zone)), ({7, 8} - {res}).pop()  # the upload's other level
-        at = json.loads(client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": other}).headers["x-aoi"])
-        assert (
-            at["columns"][0] == f"h3_r{other}" and at["dataset_resolution"] == res and at["inside"] == counts["inside"]
-        )  # another table's cells, the same in_aoi
-        assert client.post(f"/api/geo/{ds}/aoi", json={"polygon": shape, "resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
-        assert client.post("/api/geo/ds-unknown/aoi", json={"polygon": {}}).json()["code"] == "unknown_dataset"
 
 
 def test_the_graph_exports_as_geosparql(engine, points_csv):
@@ -840,6 +823,7 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     and the provenance chain are there."""
     import rdflib
     from pyshacl import validate
+    from rdflib.query import ResultRow
 
     done = upload_levels(engine, points_csv, geo="auto@8,7", source="sensor net", reliability="B")
     assert [r["status"] for r in done] == ["READY", "READY"]
@@ -854,11 +838,12 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     edges = [e for e in graph.edges if e["type"] == "IN_REGION"]
     region = max({e["target"] for e in edges}, key=lambda r: sum(e["target"] == r for e in edges))
     rows = data.query(f"PREFIX sig: <urn:sig:vocab#> SELECT ?p WHERE {{ ?p a sig:Insight ; sig:inRegion <urn:sig:{region}> }}")
-    assert {str(r.p) for r in rows} == {f"urn:sig:{e['source']}" for e in edges if e["target"] == region}
+    assert {str(r.p) for r in rows if isinstance(r, ResultRow)} == {f"urn:sig:{e['source']}" for e in edges if e["target"] == region}
     features = (
         "PREFIX geo: <http://www.opengis.net/ont/geosparql#> SELECT (COUNT(?f) AS ?n) WHERE { ?f a geo:Feature ; geo:hasGeometry/geo:asWKT ?w }"
     )
-    assert int(next(iter(data.query(features))).n) == sum(1 for n in graph.of_kind("Pattern")) + sum(1 for _ in graph.of_kind("Region"))
+    count = next(iter(data.query(features)))
+    assert isinstance(count, ResultRow) and int(count.n) == sum(1 for n in graph.of_kind("Pattern")) + sum(1 for _ in graph.of_kind("Region"))
     sig = rdflib.Namespace("urn:sig:vocab#")
     relation = {"overlaps": sig.extentsOverlap, "adjacent": sig.extentsTouch, "same_region": sig.sameRegion}
     co = [e for e in graph.edges if e["type"] == "CO_LOCATED"]
@@ -869,7 +854,8 @@ def test_the_graph_exports_as_geosparql(engine, points_csv):
     insight, dataset = rdflib.URIRef(f"urn:sig:{pid}"), rdflib.URIRef(f"urn:sig:DS:{graph.insight(pid).dataset_id}")
     prov = rdflib.Namespace("http://www.w3.org/ns/prov#")
     assert (insight, prov.wasDerivedFrom, dataset) in data and (dataset, sig.sourceReliability, rdflib.Literal("B")) in data
-    assert data.value(insight, sig.credibility).toPython() == graph.nodes[pid]["props"]["credibility"]
+    credibility = data.value(insight, sig.credibility)
+    assert isinstance(credibility, rdflib.Literal) and credibility.toPython() == graph.nodes[pid]["props"]["credibility"]
     assert data.value(dataset, prov.wasDerivedFrom) == rdflib.URIRef(f"urn:sig:{done[0]['upload_id']}")
     geo = rdflib.Namespace("http://www.opengis.net/ont/geosparql#")
     wkt = str(data.value(data.value(insight, geo.hasGeometry), geo.asWKT))
@@ -911,9 +897,14 @@ def test_the_point_columns_are_profiled_once_per_upload(monkeypatch, tmp_path):
     the codes are made for the first level and read by the next; without the upload's key every call profiles anew."""
     import subgroup_miner.spatial as sp
 
-    parsed = []
+    parsed: list[str] = []
     real = sp._as_datetime
-    monkeypatch.setattr(sp, "_as_datetime", lambda values: parsed.append(values.name) or real(values))
+
+    def as_datetime(values: pd.Series) -> pd.Series | None:
+        parsed.append(values.name)
+        return real(values)
+
+    monkeypatch.setattr(sp, "_as_datetime", as_datetime)
     sp.forget_profile()
     frame = geo_frame()
     six = build_cells(frame, "latitude,longitude", 6, min_cell_points=5, profile_key="upload")
@@ -971,11 +962,8 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         stored = engine.ws.load_geo(ds)  # a dataset stored before the points' times were kept
         np.savez_compressed(engine.ws.dataset_dir(ds) / "geo.npz", **{k: v for k, v in stored.items() if k != "point_time"})
-        assert client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json() == {
-            "counts": None,
-            "points": 0,
-            "timed": True,
-        }
+        stale = client.get(f"/api/geo/{ds}/counts", params={"start": "2019-03-04", "end": "2019-03-10"}).json()
+        assert (stale["counts"], stale["points"], stale["timed"]) == (None, 0, True)
         assert not engine.ws.add_point_times(ds, stored["point_time"][:-1])  # not of its stored points: nothing written
         (again,) = upload_levels(engine, path, geo="auto@8", time="when", grid="week")  # the same file again: skipped, its times added
         assert (
@@ -986,4 +974,9 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
         assert not engine.ws.add_point_times(ds, added["point_time"])  # it has them
     (plain,) = upload_levels(engine, path, geo="auto@7")
     assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
-    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {"counts": None, "points": 0, "timed": False}
+    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {
+        "counts": None,
+        "points": 0,
+        "timed": False,
+        "idle": [],
+    }

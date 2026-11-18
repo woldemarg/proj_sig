@@ -4,8 +4,12 @@ Chromium on the ``scripts/dev.py`` composite (docs/08_interface.md §8.2)."""
 from __future__ import annotations
 
 import contextlib
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Route
 
 
 @pytest.mark.browser
@@ -108,7 +112,14 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         page.select_option("#baseline", "zone")
         page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
         sent: list[bytes] = []
-        page.route("**/api/upload", lambda route: (sent.append(route.request.post_data_buffer), route.abort()))
+
+        def refuse(route: Route) -> None:
+            body = route.request.post_data_buffer
+            assert body is not None
+            sent.append(body)
+            route.abort()
+
+        page.route("**/api/upload", refuse)
         page.click("#upload-btn")
         page.wait_for_function(
             "document.getElementById('upload-note').classList.contains('err')", timeout=5000
@@ -167,12 +178,13 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     engine = make_engine(cfg)
     port, app = stack(engine)
 
-    def settled() -> list[dict]:
+    def settled() -> list[dict[str, Any]]:
         deadline = time.time() + 300
         while any(r["status"] not in TERMINAL for r in engine.ws.list_batches()):
             assert time.time() < deadline, "a batch still running"
             time.sleep(0.3)
-        return engine.ws.list_batches()
+        records: list[dict[str, Any]] = engine.ws.list_batches()
+        return records
 
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
@@ -183,6 +195,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.goto(f"{url}/")
         page.wait_for_selector(".ds-link", timeout=20000)
         page.click(".ds-link")
+        assert page.is_visible("#link-drop") and page.is_visible("#link-or")  # one's own file apart from the ready layers
         assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == (
             "kind=a",
             "0",
@@ -195,7 +208,14 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         assert not page.evaluate("$('link-dd').open")
         page.fill("#link-counts", "kind=a")
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
-        page.click(".link-opt[data-sample='schools']")  # one click runs it
+        assert page.is_disabled("#link-go")  # nothing picked yet
+        page.click(".link-opt[data-sample='schools']")  # a pick, not a run: the button sends it
+        page.set_input_files("#link-file", files=[{"name": "own.csv", "mimeType": "text/csv", "buffer": b"lat,lon\n0,0\n"}])
+        assert page.inner_text("#link-file-name") == "own.csv" and not page.locator(".link-opt.on").count()  # a file replaces the pick
+        page.click(".link-opt[data-sample='schools']")  # and a pick replaces the file
+        assert page.inner_text("#link-file-name") == "" and page.is_enabled("#link-go")
+        assert not any(b.get("cross") for b in engine.ws.list_batches())  # no run before the button
+        page.click("#link-go")
         kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"
         page.wait_for_function(kids % "schools", timeout=20000)  # the run under its base, named by its layer
         settled()
@@ -206,11 +226,13 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         assert "уже додано" in page.inner_text(f".link-opt[data-layer='{layer}']")
         page.select_option("#link-ring", "1")  # the same disk as the run
         page.click(f".link-opt[data-layer='{layer}']")  # the same layer again: the run exists
+        page.click("#link-go")
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
         page.click(".ds-link")
         page.fill("#link-counts", "")  # no types: the composition alone
         page.select_option("#link-ring", "1")
         page.click(".link-opt[data-sample='patrols']")
+        page.click("#link-go")
         page.wait_for_function(kids % "patrols", timeout=20000)
         batches = settled()
     runs = sorted((b for b in batches if b.get("cross") and b["status"] != "SKIPPED"), key=lambda b: b["created_at"])

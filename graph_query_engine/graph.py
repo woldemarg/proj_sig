@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -75,26 +75,26 @@ class DualGraph:
         self.trajectories: dict[str, dict[str, Any]] = snapshot.get("trajectories", {})  # pattern -> its series over time (§6.1)
         stamp = snapshot.get("stats", {}).get("as_of")
         self.as_of: datetime | None = datetime.fromisoformat(stamp) if stamp else None  # the latest data of the timed datasets
-        self.memo: dict[tuple[str, str], Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
+        self.memo: dict[Hashable, Any] = {}  # facts readers derive from the snapshot, filled once: it never changes
         self._memo_lock = threading.RLock()
 
-    def memoised(self, key: tuple[str, str], build: Callable[[], Any]) -> Any:
+    def memoised[T](self, key: Hashable, build: Callable[[], T]) -> T:
         """``build()`` kept under ``key``: computed once per graph even when readers on several threads ask at once (a
         projection takes seconds on a large upload). Reentrant, since one build may read another's facts."""
         # ponytail: one lock per graph serialises the first builds of different keys; per-key locks if readers ever queue
-        if key in self.memo:
-            return self.memo[key]
-        with self._memo_lock:
-            if key not in self.memo:
-                self.memo[key] = build()
-            return self.memo[key]
+        if key not in self.memo:
+            with self._memo_lock:
+                if key not in self.memo:
+                    self.memo[key] = build()
+        value: T = self.memo[key]
+        return value
 
     def insight(self, node_id: str) -> Insight:
         return self.insights[node_id]
 
     def tampered(self, pattern_id: str) -> bool:
         """Whether the pattern's journal record fails its digest (docs/13_trust.md §13.4): never a seed, a walk slot or evidence."""
-        return self.nodes[pattern_id]["props"].get("integrity") == "mismatch"
+        return bool(self.nodes[pattern_id]["props"].get("integrity") == "mismatch")
 
     def holders(self, region: str) -> list[str]:
         """The patterns a region holds: its IN_REGION sources, and the geo patterns whose own cell it is (``own_cells``)."""
@@ -102,7 +102,8 @@ class DualGraph:
         def build() -> dict[str, list[str]]:
             held: defaultdict[str, list[str]] = defaultdict(list)
             for pid, cells in self.own_cells.items():
-                res = self.facts(pid).resolution
+                if (res := self.facts(pid).resolution) is None:
+                    continue
                 for c in cells:
                     held[region_node_id(res, c)].append(pid)
             return dict(held)
@@ -141,24 +142,25 @@ class DualGraph:
         def build() -> PatternFacts:
             out, ins = self.out.get(pattern_id, []), self.insight(pattern_id)
             spatial = SpatialProvenance.from_dict(ins.provenance.get("spatial"))
+            res = spatial.resolution if spatial else None
             regions = {e["target"]: e["weight"] for e in out if e["type"] == "IN_REGION"}
             levels = {r: self.nodes[r]["props"]["resolution"] for r in regions}
             top = max(levels.values(), default=None)
             own = self.own_cells.get(pattern_id)
             placed = frozenset(r for r, lv in levels.items() if lv == top)
             return PatternFacts(
-                resolution=spatial.resolution if spatial else None,
+                resolution=res,
                 upload=self.nodes.get(dataset_node_id(ins.dataset_id), {"props": {}})["props"].get("upload_id"),
                 regions=regions,
                 placed=placed,
-                finest=frozenset(region_node_id(spatial.resolution, c) for c in own) if own else placed,
+                finest=frozenset(region_node_id(res, c) for c in own) if own and res is not None else placed,
                 anchors={e["target"]: e["weight"] for e in out if e["type"] == "ACTIVATES" and not e["props"].get("weak")},
             )
 
         return self.memoised(("facts", pattern_id), build)
 
     def canonical_document(self, node_id: str) -> str:
-        return self.nodes[node_id]["props"]["canonical"]["document"]
+        return str(self.nodes[node_id]["props"]["canonical"]["document"])
 
     @classmethod
     def empty(cls) -> DualGraph:

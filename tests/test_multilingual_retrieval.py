@@ -7,6 +7,8 @@ under the ``model`` marker, on the real embedder (B3, B4).
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from conftest import make_config, make_engine
@@ -65,7 +67,7 @@ class DictEmbedder:
     embed_queries = embed
 
 
-def toy_graph(extra: list | None = None) -> DualGraph:
+def toy_graph(extra: list[dict[str, Any]] | None = None) -> DualGraph:
     nodes = [
         pattern("P1", ["region=US", "category=phones"]),
         pattern("P2", ["region=EU", "category=phones"], z=1.0),

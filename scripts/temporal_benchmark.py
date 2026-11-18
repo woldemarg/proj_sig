@@ -131,6 +131,7 @@ def mine(path: Path, config: Settings) -> tuple[list[Insight], dict[str, dict[st
         return [], {}, []
     insights = build_insights(result, cfg, dataset_id=loaded.dataset_id, batch_id="bench", filename=path.name)
     kept, _ = admit_insights(select_insights(insights, cfg).kept, config.min_insight_weight, config.max_insights_per_batch)
+    assert loaded.grid is not None  # a time reading
     codes, bins = calendar_bins(loaded.time, loaded.grid)
     covers = covers_of(result)
     series = annotate(
@@ -156,7 +157,7 @@ def cohort(kept: list[Insight], scope: dict[str, str], metric: str) -> Insight |
 
 def score_planted(kept: list[Insight], trajectories: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Each planted cohort: found, its trend, its events on its own metric and on the others, and S3's dip depth."""
-    out = {}
+    out: dict[str, dict[str, Any]] = {}
     for name, (scope, metric) in PLANTED.items():
         ins = cohort(kept, scope, metric)
         if ins is None:
@@ -198,7 +199,7 @@ def parity(library: dict[str, dict[str, Any]], served: dict[str, dict[str, Any]]
 
     def same(p: str) -> bool:
         events = [{k: v for k, v in e.items() if k not in ("carrier", "echo_of")} for e in served[p].get("events", [])]
-        return json.loads(json.dumps(library[p], default=float)) == {k: served[p].get(k) for k in library[p]} | {"events": events}
+        return bool(json.loads(json.dumps(library[p], default=float)) == {k: served[p].get(k) for k in library[p]} | {"events": events})
 
     return sorted(p for p in library.keys() | served.keys() if p not in library or p not in served or not same(p))
 
@@ -316,14 +317,14 @@ def main() -> int:
     parser.add_argument("--override", action="append", default=[], metavar="NAME=VALUE", help="a settings field by its upper-case name")
     args = parser.parse_args()
     overrides = parse_overrides(args.override)
-    jobs = [(s, "planted", None) for s in parse_seeds(args.seeds)] if args.seeds else []
+    jobs: list[tuple[int, str, tuple[int, float] | None]] = [(s, "planted", None) for s in parse_seeds(args.seeds)] if args.seeds else []
     jobs += [(s, "stationary", None) for s in parse_seeds(args.stationary_seeds)] if args.stationary_seeds else []
     if args.flash_seeds:
         jobs += [(s, "flash", (k, m)) for k in FLASH_WEEKS for m in FLASH_SIZES for s in parse_seeds(args.flash_seeds)]
     with ProcessPoolExecutor(args.workers) as pool:
         rows = list(pool.map(run_seed, *zip(*[(s, kind, overrides, flash) for s, kind, flash in jobs])))
     if args.engine_seeds:
-        from tests.doubles import HashingEmbedder
+        from doubles import HashingEmbedder
 
         rows += [run_engine(s, overrides, HashingEmbedder()) for s in parse_seeds(args.engine_seeds)]
     summary = analyse(rows)

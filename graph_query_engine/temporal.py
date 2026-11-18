@@ -68,7 +68,7 @@ def recency(trajectory: dict[str, Any] | None, as_of: datetime | None, half_life
     core = (trajectory or {}).get("core")
     if not core or as_of is None or half_life_days <= 0:
         return None
-    return 0.5 ** (core_age(core, as_of)["days"] / half_life_days)
+    return float(0.5 ** (core_age(core, as_of)["days"] / half_life_days))
 
 
 def strip_periods(text: str) -> str:
@@ -80,7 +80,9 @@ def strip_periods(text: str) -> str:
 @functools.lru_cache(maxsize=1024)  # ponytail: a grid's labels repeat across patterns and questions
 def _interval(token: str) -> tuple[datetime, datetime] | None:
     """One ``wording.PERIOD`` token's interval; None for one that names no date."""
-    g = wording.PERIOD.fullmatch(token).groups()
+    if (m := wording.PERIOD.fullmatch(token)) is None:
+        return None
+    g = m.groups()
     try:
         if g[0]:
             start = date.fromisocalendar(int(g[0]), int(g[1]), 1)
@@ -97,7 +99,7 @@ def _interval(token: str) -> tuple[datetime, datetime] | None:
             stop = _months_on(start, 1)
     except (ValueError, OverflowError):
         return None
-    return tuple(datetime(d.year, d.month, d.day, tzinfo=UTC) for d in (start, stop))
+    return datetime(start.year, start.month, start.day, tzinfo=UTC), datetime(stop.year, stop.month, stop.day, tzinfo=UTC)
 
 
 def _months_on(day: date, months: int) -> date:

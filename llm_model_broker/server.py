@@ -123,7 +123,7 @@ def create_app(settings: Settings) -> FastAPI:
             retry = {"Retry-After": resp.headers["retry-after"]} if "retry-after" in resp.headers else None
             return _error(status, f"upstream HTTP {resp.status_code}: {resp.text[:300]}", "upstream_error", retry)
         try:
-            data = resp.json()
+            data: dict[str, Any] = resp.json()
         except ValueError:
             return _error(502, f"upstream sent no JSON: {resp.text[:200]}", "upstream_error")
         usage = data.get("usage") or {}

@@ -28,7 +28,7 @@ from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.context import points_near
-from subgroup_miner.ingestion import IngestionError, aoi_rows, read_context
+from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
@@ -173,12 +173,14 @@ def _zone_scores(
 _zone_scores_cached = functools.lru_cache(maxsize=64)(_zone_scores)
 
 
-def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any], resolution: int | None = None) -> tuple[bytes, dict[str, Any]]:
-    """A geo dataset's rows as CSV with their place against a drawn zone, and the rows per place with what the reader
-    must know of the table (``ingestion.aoi_rows``): what an analysis outside SIG reads beside the zone's insights. The
-    cells are of ``resolution``, the dataset's own by default: tables read at one resolution share their cell columns;
-    only a resolution some geo dataset is analysed at is taken (a finer one over a wide zone is millions of cells).
-    A hidden layer's dataset is not served, as the map does not offer it."""
+def _export_reading(
+    ws: Workspace, dataset_id: str, resolution: int | None, layer: str | None = None
+) -> tuple[dict[str, Any], tuple[Path, str, str | None, tuple[str, str | None, str, str] | None], int]:
+    """What the reader of a geo dataset's export must know of its table, the reading of its rows and the cell resolution
+    of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
+    over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
+    ``layer``: a layer link run's context layer by its name, its points read as the run read them (its filter, an aligned
+    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
     if not geo or dataset_id in hidden_datasets(ws.list_batches()):
@@ -187,12 +189,50 @@ def geo_aoi_rows(ws: Workspace, dataset_id: str, polygon: dict[str, Any], resolu
         resolution = geo["resolution"]
     elif resolution not in (known := sorted({d["resolution"] for d in geo_datasets(ws)})):
         raise PipelineError("invalid_options", f"resolution {resolution} is not a geo dataset's: {known}")
+    table = {"dataset_id": dataset_id, "upload_id": record.get("upload_id"), "filename": record["filename"], "dataset_resolution": geo["resolution"]}
+    if layer is not None:
+        entry = next((c for c in context_files(record) if c[0] == layer), None)
+        if entry is None:
+            raise PipelineError("unknown_dataset", f"{dataset_id} holds no layer {layer!r}")
+        _, path, locator, window, where = entry
+        table |= {
+            "layer": layer,
+            "filename": f"{layer}{path.suffix}",
+            "upload_id": None,
+            "ring": record.get("context_ring", 1),
+        }  # a run before #307 counted a ring
+        span = {"window": list(window[2:])} if window else {}
+        return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
+    reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)
+    return table | {"time": record.get("time"), "where": record.get("where")}, reading, resolution
+
+
+def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
+    """A geo dataset's rows as CSV with a ``row_id`` and their cell columns of ``resolution`` (``ingestion.table_rows``),
+    and what the reader must know of the table: what an analysis outside SIG reads; tables exported at one resolution share
+    their cell columns. It does not depend on a zone: ``geo_zone_rows`` places the rows."""
+    table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
-        data, counts = aoi_rows(Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), resolution, polygon)
+        data, counts = table_rows(*reading, resolution)
     except (SpatialError, IngestionError) as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    table = {"dataset_id": dataset_id, "filename": record["filename"], "dataset_resolution": geo["resolution"]}
-    return data, counts | table | {"time": record.get("time"), "where": record.get("where")}
+    return data, counts | table
+
+
+def geo_zone_rows(
+    ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
+) -> tuple[bytes, dict[str, Any]]:
+    """Which of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) holds, by the ``row_id`` of ``geo_table_rows``
+    at the same ``resolution`` (``ingestion.zone_rows``), per zone its rows per place and its cells, and what
+    ``geo_table_rows`` tells of the table: a reader that holds the table already reads the zones alone."""
+    if len({z for z, _ in zones}) != len(zones):
+        raise PipelineError("invalid_options", "two zones share an id")
+    table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
+    try:
+        data, counts = zone_rows(*reading, resolution, zones)
+    except (SpatialError, IngestionError) as exc:
+        raise PipelineError("invalid_options", str(exc)) from exc
+    return data, counts | table
 
 
 def point_times(times: Any) -> np.ndarray | None:
@@ -205,17 +245,53 @@ def geo_period_counts(ws: Workspace, dataset_id: str, period: tuple[datetime, da
     """Each cell's points in ``period`` ([start, end), wall clock: ``temporal.parse_period``), read on the dataset's
     calendar as an asked period is (docs/07_question_answering.md §7.1): ``{counts: [per cell row], points, timed}``;
     ``counts`` is None for a dataset without a time column (``timed`` false) or whose points were stored without their times."""
-    lo, hi = period
+    counts = period_cell_counts(ws, dataset_id, period)
+    if counts is None:
+        return {"counts": None, "points": 0, "timed": bool(_owner(ws, dataset_id).get("temporal"))}
+    return {"counts": counts.tolist(), "points": int(counts.sum()), "timed": True}
+
+
+def idle_insights(
+    ws: Workspace,
+    graph: DualGraph,
+    dataset_id: str,
+    period: tuple[datetime, datetime],
+    thresholds: PhenomenonThresholds,
+    datasets: tuple[str, ...] = (),
+) -> list[str]:
+    """The insights the map lists (``geo_overlay``'s region ``ids``) that do not act in ``period``: a trajectory whose core
+    does not meet it and no event inside it (``DualGraph.members``, docs/07_question_answering.md §7.2); one with
+    neither a core nor an event always acts."""
+    listed = {
+        pid for f in geo_overlay(ws, graph, dataset_id, thresholds, datasets)["features"] for ids in f["properties"]["ids"].values() for pid in ids
+    }
+    members = graph.members(period)
+    acting = {*members["active"], *(pid for pid, _ in members["peaked"]), *(pid for pid, _ in members["dropped"])}
+    timed = {pid for pid, t in graph.trajectories.items() if t.get("core") or t["events"]}
+    return sorted(listed & timed - acting)
+
+
+def points_in_period(ws: Workspace, dataset_id: str, period: tuple[datetime, datetime]) -> np.ndarray | None:
+    """Which of the dataset's points lie in ``period`` ([start, end), wall clock, read on the dataset's calendar as an
+    asked period is: docs/07_question_answering.md §7.1); None without their times (no time column, or stored before
+    ``geo.npz`` kept them)."""
     temporal = _owner(ws, dataset_id).get("temporal") or {}
-    geo = _geo(ws, dataset_id, ("cells", "point_cell", "point_time"))
-    if "point_time" not in geo:
-        return {"counts": None, "points": 0, "timed": bool(temporal)}
+    geo = _geo(ws, dataset_id, ("point_time",))
+    if not temporal or "point_time" not in geo:
+        return None
     zone = ZoneInfo(temporal["tz"]) if temporal.get("tz") else UTC
-    lo_ms, hi_ms = (int(t.replace(tzinfo=zone).timestamp() * 1000) for t in (lo, hi))
-    t, cell = geo["point_time"], geo["point_cell"]
-    inside = (t >= lo_ms) & (t < hi_ms) & (cell >= 0)  # NaT, the int64 minimum, lies before every period
-    counts = np.bincount(cell[inside], minlength=len(geo["cells"]))
-    return {"counts": counts.tolist(), "points": int(inside.sum()), "timed": True}
+    lo_ms, hi_ms = (int(t.replace(tzinfo=zone).timestamp() * 1000) for t in period)
+    return np.asarray((geo["point_time"] >= lo_ms) & (geo["point_time"] < hi_ms))  # NaT, the int64 minimum, lies before every period
+
+
+def period_cell_counts(ws: Workspace, dataset_id: str, period: tuple[datetime, datetime]) -> np.ndarray | None:
+    """Each cell row's points in ``period`` (``points_in_period``); None without the points' times."""
+    inside = points_in_period(ws, dataset_id, period)
+    if inside is None:
+        return None
+    geo = _geo(ws, dataset_id, ("cells", "point_cell"))
+    cell = geo["point_cell"]
+    return np.bincount(cell[inside & (cell >= 0)], minlength=len(geo["cells"]))
 
 
 def geo_cells_pack(ws: Workspace, dataset_id: str) -> bytes:
@@ -294,7 +370,8 @@ def lon_span(lons: np.ndarray) -> tuple[float, float]:
 
 def _props(graph: DualGraph, pid: str) -> dict[str, Any]:
     """The props of a pattern's Dataset node (empty for a dataset the graph lost)."""
-    return graph.nodes.get(dataset_node_id(graph.insight(pid).dataset_id), {"props": {}})["props"]
+    props: dict[str, Any] = graph.nodes.get(dataset_node_id(graph.insight(pid).dataset_id), {"props": {}})["props"]
+    return props
 
 
 def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any]:
@@ -330,12 +407,21 @@ def layer_points(record: dict[str, Any], cells: np.ndarray) -> list[dict[str, An
     return out
 
 
-def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: str, max_points: int, rings: bool = False) -> dict[str, Any]:
+def geo_pattern(
+    ws: Workspace,
+    graph: DualGraph,
+    dataset_id: str,
+    pattern_id: str,
+    max_points: int,
+    rings: bool = False,
+    period: tuple[datetime, datetime] | None = None,
+) -> dict[str, Any]:
     """A pattern's cells (rows of the cell table) and a deterministic sample of the points inside them; an insight of
     another level of the upload (``geo_projected``): the cells it is drawn by and its own points inside them. An insight
     whose record fails its digest is drawn by neither (``unknown_dataset``), as the projection and the window skip it.
     With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
-    of this dataset draws and describes it."""
+    of this dataset draws and describes it. With a ``period``, the points are those in it (``points_in_period``) when the
+    dataset has their times (``in_period``)."""
     geo = _geo(ws, dataset_id)
     rows = ws.load_covers(dataset_id).get(pattern_id)
     if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
@@ -345,12 +431,15 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
     else:
         found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
         batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = member_rows(ws, batch, ws.ready_batch_for(dataset_id), len(geo["point_cell"])) if batch else None
-        if members is None:  # unknown here, or its dataset deleted since this commit
+        members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
+        if batch is None or members is None:  # unknown here, or its dataset deleted since this commit
             raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
         rows, level = found.events, found.level
         src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
         inside = src[np.isin(geo["point_cell"][src], rows)]
+    timed = points_in_period(ws, dataset_id, period) if period is not None else None
+    if timed is not None:
+        inside = inside[timed[inside]]
     step = max(1, int(np.ceil(len(inside) / max_points)))
     points = geo["lonlat"][inside[::step]]
     ins = graph.insight(pattern_id)
@@ -359,6 +448,7 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
         "cells": [str(c) for c in geo["cells"][rows]],
         "rows": rows.tolist(),
         "n_points": int(len(inside)),
+        "in_period": timed is not None,  # the points are those of the asked period
         "points": np.round(points.astype(float), 5).tolist(),
         "level": level,
         "effect_size": ins.effect_size,
@@ -371,9 +461,9 @@ def geo_pattern(ws: Workspace, graph: DualGraph, dataset_id: str, pattern_id: st
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
     """What the map draws over a geo dataset: every region holding a cell of the datasets ``map_set`` keeps, at each
-    level of ``_region_sets``, as GeoJSON with the rows of ``dataset_id``'s cells inside it and ``n``, the IN VIEW rows a
-    view of that region alone lists (``_rows``; the datasets' insights are of different uploads, so their counts add), and
-    ``by``, that count per dataset; and each pattern of the dataset and of the table levels of its upload, and each one
+    level of ``_region_sets``, as GeoJSON with the rows of ``dataset_id``'s cells inside it, ``ids``, the IN VIEW rows a
+    view of that region alone lists per dataset (``_rows``; the datasets' insights are of different uploads, so they
+    add), and ``n``, their number; and each pattern of the dataset and of the table levels of its upload, and each one
     another dataset of the set lists, with its credibility, integrity, scale and reading — the latter with ``map_dataset``,
     the dataset whose ``/patterns`` draws it. Derived once per commit and hidden set (model A: a hidden layer's runs
     are not listed, not counted, not drawn)."""
@@ -384,16 +474,16 @@ def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: Ph
         owner = _owner(ws, dataset_id)
         tables = {b["dataset_id"] for b in ws.list_batches() if b.get("status") == "READY" and b.get("level") == "table" and same_points(b, owner)}
         pids = [n["id"] for n in graph.of_kind("Pattern") if n["props"]["dataset_id"] == dataset_id or n["props"]["dataset_id"] in tables]
-        held: defaultdict[str, dict[str, int]] = defaultdict(dict)
+        held: defaultdict[str, dict[str, list[str]]] = defaultdict(dict)
         levels = _region_sets(ws, graph, dataset_id, hidden).keys()  # the map's: another dataset's finer ones would lie inside its cells
         for ds in kept:
             for lv, sets in _region_sets(ws, graph, ds, hidden).items():
                 for cell, listed in zip(sets.ids, sets.listed, strict=True) if lv in levels else ():
-                    held[region_node_id(lv, str(cell))][ds] = len(_rows(graph, ds, listed))
+                    held[region_node_id(lv, str(cell))][ds] = list(_rows(graph, ds, listed))
         features = region_features(geo["cells"], sorted(held))
         for f in features:
             by = held[f["properties"]["id"]]
-            f["properties"].update(n=sum(by.values()), by=by)
+            f["properties"].update(n=sum(map(len, by.values())), ids=by)
         elsewhere = {pid: ds for ds in kept[1:] for pid in _projection(ws, graph, ds, hidden)["patterns"]}
         trust = {
             pid: {k: graph.nodes[pid]["props"].get(k) for k in ("credibility", "integrity")}
@@ -541,7 +631,7 @@ def _projection(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: frozen
             for pid, rows in ws.load_covers(b["dataset_id"]).items():
                 if pid not in graph.nodes or graph.tampered(pid):
                     continue
-                if own:
+                if members is None:  # the dataset's own
                     patterns[pid] = Projected(level, rows, per_cell[rows])
                     continue
                 events, counts = footprint(point_cell, members(rows), 1.0)  # every cell holding its located events
@@ -596,7 +686,7 @@ def window_view(centres: np.ndarray, bbox: str) -> np.ndarray:
         raise PipelineError("invalid_options", f"bbox {bbox!r} is not west,south,east,north in degrees")
     lon, lat = centres.T
     across = ((lon >= w) | (lon <= e)) if w > e else ((lon >= w) & (lon <= e))
-    return across & (lat >= s) & (lat <= n)
+    return np.asarray(across & (lat >= s) & (lat <= n))
 
 
 def _restates(graph: DualGraph, pid: str) -> set[str]:
@@ -612,6 +702,7 @@ def geo_window(
     thresholds: PhenomenonThresholds,
     level: int | None = None,
     datasets: tuple[str, ...] = (),
+    period: tuple[datetime, datetime] | None = None,
 ) -> dict[str, Any]:
     """The IN VIEW list (docs/08_interface.md §8.7), a hidden layer's runs left out: the regions of ``level`` (the finest of ``_region_sets`` without one)
     holding a cell whose centre lies in ``bbox`` (``window_view``), and the rows of the insights characteristic of any
@@ -619,9 +710,11 @@ def geo_window(
     regions it is characteristic of in its own right — a row a region lists only as a coarser one's comes after —,
     then its best lift there, then weight, and listed under its theme
     (``primary_anchor``). A view of one region lists the ``n`` the overlay draws on it; ``cells`` and ``points`` add over
-    the set's datasets, each of its own grid and file."""
+    the set's datasets, each of its own grid and file, over the whole span; with a ``period``, ``period_points`` are the
+    points in it of the datasets that have their times (``period_cell_counts``; None when none has)."""
     rows: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     cells = points = 0
+    period_points: int | None = None
     regions: set[str] = set()
     hidden = hidden_datasets(ws.list_batches())
     own_levels = _region_sets(ws, graph, dataset_id, hidden)
@@ -634,6 +727,8 @@ def geo_window(
             continue
         view, at = window_view(proj["centres"], bbox), sets[lv]
         cells, points = cells + int(view.sum()), points + int(proj["per_cell"][view].sum())
+        if period is not None and (counted := period_cell_counts(ws, ds, period)) is not None:
+            period_points = (period_points or 0) + int(counted[view].sum())
         own: defaultdict[str, list[float]] = defaultdict(list)  # the regions in focus each insight is characteristic of
         wide: defaultdict[str, list[float]] = defaultdict(list)  # those listing it only as a coarser region's
         for r in np.unique(at.idx[view]):
@@ -672,29 +767,35 @@ def geo_window(
     for rank, (_, row) in enumerate(sorted(rows, key=lambda r: r[0])):
         anchor = primary_anchor(graph, row["id"])
         aid = anchor["target"] if anchor else None
-        node = graph.nodes.get(aid)
+        node = graph.nodes.get(anchor["target"]) if anchor else None
         theme = themes.setdefault(
             aid,
             {
                 "id": aid,
                 "label": node["label"] if node else "без теми",
-                "reading": wording.theme_reading(node["props"], theme_glossary(graph, aid)) if node else "",
+                "reading": wording.theme_reading(node["props"], theme_glossary(graph, node["id"])) if node else "",
                 "insights": [],
             },
         )
         theme["insights"].append(row | {"rank": rank})
     order = sorted(themes.values(), key=lambda t: t["id"] is None)  # by their leading row; the insights without a theme last
-    return {"cells": cells, "points": points, "level": lv, "regions": len(regions), "insights": len(rows), "themes": order}
+    return {
+        "cells": cells,
+        "points": points,
+        "period_points": period_points,
+        "level": lv,
+        "regions": len(regions),
+        "insights": len(rows),
+        "themes": order,
+    }
 
 
 def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> dict[str, list[str]]:
     """The hosts among the listed geo insights, each with the listed levels it folds (finest first): hosts go the open
     dataset's first, then the finest; a level restated by several (``restating``) goes to the one whose subgroup is
     closest to its own (``affinity``), the earlier host on a tie."""
-    geo = sorted(
-        (q for q in listed if graph.facts(q).resolution is not None),
-        key=lambda q: (graph.insight(q).dataset_id != dataset_id, -graph.facts(q).resolution, q),
-    )
+    res = {q: r for q in listed if (r := graph.facts(q).resolution) is not None}
+    geo = sorted(res, key=lambda q: (graph.insight(q).dataset_id != dataset_id, -res[q], q))
     rank = {q: i for i, q in enumerate(geo)}
     claims: defaultdict[str, list[str]] = defaultdict(list)
     for h in geo:
@@ -706,7 +807,7 @@ def _fold_levels(graph: DualGraph, dataset_id: str, listed: dict[str, Any]) -> d
         if pid in folded:
             continue
         hosts[pid] = []
-        for q in sorted(_restates(graph, pid) & listed.keys(), key=lambda q: (-graph.facts(q).resolution, q)):
+        for q in sorted(_restates(graph, pid) & listed.keys(), key=lambda q: (-res[q], q)):
             live = [h for h in claims[q] if h not in folded]
             if q not in folded and q not in hosts and max(live, key=lambda h: (affinity(graph, h, q), -rank[h])) == pid:
                 hosts[pid].append(q)

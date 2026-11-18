@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from itertools import combinations
 
-from insight_contracts import EdgeType, GraphEdge, Insight
+from insight_contracts import Condition, EdgeType, GraphEdge, Insight
 from subgroup_miner.config import MinerConfig
 
 
-def _conds(ins: Insight) -> frozenset:
+def _conds(ins: Insight) -> frozenset[Condition]:
     return frozenset(ins.conditions)
 
 

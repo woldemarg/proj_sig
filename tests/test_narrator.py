@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import MutableMapping
+from typing import Any
 
 import pytest
 from conftest import FakeLLM, serve
@@ -28,12 +30,12 @@ def recorded(hashed_engine):
     return hashed_engine.evidence(QUESTION).to_dict()
 
 
-def graph_stub(answers: dict, bodies: list | None = None) -> FastAPI:
+def graph_stub(answers: dict[str, tuple[int, Any]], bodies: list[dict[str, Any]] | None = None) -> FastAPI:
     """The graph service as the narrator sees it: POST /api/search (the requests it gets go to ``bodies``) and GET /api/health."""
     app = FastAPI()
 
     @app.post("/api/search")
-    def search(body: dict):
+    def search(body: dict[str, Any]):
         if bodies is not None:
             bodies.append(body)
         status, payload = answers[body["question"]]
@@ -51,7 +53,7 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
     degraded = {"detail": "workspace was built with ltir-canon-0; reset the workspace (POST /api/reset)", "code": "workspace_degraded"}
     empty = empty_payload("empty?").to_dict()
     bad_zone = {"detail": "'nope' is not an H3 cell", "code": "invalid_options"}
-    bodies: list = []
+    bodies: list[dict[str, Any]] = []
     stub = graph_stub({QUESTION: (200, recorded), "degraded?": (409, degraded), "empty?": (200, empty), "": (400, bad_zone)}, bodies)
     with serve(stub) as graph_url:
         settings = NarratorSettings(insight_graph_url=graph_url, llm_base_url=base)
@@ -124,7 +126,7 @@ def test_a_graph_service_that_does_not_answer_in_time_is_a_504(recorded):
     stub = FastAPI()
 
     @stub.post("/api/search")
-    def search(body: dict):
+    def search(body: dict[str, Any]):
         time.sleep(1)
         return recorded
 
@@ -144,9 +146,10 @@ def test_a_question_whose_console_is_gone_calls_no_llm(recorded, caplog):
         app = create_app(NarratorSettings(insight_graph_url=graph_url), llm=llm)
 
         def ask(gone: bool) -> int:
-            inbox, sent = [{"type": "http.request", "body": body, "more_body": False}], []
+            inbox: list[dict[str, Any]] = [{"type": "http.request", "body": body, "more_body": False}]
+            sent: list[MutableMapping[str, Any]] = []
 
-            async def receive() -> dict:
+            async def receive() -> dict[str, Any]:
                 if inbox:
                     return inbox.pop(0)
                 if gone:
@@ -154,14 +157,21 @@ def test_a_question_whose_console_is_gone_calls_no_llm(recorded, caplog):
                 await asyncio.sleep(3600)  # still waiting for its answer
                 return {}
 
-            async def send(message: dict) -> None:
+            async def send(message: MutableMapping[str, Any]) -> None:
                 sent.append(message)
 
             headers = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
-            scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/api/chat/query"}
+            scope: dict[str, Any] = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/chat/query",
+            }
             scope |= {"raw_path": b"/api/chat/query", "query_string": b"", "root_path": "", "headers": headers, "client": ("127.0.0.1", 1)}
             asyncio.run(app(scope, receive, send))
-            return next(m["status"] for m in sent if m["type"] == "http.response.start")
+            return int(next(m["status"] for m in sent if m["type"] == "http.response.start"))
 
         with caplog.at_level(logging.INFO, logger="evidence_narrator_service.queries"):
             assert ask(gone=True) == 499 and not llm.prompts and not caplog.records

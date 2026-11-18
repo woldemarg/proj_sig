@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import functools
 import hashlib
+import warnings
 import zoneinfo
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,7 +29,7 @@ from subgroup_miner.spatial import (
     parse_times,
     select_levels,
 )
-from subgroup_miner.spatial_plane import aoi_columns
+from subgroup_miner.spatial_plane import cell_column_names, cell_columns, point_cells, zone_places
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -140,7 +141,7 @@ def dataset_fingerprint(
         h.update(b"weights=events")
     if baseline:
         h.update(f"baseline={baseline}".encode())
-    return "ds-" + h.hexdigest()[:12]
+    return f"ds-{h.hexdigest()[:12]}"
 
 
 def read_file(path: Path, *, shared: bool = False) -> tuple[pd.DataFrame, Any]:
@@ -172,7 +173,10 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
         if ext == ".parquet":
             return pd.read_parquet(path), digest
         if ext == ".tsv":
-            frame = pd.read_csv(path, sep="\t", engine="c")
+            # the warning is the condition checked below; ponytail: catch_warnings is process-wide until Python 3.14's
+            # context-aware warnings, so a TSV read in another thread meanwhile shares the filter
+            with warnings.catch_warnings(action="ignore", category=pd.errors.DtypeWarning):
+                frame = pd.read_csv(path, sep="\t", engine="c")
             # a chunk typed a column apart: codes then text leave values of two types, an integer chunk beside a float or
             # an unsigned one makes floats of integers past 2**53; then the whole file decides, else it is read once
             if any(
@@ -275,7 +279,7 @@ def resolve_grid(times: pd.Series, grid: str) -> str:
 
     def balance(unit: str) -> float:
         bins = pd.Period(last, GRID_FREQ[unit]).ordinal - pd.Period(first, GRID_FREQ[unit]).ordinal + 1
-        return min(bins / GRID_MIN_BINS, len(naive) / bins / GRID_MIN_ROWS)
+        return float(min(bins / GRID_MIN_BINS, len(naive) / bins / GRID_MIN_ROWS))
 
     return max(("quarter", "month", "week", "day"), key=balance)
 
@@ -332,7 +336,7 @@ def check_counts(frame: pd.DataFrame | None, spec: str | None, min_rows: int) ->
     rows: too few events for a frequency; no counter). A column the frame lacks, a number or one that is no category,
     and a value no row holds are ``invalid_options`` (``filter_rows``). None asked, none (the frame is not read)."""
     out = []
-    for where in dict.fromkeys(parse_where(part) for part in (spec or "").split(",") if part.strip()):
+    for where in dict.fromkeys(w for part in (spec or "").split(",") if (w := parse_where(part))):
         column, _, value = where.partition("=")
         rows = len(filter_rows(frame, where))
         out.append({"column": column, "value": value, "rows": rows, "status": "ok" if rows >= min_rows else "sparse"})
@@ -365,17 +369,68 @@ def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
     return filter_rows(frame, where) if where else frame
 
 
-def aoi_rows(path: Path, locator: str, where: str | None, resolution: int, polygon: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
-    """A stored file's rows as CSV with each row's place against a drawn zone (``spatial_plane.aoi_columns``: the cell
-    columns, ``in_aoi``, ``aoi_zone``), and the rows per place. Read as the upload's levels read it (pandas' reading:
-    a code with leading zeros that parsed as a number comes back as that number); a file that already holds one of the
-    added columns is refused."""
+ROW_ID = "row_id"  # a row's position in its reading: what ``table_rows`` and ``zone_rows`` join on
+
+
+def _export_frame(path: Path, where: str | None, resolution: int) -> pd.DataFrame:
+    """The rows both exports read; a file that already holds a column ``table_rows`` adds is refused."""
     frame = read_rows(path, where)
+    if taken := sorted({ROW_ID, *cell_column_names(resolution)} & set(frame.columns)):
+        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the export adds")
+    return frame
+
+
+def _export_points(frame: pd.DataFrame, locator: str, window: tuple[str, str | None, str, str] | None) -> tuple[np.ndarray, np.ndarray]:
+    """The rows' points; with a span-aligned layer's ``window`` its events outside the span have none, as ``read_context``
+    reads them."""
     lat, lon, _ = locate_points(frame, locator)
-    columns, counts = aoi_columns(lat, lon, resolution, polygon)
-    if taken := sorted(set(columns) & set(frame.columns)):
-        raise IngestionError("invalid_options", f"the file already holds the column(s) {', '.join(taken)} the zone adds")
-    return frame.assign(**columns).to_csv(index=False).encode("utf-8"), counts
+    return within_window(lat, lon, read_times(frame, window[0], window[1]), window) if window else (lat, lon)
+
+
+def within_window(lat: np.ndarray, lon: np.ndarray, times: pd.Series, window: tuple[str, str | None, str, str]) -> tuple[np.ndarray, np.ndarray]:
+    """The points of the events within ``window``'s span; the others (a time outside it or unread) have none."""
+    inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
+    return np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+
+
+def table_rows(
+    path: Path, locator: str, where: str | None, window: tuple[str, str | None, str, str] | None, resolution: int
+) -> tuple[bytes, dict[str, Any]]:
+    """A stored file's rows as CSV, each with its ``row_id`` first and its cell columns last (``cell_columns``), and what
+    was added. Read as the upload's levels read it (pandas' reading: a code with leading zeros that parsed as a number
+    comes back as that number); a file that already holds one of the added columns is refused. ``window``: a span-aligned
+    layer's, its events outside the span without a cell."""
+    frame = _export_frame(path, where, resolution)
+    lat, lon = _export_points(frame, locator, window)
+    out = frame.assign(**cell_columns(lat, lon, resolution))
+    out.insert(0, ROW_ID, np.arange(len(out)))
+    return out.to_csv(index=False).encode("utf-8"), {"total": len(out), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
+
+
+def zone_rows(
+    path: Path,
+    locator: str,
+    where: str | None,
+    window: tuple[str, str | None, str, str] | None,
+    resolution: int,
+    zones: list[tuple[str, dict[str, Any]]],
+) -> tuple[bytes, dict[str, Any]]:
+    """Which rows of a stored file each drawn zone holds: CSV ``zone_id,row_id,aoi_zone`` of its ``inside`` and
+    ``adjacent`` rows (``zone_places``; a row not listed is ``far``, or ``unlocated`` when its cell is empty), ``row_id`` as
+    ``table_rows`` numbers them; and per zone its rows per place and its cell count at ``resolution``; ``total`` and
+    ``columns`` are ``table_rows``'s."""
+    frame = _export_frame(path, where, resolution)
+    lat, lon = _export_points(frame, locator, window)
+    cell = point_cells(lat, lon, resolution)
+    parts, counts = [], {}
+    for zone_id, polygon in zones:
+        place, cells = zone_places(lat, lon, cell, resolution, polygon)
+        near = np.flatnonzero(np.isin(place, ["inside", "adjacent"]))
+        parts.append(pd.DataFrame({"zone_id": zone_id, ROW_ID: near, "aoi_zone": place[near]}))
+        counts[zone_id] = {k: int((place == k).sum()) for k in ("inside", "adjacent", "far", "unlocated")} | {"zone_cells": cells}
+    table = {"total": len(frame), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
+    listed = pd.concat(parts) if parts else pd.DataFrame(columns=["zone_id", ROW_ID, "aoi_zone"])
+    return listed.to_csv(index=False).encode("utf-8"), table | {"zones": counts}
 
 
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
@@ -412,7 +467,7 @@ def load_dataset(
     time: str | None = None,
     grid: str | None = None,
     tz: str | None = None,
-    context: Sequence[tuple] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
+    context: Sequence[tuple[Any, ...]] = (),  # (layer, path, locator[, window[, where]]) per layer: read_context's arguments
     context_ring: int | str | None = DEFAULT_RING,
     where: str | None = None,
     count_values: Sequence[str] = (),
@@ -486,7 +541,8 @@ def load_dataset(
             point_values = points.select_dtypes(include=[np.number]).drop(columns=spatial.location.split(","), errors="ignore")
             if spatial.baseline != "zone":  # and each point's type: a zoned share or count is a residual, no point's
                 point_values = pd.concat([point_values, point_types(points, spatial.levels)], axis=1)
-    if time:  # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
+    # auto's unit from the rows the series are of: a geo level's located points, a table's every row (§2.10)
+    if times is not None and option is not None:
         grid = resolve_grid(times if spatial is None else times[spatial.point_cell >= 0], option)
     cats, missing_cats = select_present(cat_spec, frame, explicit=categories is not None, option="Categorical", tolerated=tolerated)
     frame = apply_categories(frame, cats)
@@ -573,9 +629,8 @@ def read_context(
         lat, lon, sha, times = _context_points(str(path), locator, *(window or (None, None))[:2], where, st.st_mtime_ns, st.st_size)
     except (SpatialError, IngestionError) as exc:
         raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
-    if window:  # the events within the span, the others as points without a place
-        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
-        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+    if window:
+        lat, lon = within_window(lat, lon, times, window)
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
         inside = f"no event of it falls within {window[2]}..{window[3]}" if window else f"No valid point in {path.name}"
         raise IngestionError("invalid_options", f"context layer {name!r}: {inside}")

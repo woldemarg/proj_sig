@@ -2,7 +2,7 @@
 
     python scripts/compose_check.py               build, start on fresh volumes in dependency order, the workflow end to end, remove
     python scripts/compose_check.py --fresh       clean room: rebuild without the build cache and pull the base images
-    python scripts/compose_check.py --tests       also run scripts/check.py inside the graph service's `test` image
+    python scripts/compose_check.py --tests       also run scripts/check.py types test inside the graph service's `test` image
     python scripts/compose_check.py --live-llm    also answer one question through the broker's real upstream (a paid call)
     python scripts/compose_check.py --gpu         the graph service on the GPU (compose.gpu.yaml); without it, on the CPU
     python scripts/compose_check.py --keep        leave the stack running afterwards
@@ -46,7 +46,7 @@ FILES = ["-f", str(ROOT / "compose.yaml")]  # --gpu adds compose.gpu.yaml
 results: list[tuple[str, bool, str]] = []
 
 
-def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
     cmd = ["docker", "compose", "-p", PROJECT, *FILES, *args]
     print("$", " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, env=ENV, check=check, text=True, capture_output=capture)
@@ -133,7 +133,8 @@ def upload(path: Path) -> dict[str, Any]:
         + path.read_bytes()
         + f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="bins"\r\n\r\n\r\n--{boundary}--\r\n'.encode()
     )
-    return http("POST", "/api/upload", body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    result: dict[str, Any] = http("POST", "/api/upload", body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    return result
 
 
 def wait_for_batch(batch_id: str, timeout: float = 1200) -> tuple[dict[str, Any], float]:

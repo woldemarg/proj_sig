@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points against a drawn zone (``aoi_columns``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -101,10 +101,10 @@ def centre_region(cell: str, level: int) -> str:
     them. Many centres lie exactly on a coarser boundary, where platforms' floating point would otherwise decide."""
     lat, lng = h3.cell_to_latlng(cell)
     d = CENTRE_TIE_DEG
-    around = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
+    around: set[str] = {h3.latlng_to_cell(lat + a, lng + b, level) for a, b in ((d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d))}
     if len(around) == 1:
         return around.pop()
-    parent = h3.cell_to_parent(cell, level)
+    parent: str = h3.cell_to_parent(cell, level)
     return parent if parent in around else min(around)
 
 
@@ -119,7 +119,8 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
     for lv, names in event_regions(table.cells, levels).items():
         regions, idx = np.unique(names, return_inverse=True)
         per_level[lv] = (regions, idx, np.bincount(idx[located], minlength=len(regions)))
-    edges, partial = [], set()
+    edges: list[tuple[str, str, float, dict[str, Any]]] = []
+    partial = set()
     for pid, rows in table.covers.items():
         cells = point_cell[np.unique(np.asarray(rows, dtype=np.int64))]
         loc = cells[cells >= 0]
@@ -139,7 +140,13 @@ def place_table(table: TableDataset, levels: tuple[int, ...]) -> tuple[list[tupl
             rule = "lift" if occupied.sum() >= GEO_LIFT_MIN_REGIONS else "share"
             hit = (q <= GEO_LINK_FDR) & (lift >= GEO_LIFT_MIN) if rule == "lift" else (share >= GEO_REGION_MIN_SHARE) & (lift >= 1)
             for i in np.flatnonzero(hit & (x >= x_min)):
-                props = {"basis": "events", "rule": rule, "share": round(float(share[i]), 4), "lift": round(float(lift[i]), 4), "n": int(x[i])}
+                props: dict[str, Any] = {
+                    "basis": "events",
+                    "rule": rule,
+                    "share": round(float(share[i]), 4),
+                    "lift": round(float(lift[i]), 4),
+                    "n": int(x[i]),
+                }
                 edges.append(
                     (pid, region_node_id(lv, str(regions[i])), props["share"], props | {"q": float(f"{q[i]:.4g}"), "placed_by": table.placed_by})
                 )
@@ -200,7 +207,7 @@ def _dataset_part(d: GeoDataset, levels: tuple[int, ...]) -> _DatasetPart:
 
 
 def derive_spatial(
-    datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = (), memo: dict[tuple, Any] | None = None
+    datasets: list[GeoDataset], levels: tuple[int, ...], tables: Iterable[TableDataset] = (), memo: dict[tuple[Any, ...], Any] | None = None
 ) -> SpatialStructure:
     """Regions, IN_REGION, PARENT_OF, CO_LOCATED with its relation and compactness, from the stored cells and extents.
 
@@ -227,7 +234,7 @@ def derive_spatial(
     raw, grown, ring, res_of, dataset_of, shares, kin = {}, {}, {}, {}, {}, {}, {}
     covered: Counter[str] = Counter()
     memo = {} if memo is None else memo
-    used = set()
+    used: set[tuple[Any, ...]] = set()
     for d in datasets:
         if not len(d.cells):
             continue
@@ -250,8 +257,8 @@ def derive_spatial(
         ring.update(part.ring)
         shares.update(part.shares)
     for table in tables:
-        used.add(key := ("table", table.dataset_id, table.placed_by, levels))
-        placed, partial = memo[key] if key in memo else memo.setdefault(key, place_table(table, levels))
+        used.add(table_key := ("table", table.dataset_id, table.placed_by, levels))
+        placed, partial = memo[table_key] if table_key in memo else memo.setdefault(table_key, place_table(table, levels))
         out.partial |= partial
         for pid, rid, share, props in placed:
             out.in_region.append((pid, rid, share))
@@ -264,7 +271,7 @@ def derive_spatial(
     members.update(rid for pid, cells in out.own_cells.items() for c in cells if (rid := region_node_id(res_of[pid], c)) in out.regions)
     for rid, props in out.regions.items():
         props.update(cells_covered=covered[rid], patterns=members[rid])
-        coarser = [x for x in levels if x < props["resolution"]]
+        coarser = [x for x in levels if x < int(props["resolution"])]
         if coarser:
             out.parent_of.append((rid, region_node_id(coarser[0], h3.cell_to_parent(props["h3"], coarser[0]))))
     regions_of: defaultdict[str, set[str]] = defaultdict(set)
@@ -366,8 +373,8 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
-AOI_RING = 1  # "adjacent": the zone's cells and their first ring, the neighbourhood of the cell table
-AOI_PARENTS = 2  # the coarser cell columns beside the dataset's own
+ZONE_RING = 1  # "adjacent": the zone's cells and their first ring, the neighbourhood of the cell table
+CELL_PARENTS = 2  # the coarser cell columns of an exported table, beside its cells at the asked resolution
 
 
 def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np.ndarray:
@@ -390,26 +397,41 @@ def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np
     return inside
 
 
-def aoi_columns(lat: np.ndarray, lon: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-    """Each point's place against a drawn zone -> (columns, counts). ``h3_r<res>``: its cell at ``resolution`` and at
-    up to ``AOI_PARENTS`` coarser ones ("" without a valid point); ``in_aoi``: 1 inside the polygon, its edges straight
-    in degrees; ``aoi_zone``: ``inside``, ``adjacent`` (outside it, in a zone cell or one of its ``AOI_RING`` neighbours),
-    ``far``. The zone's cells are ``geometry_to_cells``'s, as a question reads the polygon."""
-    zone = geometry_to_cells(polygon, resolution)
+def cell_column_names(resolution: int) -> list[str]:
+    """The cell columns of ``cell_columns`` at ``resolution``, finest first."""
+    return [f"h3_r{r}" for r in range(resolution, max(resolution - CELL_PARENTS, 0) - 1, -1)]
+
+
+def point_cells(lat: np.ndarray, lon: np.ndarray, resolution: int) -> np.ndarray:
+    """Each point's cell at ``resolution``, "" without a valid point."""
     ok = np.isfinite(lat) & np.isfinite(lon)
     pairs, back = distinct_points(lat[ok], lon[ok])
     cell = np.full(len(lat), "", dtype=object)
     cell[ok] = np.array([h3.latlng_to_cell(float(a), float(b), resolution) for a, b in pairs], dtype=object)[back]
+    return cell
+
+
+def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str, np.ndarray]:
+    """Each point's cell at ``resolution`` and at up to ``CELL_PARENTS`` coarser ones, as ``h3_r<res>`` columns ("" without a
+    valid point); a coarser cell is the finer one's parent."""
+    cell = point_cells(lat, lon, resolution)
     columns = {f"h3_r{resolution}": cell}
-    for r in range(resolution - 1, max(resolution - AOI_PARENTS, 0) - 1, -1):
-        parent = {c: h3.cell_to_parent(c, r) for c in set(cell[ok])} | {"": ""}
-        columns[f"h3_r{r}"] = np.array([parent[c] for c in cell], dtype=object)
-    inside = ok & _in_polygon(lon, lat, polygon)
-    near = set().union(*(h3.grid_disk(c, AOI_RING) for c in zone))
-    place = np.where(inside, "inside", np.where(np.isin(cell, list(near)), "adjacent", "far"))
-    columns |= {"in_aoi": inside.astype(int), "aoi_zone": place}
-    counts = {"total": len(lat), **{k: int((place == k).sum()) for k in ("inside", "adjacent", "far")}}
-    return columns, counts | {"resolution": resolution, "zone_cells": len(zone), "columns": list(columns)}
+    for name in cell_column_names(resolution)[1:]:
+        parent = {c: h3.cell_to_parent(c, int(name[4:])) for c in set(cell) - {""}} | {"": ""}
+        columns[name] = np.array([parent[c] for c in cell], dtype=object)
+    return columns
+
+
+def zone_places(lat: np.ndarray, lon: np.ndarray, cell: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[np.ndarray, int]:
+    """Each point's place against a drawn zone -> (places, the zone's cell count): ``inside`` the polygon, its edges
+    straight in degrees; ``adjacent``, outside it in a zone cell or one of its ``ZONE_RING`` neighbours; ``far``; and
+    ``unlocated`` without a valid point, in no place. ``cell``: each point's cell at ``resolution`` (``point_cells``); the
+    zone's cells are ``geometry_to_cells``'s, as a question reads it."""
+    inside = np.isfinite(lat) & np.isfinite(lon) & _in_polygon(lon, lat, polygon)
+    zone = geometry_to_cells(polygon, resolution)
+    near = set().union(*(h3.grid_disk(c, ZONE_RING) for c in zone))
+    outside = np.where(cell == "", "unlocated", np.where(np.isin(cell, list(near)), "adjacent", "far"))
+    return np.where(inside, "inside", outside), len(zone)
 
 
 def cells_inside(cells: np.ndarray, area: Iterable[str]) -> np.ndarray:
