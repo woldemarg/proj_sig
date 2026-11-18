@@ -165,6 +165,8 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.on("pageerror", lambda e: errors.append(str(e)))
         requested: list[str] = []
         page.on("request", lambda r: requested.append(r.url))
+        tiles: list[int] = []
+        page.on("response", lambda r: tiles.append(r.status) if r.url.endswith(".pmtiles") else None)
         page.goto(url)
         page.wait_for_function("typeof S !== 'undefined' && S.nodes.length > 0 && G.want && !G.refreshing", timeout=60000)
         assert not [u for u in requested if "/cells" in u] and page.evaluate("G.stale && !G.map")  # no cell read, no map made, before its tab
@@ -193,6 +195,9 @@ def test_esc_closes_one_layer_and_an_empty_level_is_no_failure(cfg, points_csv):
         page.click("#view-switch button[data-view='map']")
         page.wait_for_function("G.data && G.map.loaded()", timeout=30000)
         assert [u for u in requested if u.endswith(f"/api/geo/{fine['dataset_id']}/cells")]  # read on the Map tab
+        page.wait_for_function("G.map.areTilesLoaded()", timeout=30000)
+        assert 206 in tiles and set(tiles) <= {206}  # the basemap read by range requests
+        assert [u for u in requested if not u.startswith((url, "data:", "blob:"))] == []  # nothing fetched from outside the console's origin
         page.wait_for_function("G.overlay", timeout=30000)
         drawn = "[G.levels, [...new Set(G.overlay.features.map((f) => f.properties.resolution))]]"
         assert page.evaluate(drawn) == [[5, 3, 1], [1, 3, 5, 7]]  # r7 outlines ~7 of the r8 cells: not drawn over them

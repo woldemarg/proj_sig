@@ -1,12 +1,11 @@
 /* SIG map view: H3 cells of geo datasets over an offline basemap, the answer's evidence on the map (docs/08_interface.md §8.7). */
 "use strict";
 
-const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], placeData: [], places: [], zones: [], zoneSeq: 0, zoneTags: {}, active: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null, idle: new Set(), focusSeq: 0 };
+const G = { map: null, ready: null, datasets: [], ds: null, others: [], cellBox: null, data: null, patterns: {}, projected: [], bounds: [], box: null, metric: "points", pending: null, evidence: [], focus: [], zones: [], zoneSeq: 0, zoneTags: {}, active: null, draw: null, overlay: null, levels: [], level: null, refreshing: null, dirty: false, loading: false, loadSeq: 0, target: null, load: null, popup: null, want: null, stale: false, periodSeq: 0, periodOn: false, periodPoints: 0, reopen: null, idle: new Set(), focusSeq: 0 };
 const RAMP = ["#241046", "#3f1670", "#6a1d96", "#9b2a9f", "#cf4475", "#f2733f", "#ffc23f"];
 const C = { up: "#ff8a3d", down: "#36d6ff", cov: "#3ccb92", hot: "#ff3b4f", cold: "#3d8bff", amber: "#ffb000", grid: "#121a26", region: "#4cc9c0" };
 const CELL_LINE = 0.32;  // the cells' outline opacity
 const PERIOD_METRIC = "points_in_period";  // a cell's points in the period bar's days (GET /counts), while it holds some
-const PLACES_MAX = 40;  // place names drawn at once: each DOM marker is repositioned on every frame of a move
 const ZONE_DIM = 0.2;  // the cells outside a zone, and every cell while one is drawn
 const POPUP_ROOM = 380;  // the height in px a zone's popup takes with its list
 const SNAP_PX = 12;  // a click this close to the first vertex closes the polygon
@@ -299,20 +298,39 @@ function graticule() {
 const TILT_FIT = -Math.log2(1 - 0.3 * Math.sin(TILT * Math.PI / 180));
 const fit = (box, o) => { const c = G.map.cameraForBounds(box, o); if (c) G.map.flyTo({ ...c, zoom: c.zoom - TILT_FIT, duration: o.duration }); };
 
+const BASE_DROP = new Set(["pois", "roads_shields", "roads_oneway"]);  // their icons need a sprite sheet the console does not ship
+
+function basemapLayers() {
+  /* Protomaps' dark layers in the map's palette, names in Ukrainian */
+  const dark = basemaps.namedFlavor("dark"), dim = Object.fromEntries(Object.keys(dark)
+    .filter((k) => /park|wood|scrub|glacier|sand|beach|hospital|industrial|school|pedestrian|aerodrome|zoo|military|buildings/.test(k)).map((k) => [k, "#0a0f17"]));
+  const cover = { grassland: "#0a1118", barren: "#0b0e13", urban_area: "#0d1119", farmland: "#0a1017", glacier: "#10161f", scrub: "#0a1017", forest: "#0b1219" };
+  const flavor = { ...dark, ...dim, landcover: cover, background: "#05080d", earth: "#080c12", water: "#0a1626", boundaries: "#7d8daa",
+    highway: "#1e2635", major: "#171e2a", minor_a: "#121822", link: "#171e2a", ocean_label: "#33435c",
+    city_label: "#a9b4cc", city_label_halo: "#05080d", state_label: "#3c475c", state_label_halo: "#05080d", country_label: "#6b7792" };
+  return basemaps.layers("base", flavor, { lang: "uk" }).filter((l) => !BASE_DROP.has(l.id)).map((l) => !l.id.startsWith("boundaries") ? l
+    : { ...l, filter: ["all", ...(l.filter ? [l.filter] : []), ["!=", "disputed", true], ["!=", "kind", "unrecognized_country"], ["!has", "brk_a3"]] });  // legacy syntax, as the layers' own filters
+}
+
 function ensureMap() {
   if (G.ready) return G.ready;
+  maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
+  const base = basemapLayers(), labels = base.filter((l) => l.type === "symbol");
   G.map = new maplibregl.Map({  // no box zoom: it swallows a Shift-click on a cell
-    container: "map", attributionControl: false, dragRotate: false, pitchWithRotate: false, boxZoom: false, pitch: TILT, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
+    container: "map", attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false, boxZoom: false, pitch: TILT, center: [36.5, 48.3], zoom: 6, maxZoom: 13,
     fadeDuration: 0,  // with the zero transition below a pulse step is one frame, and the region counts appear without fading
-    style: { version: 8, transition: { duration: 0, delay: 0 }, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#05080d" } }] },
+    style: {
+      version: 8, transition: { duration: 0, delay: 0 }, glyphs: `${location.origin}/vendor/geo/fonts/{fontstack}/{range}.pbf`,
+      sources: { base: { type: "vector", url: `pmtiles://${location.origin}/vendor/geo/world.pmtiles`, attribution: "© OpenStreetMap" } },
+      layers: base.filter((l) => l.type !== "symbol"),
+    },
   });
   G.map.touchZoomRotate.disableRotation();
   G.map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
   G.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
   G.ready = new Promise((resolve) => G.map.on("load", resolve)).then(async () => {
-    const base = await fetch("/vendor/geo/basemap.json").then((r) => r.json());
     const m = G.map;
-    m.addSource("base", { type: "geojson", data: base });
+    m.addSource("ukraine", { type: "geojson", data: `${location.origin}/vendor/geo/ukraine.json` });
     m.addSource("grid", { type: "geojson", data: graticule() });
     m.addSource("cells", cellSource());
     m.addSource("focus", cellSource());  // the focused insight's cells
@@ -323,13 +341,9 @@ function ensureMap() {
     m.addSource("regions", { type: "geojson", data: empty() });
     m.addSource("region-labels", { type: "geojson", data: empty() });  // a point per region, its count as an icon
     const layer = (id, type, source, paint, filter, extra = {}) => m.addLayer({ id, type, source, paint, ...(filter ? { filter } : {}), ...extra });
-    layer("land", "fill", "base", { "fill-color": ["case", ["get", "ukr"], "#0c121b", "#080c12"] }, ["==", ["get", "layer"], "country"]);
-    layer("grid", "line", "grid", { "line-color": C.grid, "line-width": ["case", ["get", "major"], 1, 0.5] });
-    layer("lake", "fill", "base", { "fill-color": "#0a1726" }, ["==", ["get", "layer"], "lake"]);
-    layer("river", "line", "base", { "line-color": "#11314c", "line-width": 1 }, ["==", ["get", "layer"], "river"]);
-    layer("admin1", "line", "base", { "line-color": "#283246", "line-width": 0.8, "line-dasharray": [3, 2] }, ["==", ["get", "layer"], "admin1"]);
-    layer("border-glow", "line", "base", { "line-color": "#6b7da0", "line-width": 5, "line-blur": 4, "line-opacity": 0.18 }, ["==", ["get", "layer"], "country"]);
-    layer("border", "line", "base", { "line-color": "#7d8daa", "line-width": 1.1 }, ["==", ["get", "layer"], "country"]);
+    m.addLayer({ id: "ukraine", type: "fill", source: "ukraine", paint: { "fill-color": "#8fa6cc", "fill-opacity": 0.035 } }, "water");  // Ukraine's land a shade lighter, its parks and towns still seen
+    m.addLayer({ id: "grid", type: "line", source: "grid", paint: { "line-color": C.grid, "line-width": ["case", ["get", "major"], 1, 0.5] } }, "water");
+    layer("ua-border", "line", "ukraine", { "line-color": "#7d8daa", "line-width": 0.7, "line-dasharray": [2, 1] }, ["==", ["geometry-type"], "LineString"]);  // Ukraine's state border at sea
     layer("cells-fill", "fill", "cells", { "fill-color": "#3f1670", "fill-opacity": 0.55 });
     layer("cells-line", "line", "cells", { "line-color": "#a265ff", "line-width": 0.5, "line-opacity": CELL_LINE });
     layer("lisa-hot", "line", "cells", { "line-color": C.hot, "line-width": 2.4, "line-blur": 2.5, "line-opacity": 0.6 }, ["==", ["get", "lisa_points"], "hot spot"]);
@@ -365,7 +379,9 @@ function ensureMap() {
       m.setPaintProperty("focus-line", "line-opacity", 0.55 + 0.45 * Math.sin(now / 280));  // a period of ≈ 1.8 s
     };
     requestAnimationFrame(pulse);
-    addPlaces(await fetch("/vendor/geo/places.json").then((r) => r.json()));
+    const dot = { width: 6, height: 6, data: new Uint8Array(144).map((_, i) => (Math.hypot((i >> 2) % 6 - 2.5, ((i >> 2) / 6 | 0) - 2.5) < 2.6 ? [170, 182, 207, 255][i % 4] : 0)) };
+    for (const id of ["townspot", "capital"]) m.addImage(id, dot);  // the places' dots, from the sprite sheet the console does not ship
+    labels.forEach((l) => m.addLayer(l));  // the basemap's names over the cells
     let pointer = null;  // the latest pointer event, read once per frame
     m.on("mousemove", (e) => {
       if (!pointer) requestAnimationFrame(() => {
@@ -391,26 +407,10 @@ function ensureMap() {
       G.draw.push([+e.lngLat.lng.toFixed(6), +e.lngLat.lat.toFixed(6)]);
       paintDraft();
     });
-    m.on("moveend", () => { placeDensity(); paintRegions(); scheduleWindow(); });  // once a move ends, not on each of its frames
+    m.on("moveend", () => { paintRegions(); scheduleWindow(); });  // once a move ends, not on each of its frames
     wireHud();
   });
   return G.ready;
-}
-
-function addPlaces(places) { G.placeData = places.features; placeDensity(); }
-
-function placeDensity() {
-  /* the most populous places in view above the zoom's population floor, at most PLACES_MAX, as DOM markers */
-  G.places.forEach((m) => m.remove());
-  const z = G.map.getZoom(), view = G.map.getBounds(), minPop = z < 6.5 ? 600000 : z < 7.5 ? 100000 : z < 8.5 ? 30000 : 0;
-  G.places = !$("lyr-labels").checked ? [] : G.placeData
-    .filter((f) => f.properties.pop >= minPop && view.contains(f.geometry.coordinates))
-    .sort((a, b) => b.properties.pop - a.properties.pop).slice(0, PLACES_MAX).map((f) => {
-      const p = f.properties, el = document.createElement("div");
-      el.className = `place r${Math.min(p.rank, 10)}${p.pop > 500000 ? " big" : ""}`;
-      el.innerHTML = `<i></i><span>${esc(p.name)}</span>`;
-      return new maplibregl.Marker({ element: el, anchor: "left" }).setLngLat(f.geometry.coordinates).addTo(G.map);
-    });
 }
 
 function cellFeatures(pack) {
@@ -510,7 +510,7 @@ const centre = (f) => {  // the region's H3 centre, where its count is drawn; a 
 };
 
 function countIcon(n) {
-  /* a region's insight count as an image for the symbol layer: the offline basemap has no glyphs to draw text with */
+  /* a region's insight count as an image for the symbol layer, in the console's monospace font */
   const id = `rn-${n}`;
   if (G.map.hasImage(id)) return id;
   const text = String(n), ratio = 2, w = 8 + 7 * text.length, h = 16, canvas = document.createElement("canvas");
@@ -729,8 +729,9 @@ function wireHud() {
   $("lyr-cells").addEventListener("change", (e) => vis(["cells-fill", "cells-line"], e.target.checked));
   $("lyr-lisa").addEventListener("change", (e) => vis(["lisa-hot", "lisa-cold"], e.target.checked));
   $("lyr-pts").addEventListener("change", (e) => vis(["pts-halo", "pts-core"], e.target.checked));
-  $("lyr-borders").addEventListener("change", (e) => vis(["border", "border-glow", "admin1", "river", "lake"], e.target.checked));
-  $("lyr-labels").addEventListener("change", placeDensity);
+  const baseIds = (keep) => G.map.getStyle().layers.filter((l) => l.source === "base" && keep(l)).map((l) => l.id);
+  $("lyr-borders").addEventListener("change", (e) => vis([...baseIds((l) => l.id.startsWith("boundaries")), "ua-border"], e.target.checked));
+  $("lyr-labels").addEventListener("change", (e) => vis(baseIds((l) => l.id.startsWith("places")), e.target.checked));
   $("lyr-regions").addEventListener("change", () => { G.level = undefined; paintRegions(); });
   $("map-card-close").addEventListener("click", () => GeoMap.unfocus());
   $("map-draw").addEventListener("click", () => {  // closes or drops the drawing, or starts another zone
