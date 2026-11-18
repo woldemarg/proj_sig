@@ -122,18 +122,21 @@ def acquire_writer_lock(workspace_dir: Path | str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = open(path, "a+b")
     try:
-        _lock_byte(handle)
-    except OSError:
-        os.lseek(handle.fileno(), 0, os.SEEK_SET)  # unbuffered: a buffered read would reach the locked byte
-        owner = os.read(handle.fileno(), 32).decode("ascii", "ignore").strip() or "unknown"
+        try:
+            _lock_byte(handle)
+        except OSError:
+            os.lseek(handle.fileno(), 0, os.SEEK_SET)  # unbuffered: a buffered read would reach the locked byte
+            owner = os.read(handle.fileno(), 32).decode("ascii", "ignore").strip() or "unknown"
+            raise WorkspaceBusy(
+                f"workspace {workspace_dir} is in use by another writer process (pid {owner}); stop it first (while the service runs, upload through its API)"
+            ) from None
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()).encode("ascii"))
+        handle.flush()
+    except BaseException:
         handle.close()
-        raise WorkspaceBusy(
-            f"workspace {workspace_dir} is in use by another writer process (pid {owner}); stop it first (while the service runs, upload through its API)"
-        ) from None
-    handle.seek(0)
-    handle.truncate()
-    handle.write(str(os.getpid()).encode("ascii"))
-    handle.flush()
+        raise
     _HELD_LOCKS[str(path)] = handle
 
 

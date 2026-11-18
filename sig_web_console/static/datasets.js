@@ -365,6 +365,9 @@ function pickLink(el) {
   /* one choice, sent by *Додати шар*: a ready layer (``el``) or the file in the drop zone (``null``) */
   if (el) $("link-file").value = "";
   $("link-opts").querySelectorAll(".link-opt").forEach((o) => o.classList.toggle("on", o === el));
+  $("link-pick").open = false;
+  $("link-pick-sum").textContent = el ? el.firstChild.textContent : "— не обрано —";
+  $("link-pick-sum").classList.toggle("none", !el);
   $("link-file-name").textContent = ($("link-file").files[0] || {}).name || "";
   $("link-go").disabled = !el && !$("link-file").files[0];
 }

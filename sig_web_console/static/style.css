@@ -117,7 +117,7 @@ details.adv[open] > summary { margin-bottom: 8px; }
 #upload-dialog { width: min(480px, calc(100vw - 32px)); overflow-y: auto; } #ads-dialog { width: min(560px, calc(100vw - 32px)); overflow-y: auto; }
 #link-dialog::backdrop, #upload-dialog::backdrop, #ads-dialog::backdrop { background: rgba(10, 12, 20, .45); }
 #link-form, #ads-form { display: grid; gap: 6px; } #link-title, #upload-title, #ads-title { margin: 0 0 10px; font-size: 15px; }
-.link-opts { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.tp-box.link-opts { position: static; display: grid; gap: 4px; max-height: 50vh; }  /* in the flow: it pushes the buttons down */
 .link-opt { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .link-opt:hover, .link-opt.on { border-color: var(--accent); background: var(--accent-soft); } .link-opt:disabled { opacity: .5; cursor: progress; }
 .link-opt .muted { font-size: 12px; white-space: nowrap; }

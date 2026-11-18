@@ -71,7 +71,7 @@
 - `model` (7 tests) — skipped automatically when the model folder lacks `modules.json`.
 - `browser` (1 test) — skipped without Playwright and an installed Chromium.
 
-`pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` and puts `tests` and `scripts` on the import path.
+`pytest.ini` pins `-n auto --dist loadgroup --basetemp=.pytest_tmp -p no:cacheprovider` and puts `tests` and `scripts` on the import path: pytest-xdist spreads the tests over every core and keeps the `model` tests on one worker (one copy of the model in memory), each worker under its own `.pytest_tmp/popen-gw<N>/` (`-n0` runs them in one process, for a debugger).
 
 **Known gaps in coverage.**
 - The weight test checks the fully measured case; the renormalisation over measured factors, the `1e-3` clamp and rule precedence are not asserted separately.

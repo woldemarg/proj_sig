@@ -172,7 +172,7 @@ curl -X POST http://127.0.0.1:8765/api/reset                                    
 
 ## Tests and quality gate
 ```powershell
-.venv\Scripts\python.exe scripts\check.py            # the gate = CI: lint, types, all tests, security (≈ 5 min)
+.venv\Scripts\python.exe scripts\check.py            # the gate = CI: lint, types, all tests, security (≈ 1 min)
 .venv\Scripts\python.exe scripts\check.py lint types # chosen stages (lint, types, test, security)
 .venv\Scripts\python.exe scripts\check.py --quick    # lint, types and the fast tests
 .venv\Scripts\python.exe -m pytest                   # tests only (never reads .env)
