@@ -83,7 +83,7 @@ jobs:
     steps:
       - *checkout
       - *setup-uv
-      - run: uv run --frozen --group cpu playwright install --with-deps chromium
+      - run: uv run --frozen --group cpu playwright install chromium  # the runner image already has its system libraries
       - run: uv run --frozen --group cpu pytest -m browser
 
   security:
