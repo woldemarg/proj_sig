@@ -400,7 +400,7 @@ The jobs install the CPU torch (`--group cpu`), as the CPU image does. Dependabo
 - **reset:** `POST /api/reset` empties the graph and the mirror, and the next question answers `empty`.
 
 Options:
-- `--tests` builds the `test` target of `insight_graph_service/Dockerfile` and runs `scripts/check.py` inside it, with the model mounted read-only, no GPU (the model tests run on the CPU), no Chromium and no gitleaks or Trivy, so the browser test and the security stage are skipped.
+- `--tests` builds the `test` target of `insight_graph_service/Dockerfile` and runs `scripts/check.py types test` inside it (the stages the image can change), with the model mounted read-only, no GPU (the model tests run on the CPU), and no Chromium, so the browser test skips.
 - `--fresh` rebuilds without the build cache and pulls the pinned base images (the clean-room run).
 - `--live-llm` asks one question through the broker to the real upstream — a paid call, so it is opt-in.
 - `--gpu` adds `compose.gpu.yaml`: the CUDA image is built, the graph service gets the GPU and must embed on CUDA.

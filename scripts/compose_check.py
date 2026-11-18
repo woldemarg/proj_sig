@@ -2,7 +2,7 @@
 
     python scripts/compose_check.py               build, start on fresh volumes in dependency order, the workflow end to end, remove
     python scripts/compose_check.py --fresh       clean room: rebuild without the build cache and pull the base images
-    python scripts/compose_check.py --tests       also run scripts/check.py inside the graph service's `test` image
+    python scripts/compose_check.py --tests       also run scripts/check.py types test inside the graph service's `test` image
     python scripts/compose_check.py --live-llm    also answer one question through the broker's real upstream (a paid call)
     python scripts/compose_check.py --gpu         the graph service on the GPU (compose.gpu.yaml); without it, on the CPU
     python scripts/compose_check.py --keep        leave the stack running afterwards

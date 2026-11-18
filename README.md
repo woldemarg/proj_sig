@@ -181,7 +181,7 @@ curl -X POST http://127.0.0.1:8765/api/reset                                    
 
 **CI.** `.github/workflows/ci.yml` runs the same stages on every push and pull request to `master` and `develop`, plus CodeQL and a report-only Trivy scan of the built images; Dependabot opens weekly grouped updates ([10.5](docs/current_docs/10_verification.md#105-quality-gate-and-container-check)). The security stage needs `gitleaks` and `trivy` on PATH; without them it reports `skipped`.
 
-**In containers.** `python scripts\compose_check.py --tests` runs the gate inside the graph service's image as well ([10.5](docs/current_docs/10_verification.md#105-quality-gate-and-container-check)).
+**In containers.** `python scripts\compose_check.py --tests` runs the types and tests stages inside the graph service's image as well ([10.5](docs/current_docs/10_verification.md#105-quality-gate-and-container-check)).
 
 **Where to look next.** The test map is in [10.1](docs/current_docs/10_verification.md#101-test-map). The measurement scripts (live answer evaluation, the multilingual benchmark, the hypothesis experiment) run on throwaway workspaces under `.scratch/` ([10.4](docs/current_docs/10_verification.md#104-measurement-scripts)).
 
