@@ -2,7 +2,7 @@
    job's stages and its report in the ADS tab; every question of a conversation goes to one ADS session (docs/08_interface.md §8.8). */
 "use strict";
 
-const ADS_STAGES = [["search", "SIG: питання + зони"], ["ads", "ADS: таблиці й зони"], ["joint", "Фінальний звіт"]];
+const ADS_STAGES = [["search", "SIG: знахідки"], ["ads", "ADS: аналіз таблиць"], ["joint", "Фінальний звіт"]];
 const ADS_POLL_MS = 3000;
 const ADS_POLL_RETRIES = 5;  // failed reads of a job in a row before the turn gives it up
 const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -12,9 +12,9 @@ const adsRunning = () => S.threads.ads.some((t) => !["done", "error"].includes(t
 
 function adsBody() {
   /* the ask as the form holds it: the first ticked table is the base, the rest its context layers (a link run's layer
-     by its name); the ticked zones are the question's, sent with every zone the conversation asked before (a later
-     question may name one); each zone is its polygon, which the bridge's graph question and the tables' rows both read
-     (not the cells the map lights) */
+     by its name); the ticked zones are the question's, none the whole map's, sent with every zone the conversation asked
+     before (a later question may name one); each zone is its polygon, which the bridge's graph question and the tables'
+     rows both read (not the cells the map lights) */
   const tables = [...document.querySelectorAll("#ads-tables input:checked")].map((i) =>
     ({ dataset_id: i.value, filename: i.dataset.file, resolution: +i.dataset.res, ...(i.dataset.layer ? { layer: i.dataset.layer } : {}) }));
   const focus = [...document.querySelectorAll("#ads-zones input:checked")].map((i) => i.value);
@@ -39,12 +39,12 @@ function periodHeader(p) {
 
 function previewAds() {
   /* the task ADS will get, but for the zones' figures and insights, which the ask brings */
-  const body = adsBody(), ready = body.tables.length && !body.tables[0].layer && body.focus.length;  // a layer describes a table: never the base
+  const body = adsBody(), ready = body.tables.length && !body.tables[0].layer;  // a layer describes a table: never the base; no zone: the whole map
   $("ads-send").disabled = !body.question.replace(PERIOD_LINE, "").trim() || !ready || adsRunning();
   $("ads-send").title = adsRunning() ? "ADS ще відповідає на попереднє питання розмови" : "";
   clearTimeout(adsPreviewTimer);
   adsPreviewTimer = setTimeout(async () => {
-    if (!ready) { $("ads-preview").textContent = "Позначте хоча б одну таблицю (не лише шар) й одну зону."; return; }
+    if (!ready) { $("ads-preview").textContent = "Позначте хоча б одну таблицю (не лише шар)."; return; }
     const d = await api("/api/ads/preview", adsPost(body)).catch((e) => ({ parts: [{ text: e.message }] }));
     $("ads-preview").textContent = d.parts.map((p) => p.text).join("");
   }, 250);
@@ -54,7 +54,7 @@ function openAds(zoneId, changed = []) {
   if (!S.ads) return;  // as the popup's button: nothing to ask
   /* one row per upload, as its levels share the rows: the level open on the map, else the finest; under it the layers
      of the upload's layer link runs, ticked with the open table; the zone asked from ticked, the map's others offered
-     beside it (without one, every zone ticked) */
+     beside it (without one, every zone ticked; none ticked asks about the whole map) */
   const open = GeoMap.current(), byUpload = new Map();
   for (const d of [...GeoMap.datasets()].sort((a, b) => (b.dataset_id === open) - (a.dataset_id === open) || b.resolution - a.resolution))
     if (!byUpload.has(uploadOf(d))) byUpload.set(uploadOf(d), d);
@@ -68,8 +68,10 @@ function openAds(zoneId, changed = []) {
   };
   $("ads-tables").innerHTML = rows.map((d) => `<label class="small chk"><input type="checkbox" value="${esc(d.dataset_id)}" data-file="${esc(d.filename)}" data-res="${esc(d.resolution)}"${d.dataset_id === open ? " checked" : ""}> ` +
     `${esc(d.filename)} · рівень ${esc(d.resolution)}${d.dataset_id === open ? " · відкрита на мапі" : ""}</label>${layers(d)}`).join("");
-  $("ads-zones").innerHTML = GeoMap.zones().map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
-    `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("");
+  const zones = GeoMap.zones();
+  $("ads-zones").innerHTML = zones.map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
+    `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("") +
+    `<p class="small muted">${zones.length ? "Якщо не позначити жодної, питання буде про всю мапу." : "Зон на мапі немає: питання про всю мапу."}</p>`;
   const asked = Object.keys(S.adsZones);
   $("ads-status").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
   if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;

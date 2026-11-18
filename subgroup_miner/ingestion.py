@@ -402,7 +402,8 @@ def zone_rows(path: Path, locator: str, where: str | None, resolution: int, zone
         parts.append(pd.DataFrame({"zone_id": zone_id, ROW_ID: near, "aoi_zone": place[near]}))
         counts[zone_id] = {k: int((place == k).sum()) for k in ("inside", "adjacent", "far", "unlocated")} | {"zone_cells": cells}
     table = {"total": len(frame), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
-    return pd.concat(parts).to_csv(index=False).encode("utf-8"), table | {"zones": counts}
+    listed = pd.concat(parts) if parts else pd.DataFrame(columns=["zone_id", ROW_ID, "aoi_zone"])
+    return listed.to_csv(index=False).encode("utf-8"), table | {"zones": counts}
 
 
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:

@@ -212,7 +212,7 @@ function renderThread() {
   /* the conversation, or the welcome card with the questions the data offers (re-rendered when the data or the filter change) */
   const t = $("thread");
   if (!S.chat.length && S.tab === "ads") {
-    t.innerHTML = `<div class="welcome"><h3>Розмова з ADS</h3><p>Виділіть до ${MAX_ZONES} зон на мапі й напишіть питання тут або натисніть «Запитати про це ADS» у попапі зони: ` +
+    t.innerHTML = `<div class="welcome"><h3>Розмова з ADS</h3><p>Напишіть питання тут — про всю мапу або про зони, яких можна виділити до ${MAX_ZONES}, — чи натисніть «Запитати про це ADS» у попапі зони: ` +
       `перше питання відкриє вибір таблиць, зон і періоду. Уточнення йдуть у ту саму сесію ADS разом із попередніми відповідями.</p></div>`;
   } else if (!S.chat.length) {
     const chips = suggestions();
@@ -221,7 +221,7 @@ function renderThread() {
       (chips.length ? `<div class="suggest">${chipButtons(chips)}</div>` : "") + `</div>`;
   } else {
     t.innerHTML = S.chat.map((turn, idx) =>
-      `<div class="msg-user">${esc(turn.question)}${turn.zones ? `<span class="msg-zone">${turn.zones.length > 1 ? "зони" : "зона"} ${esc(turn.zones.join(", "))}${turn.zone ? ` · ${plural(turn.zone, "комірка", "комірки", "комірок")}` : ""}</span>` : turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
+      `<div class="msg-user">${esc(turn.question)}${turn.zones ? `<span class="msg-zone">${!turn.zones.length ? "уся мапа" : turn.zones.length > 1 ? "зони" : "зона"} ${esc(turn.zones.join(", "))}${turn.zone ? ` · ${plural(turn.zone, "комірка", "комірки", "комірок")}` : ""}</span>` : turn.zone ? `<span class="msg-zone">зона на мапі · ${plural(turn.zone, "комірка", "комірки", "комірок")}</span>` : ""}` +
       `${barPeriod(turn) ? `<span class="msg-zone">${esc(word("period"))} ${esc(periodWords(wall(turn.period.start), wall(turn.period.end)))}</span>` : ""}${turn.picked ? `<span class="msg-zone">обрано на мапі</span>` : ""}</div><div class="msg-bot" data-turn="${idx}">${botTurn(turn, idx === S.chat.length - 1)}</div>`).join("");
   }
   tick(t);
