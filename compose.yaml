@@ -47,7 +47,7 @@ services:
     restart: "no"
 
   neo4j:
-    image: neo4j:5.26.31-community
+    image: neo4j:5.26.33-community
     environment:  # no env_file: the entrypoint turns every NEO4J_* variable into a setting
       NEO4J_AUTH: neo4j/${SIG_NEO4J_PASSWORD:-sig-local-password}
     ports:
