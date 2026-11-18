@@ -195,6 +195,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.goto(f"{url}/")
         page.wait_for_selector(".ds-link", timeout=20000)
         page.click(".ds-link")
+        assert page.is_visible("#link-drop") and page.is_visible("#link-or")  # one's own file apart from the ready layers
         assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == (
             "kind=a",
             "0",
@@ -207,7 +208,14 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         assert not page.evaluate("$('link-dd').open")
         page.fill("#link-counts", "kind=a")
         page.select_option("#link-ring", "1")  # the planted dependence fills a school's disk: asked for, as a user would
-        page.click(".link-opt[data-sample='schools']")  # one click runs it
+        assert page.is_disabled("#link-go")  # nothing picked yet
+        page.click(".link-opt[data-sample='schools']")  # a pick, not a run: the button sends it
+        page.set_input_files("#link-file", files=[{"name": "own.csv", "mimeType": "text/csv", "buffer": b"lat,lon\n0,0\n"}])
+        assert page.inner_text("#link-file-name") == "own.csv" and not page.locator(".link-opt.on").count()  # a file replaces the pick
+        page.click(".link-opt[data-sample='schools']")  # and a pick replaces the file
+        assert page.inner_text("#link-file-name") == "" and page.is_enabled("#link-go")
+        assert not any(b.get("cross") for b in engine.ws.list_batches())  # no run before the button
+        page.click("#link-go")
         kids = "document.querySelector('#batches .ds-kids')?.textContent.includes('%s')"
         page.wait_for_function(kids % "schools", timeout=20000)  # the run under its base, named by its layer
         settled()
@@ -218,11 +226,13 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         assert "уже додано" in page.inner_text(f".link-opt[data-layer='{layer}']")
         page.select_option("#link-ring", "1")  # the same disk as the run
         page.click(f".link-opt[data-layer='{layer}']")  # the same layer again: the run exists
+        page.click("#link-go")
         page.wait_for_function("document.getElementById('upload-msg').textContent.includes('уже є')", timeout=20000)
         page.click(".ds-link")
         page.fill("#link-counts", "")  # no types: the composition alone
         page.select_option("#link-ring", "1")
         page.click(".link-opt[data-sample='patrols']")
+        page.click("#link-go")
         page.wait_for_function(kids % "patrols", timeout=20000)
         batches = settled()
     runs = sorted((b for b in batches if b.get("cross") and b["status"] != "SKIPPED"), key=lambda b: b["created_at"])
