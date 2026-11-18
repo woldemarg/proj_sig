@@ -41,7 +41,8 @@ from sklearn.cluster import KMeans
 
 import insight_graph_service.core.snapshot as snapshot_module
 from attractor_topology.config import TopologyConfig
-from attractor_topology.ontology import Attractor, LatentOntology
+from attractor_topology.ontology import Attractor
+from attractor_topology.vendor.lac import ontology_engine as eng
 from attractor_topology.vendor.lac.storage import ConceptStore
 from graph_query_engine.graph import DualGraph
 from graph_query_engine.seeds import SeedMatch
@@ -139,8 +140,8 @@ def build_cases(engine: Engine, truth_by_batch: dict[str, Truth], seed_by_batch:
     return cases
 
 
-class StaticOntology(LatentOntology):
-    """The ontology the snapshot builder reads, over fixed centroids: no lifecycle, no state on disk."""
+class StaticOntology:
+    """The ontology the snapshot builder reads (``OntologyView``), over fixed centroids: no lifecycle, no state on disk."""
 
     def __init__(self, centroids: np.ndarray, config: TopologyConfig) -> None:
         self.config = config
@@ -148,8 +149,18 @@ class StaticOntology(LatentOntology):
         self.store.embeddings = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
         self.store.concept_ids = list(range(len(centroids)))
 
+    @property
+    def attractor_ids(self) -> list[int]:
+        return list(self.store.concept_ids)
+
     def attractors(self) -> list[Attractor]:
         return [Attractor(i, c.copy(), 0, "static", 0) for i, c in zip(self.store.concept_ids, self.store.embeddings, strict=True)]
+
+    def centroid(self, attractor_id: int) -> np.ndarray:
+        return np.asarray(self.store.embeddings[attractor_id])
+
+    def topology(self) -> list[dict[str, Any]]:
+        return eng.calculate_knn_topology(self.store, self.config)
 
 
 def static_graph(engine: Engine, assign: np.ndarray, centroids: np.ndarray, *, compile_co_memberships: bool = True) -> DualGraph:

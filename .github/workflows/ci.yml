@@ -23,6 +23,7 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: init.defaultBranch
   GIT_CONFIG_VALUE_0: master
+  UV_PYTHON_PREFERENCE: only-managed  # uv's CPython, as the images' python: the runner's system one loads Ubuntu's sitecustomize
   UV_VERSION: "0.11.17"  # the Dockerfiles' uv; jobs add --group cpu: the CPU torch, as in the CPU image
   TRIVY_VERSION: "v0.76.2"
 
