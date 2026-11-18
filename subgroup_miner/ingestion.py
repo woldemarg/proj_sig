@@ -380,11 +380,13 @@ def _export_points(frame: pd.DataFrame, locator: str, window: tuple[str, str | N
     """The rows' points; with a span-aligned layer's ``window`` its events outside the span have none, as ``read_context``
     reads them."""
     lat, lon, _ = locate_points(frame, locator)
-    if window:
-        times = read_times(frame, window[0], window[1])
-        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
-        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
-    return lat, lon
+    return within_window(lat, lon, read_times(frame, window[0], window[1]), window) if window else (lat, lon)
+
+
+def within_window(lat: np.ndarray, lon: np.ndarray, times: pd.Series, window: tuple[str, str | None, str, str]) -> tuple[np.ndarray, np.ndarray]:
+    """The points of the events within ``window``'s span; the others (a time outside it or unread) have none."""
+    inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
+    return np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
 
 
 def table_rows(
@@ -622,9 +624,8 @@ def read_context(
         lat, lon, sha, times = _context_points(str(path), locator, *(window or (None, None))[:2], where, st.st_mtime_ns, st.st_size)
     except (SpatialError, IngestionError) as exc:
         raise IngestionError("invalid_options", f"context layer {name!r}: {exc}") from exc
-    if window:  # the events within the span, the others as points without a place
-        inside = ((times >= pd.Timestamp(window[2])) & (times <= pd.Timestamp(window[3]))).to_numpy()
-        lat, lon = np.where(inside, lat, np.nan), np.where(inside, lon, np.nan)
+    if window:
+        lat, lon = within_window(lat, lon, times, window)
     if not (np.isfinite(lat) & np.isfinite(lon)).any():
         inside = f"no event of it falls within {window[2]}..{window[3]}" if window else f"No valid point in {path.name}"
         raise IngestionError("invalid_options", f"context layer {name!r}: {inside}")

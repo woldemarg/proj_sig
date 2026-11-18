@@ -25,6 +25,12 @@ function adsBody() {
   return { question: $("ads-question").value.trim(), tables, zones, focus, ...(S.adsSession ? { session_id: S.adsSession } : {}), ...(p ? { period: [p.start, p.end] } : {}) };
 }
 
+function syncLayers() {
+  /* a layer's box is off while its own table is not ticked: it goes with that table alone */
+  const own = new Set([...document.querySelectorAll("#ads-tables input:checked:not([data-layer])")].map((i) => i.value));
+  for (const i of document.querySelectorAll("#ads-tables input[data-layer]")) i.disabled = !own.has(i.dataset.of);
+}
+
 function adsState() {
   /* what a follow-up would not see change: the period bar's days, the map's zones, the datasets and their layers */
   const shown = Timeline.shown(), data = Object.keys(S.datasets).map((id) => [id, ...layersOf(id)].join("+")).sort();
@@ -78,6 +84,7 @@ function openAds(zoneId, changed = []) {
   if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;
   const shown = Timeline.shown();  // the bar's days head the question even when they are the whole span: ADS reads them, the person may edit them
   $("ads-question").value = (shown ? `${periodHeader(shown)}\n\n` : "") + $("question").value;
+  syncLayers();
   $("ads-dialog").showModal();
   previewAds();
 }
@@ -137,7 +144,7 @@ function adsCard(turn) {
 }
 
 $("ads-question").addEventListener("input", previewAds);
-$("ads-tables").addEventListener("change", previewAds);
+$("ads-tables").addEventListener("change", () => { syncLayers(); previewAds(); });
 $("ads-zones").addEventListener("change", (e) => {  // a question compares at most MAX_ZONES
   if ([...document.querySelectorAll("#ads-zones input:checked")].length > MAX_ZONES) e.target.checked = false;
   previewAds();

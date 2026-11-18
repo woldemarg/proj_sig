@@ -195,7 +195,12 @@ def _export_reading(
         if entry is None:
             raise PipelineError("unknown_dataset", f"{dataset_id} holds no layer {layer!r}")
         _, path, locator, window, where = entry
-        table |= {"layer": layer, "filename": f"{layer}{path.suffix}", "upload_id": None, "ring": record.get("context_ring", 0)}
+        table |= {
+            "layer": layer,
+            "filename": f"{layer}{path.suffix}",
+            "upload_id": None,
+            "ring": record.get("context_ring", 1),
+        }  # a run before #307 counted a ring
         span = {"window": list(window[2:])} if window else {}
         return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
     reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)

@@ -442,6 +442,7 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 ]
                 page.uncheck("#ads-tables input:not([data-layer])")
                 assert page.evaluate("adsBody().tables") == []  # a layer goes with its own table alone
+                assert page.is_disabled("#ads-tables input[data-layer]")  # and its box is off meanwhile
                 page.evaluate("delete S.datasets[GeoMap.current()].cross_layers")
                 page.evaluate("G.datasets.pop(); openAds()")
                 page.wait_for_function("$('ads-preview').textContent.includes('Період:')")  # previewed: the period line alone asks nothing

@@ -1,6 +1,6 @@
 # subgroup_miner
 
-`subgroup_miner` finds the subgroups of a table whose metrics behave unusually. Each finding is a validated, weighted `Insight` with its scope, the shift or correlation change, and its statistics. The method is subgroup discovery with robust median shifts and Exceptional Model Mining, closed intents and bootstrap validation; [docs/02_discovery.md](../docs/02_discovery.md) and [docs/03_insights.md](../docs/03_insights.md) describe it.
+`subgroup_miner` finds the subgroups of a table whose metrics behave unusually. Each finding is a validated, weighted `Insight` with its scope, the shift or correlation change, and its statistics. The method is subgroup discovery with robust median shifts and Exceptional Model Mining, closed intents and bootstrap validation; [docs/current_docs/02_discovery.md](../docs/current_docs/02_discovery.md) and [docs/current_docs/03_insights.md](../docs/current_docs/03_insights.md) describe it.
 
 It depends only on `insight_contracts` and on pandas, numpy, scipy and pysubgroup (the `miner` group of the root `pyproject.toml`). Use it alone, for example to give an LLM statistical context about a table, or feed its insights to `attractor_topology`.
 
