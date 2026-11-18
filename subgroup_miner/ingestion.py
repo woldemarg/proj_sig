@@ -173,7 +173,9 @@ def _parse(path: str, ext: str, *_stamp: int) -> tuple[pd.DataFrame, Any]:
         if ext == ".parquet":
             return pd.read_parquet(path), digest
         if ext == ".tsv":
-            with warnings.catch_warnings(action="ignore", category=pd.errors.DtypeWarning):  # the condition checked below
+            # the warning is the condition checked below; ponytail: catch_warnings is process-wide until Python 3.14's
+            # context-aware warnings, so a TSV read in another thread meanwhile shares the filter
+            with warnings.catch_warnings(action="ignore", category=pd.errors.DtypeWarning):
                 frame = pd.read_csv(path, sep="\t", engine="c")
             # a chunk typed a column apart: codes then text leave values of two types, an integer chunk beside a float or
             # an unsigned one makes floats of integers past 2**53; then the whole file decides, else it is read once
