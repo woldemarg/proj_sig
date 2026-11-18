@@ -17,7 +17,7 @@ python scripts/check.py
 The gate runs the stages CI runs (`.github/workflows/ci.yml`), so a green gate means a green CI:
 - `lint`: `ruff check`, `ruff format --check`, `uv lock --check`;
 - `types`: mypy over the packages, `tests/` and `scripts/` (strict: the packages fully annotated; settings in `pyproject.toml`);
-- `test`: the **whole** pytest suite, every warning an error (`pytest.ini`) (≈ 4–5 min; model-backed and browser tests included when the local model and Chromium are present on the host);
+- `test`: the **whole** pytest suite, every warning an error (`pytest.ini`) (≈ 1 min across every core; model-backed and browser tests included when the local model and Chromium are present on the host);
 - `security`: gitleaks over the git history and Trivy over `uv.lock` (dev groups included) and the Dockerfiles, failing on any severity (`brew install gitleaks trivy` or their releases); a tool not on PATH is reported `skipped`, never `ok`.
 
 `python scripts/check.py lint types` runs chosen stages. CI also runs CodeQL and a report-only Trivy scan of the built images; those need CI's runners and are not part of the local gate.
@@ -108,7 +108,7 @@ Docs-only changes (`docs/`, `README.md`, `AGENTS.md`, the packages' `README.md`)
 
 - Use `pathlib.Path` and repo-relative forward-slash paths in code and docs; the platform-specific code is the writer lock (`workspace._lock_byte`: `msvcrt` on Windows, `fcntl` elsewhere).
 - The embedding model (Qwen3-Embedding-0.6B, ≈ 1.2 GB VRAM) loads once (~10 s; with `EMBEDDING_DEVICE=auto` on CUDA, or MPS on Apple silicon, when available; the graph service container runs `auto` as well: the GPU when `compose.gpu.yaml` attaches one, else the CPU). The LLM is never loaded in-process; it is only reached through `LLM_BASE_URL`. Tests use the 384-d hashing double (`tests/doubles.py`) unless marked `model`.
-- `pytest.ini` pins `--basetemp=.pytest_tmp -p no:cacheprovider` (Windows temp-dir permissions); do not remove it.
+- `pytest.ini` pins `-n auto --dist loadgroup --basetemp=.pytest_tmp -p no:cacheprovider` (pytest-xdist on every core, the `model` tests on one worker; the basetemp for Windows temp-dir permissions); do not remove it. `-n0` runs in one process, for `--pdb`.
 - Processing a batch is sequential and checkpointed (`docs/current_docs/09_operations.md`); when debugging a stuck or failed batch, read `workspace/registry/batches/<id>.json` first (`error`, `failed_stage`, `warnings`).
 
 ## 4) Testing

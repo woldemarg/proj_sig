@@ -61,10 +61,14 @@ def pytest_addoption(parser):
     parser.addoption("--update-golden", action="store_true", help="rewrite tests/golden/ from the current code (test_golden.py)")
 
 
+@pytest.hookimpl(tryfirst=True)  # before xdist reads the groups
 def pytest_collection_modifyitems(config, items):
     from attractor_topology.encoder import model_folder
     from insight_graph_service.core.model_store import problems
 
+    for item in items:  # one worker loads the model, not every worker its own copy
+        if "model" in item.keywords:
+            item.add_marker(pytest.mark.xdist_group("model"))
     folder = model_folder(load_settings().topology.model_dir)
     if not problems(folder, hashes=False):
         return
