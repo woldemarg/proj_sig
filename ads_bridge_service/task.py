@@ -22,6 +22,7 @@ SIG_TERMS = (
 )
 
 # What an insight is and how to read it, ahead of the user's question (the query is the part ADS never trims)
+IN_ZONE = "- `in zone` says, for each zone of the question it was found for, whether those cells overlap that zone.\n"
 INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
 
 Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a result already computed and validated for this dataset, not a suggestion.
@@ -29,8 +30,7 @@ Before this task a separate statistical system (SIG) mined these very tables and
 How to read an insight:
 - `cells where` is the condition that selects a set of H3 map cells at the insight's own H3 level (for the base layer: the finest h3_r column); SIG's row is a cell with its events, not an event.
 - `established` is how a per-cell metric in those cells differs from the whole map: the subgroup's median against the map's median, in robust standard deviations (sd).
-- `in zone` says, for each zone of the question it was found for, whether those cells overlap that zone.
-- `trust` is how far the insight's source is confirmed: the source's reliability, whether another source confirms or contradicts the insight (credibility), and the record's integrity. It is separate from the statistics.
+{{in_zone}}- `trust` is how far the insight's source is confirmed: the source's reliability, whether another source confirms or contradicts the insight (credibility), and the record's integrity. It is separate from the statistics.
 - SIG's terms: {SIG_TERMS}.
 
 Rules for the insights:
@@ -40,19 +40,32 @@ Rules for the insights:
 
 """
 
-GUIDANCE = (
-    "\n\nGuidance:\n- Answer the question with your own computations on the tables. Where the question points to it, compare inside vs "
-    "adjacent vs far at the same level (rows per cell for counts, shares for categories).\n- The insights are computed: quote those that "
-    "bear on the question by id with their numbers, and add what they do not state (dates, counts in the zone, breakdowns).\n"
-    "- End the report with one section 'Established insights'. List only the insights that bear on the question (their condition or "
-    "metric is what the question asks about), the ones in a zone first. For each give its id and the zones it is in, copy its "
-    "'established' lines word for word (a median pair reads 'median a vs b overall'; sd is the unit of the shift, not of a median), and "
-    "add one sentence on what it adds to your own figures. When no insight bears on the question, say so in one sentence. An insight "
-    "with 'no' for a zone describes other places than that zone: say so, never present it as a fact about that zone.\n"
-    "- Report figures for groups of cells (inside, adjacent, far; with and without layer points), not tables of raw cell ids. A question "
-    "about several zones gives each zone's figures side by side.\n"
-    "- Describe differences as shifts and ratios, not causes; proximity is not causation."
-)
+
+def build_guidance(zoned: bool) -> str:
+    """The task's closing guidance; its zone sentences only when the question asks about zones."""
+    return (
+        "\n\nGuidance:\n- Answer the question with your own computations on the tables."
+        + (
+            " Where the question points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, shares for categories)."
+            if zoned
+            else ""
+        )
+        + "\n- The insights are computed: quote those that bear on the question by id with their numbers, and add what they do not state "
+        f"(dates, counts{' in the zone' if zoned else ''}, breakdowns).\n"
+        "- End the report with one section 'Established insights'. List only the insights that bear on the question (their condition or "
+        f"metric is what the question asks about){', the ones in a zone first. For each give its id and the zones it is in' if zoned else '. For each give its id'}, "
+        "copy its 'established' lines word for word (a median pair reads 'median a vs b overall'; sd is the unit of the shift, not of a "
+        "median), and add one sentence on what it adds to your own figures. When no insight bears on the question, say so in one sentence."
+        + (
+            " An insight with 'no' for a zone describes other places than that zone: say so, never present it as a fact about that zone."
+            if zoned
+            else ""
+        )
+        + f"\n- Report figures for groups of cells ({'inside, adjacent, far; ' if zoned else ''}with and without layer points), not tables of raw cell ids."
+        + (" A question about several zones gives each zone's figures side by side." if zoned else "")
+        + "\n- Describe differences as shifts and ratios, not causes; proximity is not causation."
+    )
+
 
 # What the graph's own words mean, for the final report
 SIG_GLOSSARY = """## Словник термінів графа інсайтів SIG
@@ -225,19 +238,21 @@ def build_query_parts(
         blocks = "(after the ask)"
     else:
         blocks = "\n\n".join(insight_blocks(findings, base)) or f"SIG has no insights for {'these zones' if focus else 'this question'}."
-    if not focus:
-        frame = "Analyse the whole map (every row of the tables; no area of interest is asked, so there is no inside, adjacent or far): "
+    if not focus and zones:  # the conversation's zones stay in df_zones: a question may still name one
+        frame = "No zone is ticked for this question: analyse the whole map (every row of the tables), unless the question names a zone of df_zones: "
+    elif not focus:
+        frame = "Analyse the whole map (every row of the tables; no zone is drawn, so there is no inside, adjacent or far): "
     elif len(focus) == 1:
         frame = f"Analyse the area of interest (AOI) {focus[0]}: "
     else:
         frame = f"Compare the areas of interest {', '.join(focus)}: "
     return [
-        {"kind": "primer", "text": INSIGHT_PRIMER},
+        {"kind": "primer", "text": INSIGHT_PRIMER.format(in_zone=IN_ZONE if focus else "")},
         {"kind": "frame", "text": frame},
         {"kind": "user", "text": question},
         {"kind": "data", "text": data},
         {"kind": "insights", "text": "\n\nEstablished insights (computed and validated; do not recompute):\n" + blocks},
-        {"kind": "guidance", "text": GUIDANCE},
+        {"kind": "guidance", "text": build_guidance(bool(focus))},
     ]
 
 
@@ -270,9 +285,9 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
     sources = "; ".join(f"{name}: {', '.join(keys)}" for name, keys in files.items()) or "none in this answer"
     return "\n".join(
         [
-            "# Areas of interest: tables, zones and columns",
+            "# Tables, zones and columns",
             *(
-                f"- Zone {z}: a polygon the user drew on the map, {v} vertices, lon {lo}, lat {la}."
+                f"- Zone {z}: a polygon drawn in this conversation (it may be gone from the map), {v} vertices, lon {lo}, lat {la}."
                 for z, p in zones.items()
                 for v, lo, la in [_zone_span(p)]
             ),

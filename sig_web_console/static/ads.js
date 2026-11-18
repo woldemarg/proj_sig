@@ -2,7 +2,7 @@
    job's stages and its report in the ADS tab; every question of a conversation goes to one ADS session (docs/08_interface.md §8.8). */
 "use strict";
 
-const ADS_STAGES = [["search", "SIG: питання + зони"], ["ads", "ADS: таблиці й зони"], ["joint", "Фінальний звіт"]];
+const ADS_STAGES = [["search", "SIG: знахідки"], ["ads", "ADS: аналіз таблиць"], ["joint", "Фінальний звіт"]];
 const ADS_POLL_MS = 3000;
 const ADS_POLL_RETRIES = 5;  // failed reads of a job in a row before the turn gives it up
 const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -62,7 +62,7 @@ function openAds(zoneId, changed = []) {
   const zones = GeoMap.zones();
   $("ads-zones").innerHTML = zones.map((z) => `<label class="small chk"><input type="checkbox" value="${esc(z.id)}"${!zoneId || z.id === zoneId ? " checked" : ""}> ` +
     `${esc(z.id)} · ${esc(plural(z.cells.length, "комірка", "комірки", "комірок"))}</label>`).join("") +
-    `<p class="small muted">${zones.length ? "Жодної не позначено — питання про всю мапу." : "Зон на мапі немає: питання про всю мапу."}</p>`;
+    `<p class="small muted">${zones.length ? "Якщо не позначити жодної, питання буде про всю мапу." : "Зон на мапі немає: питання про всю мапу."}</p>`;
   const asked = Object.keys(S.adsZones);
   $("ads-status").textContent = S.adsSession ? `Питання продовжить розмову з ADS (${plural(S.threads.ads.length, "питання", "питання", "питань")}${asked.length ? `, зони ${asked.join(", ")}` : ""}).` : "Нова розмова з ADS.";
   if (changed.length) $("ads-status").textContent += ` Змінилося: ${changed.join(", ")}. Перевірте таблиці, зони й період.`;

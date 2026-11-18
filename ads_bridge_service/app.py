@@ -146,8 +146,12 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
         """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
-        centres it holds, and the period bar's days, never a period the question's text names (that one is ADS's)."""
-        ask = {"question": _PERIODS.sub(" ", _HEADER.sub(" ", question)), "use_llm": False} | ({"geometry": polygon} if polygon else {})
+        centres it holds, and the period bar's days, never a period the question's text names (that one is ADS's). Neither
+        a zone nor words left: nothing to seed the graph, no findings."""
+        text = _PERIODS.sub(" ", _HEADER.sub(" ", question))
+        if not polygon and not text.strip():
+            return []
+        ask = {"question": text, "use_llm": False} | ({"geometry": polygon} if polygon else {})
         if period:
             ask["period"] = period
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())

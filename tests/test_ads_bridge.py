@@ -261,7 +261,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
 
 def test_a_question_needs_no_zone():
     """A question with no zone asks the graph about the whole map, sends no zones file and frames the task and the
-    final report's methodology as the whole map's."""
+    final report's methodology as the whole map's; in a conversation with zones they stay for a question that names one."""
     seen: dict = {}
     ask = {"question": "Де найбільше подій?", "tables": TABLES[:1]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
@@ -270,9 +270,18 @@ def test_a_question_needs_no_zone():
         assert [b["zones"] for _, b in seen["zone_rows"]] == [[]] and seen["uploads"] == ["events_dsa_r8.csv", "zones.md"]  # no zones file
         query = job["ads_query"]
         assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
+        assert "`in zone`" not in query and "inside vs adjacent" not in query and "zones it is in" not in query  # no zone sentence
         assert "No zone is drawn" in seen["files"]["zones.md"] and "# Уся мапа: методика" in seen["prompt"]
         two = ask | {"session_id": SID, "question": "А по місяцях?"}  # a follow-up of a conversation without zones
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["stage"] == "done" and seen["sessions"] == 1
+        bare = ask | {"session_id": SID, "question": "Період: 2031-03-01 — 2031-03-31 (включно)\n\n2031-03"}  # no words for the graph
+        job = finished(client, client.post("/api/ads/jobs", json=bare).json()["job_id"])
+        assert job["stage"] == "done" and len(seen["chat"]) == 2 and "SIG has no insights for this question." in job["ads_query"]
+        kept = ask | {"session_id": SID, "zones": [{"id": "Z1", "polygon": POLYGON}], "question": "А в Z1?"}  # Z1 asked before, now unticked
+        job = finished(client, client.post("/api/ads/jobs", json=kept).json()["job_id"])
+        assert seen["uploads"][-2:] == ["zones.csv", "zones.md"] and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
+        assert "unless the question names a zone of df_zones" in job["ads_query"] and "other zones (Z1)" in job["ads_query"]
+        assert "inside vs adjacent" not in job["ads_query"] and "# Уся мапа: методика" in seen["prompt"]
 
 
 def test_the_bridge_strips_the_periods_the_graph_reads():
