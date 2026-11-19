@@ -85,6 +85,12 @@ def upstream(
         seen.setdefault("rows", []).append((dataset_id, resolution) if layer is None else (dataset_id, resolution, layer))
         return Response(f"rows of {dataset_id}".encode(), media_type="text/csv") if table(dataset_id) else unknown(dataset_id)
 
+    @app.get("/api/datasets/{dataset_id}/metadata")
+    def metadata(dataset_id: str) -> dict[str, Any]:
+        seen.setdefault("metadata", []).append(dataset_id)
+        doc: dict[str, Any] = seen.get("docs", {}).get(dataset_id, {})
+        return doc
+
     @app.get("/health")
     def health():
         return {}
@@ -171,7 +177,14 @@ def settings(url: str, **over: Any) -> AdsSettings:
 
 
 def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
-    seen: dict[str, Any] = {}
+    seen: dict[str, Any] = {
+        "docs": {
+            "ds-a": {
+                "dataset": {"description": "planted events"},
+                "columns": {"seen_at": {"title_uk": "коли", "assistant_context": "the event's time"}, "kind": {}},
+            }
+        }
+    }
     ask = {"question": "Скільки подій у зоні?", "tables": TABLES, "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
     files = ("events_dsa_r8.csv", "bars_dsb_r8.csv")  # the name, the dataset and the base table's resolution: one file per session
     with serve(upstream(seen, polls=3, flaky=2)) as url, TestClient(create_app(settings(url))) as client:  # two bad status reads, read again
@@ -193,7 +206,13 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert [(i["key"], i["zones"]) for i in job["insights"]] == [("P1", {"Z1": True}), ("P2", {"Z1": False}), ("P4", {"Z1": False})]
         # every table's zones and rows at the base table's resolution: one cell column to join on
         assert [(d, b["resolution"]) for d, b in seen["zone_rows"]] == [("ds-a", 8), ("ds-b", 8)] and seen["rows"] == [("ds-a", 8), ("ds-b", 8)]
-        assert seen["uploads"] == [*files, "zones.csv", "zones.md"] and seen["files"][files[0]] == "rows of ds-a"
+        assert seen["uploads"] == [*files, "zones.csv", "zones.md", "metadata.md"] and seen["files"][files[0]] == "rows of ds-a"
+        assert seen["files"]["metadata.md"].splitlines()[2:] == [
+            f"## {files[0]} (events.csv)",
+            "planted events",
+            "- seen_at (коли): the event's time",
+            "- kind",
+        ]
         assert seen["files"]["zones.csv"].splitlines() == ["zone_id,table,row_id,aoi_zone"] + [
             f"Z1,{f},{r}" for f in files for r in ("0,inside", "3,adjacent")
         ]
@@ -219,7 +238,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         }
         job = finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])
         assert job["stage"] == "done" and job["session_id"] == SID and seen["sessions"] == 1 and "closed" not in seen
-        assert seen["uploads"][4:] == ["zones.csv", "zones.md"] and len(seen["rows"]) == 2  # the tables went once
+        assert seen["uploads"][5:] == ["zones.csv", "zones.md", "metadata.md"] and len(seen["rows"]) == 2  # the tables went once
         assert {line.split(",")[0] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"Z1", "Z2"} and "Zone Z2" in seen["files"]["zones.md"]
         assert seen["query"].count("Compare the areas of interest Z2, Z1: ") == 1 and "O1 · in zone: Z2 yes, Z1 yes" in seen["query"]
         lone = ask | {"session_id": SID, "zones": two["zones"]}  # Z2 is the conversation's, the question is about Z1 alone

@@ -127,6 +127,7 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         ) == ["Житло Каліфорнії (мапа)", "мапа · рівень 5", "таблиця"]
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
+        assert httpx.get(f"{url}/api/datasets/{table['dataset_id']}/metadata").json()["columns"] == {"median_income": {"title_uk": "dohid"}}  # ADS's
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
         page.evaluate("refreshBatches()")  # the document came by the API: the rail reads it on its next refresh
         page.wait_for_selector(f"{chips}:has-text('документ')", state="attached", timeout=30000)

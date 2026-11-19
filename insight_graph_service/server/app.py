@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from attractor_topology.encoder import model_folder
 from graph_query_engine.temporal import parse_as_of, parse_period
-from insight_contracts import wording
+from insight_contracts import dataset_node_id, wording
 from insight_graph_service.core.demo import DEMO_DIR, demo_datasets, generate_retail_dataset
 from insight_graph_service.core.engine import Engine, PipelineError
 from insight_graph_service.core.model_store import problems
@@ -406,6 +406,14 @@ def create_app(engine: Engine) -> FastAPI:
                 supersedes=body.supersedes,
             )
         )
+
+    @app.get("/api/datasets/{dataset_id}/metadata")
+    def dataset_metadata(dataset_id: str) -> dict[str, Any]:
+        """A dataset's metadata document as the graph holds it (``{dataset, columns}``; ``{}`` without one or with a record that
+        fails its digest): what the ADS bridge tells ADS of a table's columns (docs/08_interface.md §8.8)."""
+        if (node := engine.graph().nodes.get(dataset_node_id(dataset_id))) is None:
+            raise HTTPException(404, f"{dataset_id} is not a dataset of the graph")
+        return node["props"].get("metadata_doc") or {}
 
     @app.get("/api/datasets/{dataset_id}/rejections")
     def rejections(dataset_id: str) -> list[dict[str, Any]]:

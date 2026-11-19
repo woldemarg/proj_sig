@@ -11,6 +11,7 @@ MAX_INSIGHTS = 10  # the graph's evidence holds about ten; a question about seve
 MIN_ZONE_INSIGHTS = 3  # a zone's share of them, however many zones the question names
 ZONES_FILE = "zones.csv"  # which rows each zone of the conversation holds, by table and row_id
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
+METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
 
 SIG_TERMS = (
@@ -315,6 +316,23 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
             f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
         ]
     )
+
+
+def build_metadata_md(tables: list[dict[str, Any]], docs: dict[str, dict[str, Any]]) -> str:
+    """The uploader's metadata documents of the tables sent (``docs``: dataset id -> ``{dataset, columns}``; a layer's points
+    have none of their own): each file's description and its columns' meanings as declared; "" when none has one."""
+    parts: list[str] = []
+    for t in tables:
+        doc = {} if t.get("layer") else docs.get(t["dataset_id"]) or {}
+        if not doc.get("columns"):
+            continue
+        about = (doc.get("dataset") or {}).get("description")
+        parts += ["", f"## {t['file']} ({t['filename']})", *([about] if about else [])]
+        for col, f in doc["columns"].items():
+            meaning = f.get("assistant_context") or f.get("description") or ""
+            title = f" ({f['title_uk']})" if f.get("title_uk") and f["title_uk"] != col else ""
+            parts.append(f"- {col}{title}{': ' + meaning if meaning else ''}")
+    return "\n".join(["# Columns as the uploader describes them", *parts]) + "\n" if parts else ""
 
 
 def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:
