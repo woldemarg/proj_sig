@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from insight_contracts import dataset_node_id
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geo_views import geo_datasets
-from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, declared_glossary, parse_metadata_doc, resolve_declared_metadata
+from insight_graph_service.core.uploads import METADATA_DOC_MAX_BYTES, declared_glossary, from_upload, parse_metadata_doc, resolve_declared_metadata
 from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import node_details
 
@@ -164,7 +164,8 @@ def test_an_uploads_document_goes_on_every_reading_at_once_and_on_a_level_added_
     geo_frame(3).to_csv(path, index=False)
     with path.open("rb") as f:
         queued = engine.upload(path.name, f, geo="auto@8,7")
-    up, doc = engine.process(queued[0]["batch_id"])["upload_id"], "About\n\nDescription: planted\n\nColumns:\n\nchannel\n  Description: how\n"
+    doc = "About\n\nDescription: planted\n\nColumns:\n\nchannel\n  Description: how\n\nwhen\n  Description: the day\n"
+    up = engine.process(queued[0]["batch_id"])["upload_id"]
     with pytest.raises(PipelineError) as busy:
         engine.update_dataset_metadata(up, metadata=doc)
     assert busy.value.code == "busy"  # level 7 still to run would miss it
@@ -188,7 +189,14 @@ def test_an_uploads_document_goes_on_every_reading_at_once_and_on_a_level_added_
     assert refused.value.code == "invalid_options"
     *skipped, table = upload_levels(engine, path, geo="auto@8,7", table=True)
     assert [b["status"] for b in skipped] == ["SKIPPED", "SKIPPED"] and not any("metadata" in w for b in skipped for w in b["warnings"])
-    assert table["status"] == "READY" and set(table["metadata_doc"]["columns"]) == {"channel"}  # the upload's document, fitted
+    assert table["status"] == "READY" and set(table["metadata_doc"]["columns"]) == {"channel", "when"}  # the upload's, fitted
+    assert not any(w.startswith("metadata:") for w in table["warnings"])
+    held = [{"upload_id": up, "status": "READY", "metadata_doc": {"dataset": {}, "columns": {"channel": {}}}}]
+    assert from_upload({"upload_id": up, **held[0]}, held) and not from_upload(
+        {"upload_id": up, "metadata_doc": {"dataset": {}, "columns": {}}}, held
+    )
+    (other,) = upload_levels(engine, path, geo="auto@8", baseline="zone")  # the same level read otherwise: a new reading
+    assert other["status"] == "READY" and set(other["metadata_doc"]["columns"]) == {"channel", "when"}
     a, b = tmp_path / "a.csv", tmp_path / "b.csv"
     geo_frame(4).drop(columns=["latitude", "longitude"]).to_csv(a, index=False)
     geo_frame(5).drop(columns=["latitude", "longitude"]).to_csv(b, index=False)

@@ -433,8 +433,7 @@ class Engine:
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
-        doc = uploads.upload_doc(self.ws.list_batches(), upload_id) if metadata is None else None  # a new level takes the upload's
-        held = {b.get("level") for b in self.ws.list_batches() if b.get("upload_id") == upload_id and b.get("status") == "READY"}
+        doc = uploads.upload_doc(self.ws.list_batches(), upload_id) if metadata is None else None  # a new reading takes the upload's
         return [  # the table level leaves the point columns out
             self.submit(
                 path,
@@ -446,7 +445,7 @@ class Engine:
                 count_values=counts if g else (),
                 baseline=baseline if g else None,
                 context_ring=ring,
-                inherited={"metadata_doc": doc} if doc and level not in held else None,
+                inherited={"metadata_doc": doc} if doc else None,
                 **options,
             )
             for g, level in levels
@@ -600,9 +599,10 @@ class Engine:
             record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
             kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
             record.update({"indicators": kept} if kept else {})
+        own = uploads.from_upload(record, self.ws.list_batches())  # nobody sent it: its columns this level lacks go unsaid
         if declared := {k: record.pop(k) for k in ["user_glossary", "metadata_doc"] if k in record}:  # kept to the columns the level holds
             fitted, warnings = uploads.fit_declared(declared, [*result.profile.numerics, *result.profile.categoricals], frame=loaded.frame)
-            record["warnings"] += warnings
+            record["warnings"] += [w for w in warnings if not (own and w.startswith("metadata:"))]
             record.update({k: v for k, v in fitted.items() if v})
         self.ws.save_profile(record["dataset_id"], record["profile"])
         return result
@@ -731,7 +731,8 @@ class Engine:
         record["status"] = "SKIPPED"
         record["duplicate_of"] = duplicate["batch_id"]
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
-        if any(record.get(k) for k in ("source", "reliability", "indicators", "user_glossary", "metadata_doc")):
+        own = uploads.from_upload(record, self.ws.list_batches())  # the upload's own document is no change asked
+        if any(record.get(k) for k in ("source", "reliability", "indicators", "user_glossary", *(() if own else ("metadata_doc",)))):
             record["warnings"].append(
                 "a re-upload does not change the source, reliability, indicators, glossary or metadata document:"
                 f" PATCH /api/datasets/{record['dataset_id']}"

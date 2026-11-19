@@ -159,6 +159,11 @@ def upload_doc(batches: Sequence[dict[str, Any]], upload_id: str) -> dict[str, A
     return {"dataset": docs[0]["dataset"], "columns": {c: f for d in docs for c, f in d["columns"].items()}} if docs else None
 
 
+def from_upload(record: dict[str, Any], batches: Sequence[dict[str, Any]]) -> bool:
+    """Whether the record's metadata document is its upload's own (``upload_doc``): taken by a reading the upload gains."""
+    return bool(record.get("metadata_doc")) and record["metadata_doc"] == upload_doc(batches, record.get("upload_id") or "")
+
+
 def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: bool = False, frame: Any = None) -> tuple[dict[str, Any], list[str]]:
     """``declared`` (``user_glossary`` / ``metadata_doc``, parsed) kept to the dataset's ``columns``: a column it does not
     hold, as itself, its band or a geo derivation (``wording.source_column``), is dropped with a warning, or refused for
