@@ -144,6 +144,13 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
+        # the bridge stops: a job it leaves running in ADS is cancelled there (ADR-356 §4), so the session it keeps takes the
+        # conversation's next question; ponytail: a crash or a SIGKILL runs none of this
+        with jobs_lock:
+            running = [j["session_id"] for j in jobs.values() if j["stage"] == "ads" and j["session_id"]]
+        for sid in running:
+            with contextlib.suppress(httpx.HTTPError):
+                http.post(f"{settings.ads_url}/sessions/{sid}/jobs/cancel", timeout=5)
         http.close()
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
@@ -317,6 +324,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             except Exception as exc:  # ADS's report stands without the final one
                 log.exception("ADS job %s: no final report", job["job_id"])
                 job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
+            check(job)  # a conversation that ended while the report was written: its one LLM call done, the job stops
             enter("done")
         except Cancelled:  # its conversation ended: the session it holds is closed (again, if the console closed it first)
             if job["session_id"]:

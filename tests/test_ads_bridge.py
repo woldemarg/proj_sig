@@ -3,7 +3,9 @@ report, against one stub that plays the narrator, the graph service's exports, t
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import time
 from typing import Any
 
@@ -43,9 +45,15 @@ def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | No
 
 
 def upstream(
-    seen: dict[str, Any], polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str | None = FINAL, flaky: int = 0
+    seen: dict[str, Any],
+    polls: int = 1,
+    report: str = "ADS: 3 events ![plot](/workspace/a.png)",
+    final: str | None = FINAL,
+    flaky: int = 0,
+    hold: threading.Event | None = None,
 ) -> FastAPI:
-    """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is down."""
+    """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is
+    down; ``hold``: the gateway answers once it is set."""
     app = FastAPI()
     left = {"polls": polls, "flaky": flaky}
 
@@ -151,6 +159,8 @@ def upstream(
         if final is None:
             return JSONResponse({"detail": "gateway down"}, status_code=503)
         seen["prompt"] = (await req.json())["messages"][0]["content"]
+        while hold and not hold.is_set():
+            await asyncio.sleep(0.01)
         return {"choices": [{"message": {"content": final}}]}
 
     return app
@@ -346,6 +356,22 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         assert (job["failed_stage"], job["error"]["code"]) == ("ads", "cancelled") and seen["cancelled"] == seen["closed"] == SID
         assert sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in seen["files"] if f.endswith(".csv"))  # its tables gone
         assert not client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]  # an ended job has nothing to stop
+    seen, hold = {}, threading.Event()
+    with serve(upstream(seen, hold=hold)) as url, TestClient(create_app(settings(url))) as client:  # it ends while the report is written
+        job_id = client.post("/api/ads/jobs", json=ask).json()["job_id"]
+        while client.get(f"/api/ads/jobs/{job_id}").json()["stage"] != "joint":
+            time.sleep(0.01)
+        assert client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]
+        hold.set()  # the report's one LLM call ends; the job then stops and closes its session
+        job = finished(client, job_id)
+        assert (job["failed_stage"], job["error"]["code"]) == ("joint", "cancelled") and seen["closed"] == SID
+    seen = {}
+    with serve(upstream(seen, polls=10**6)) as url:  # the bridge stops while ADS runs the job: cancelled in ADS, the session kept
+        with TestClient(create_app(settings(url))) as client:
+            client.post("/api/ads/jobs", json=ask)
+            while "query" not in seen:
+                time.sleep(0.01)
+        assert seen["cancelled"] == SID and "closed" not in seen  # the conversation's next question goes on in it
     with serve(upstream({}, final=None)) as url, TestClient(create_app(settings(url))) as client:  # no final report: ADS's stands
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and job["joint_report"] == "" and "503" in job["joint_error"] and job["ads_report"]
