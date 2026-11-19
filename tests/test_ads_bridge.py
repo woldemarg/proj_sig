@@ -464,9 +464,10 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert card.locator(".ads-stage.ok").count() == 3 and card.locator(".md-table td").all_inner_texts() == ["у зоні", "3"]
                 assert f"зона {zone}" in page.locator(".msg-user").last.inner_text() and page.evaluate("S.adsSession") == SID
                 assert page.evaluate("S.chat.at(-1).ads.ads_query") == seen["query"]
-                page.evaluate("GeoMap.pick(Object.keys(G.patterns)[0])")  # the person's insight from the map: the drawer, not the graph's chat
-                page.wait_for_function("!$('drawer').hidden")
-                assert page.evaluate("!S.threads.graph.length")
+                page.evaluate("GeoMap.pick(Object.keys(G.patterns)[0])")  # the person's insight from the map: its focus and card alone
+                page.wait_for_function("G.focusId && !$('map-card').hidden")
+                page.wait_for_timeout(500)  # a drawer would open after its node's read
+                assert page.evaluate("$('drawer').hidden && !S.threads.graph.length")
                 table = next(f for f in seen["files"] if f.startswith("points_"))
                 assert set(seen["files"]) == {table, "zones.csv", "zones.md"} and seen["files"]["zones.csv"].startswith(
                     "zone_id,table,row_id,aoi_zone\n"
