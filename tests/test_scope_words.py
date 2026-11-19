@@ -51,9 +51,9 @@ def test_a_declared_name_of_one_word_binds_its_condition():
 def test_like_phrases_bind_where_they_are_written_and_a_typed_value_wins():
     """Two neighbourhood bands read alike (*сусідні комірки нижче середини (…)*, their counters apart): each binds on its
     own words, not on a run across the two, so no «нижче» is left to read as a direction; a value typed as stored
-    (*district 4*) stays, though another value's phrase (*district 11*) reads the same once its digits are dropped."""
-    scope = ["district_mode=district 4", "lisa_points=no cluster", "neighbours_crime_date_active_days_band=q2", "neighbours_points_band=q2"]
-    g = toy_graph([geo_pattern("P8", scope), geo_pattern("P9", ["district_mode=district 11", "neighbours_points_band=q3"])])
+    (*area 4*) stays, though another value's phrase (*area 11*) reads the same once its digits are dropped."""
+    scope = ["area_mode=area 4", "lisa_points=no cluster", "neighbours_visit_date_active_days_band=q2", "neighbours_points_band=q2"]
+    g = toy_graph([geo_pattern("P8", scope), geo_pattern("P9", ["area_mode=area 11", "neighbours_points_band=q3"])])
     parsed = parse_query(f"Розкажи про margin там, де {insight_reading(g, 'P8', PhenomenonThresholds())['where']}", g)
     assert set(parsed.conditions) == {tuple(c.split("=", 1)) for c in scope} and parsed.direction == 0
 

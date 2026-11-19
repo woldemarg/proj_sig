@@ -90,8 +90,8 @@ def test_a_layer_band_shared_with_another_column_binds_only_in_the_insights_word
     """A band value is held by every band column: asked by its values alone («… для q3 no cluster q2») the layer's band
     and the neighbours' band bind any column; asked as *Запитати граф про це* asks it now (``askAbout``, chat.js: «… там,
     де <its reading's where>») each binds to its own column."""
-    scope = ["context_bars_band=q3", "lisa_points=no cluster", "neighbours_points_band=q2"]
-    graph = toy_graph([geo_pattern("P8", scope), geo_pattern("P9", ["context_bars_band=q2", "neighbours_points_band=q3"])])
+    scope = ["context_shops_band=q3", "lisa_points=no cluster", "neighbours_points_band=q2"]
+    graph = toy_graph([geo_pattern("P8", scope), geo_pattern("P9", ["context_shops_band=q2", "neighbours_points_band=q3"])])
     where = insight_reading(graph, "P8", PhenomenonThresholds())["where"]
     assert {("*", "q3"), ("*", "q2")} <= set(parse_query("Розкажи про margin для q3 no cluster q2", graph).conditions)
     assert set(parse_query(f"Розкажи про margin там, де {where}", graph).conditions) == {tuple(c.split("=", 1)) for c in scope}
