@@ -769,6 +769,7 @@ function renderCard(p, item, pts) {
       .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
     (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
+    layerNote(pts) +
     (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -782,6 +783,13 @@ function trustTags(pid) {
 }
 
 const cardPoints = (pts) => `${num(pts.n_points, 0)}${pts.in_period ? " за період" : ""}`;  // an insight's points, the bar's days' when /patterns read them
+
+const layerNote = (pts) => {  // a run insight's layer beside it: its points near, and how many of them the map draws when thinned
+  const lp = pts && (pts.layer_points || [])[0];
+  if (!lp) return "";
+  const n = lp.points.length < lp.n_points ? `показано ${num(lp.points.length, 0)} з ${num(lp.n_points, 0)}` : num(lp.n_points, 0);
+  return `<div class="mc-note">точки шару «${esc(layerName(lp.name))}» поруч: ${n}</div>`;
+};
 
 const LISA_WORDS = { "hot spot": "гаряча точка", "cold spot": "холодна точка" };
 
