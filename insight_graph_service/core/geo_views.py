@@ -825,3 +825,46 @@ def export_geosparql(ws: Workspace, graph: DualGraph) -> str:
             if pid in graph.nodes:
                 extents[pid] = [str(c) for c in geo["cells"][rows]]
     return build_turtle(graph, extents)
+
+
+class MapReads(NamedTuple):
+    """The map's reads (docs/08_interface.md §8.1) over one workspace and the graph of one commit, with the settings they
+    take: what ``Engine.maps`` hands out while the workspace is usable."""
+
+    ws: Workspace
+    graph: DualGraph
+    thresholds: PhenomenonThresholds
+    max_points: int  # a pattern's points sent to the map
+
+    def datasets(self) -> list[dict[str, Any]]:
+        return geo_datasets(self.ws)
+
+    def cells_pack(self, dataset_id: str) -> bytes:
+        return geo_cells_pack(self.ws, dataset_id)
+
+    def pattern(self, dataset_id: str, pattern_id: str, rings: bool = False, period: tuple[datetime, datetime] | None = None) -> dict[str, Any]:
+        return geo_pattern(self.ws, self.graph, dataset_id, pattern_id, self.max_points, rings, period)
+
+    def table_rows(self, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
+        return geo_table_rows(self.ws, dataset_id, resolution, layer)
+
+    def zone_rows(
+        self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
+    ) -> tuple[bytes, dict[str, Any]]:
+        return geo_zone_rows(self.ws, dataset_id, zones, resolution, layer)
+
+    def overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        return geo_overlay(self.ws, self.graph, dataset_id, self.thresholds, datasets)
+
+    def period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        """The cells' points in ``period`` and the listed insights that do not act in it (``idle_insights``)."""
+        idle = idle_insights(self.ws, self.graph, dataset_id, period, self.thresholds, datasets)
+        return geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
+
+    def projected(self, dataset_id: str) -> list[dict[str, Any]]:
+        return geo_projected(self.ws, self.graph, dataset_id, self.thresholds)
+
+    def window(
+        self, dataset_id: str, bbox: str, level: int | None = None, datasets: tuple[str, ...] = (), period: tuple[datetime, datetime] | None = None
+    ) -> dict[str, Any]:
+        return geo_window(self.ws, self.graph, dataset_id, bbox, self.thresholds, level, datasets, period)

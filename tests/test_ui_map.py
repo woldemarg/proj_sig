@@ -509,7 +509,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.click("#pb-presets button:has-text('останній тиждень')")
         assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
-        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        served = engine.maps().period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
         assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
         pick_dataset(page, other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
         page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)

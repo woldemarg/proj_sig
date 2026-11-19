@@ -674,56 +674,15 @@ class Engine:
             self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
         return snapshot, state
 
-    # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
-
     @_healthy
-    def geo_datasets(self) -> list[dict[str, Any]]:
-        return geo_views.geo_datasets(self.ws)
-
-    @_healthy
-    def geo_cells_pack(self, dataset_id: str) -> bytes:
-        return geo_views.geo_cells_pack(self.ws, dataset_id)
+    def maps(self) -> geo_views.MapReads:
+        """The map's reads (core/geo_views.py) over the graph of one commit; refused on a degraded workspace."""
+        return geo_views.MapReads(self.ws, self.graph(), self.settings.thresholds, self.settings.geo_max_points)
 
     def _load(self, record: dict[str, Any], shared: bool = False) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it; ``shared`` for a level being
         processed, never for a re-check (``verify``), which reads the file as it is now."""
         return load_dataset(Path(record["source_path"]), self.settings.miner, shared=shared, **uploads.reading(record))
-
-    @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False, period: tuple[datetime, datetime] | None = None) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings, period)
-
-    @_healthy
-    def geo_table_rows(self, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
-        return geo_views.geo_table_rows(self.ws, dataset_id, resolution, layer)
-
-    @_healthy
-    def geo_zone_rows(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], **options: Any) -> tuple[bytes, dict[str, Any]]:
-        return geo_views.geo_zone_rows(self.ws, dataset_id, zones, **options)  # resolution, layer
-
-    @_healthy
-    def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
-        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
-
-    @_healthy
-    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
-        idle = geo_views.idle_insights(self.ws, self.graph(), dataset_id, period, self.settings.thresholds, datasets)
-        return geo_views.geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
-
-    @_healthy
-    def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
-        return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
-
-    @_healthy
-    def geo_window(
-        self,
-        dataset_id: str,
-        bbox: str,
-        level: int | None = None,
-        datasets: tuple[str, ...] = (),
-        period: tuple[datetime, datetime] | None = None,
-    ) -> dict[str, Any]:
-        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds, level, datasets, period)
 
     def warm_map(self) -> None:
         """``geo_views.warm`` over the committed graph (the server queues it on the batch thread after a commit and at a

@@ -352,11 +352,11 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/geo")
     def geo_datasets() -> list[dict[str, Any]]:
-        return engine.geo_datasets()
+        return engine.maps().datasets()
 
     @app.get("/api/geo/{dataset_id}/cells")
     def geo_cells(dataset_id: str) -> Response:
-        return Response(engine.geo_cells_pack(dataset_id), media_type="application/json")
+        return Response(engine.maps().cells_pack(dataset_id), media_type="application/json")
 
     @app.get("/api/export/geosparql.ttl")
     def export_geosparql() -> Response:
@@ -364,34 +364,34 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/geo/{dataset_id}/overlay")
     def geo_overlay(dataset_id: str, datasets: str = "") -> dict[str, Any]:
-        return engine.geo_overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
+        return engine.maps().overlay(dataset_id, tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/counts")
     def geo_period_counts(dataset_id: str, start: str, end: str, datasets: str = "") -> dict[str, Any]:
-        return engine.geo_period_counts(dataset_id, asked_period(start, end), tuple(filter(None, map(str.strip, datasets.split(",")))))
+        return engine.maps().period_counts(dataset_id, asked_period(start, end), tuple(filter(None, map(str.strip, datasets.split(",")))))
 
     @app.get("/api/geo/{dataset_id}/projected")
     def geo_projected(dataset_id: str) -> list[dict[str, Any]]:
-        return engine.geo_projected(dataset_id)
+        return engine.maps().projected(dataset_id)
 
     @app.get("/api/geo/{dataset_id}/window")
     def geo_window(dataset_id: str, bbox: str, level: int | None = None, datasets: str = "", start: str = "", end: str = "") -> dict[str, Any]:
         period = asked_period(start, end) if start or end else None  # the period bar's days: the view's points in them
-        return engine.geo_window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
+        return engine.maps().window(dataset_id, bbox, level, tuple(filter(None, map(str.strip, datasets.split(",")))), period)
 
     @app.get("/api/geo/{dataset_id}/rows")
     def geo_table_rows(dataset_id: str, resolution: int | None = None, layer: str | None = None) -> Response:
-        data, counts = engine.geo_table_rows(dataset_id, resolution, layer)
+        data, counts = engine.maps().table_rows(dataset_id, resolution, layer)
         return Response(data, media_type="text/csv", headers={"X-Rows": json.dumps(counts)})  # ASCII: a header's bytes
 
     @app.post("/api/geo/{dataset_id}/zone_rows")
     def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
-        data, counts = engine.geo_zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
+        data, counts = engine.maps().zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
         return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:
-        return engine.geo_pattern(dataset_id, pattern_id, rings, asked_period(start, end) if start or end else None)
+        return engine.maps().pattern(dataset_id, pattern_id, rings, asked_period(start, end) if start or end else None)
 
     @app.patch("/api/datasets/{dataset_id}")
     def update_dataset(dataset_id: str, body: DatasetMetadataIn) -> dict[str, Any]:
