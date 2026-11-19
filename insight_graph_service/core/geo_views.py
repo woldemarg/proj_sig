@@ -403,7 +403,7 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
-LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it: the nearest so many
+LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it: the first so many in the layer's file order
 
 
 def layer_points(record: dict[str, Any], cells: np.ndarray) -> list[dict[str, Any]]:
@@ -470,7 +470,8 @@ def geo_pattern(
             "phenomenon_type": ins.phenomenon_type,
             "support": ins.support,
             "weight": ins.weight,
-            "layer_points": layer_points(ws.ready_batch_for(dataset_id) or {}, geo["cells"][rows]),  # the run's layer beside it
+            # the insight's run's layer beside it, whichever map draws it: a base map holds a run's insights, not its layer
+            "layer_points": layer_points(ws.ready_batch_for(ins.dataset_id) or {}, geo["cells"][rows]),
         } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
     except FileNotFoundError as exc:  # a deletion moved the dataset's files while this read them: as a read after it
         raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset") from exc

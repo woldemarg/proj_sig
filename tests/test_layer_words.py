@@ -121,10 +121,15 @@ def test_a_run_insight_asked_in_its_own_words_keeps_its_scope_and_seeds_the_sear
 
 def test_a_focused_run_insight_brings_its_layers_points(tmp_path):
     """``GET /api/geo/{ds}/patterns/{pid}`` of a run's insight holds its layer's points in and around its cells, so the
-    map draws the two layers side by side; an insight of no layer holds none."""
+    map draws the two layers side by side — through the run's own dataset and through its base level's, whose map draws
+    the run's insights while no row of the rail is picked; an insight of the base's own holds none."""
     engine, client, run = run_of(tmp_path)
     found = [p["id"] for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"]]
+    level = [r for r in engine.ws.list_batches() if r["upload_id"] == run["upload_id"] and "cross" not in r and r.get("level") == run["level"]]
+    base = level[0]["dataset_id"]
+    own = next(p["id"] for p in engine.ws.patterns() if p["dataset_id"] == base)
     with client:
-        drawn = client.get(f"/api/geo/{run['dataset_id']}/patterns/{found[0]}").json()
-    (layer,) = drawn["layer_points"]
-    assert layer["name"] == "schools" and layer["points"] and all(len(p) == 2 for p in layer["points"])
+        for ds in (run["dataset_id"], base):
+            (layer,) = client.get(f"/api/geo/{ds}/patterns/{found[0]}").json()["layer_points"]
+            assert layer["name"] == "schools" and layer["points"] and all(len(p) == 2 for p in layer["points"]), ds
+        assert client.get(f"/api/geo/{base}/patterns/{own}").json()["layer_points"] == []
