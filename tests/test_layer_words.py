@@ -15,6 +15,7 @@ from test_scope_words import geo_pattern
 from graph_query_engine.graph import insight_reading
 from graph_query_engine.question import parse_query
 from insight_contracts import Condition, PhenomenonThresholds, Shift, wording
+from insight_graph_service.core import geo_views
 from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import variant_groups
 
@@ -119,17 +120,24 @@ def test_a_run_insight_asked_in_its_own_words_keeps_its_scope_and_seeds_the_sear
             assert (items[0]["pattern_id"], items[0]["role"]) == (pid, "seed")
 
 
-def test_a_focused_run_insight_brings_its_layers_points(tmp_path):
+def test_a_focused_run_insight_brings_its_layers_points(tmp_path, monkeypatch):
     """``GET /api/geo/{ds}/patterns/{pid}`` of a run's insight holds its layer's points in and around its cells, so the
-    map draws the two layers side by side — through the run's own dataset and through its base level's, whose map draws
-    the run's insights while no row of the rail is picked; an insight of the base's own holds none."""
+    map draws the two layers side by side — the same through the run's own dataset and through its base level's, whose
+    map draws the run's insights while no row of the rail is picked; an insight of the base's own holds none. Past
+    ``LAYER_POINTS_MAX`` they are thinned evenly, every k-th of all of them in file order, ``n_points`` counting all."""
     engine, client, run = run_of(tmp_path)
     found = [p["id"] for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"]]
     level = [r for r in engine.ws.list_batches() if r["upload_id"] == run["upload_id"] and "cross" not in r and r.get("level") == run["level"]]
     base = level[0]["dataset_id"]
     own = next(p["id"] for p in engine.ws.patterns() if p["dataset_id"] == base)
     with client:
-        for ds in (run["dataset_id"], base):
-            (layer,) = client.get(f"/api/geo/{ds}/patterns/{found[0]}").json()["layer_points"]
-            assert layer["name"] == "schools" and layer["points"] and all(len(p) == 2 for p in layer["points"]), ds
+        drawn = [client.get(f"/api/geo/{ds}/patterns/{found[0]}").json()["layer_points"] for ds in (run["dataset_id"], base)]
+        assert drawn[0] == drawn[1]  # whichever map draws it
+        (layer,) = drawn[0]
+        assert layer["name"] == "schools" and len(layer["points"]) == layer["n_points"] > 2 and all(len(p) == 2 for p in layer["points"])
         assert client.get(f"/api/geo/{base}/patterns/{own}").json()["layer_points"] == []
+        monkeypatch.setattr(geo_views, "LAYER_POINTS_MAX", layer["n_points"] // 2)
+        (thin,) = client.get(f"/api/geo/{base}/patterns/{found[0]}").json()["layer_points"]
+    step = -(-layer["n_points"] // geo_views.LAYER_POINTS_MAX)  # ceil: every k-th, the first and the last stretch of the file alike
+    assert thin["n_points"] == layer["n_points"] and thin["points"] == layer["points"][::step]
+    assert len(thin["points"]) <= geo_views.LAYER_POINTS_MAX

@@ -798,6 +798,9 @@ def test_the_console_shows_the_layers_verdict_the_reasons_it_refused_and_the_war
         page.evaluate(f"GeoMap.focusPattern('{crossed}')")
         page.wait_for_function("!$('map-card').hidden", timeout=10000)
         assert "нуль шару" in page.inner_text("#map-card")
+        # its layer's points beside it, counted on the card: the run keeps its copy of the deleted layer's file
+        page.wait_for_function("$('map-card').innerText.includes('точки шару')", timeout=20000)
+        assert "поруч:" in page.inner_text("#map-card")
         # a run with a layer that admitted none is the layer's verdict on its own too, not only beside a READY level of its upload
         for gone in (own["dataset_id"], run["dataset_id"]):
             client.delete(f"/api/datasets/{gone}")

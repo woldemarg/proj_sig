@@ -403,20 +403,24 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
-LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it: the first so many in the layer's file order
+LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it, at most
 
 
 def layer_points(record: dict[str, Any], cells: np.ndarray) -> list[dict[str, Any]]:
     """A run's layers' points in and around ``cells`` (their disk one ring wider than the run's), as the run counted them
-    (its window and filter): ``[{name, points: [[lon, lat], …]}]``, the map draws the two layers side by side. A
-    dataset of no layer has none."""
+    (its window and filter): ``[{name, n_points, points: [[lon, lat], …]}]``, ``n_points`` all of them and ``points`` at
+    most ``LAYER_POINTS_MAX``, every k-th in file order as an insight's own points are thinned, so the layer's density
+    holds over the whole disk and span; the map draws the two layers side by side. A dataset of no layer has none."""
     if not record.get("cross") or not len(cells):
         return []
     out = []
     for name, path, locator, window, where in context_files(record):
         source = read_context(name, Path(path), locator, window, where)[0]
-        near = points_near(source, cells, record.get("context_ring", 1) + 1, LAYER_POINTS_MAX)
-        out.append({"name": name, "points": [[round(float(source.lon[i]), 6), round(float(source.lat[i]), 6)] for i in near]})
+        near = points_near(source, cells, record.get("context_ring", 1) + 1)
+        drawn = near[:: max(1, int(np.ceil(len(near) / LAYER_POINTS_MAX)))]
+        out.append(
+            {"name": name, "n_points": int(len(near)), "points": [[round(float(source.lon[i]), 6), round(float(source.lat[i]), 6)] for i in drawn]}
+        )
     return out
 
 
