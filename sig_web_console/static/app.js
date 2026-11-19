@@ -327,6 +327,12 @@ function clearAnswer() {
   S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear();
 }
 
+function pickDataset(id) {
+  /* the rail's filter: one dataset, or every one for "" */
+  if ($("dataset-filter").value === id) return;
+  $("dataset-filter").value = id; refreshBatches();
+}
+
 function syncTabs() {
   /* the chat's tabs: the developer's both (ADS once it answers or holds a conversation), the person's one chat */
   const shown = isDev() ? ["graph", ...(S.adsSeen || S.threads.ads.length ? ["ads"] : [])] : [personTab()];
@@ -477,7 +483,10 @@ function init() {
   $("upload-dialog").addEventListener("close", resetUpload);  // Esc too
   on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
     if (e.target.closest(".ds-more")) return;
-    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches();
+    pickDataset($("dataset-filter").value === el.dataset.ds ? "" : el.dataset.ds);
+  });
+  document.querySelector(".rail").addEventListener("click", (e) => {  // a click off the rows and controls drops the dataset
+    if (!e.target.closest(".ds, button, a, input, summary, .msg, .col-resize")) pickDataset("");
   });
   on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
     e.stopImmediatePropagation();
@@ -512,13 +521,14 @@ function init() {
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
   });
-  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer; a text field keeps its own
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer, the picked dataset; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]") || document.querySelector("dialog[open]")) return;  // a dialog closes itself
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
     if (S.view === "map" && GeoMap.zones().length) { GeoMap.clearZones(); return; }
-    closeDrawer();
+    if (!$("drawer").hidden) { closeDrawer(); return; }
+    pickDataset("");
   });
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot
