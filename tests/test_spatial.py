@@ -462,6 +462,13 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     pid = next(iter(table_ids & set(listed)))
     drawn = engine.maps().pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
     assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
+    # a deletion overlapping the read (its covers gone, its files moved away) reads as one before it: unknown_dataset, no 500
+    covers = engine.ws.load_covers
+    with mock.patch.object(engine.ws, "load_covers", side_effect=lambda ds: covers(ds) if ds == fine else {}), pytest.raises(PipelineError) as gone:
+        engine.maps().pattern(fine, pid)
+    with mock.patch.object(engine.ws, "load_geo", side_effect=FileNotFoundError("moved")), pytest.raises(PipelineError) as moved:
+        engine.maps().pattern(fine, pid)
+    assert gone.value.code == moved.value.code == "unknown_dataset"
     with pytest.raises(PipelineError, match="west,south"):
         engine.maps().window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload

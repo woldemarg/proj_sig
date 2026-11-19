@@ -422,41 +422,45 @@ def geo_pattern(
     With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
     of this dataset draws and describes it. With a ``period``, the points are those in it (``points_in_period``) when the
     dataset has their times (``in_period``)."""
-    geo = _geo(ws, dataset_id)
-    rows = ws.load_covers(dataset_id).get(pattern_id)
-    if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
-        raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
-    if rows is not None:
-        inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
-    else:
-        found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
-        batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
-        if batch is None or members is None:  # unknown here, or its dataset deleted since this commit
-            raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-        rows, level = found.events, found.level
-        src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
-        inside = src[np.isin(geo["point_cell"][src], rows)]
-    timed = points_in_period(ws, dataset_id, period) if period is not None else None
-    if timed is not None:
-        inside = inside[timed[inside]]
-    step = max(1, int(np.ceil(len(inside) / max_points)))
-    points = geo["lonlat"][inside[::step]]
-    ins = graph.insight(pattern_id)
-    return {
-        "pattern_id": pattern_id,
-        "cells": [str(c) for c in geo["cells"][rows]],
-        "rows": rows.tolist(),
-        "n_points": int(len(inside)),
-        "in_period": timed is not None,  # the points are those of the asked period
-        "points": np.round(points.astype(float), 5).tolist(),
-        "level": level,
-        "effect_size": ins.effect_size,
-        "phenomenon_type": ins.phenomenon_type,
-        "support": ins.support,
-        "weight": ins.weight,
-        "layer_points": layer_points(ws.ready_batch_for(dataset_id) or {}, geo["cells"][rows]),  # the run's layer beside it
-    } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
+    try:
+        geo = _geo(ws, dataset_id)
+        rows = ws.load_covers(dataset_id).get(pattern_id)
+        if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
+            raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
+        if rows is not None:
+            inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
+        else:
+            found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
+            batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
+            members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
+            own = ws.load_covers(batch["dataset_id"]).get(pattern_id) if batch and members else None
+            if own is None:  # unknown here, or its dataset deleted since this commit (its record, or its covers, gone)
+                raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
+            rows, level = found.events, found.level
+            src = members(own)
+            inside = src[np.isin(geo["point_cell"][src], rows)]
+        timed = points_in_period(ws, dataset_id, period) if period is not None else None
+        if timed is not None:
+            inside = inside[timed[inside]]
+        step = max(1, int(np.ceil(len(inside) / max_points)))
+        points = geo["lonlat"][inside[::step]]
+        ins = graph.insight(pattern_id)
+        return {
+            "pattern_id": pattern_id,
+            "cells": [str(c) for c in geo["cells"][rows]],
+            "rows": rows.tolist(),
+            "n_points": int(len(inside)),
+            "in_period": timed is not None,  # the points are those of the asked period
+            "points": np.round(points.astype(float), 5).tolist(),
+            "level": level,
+            "effect_size": ins.effect_size,
+            "phenomenon_type": ins.phenomenon_type,
+            "support": ins.support,
+            "weight": ins.weight,
+            "layer_points": layer_points(ws.ready_batch_for(dataset_id) or {}, geo["cells"][rows]),  # the run's layer beside it
+        } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
+    except FileNotFoundError as exc:  # a deletion moved the dataset's files while this read them: as a read after it
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset") from exc
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
