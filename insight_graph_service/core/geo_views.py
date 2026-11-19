@@ -438,7 +438,7 @@ def geo_pattern(
             batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
             members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
             own = ws.load_covers(batch["dataset_id"]).get(pattern_id) if batch and members else None
-            if own is None:  # unknown here, or its dataset deleted since this commit (its record, or its covers, gone)
+            if own is None or members is None:  # unknown here, or its dataset deleted since this commit (its record, or its covers, gone)
                 raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
             rows, level = found.events, found.level
             src = members(own)
