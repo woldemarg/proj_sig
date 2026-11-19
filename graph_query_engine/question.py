@@ -140,8 +140,13 @@ def _phrases(graph: DualGraph) -> dict[tuple[str, str], tuple[list[str], int]]:
             for c in ins.conditions:
                 if (c.attribute, c.value) not in out:
                     words = words or declared_words(graph, pid)
-                    tokens = _TOKEN.findall(wording.condition_words(c, words[0], bool(ins.provenance.get("spatial")), words[1], words[2]).lower())
-                    out[(c.attribute, c.value)] = ([w for w in tokens if len(w) >= 3], len(tokens))
+                    text = wording.condition_words(c, words[0], bool(ins.provenance.get("spatial")), words[1], words[2])
+                    tokens = _TOKEN.findall(text.lower())
+                    kept = list(dict.fromkeys(w for w in tokens if len(w) >= 3))  # once each: «ocean proximity = <1H OCEAN»
+                    # holds «ocean» twice, and the column's words alone would cover it whole
+                    # one word names a condition only as a declared name (region=US read «США»); else it is the value itself,
+                    # which the lexical pass binds
+                    out[(c.attribute, c.value)] = (kept if len(kept) >= 2 or text in words[0].values() else [], len(tokens))
         return out
 
     return graph.memoised(("phrases", ""), build)
@@ -152,18 +157,22 @@ def _named_conditions(q: ParsedQuery, graph: DualGraph, tokens: list[str], claim
     best within a run of the phrase's length, at least ``PHRASE_MIN_COVER`` of its words, bound to that column — a value
     the lexical pass bound to any column (``*``) is replaced by it, and the run's words are no intent words."""
     stems = set(tokens) | {t[:5] for t in tokens if len(t) >= 5}
-    best: dict[str, tuple[float, int, str, set[int]]] = {}
+    best: dict[str, tuple[float, int, int, str, set[int]]] = {}
     for (attr, value), (words, span) in _phrases(graph).items():
-        if len(words) < 2 or sum(w in stems or w[:5] in stems for w in words) < PHRASE_MIN_COVER * len(words):
+        if not words or sum(w in stems or w[:5] in stems for w in words) < PHRASE_MIN_COVER * len(words):
             continue  # cheap: too few of its words anywhere in the question
         hits = [{k for k, w in enumerate(words) if _stem_match(w, t)} for t in tokens]
         for i in range(max(len(tokens) - span + 1, 1)):
-            cover = len(set().union(*hits[i : i + span])) / len(words)
-            if cover >= PHRASE_MIN_COVER and (cover, len(words)) > best.get(attr, (0.0, 0))[:2]:
-                best[attr] = (cover, len(words), value, {j for j in range(i, i + span) if j < len(tokens) and hits[j]})
-    for attr, (_, _, value, held) in best.items():
+            window = hits[i : i + span]
+            # the fuller phrase, then the run whose tokens it holds most: a run across two phrases of like words loses
+            rank = (len(set().union(*window)) / len(words), len(words), sum(map(bool, window)))
+            if rank[0] >= PHRASE_MIN_COVER and rank > best.get(attr, (0.0, 0, 0))[:3]:
+                best[attr] = (*rank, value, {j for j in range(i, i + span) if j < len(tokens) and hits[j]})
+    typed = {a for a, _ in q.conditions if a != "*"}  # a column the lexical pass bound a value to: the value as typed wins
+    for attr, (*_, value, held) in best.items():
         claimed |= held
-        q.conditions[:] = [c for c in q.conditions if c != ("*", value)] + ([] if (attr, value) in q.conditions else [(attr, value)])
+        if attr not in typed:
+            q.conditions[:] = [c for c in q.conditions if c != ("*", value)] + ([] if (attr, value) in q.conditions else [(attr, value)])
 
 
 def _vocabulary(graph: DualGraph) -> tuple[list[str], dict[str, list[str]]]:

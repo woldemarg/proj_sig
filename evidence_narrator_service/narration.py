@@ -98,6 +98,14 @@ Rules:
    what for) and that the data hold nothing about the layer's own activity; the layer's density may stand in for
    something else about those places, such as how busy they are.
    Without a "layers=" line this rule does not apply.
+15. INTERPRETATION: a hypothesis names a possible mechanism: what, in the finding's places, period or group,
+   could put the metric where it is - who or what is there, when, what for -, told from the side of the dataset
+   whose rows the finding counts and in rule 4's words. Build it on the prompt's own signals: the medians against
+   the baseline, the confounders on the "validation:" line (a skewed companion is a rival explanation: name it),
+   the "scale:" line, a "layer_time=... read as static" (no coincidence in time), the meaning a declared
+   description gives a column or value. Say what the data cannot tell. End with one check the person can make
+   with these data: a split, a comparison, another layer, level or period. Rule 6 still holds for items reached
+   only by location.
 Be concise (at most ~250 words)."""
 
 CITATION = re.compile(r"\[(P\d+(?:\s*[,;]\s*P\d+)*)\]")  # [P1] and grouped [P1, P3]

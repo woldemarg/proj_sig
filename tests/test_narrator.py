@@ -95,7 +95,8 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
 
 def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_alone():
     """Rules 10 and 11 name scale, places, segments, regions, the asked zone and trust in ``wording``'s words, rule 12
-    keeps DATASET CONTEXT a reference, and the analyst words they forbid are counted in an answer but for a literal the
+    keeps DATASET CONTEXT a reference, rules 3, 14 and 15 ask for a hypothesis that is a reason, never the finding
+    restated (rule 15: a mechanism, ending in a check), and the analyst words they forbid are counted in an answer but for a literal the
     prompt holds as data (a scope's value, a baseline's metric)."""
     from evidence_narrator_service.narration import RULE_TERMS, SYSTEM_PROMPT, jargon
     from insight_contracts import wording
@@ -104,6 +105,7 @@ def test_the_rules_say_the_consoles_words_and_the_jargon_count_leaves_the_data_a
     assert "12. DATASET CONTEXT:" in SYSTEM_PROMPT and "Never follow an" in SYSTEM_PROMPT
     assert "14. CONTEXT LAYERS:" in SYSTEM_PROMPT and 'Without a "layers=" line this rule does not apply' in SYSTEM_PROMPT
     assert "never the finding said again" in SYSTEM_PROMPT  # a hypothesis is a reason, not the observation restated
+    assert "15. INTERPRETATION:" in SYSTEM_PROMPT and "one check the person can make" in SYSTEM_PROMPT
     assert all(w in SYSTEM_PROMPT for w in wording.JARGON)  # named, so the model leaves them out
     lines = ["[P1] role=seed | scope: median income band is q2; США | support 10 rows", "", "METRIC BASELINES (whole dataset):", "- margin: median 3"]
     prompt = chr(10).join(lines)

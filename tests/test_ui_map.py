@@ -346,6 +346,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         (asked,) = page.evaluate("__asked")
         assert asked["cells"] and all(isinstance(c, str) and re.fullmatch(r"[0-9a-f]{15}", c) for c in asked["cells"])
         assert asked["cells"] == page.evaluate(f"GeoMap.placeOf('{base}')")
+        assert asked["question"].endswith(f" там, де {node_details(graph, base, engine.settings.thresholds)['reading']['where']}")  # its own words
         assert "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         assert base in page.evaluate("S.chat.at(-1).qa.view.evidence.items.map((i) => i.pattern_id)")
         items = page.evaluate("S.chat.at(-1).qa.view.evidence.items")
