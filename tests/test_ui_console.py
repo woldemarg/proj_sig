@@ -116,7 +116,6 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         for field, value in {"#time": "when", "#where": "kind=a"}.items():
             page.fill(field, value)
         page.select_option("#baseline", "zone")
-        page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
         sent: list[bytes] = []
 
         def refuse(route: Route) -> None:
@@ -132,11 +131,10 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         )  # said in the dialog, which stays open
         page.unroute("**/api/upload")
         page.fill("#time", "")  # the layer below: its points alone
-        page.set_input_files("#metadata", [])
         assert {m.decode() for m in re.findall(rb'; name="([^"]+)"', sent[0])} == {
             *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "baseline"),
-            *("source", "reliability", "indicators", "glossary", "metadata"),
-        }
+            *("source", "reliability", "indicators", "glossary"),
+        }  # the metadata document is the rail's, per upload
         page.check("#role-layer")  # changed by hand: the points kept as a layer
         assert page.text_content("#upload-btn") == "Зберегти шар"
         page.click("#upload-btn")
@@ -231,6 +229,16 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         settled()
         page.evaluate("refreshBatches()")
         assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
+        with page.expect_file_chooser() as chooser:  # an upload's metadata document, from its row: every reading and run at once
+            page.click(".ds-group[data-upload] .ds-doc >> nth=0")
+        doc = b"Planted\n\nDescription: planted points\n\nColumns:\n\nkind\n  Description: the planted type\n"
+        chooser.value.set_files(files=[{"name": "doc.md", "mimeType": "text/markdown", "buffer": doc}])
+        page.wait_for_selector(".ds-docs", timeout=20000)
+        ready = [b for b in engine.ws.list_batches() if b["status"] == "READY"]  # the level and its layer run
+        assert "документ · 1 колонка" in page.inner_text(".ds-docs") and len(ready) > 1 and all(b.get("metadata_doc") for b in ready)
+        page.click(".ds-doc-x")
+        page.wait_for_selector(".ds-docs", state="detached", timeout=20000)
+        assert not any(b.get("metadata_doc") for b in engine.ws.list_batches())
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
         page.click("#link-pick summary")

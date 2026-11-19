@@ -250,12 +250,12 @@ class Engine:
             attractors={a.id: a.centroid for a in ontology.attractors()},
         )
 
-    def _derive(self, ontology: LatentOntology, pending: dict[str, Any] | None = None) -> tuple[dict[str, Any], CommittedState]:
+    def _derive(self, ontology: LatentOntology, pending: Sequence[dict[str, Any]] = ()) -> tuple[dict[str, Any], CommittedState]:
         """The snapshot of the workspace's state (saved) and the read state of the same journal read; ``pending`` (the
-        batch being committed) counts as READY. Runs inside a write, before its commit point."""
+        batches being committed) count as READY. Runs inside a write, before its commit point."""
         batches = {b["batch_id"]: b for b in self.ws.list_batches()}
-        if pending is not None:
-            batches[pending["batch_id"]] = {**pending, "status": "READY"}
+        for p in pending:
+            batches[p["batch_id"]] = {**p, "status": "READY"}
         records, vectors = self.ws.patterns(), self.ws.vectors()
         geo = []  # every READY geo dataset's stored cells and extents: the spatial plane is derived, never journaled
         for b in batches.values():
@@ -661,7 +661,7 @@ class Engine:
                 self.ws.record_representation(mined.spec)
                 self.ws.commit_batch_seq(seq)
                 record["metadata_digest"] = metadata_digest(record)  # what the graph reads of the dataset, signed
-                snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
+                snapshot, state = self._derive(ontology, pending=[record])  # loaded before the commit point
                 if state.catalog is None:
                     record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
 
@@ -834,22 +834,25 @@ class Engine:
         ``supersedes`` (None: unchanged, "": undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
         (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
         refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
-        the same transaction (docs/06_graph_and_storage.md §6.8)."""
+        the same transaction (docs/06_graph_and_storage.md §6.8). An upload id changes every READY reading of the upload,
+        its layer runs too, in one write (``supersedes`` stays a dataset's)."""
         changes = uploads.resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._writing():
-            record = self.ws.ready_batch_for(dataset_id)
-            if record is None:
+            ids = [b["batch_id"] for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b.get("upload_id"))]
+            records = [r for i in ids if (r := self.ws.load_batch(i)) and r["status"] == "READY"]  # copies to edit
+            if not records:
                 raise PipelineError("unknown_dataset", dataset_id)
-            if compute_metadata_integrity(record) == "mismatch":  # a PATCH would sign the forged fields as genuine
+            if any(compute_metadata_integrity(r) == "mismatch" for r in records):  # a PATCH would sign the forged fields as genuine
                 raise PipelineError(
                     "metadata_mismatch", f"{dataset_id}: its batch record no longer matches its digest; delete it and upload it again"
                 )
+            record = records[0]
             own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
-            if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
-                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")
-            warnings = uploads.apply_declared(record, changes, glossary, metadata)
+            if changes.get("supersedes") and (dataset_id not in own or changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}):
+                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: only a dataset replaces another, never its own upload")
+            warnings = [w for r in records for w in uploads.apply_declared(r, changes, glossary, metadata)]
             replaced = uploads.targets(record, self.ws.list_batches(), own) if changes.get("supersedes") else None
             ontology = self.ontology()
             # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
@@ -857,11 +860,14 @@ class Engine:
                 superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
                 if replaced:
                     ontology.save()
-                record["metadata_digest"] = metadata_digest(record)  # a PATCH signs the record again
-                snapshot, state = self._derive(ontology, pending=record)
-                self.ws.save_batch(record)
+                for r in records:
+                    r["metadata_digest"] = metadata_digest(r)  # a PATCH signs the record again
+                snapshot, state = self._derive(ontology, pending=records)
+                for r in records:
+                    self.ws.save_batch(r)
             return {
                 "dataset_id": dataset_id,
+                "datasets": [r["dataset_id"] for r in records],
                 "source": record.get("source"),
                 "reliability": record.get("reliability", "F"),
                 "indicators": record.get("indicators", {}),

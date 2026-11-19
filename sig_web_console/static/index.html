@@ -28,6 +28,7 @@
     <div id="upload-msg" class="msg"></div>
     <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
     <div class="rail-list" id="batches"></div>
+    <input type="file" id="doc-file" accept=".md,.txt,text/plain,text/markdown" hidden>
     <div class="col-resize" data-col="rail" title="Тягніть, щоб змінити ширину · подвійний клік — скинути"></div>
   </aside>
 
@@ -321,10 +322,6 @@
       <label class="small" for="glossary">Що означають колонки</label>
       <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
       <div class="hint">JSON: колонка чи <span class="mono">колонка=значення</span> → як її називати.</div>
-      <label class="small" for="metadata">Документ метаданих</label>
-      <div><label class="btn ghost sm" for="metadata">Обрати файл</label> <span class="file" id="metadata-name"></span></div>
-      <input type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown" hidden>
-      <div class="hint">Текстовий опис колонок — довідка для моделі.</div>
       <label class="small" for="source">Джерело</label>
       <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
       <label class="small" for="reliability">Надійність джерела</label>

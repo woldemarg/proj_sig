@@ -103,9 +103,6 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.fill("#geo", "auto@5")
         page.fill("#bins", f"{bins},median_income:4")
         page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
-        page.set_input_files(
-            "#metadata", files=[{"name": "housing.md", "mimeType": "text/markdown", "buffer": b"Columns:\nmedian_income\n  Title (uk): dohid\n"}]
-        )
         page.click("#upload-btn")
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
@@ -121,7 +118,9 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)
         region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
+        doc = httpx.patch(f"{url}/api/datasets/{geo['upload_id']}", json={"metadata": "Columns:\nmedian_income\n  Title (uk): dohid\n"}, timeout=60)
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
+        assert sorted(doc.json()["datasets"]) == sorted(b["dataset_id"] for b in levels if b["status"] == "READY")  # every reading at once
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
         assert page.evaluate(  # the upload by its shipped set's title, its levels under it
             f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
@@ -129,6 +128,8 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
+        page.evaluate("refreshBatches()")  # the document came by the API: the rail reads it on its next refresh
+        page.wait_for_selector(f"{chips}:has-text('документ')", state="attached", timeout=30000)
         assert page.locator(chips).all_text_contents()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]  # under the folded record
         # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
         patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)

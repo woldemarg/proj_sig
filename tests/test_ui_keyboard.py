@@ -67,6 +67,7 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
         page.wait_for_function("$('dataset-filter').value !== ''", timeout=10000)
         page.mouse.click(*(lambda b: (b["x"] + 20, b["y"] + b["height"] - 10))(page.locator(".rail").bounding_box()))  # the rail off its rows
         page.wait_for_function("$('dataset-filter').value === ''", timeout=10000)
+        page.evaluate("loadGraph()")  # the last load wins: the reset's own redraw is done before the legend is read
         page.focus("#legend .key[data-key='up']")
         assert page.evaluate("S.cy.elements('.lg-dim').length > 0")
         page.focus("#question")

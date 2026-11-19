@@ -370,7 +370,6 @@ function init() {
     if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
   // upload and a layer's file: click or drop
-  $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
     if (f) { if ($("sample").value) fillOptions(); $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
@@ -468,6 +467,12 @@ function init() {
     if (!box.dataset.loaded) { box.dataset.loaded = "1"; showRefusals(box).catch(() => { box.dataset.loaded = ""; }); }
   });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  on($("batches"), ".ds-doc", (el, e) => { e.stopImmediatePropagation(); $("doc-file").dataset.upload = el.dataset.doc; $("doc-file").click(); });
+  on($("batches"), ".ds-doc-x", (el, e) => { e.stopImmediatePropagation(); setDoc(el.dataset.docClear, ""); });
+  $("doc-file").addEventListener("change", async () => {  // the picked document's text, then the input empty for the same file again
+    const f = $("doc-file").files[0]; $("doc-file").value = "";
+    if (f) setDoc($("doc-file").dataset.upload, await f.text());
+  });
   on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
   $("link-form").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -488,7 +493,7 @@ function init() {
     pickDataset($("dataset-filter").value === el.dataset.ds ? "" : el.dataset.ds);
   });
   document.querySelector(".rail").addEventListener("click", (e) => {  // a click off the rows and controls drops the dataset
-    if (!e.target.closest(".ds, button, a, input, summary, .msg, .col-resize")) pickDataset("");
+    if (!e.target.closest(".ds, .ds-src, button, a, input, summary, .msg, .col-resize")) pickDataset("");
   });
   on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
     e.stopImmediatePropagation();

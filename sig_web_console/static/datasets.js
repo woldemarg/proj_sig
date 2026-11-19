@@ -52,6 +52,7 @@ const ICON = {
   eye: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   eyeOff: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.6 5-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   bin: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  doc: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>',
   layer: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg>',
 };
 
@@ -86,7 +87,7 @@ function rowBody(b, neutral) {
   return "";
 }
 
-function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
+function dsRow(b, label, busy, { neutral = false, layer = null, tools = "" } = {}) {
   /* one dataset of the tree: a click shows it alone; a layer's row hides or shows its layer (PATCH /api/uploads/{id}) */
   const ready = b.status === "READY", running = !TERMINAL.has(b.status), active = ready && $("dataset-filter").value === b.dataset_id;
   const off = !!layer && (b.status === "LAYER" ? !!b.hidden : (b.hidden_by || []).includes(layer));
@@ -100,7 +101,7 @@ function dsRow(b, label, busy, { neutral = false, layer = null } = {}) {
     `aria-label="${off ? "Показати шар" : "Сховати шар"}" title="${busy ? "Іде обробка: зачекайте" : off ? "Показати шар" : "Сховати шар (з усіх датасетів, де він є)"}">${off ? ICON.eyeOff : ICON.eye}</button>` : "";
   const del = running ? "" : binOf([b.dataset_id || b.batch_id], b.cross ? label : datasetName(b), busy, b.cross ? "Прибрати шар із цього датасету" : "Прибрати з бази знань", b.cross ? layer : "");
   return `<div class="ds${ready ? " clickable" : ""}${active ? " active" : ""}${layer ? " layer" : ""}${off ? " off" : ""}" data-ds="${esc(ready ? b.dataset_id : "")}">` +
-    `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}<span class="ds-label">${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}</span>${hide}${del}</div>` +
+    `<div class="ds-head">${layer ? `<span class="ds-glyph">${ICON.layer}</span>` : ""}<span class="ds-label">${name}${level}${staleChip(b)}${off ? chip("", "приховано") : ""}${state}</span>${tools}${hide}${del}</div>` +
     `${rowBody(b, neutral)}</div>`;
 }
 
@@ -122,6 +123,28 @@ const binOf = (ids, name, busy, title, layer = "") =>  // a bin for one dataset,
   `<button type="button" class="ds-del ds-icon" data-del="${esc(ids.join(" "))}" data-name="${esc(name)}"${layer ? ` data-layer="${esc(layer)}"` : ""} aria-label="Видалити" ` +
   `title="${busy ? "Іде обробка: видалення відхиляється, доки вона не скінчиться" : title}"${busy ? " disabled" : ""}>${ICON.bin}</button>`;
 
+function uploadDoc(levels, busy) {
+  /* an upload's metadata document, one for all its readings: [the button that adds or replaces it, its chip with ×] */
+  const ready = levels.filter((b) => b.status === "READY"), docs = ready.map((b) => S.datasets[b.dataset_id] || {});
+  if (!ready.length || !ready[0].upload_id) return ["", ""];
+  const up = esc(ready[0].upload_id), n = Math.max(0, ...docs.map((t) => t.metadata_columns || 0)), about = docs.map((t) => t.about).find(Boolean);
+  const off = busy ? " disabled" : "", has = n > 0 || !!about;
+  const button = `<button type="button" class="ds-doc ds-icon" data-doc="${up}"${off} aria-label="${has ? "Замінити документ метаданих" : "Додати документ метаданих"}" ` +
+    `title="${busy ? "Іде обробка: зачекайте" : has ? "Замінити документ метаданих" : "Додати документ метаданих (.md, .txt): опис датасету й колонок для відповідей"}">${ICON.doc}</button>`;
+  const line = has ? `<div class="ds-src ds-docs">${chip("", `документ · ${plural(n, "колонка", "колонки", "колонок")}`, about || "Документ метаданих: опис колонок для відповідей")}` +
+    `<button type="button" class="ds-doc-x" data-doc-clear="${up}"${off} aria-label="Прибрати документ метаданих" title="Прибрати документ метаданих">×</button></div>` : "";
+  return [button, line];
+}
+
+async function setDoc(upload, text) {
+  /* the upload's metadata document added or replaced, or removed (""), on every reading of it at once */
+  try {
+    await api(`/api/datasets/${encodeURIComponent(upload)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ metadata: text }) });
+    setUploadMsg(text ? "Документ метаданих додано." : "Документ метаданих прибрано.");
+  } catch (e) { setUploadMsg(`Документ метаданих не прийнято: ${e.message}`, true); }
+  await refreshBatches();
+}
+
 function uploadGroup(cards, busy) {
   /* an upload as a tree: its levels under its name (one level is the upload's row), each level's layer runs under it,
      *+ Додати шар* under the level that can take one, and under the name why none can when its finest map is coarser */
@@ -139,9 +162,10 @@ function uploadGroup(cards, busy) {
   };
   const astray = runs.filter((r) => !owner(r));  // a run whose level is gone
   const name = titleOf(lead) + (lead.where ? ` · ${lead.where}` : "");
+  const [doc, docLine] = uploadDoc(levels, busy);
   const whole = levels.length > 1 ? binOf([...levels, ...astray].map((b) => b.dataset_id || b.batch_id), name, busy, "Прибрати з бази знань увесь файл: усі його рівні й шари") : "";
-  const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy) + why + under(levels[0])
-    : `<div class="ds-group-head"><span class="ds-name">${esc(name)}</span>${whole}</div>` + why +
+  const body = levels.length === 1 ? dsRow(levels[0], datasetName(levels[0]), busy, { tools: doc }) + docLine + why + under(levels[0])
+    : `<div class="ds-group-head"><span class="ds-name">${esc(name)}</span>${doc}${whole}</div>` + docLine + why +
       (levels.length ? `<div class="ds-kids">${levels.map((b) => dsRow(b, geoLevel(b) ? `мапа · рівень ${b.level}` : "таблиця", busy, { neutral: neutral(b) }) + under(b)).join("")}</div>` : "");
   return `<div class="ds-group" data-upload="${esc(lead.upload_id)}">${body}${astray.length ? `<div class="ds-kids">${astray.map(layer).join("")}</div>` : ""}</div>`;
 }
@@ -406,7 +430,6 @@ async function upload() {
   }
   fd.append("source", $("source").value); fd.append("reliability", $("reliability").value); fd.append("indicators", $("indicators").value);
   fd.append("glossary", $("glossary").value);
-  if ($("metadata").files[0]) fd.append("metadata", $("metadata").files[0]);
   setUploadNote(`Завантажую ${f ? f.name : $("file-name").textContent}…`);
   $("upload-btn").disabled = true;
   try {
@@ -417,6 +440,6 @@ async function upload() {
 
 function resetUpload() {  // the dialog closed, sent or not: the next opening starts from the defaults
   document.querySelector("#upload-form details.adv").open = false;
-  $("upload-form").reset(); setUploadNote(""); $("sample-hint").textContent = ""; $("metadata-name").textContent = ""; $("file-name").textContent = "";
+  $("upload-form").reset(); setUploadNote(""); $("sample-hint").textContent = ""; $("file-name").textContent = "";
   setRole(""); $("upload-btn").disabled = true;
 }
