@@ -434,6 +434,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.evaluate(draw)
                 if not with_ads:  # the person's one chat is the graph's: no ADS to ask, its form never opens
                     assert page.inner_text("#ads-pill") == "ADS вимкнено" and page.is_disabled(".sig-pop .pp-ads")
+                    assert page.get_attribute(".sig-pop .pp-ads", "title").startswith("ADS вимкнено.")  # the pill's own state, not «недоступний»
+                    page.set_viewport_size({"width": 1280, "height": 900})  # a laptop: the developer's chips fold away, this pill stays
+                    assert page.is_visible("#ads-pill")
                     assert page.is_visible(".chat-tabs [data-tab='graph']") and not page.is_visible(".chat-tabs [data-tab='ads']")
                     page.evaluate("openAds()")
                     assert page.evaluate("S.tab === 'graph' && !$('ads-dialog').open")
@@ -466,6 +469,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
                 zone = page.evaluate("GeoMap.zones()[0].id")  # the popup's zone, ticked
                 assert page.evaluate("[...document.querySelectorAll('#ads-zones input:checked')].map((i) => i.value)") == [zone]
+                many = "Object.assign(S.adsZones, Object.fromEntries([...Array(60)].map((_, i) => [`X${i}`, GeoMap.zones()[0].polygon])))"
+                ids = page.evaluate(f"{many}; adsBody().zones.map((z) => z.id)")  # a long conversation: the bridge takes 50, the oldest go
+                assert len(ids) == 50 and ids[-1] == zone and ids[0] == "X11" and page.evaluate("S.adsZones = {}; true")
                 coarser = "G.datasets.push({...G.datasets[0], dataset_id: 'coarser', resolution: G.datasets[0].resolution - 1}); openAds()"
                 page.evaluate(coarser)  # another level of the same upload: its rows go once
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.value)") == [page.evaluate("GeoMap.current()")]
@@ -509,6 +515,8 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.press("#question", "Enter")
                 page.wait_for_function("S.chat.length === 2 && S.chat.at(-1).ads.stage === 'done'", timeout=30000)
                 assert seen["sessions"] == 1 and seen["uploads"].count(table) == 1 and seen["query"].count("А по годинах?") == 1
+                asked = page.evaluate("S.adsLast.question")  # headed by the bar's period, as the form heads the first: ADS bounds by it
+                assert asked.startswith("Період: 2019-03-04 — ") and asked.endswith("\n\nА по годинах?"), asked
                 page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")  # the period changed: the form again
                 page.fill("#question", "А вночі?")
                 page.press("#question", "Enter")

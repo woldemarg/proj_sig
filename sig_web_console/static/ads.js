@@ -5,6 +5,7 @@
 const ADS_STAGES = [["search", "SIG: знахідки"], ["ads", "ADS: аналіз таблиць"], ["joint", "Фінальний звіт"]];
 const ADS_POLL_MS = 3000;
 const ADS_POLL_RETRIES = 5;  // failed reads of a job in a row before the turn gives it up
+const ADS_MAX_ZONES = 50;  // the zones one ask carries (the bridge's AskIn.zones): a long conversation's oldest go first
 const adsPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 let adsPreviewTimer = null;
 const PERIOD_LINE = /^Період:[^\n]*\n?/;  // the line openAds heads the question with: no question of its own
@@ -20,7 +21,9 @@ function adsBody() {
     ({ dataset_id: i.value, filename: i.dataset.file, resolution: +i.dataset.res, ...(i.dataset.layer ? { layer: i.dataset.layer } : {}) }));
   const focus = [...document.querySelectorAll("#ads-zones input:checked")].map((i) => i.value);
   const drawn = Object.fromEntries(GeoMap.zones().filter((z) => focus.includes(z.id)).map((z) => [z.id, z.polygon]));
-  const zones = Object.entries({ ...S.adsZones, ...drawn }).map(([id, polygon]) => ({ id, polygon }));
+  const before = Object.entries(S.adsZones).filter(([id]) => !(id in drawn));  // the conversation's earlier zones, the oldest first
+  const zones = [...before.slice(Math.max(0, before.length + Object.keys(drawn).length - ADS_MAX_ZONES)), ...Object.entries(drawn)]
+    .map(([id, polygon]) => ({ id, polygon }));
   const p = S.period;  // SIG reads the period bar alone; ADS reads the question's words
   return { question: $("ads-question").value.trim(), tables, zones, focus, ...(S.adsSession ? { session_id: S.adsSession } : {}), ...(p ? { period: [p.start, p.end] } : {}) };
 }
@@ -100,7 +103,8 @@ function askAdsFurther(question) {
   const now = adsState(), changed = S.adsLast ? Object.keys(now).filter((k) => now[k] !== S.adsState[k]) : [];
   if (!S.adsLast || changed.length) { openAds(null, changed); return; }
   $("question").value = ""; autosize();
-  askAds({ ...S.adsLast, question, ...(S.adsSession ? { session_id: S.adsSession } : {}) });
+  const shown = Timeline.shown();  // the bar's days head it, as the form heads the first: ADS bounds every figure by them
+  askAds({ ...S.adsLast, question: (shown ? `${periodHeader(shown)}\n\n` : "") + question, ...(S.adsSession ? { session_id: S.adsSession } : {}) });
 }
 
 async function askAds(body) {

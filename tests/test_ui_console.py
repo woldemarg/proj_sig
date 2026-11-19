@@ -196,6 +196,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         page.wait_for_selector(".ds-link", timeout=20000)
         page.click(".ds-link")
         assert page.is_visible("#link-drop") and page.is_visible("#link-or")  # one's own file apart from the ready layers
+        assert "CSV, TSV, TXT, Parquet" in page.inner_text("#link-drop") and "CSV, TSV, TXT, Parquet" in page.text_content("#drop")
         assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == (
             "kind=a",
             "0",
