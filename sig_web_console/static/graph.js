@@ -366,6 +366,7 @@ async function loadGraph() {
 
 // views
 function setView(view) {
+  if (view !== S.view) closeDrawer();  // the drawer belongs to the view it opened in
   S.view = view;
   if (view !== "map") { GeoMap.cancelDraw(); GeoMap.closePopup(); }
   document.querySelectorAll("#view-switch button").forEach((b) => { b.classList.toggle("active", b.dataset.view === view); b.setAttribute("aria-selected", String(b.dataset.view === view)); });
