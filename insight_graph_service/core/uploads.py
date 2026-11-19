@@ -138,6 +138,20 @@ def resolve_declared_metadata(
     return fit_declared(declared, columns, strict) if columns is not None else (declared, [])
 
 
+def apply_declared(record: dict[str, Any], changes: dict[str, Any], glossary: str | None, metadata: str | None) -> list[str]:
+    """``changes`` (``resolve_dataset_metadata``'s) with the declared glossary and document written onto a READY ``record``,
+    checked against its metrics and columns (an unknown indicator or glossary column is ``invalid_options``); a None
+    value clears its field. Returns the warnings (documented columns left out)."""
+    if unknown := sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", []))):
+        raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {record['dataset_id']}")
+    columns = [*record["profile"].get("numerics", []), *record["profile"].get("categoricals", [])]
+    declared, warnings = resolve_declared_metadata(glossary, metadata, columns, strict=True)
+    record.update(changes | declared)
+    for cleared in [k for k, v in (changes | declared).items() if v is None]:
+        del record[cleared]
+    return warnings
+
+
 def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: bool = False, frame: Any = None) -> tuple[dict[str, Any], list[str]]:
     """``declared`` (``user_glossary`` / ``metadata_doc``, parsed) kept to the dataset's ``columns``: a column it does not
     hold, as itself, its band or a geo derivation (``wording.source_column``), is dropped with a warning, or refused for

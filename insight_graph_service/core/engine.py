@@ -849,15 +849,7 @@ class Engine:
             own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
             if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
                 raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")
-            unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
-            if unknown:
-                raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
-            columns = [*record["profile"].get("numerics", []), *record["profile"].get("categoricals", [])]
-            declared, warnings = uploads.resolve_declared_metadata(glossary, metadata, columns, strict=True)
-            changes.update(declared)
-            record.update(changes)
-            for cleared in [k for k, v in changes.items() if v is None]:
-                del record[cleared]
+            warnings = uploads.apply_declared(record, changes, glossary, metadata)
             replaced = uploads.targets(record, self.ws.list_batches(), own) if changes.get("supersedes") else None
             ontology = self.ontology()
             # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
