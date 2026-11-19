@@ -74,6 +74,7 @@ label.chk { display: flex; align-items: center; gap: 6px; } label.chk:has(input:
 .drop .big { font-weight: 620; } .drop .muted { font-size: 12.5px; }
 .drop svg { color: var(--accent); margin-bottom: 2px; }
 .drop .file { font-size: 13px; color: var(--accent); font-weight: 600; word-break: break-all; }
+#roles:not(:has(#role-events:checked)) + .geo-opt { display: none; }  /* the person's level, asked for events on the map */
 .time-opt { margin-top: 8px; } .time-opt:not(:has(#use-time:checked)) .field { display: none; }  /* the column asked once time is ticked */
 .roles { border: 0; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; } .roles legend { width: 100%; }
 .role-card { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-xs); cursor: pointer; font-size: 13px; } .role-card b { font-weight: 560; }
@@ -121,11 +122,12 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .link-opt { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .link-opt:hover, .link-opt.on { border-color: var(--accent); background: var(--accent-soft); } .link-opt:disabled { opacity: .5; cursor: progress; }
 .link-opt .muted { font-size: 12px; white-space: nowrap; }
-.link-dev { margin-bottom: 6px; } #link-drop { margin: 8px 0 4px; } #link-drop:has(input:disabled) { opacity: .5; cursor: progress; }
+.link-ring { margin-bottom: 6px; } #link-drop { margin: 8px 0 4px; } #link-drop:has(input:disabled) { opacity: .5; cursor: progress; }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--r-xs); font-size: 11.5px; font-weight: 620; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .ds-src { margin-top: 6px; }
+.ds-docs { display: flex; align-items: center; gap: 2px; margin: 0; padding: 0 8px 4px; } .ds-doc-x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: var(--r-xs); } .ds-doc-x:hover:not(:disabled) { color: var(--bad); background: var(--bad-soft); } .ds-doc-x:disabled { opacity: .4; cursor: default; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); } .chip.run { background: var(--accent-soft); color: var(--accent); }
 .progress { height: 4px; border-radius: 99px; background: var(--sunken); overflow: hidden; margin-top: 6px; }
 .progress > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .5s; }
@@ -438,6 +440,6 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .tp-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; } .tp-sum.none { color: var(--muted); }
 .tp-box { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-lg); }
 .tp-name { padding: 6px 8px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.tp-opt { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--r-xs); font-size: 13px; cursor: pointer; } .tp-opt:hover { background: var(--surface-2); }
+.tp-opt { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--r-xs); font-size: 13px; cursor: pointer; } .tp-opt:hover { background: var(--surface-2); } .tp-opt .muted { margin-left: auto; }
 .tp { accent-color: var(--accent); margin: 0; }
 body:not(.dev) .types.has-types > .field { display: none; }  /* picked from the list; the developer may still type */

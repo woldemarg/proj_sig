@@ -219,7 +219,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_selector("#drawer:not([hidden]) .shift-row", timeout=10000)
         page.click("#view-switch button[data-view='graph']")
         hidden, rest = (page.evaluate(f"S.cy.edges('[type=\"ACTIVATES\"]').not('.hl-edge'){f}.length") for f in (".filter('.hidden')", ""))
-        assert hidden == rest > 0  # off in the graph too
+        assert hidden == rest > 0 and page.is_hidden("#drawer")  # off in the graph too; another view closes the drawer
         # an isolated evidence path stays isolated through a layer switch (it is the current highlight)
         page.click(tab)
         page.click(".bot-pane[data-pane='0'] .ev >> nth=0")

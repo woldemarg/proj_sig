@@ -61,7 +61,13 @@ def test_the_console_works_from_the_keyboard_and_on_narrow_screens(cfg, demo_csv
             f"$('dataset-filter').value === {json.dumps(picked)} && document.activeElement.matches('.ds-pick[aria-pressed=\"true\"]')", timeout=10000
         )
         assert page.evaluate("document.activeElement.closest('.ds').dataset.ds") == picked  # the replaced row keeps the focus
-        page.evaluate("() => { $('dataset-filter').value = ''; return refreshBatches(); }")
+        page.keyboard.press("Escape")  # nothing else open: Esc shows every dataset again
+        page.wait_for_function("$('dataset-filter').value === ''", timeout=10000)
+        page.click("#batches .ds.clickable >> nth=0")
+        page.wait_for_function("$('dataset-filter').value !== ''", timeout=10000)
+        page.mouse.click(*(lambda b: (b["x"] + 20, b["y"] + b["height"] - 10))(page.locator(".rail").bounding_box()))  # the rail off its rows
+        page.wait_for_function("$('dataset-filter').value === ''", timeout=10000)
+        page.evaluate("loadGraph()")  # the last load wins: the reset's own redraw is done before the legend is read
         page.focus("#legend .key[data-key='up']")
         assert page.evaluate("S.cy.elements('.lg-dim').length > 0")
         page.focus("#question")

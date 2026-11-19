@@ -28,6 +28,7 @@
     <div id="upload-msg" class="msg"></div>
     <button type="button" class="btn ghost sm" id="reset-btn" hidden>Скинути робочий простір</button>
     <div class="rail-list" id="batches"></div>
+    <input type="file" id="doc-file" accept=".md,.txt,text/plain,text/markdown" hidden>
     <div class="col-resize" data-col="rail" title="Тягніть, щоб змінити ширину · подвійний клік — скинути"></div>
   </aside>
 
@@ -212,12 +213,11 @@
   <form id="link-form">
     <h3 id="link-title">Додати шар</h3>
     <div class="types">
-      <label class="small" for="link-counts">Типи для «більше подій»</label>
+      <label class="small" for="link-counts">Які події рахувати біля шару</label>
       <details class="tp-dd" id="link-dd"><summary><span class="tp-sum" id="link-sum"></span></summary><div class="tp-box" id="link-types"></div></details>
       <input class="field" id="link-counts" placeholder="колонка=значення, колонка=значення">
-      <div class="hint">Які типи подій рахувати біля шару; жодного — лише склад подій.</div>
     </div>
-    <div class="link-dev" data-dev>
+    <div class="link-ring">
       <label class="small" for="link-ring">Що рахувати поруч</label>
       <select class="field" id="link-ring"><option value="0">лише саму комірку</option><option value="1">комірку й шість сусідніх</option><option value="2">комірку й сусідніх у межах двох кілець</option></select>
     </div>
@@ -281,6 +281,10 @@
       <label class="role-card" title="Інсайти рядків таблиці"><input type="radio" name="role" id="role-table" value="table"><b>Таблиця</b></label>
       <label class="role-card" title="Контекстний шар: точки, що лише стоять поруч із подіями датасету"><input type="radio" name="role" id="role-layer" value="layer"><b>Шар</b></label>
     </fieldset>
+    <div class="geo-opt" data-user>
+      <label class="small" for="geo-user">Просторовий аналіз (комірки H3)</label>
+      <input class="field" id="geo-user" placeholder="напр. auto@auto · geometry · lat,lon">
+    </div>
     <div class="time-opt" data-user title="Дає інсайтам динаміку: тренд, піки й спади">
       <label class="small chk"><input type="checkbox" id="use-time"> Аналізувати в часі</label>
       <input class="field" id="time-user" placeholder="Колонка з датою, напр. order_date" aria-label="Колонка з датою">
@@ -318,10 +322,6 @@
       <label class="small" for="glossary">Що означають колонки</label>
       <textarea class="field" id="glossary" rows="2" placeholder='напр. {"region": "регіон продажу", "region=US": "США"}'></textarea>
       <div class="hint">JSON: колонка чи <span class="mono">колонка=значення</span> → як її називати.</div>
-      <label class="small" for="metadata">Документ метаданих</label>
-      <div><label class="btn ghost sm" for="metadata">Обрати файл</label> <span class="file" id="metadata-name"></span></div>
-      <input type="file" id="metadata" accept=".md,.txt,text/plain,text/markdown" hidden>
-      <div class="hint">Текстовий опис колонок — довідка для моделі.</div>
       <label class="small" for="source">Джерело</label>
       <input class="field" id="source" maxlength="120" placeholder="напр. польові звіти, мережа датчиків">
       <label class="small" for="reliability">Надійність джерела</label>

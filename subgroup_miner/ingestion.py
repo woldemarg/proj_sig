@@ -353,7 +353,8 @@ def filter_rows(frame: pd.DataFrame, where: str) -> pd.DataFrame:
         raise IngestionError("invalid_options", f"where {where}: no column {column!r}")
     text = frame[column].astype("string")
     counts = text.value_counts()
-    if pd.api.types.is_numeric_dtype(frame[column]) or not 2 <= len(counts) <= GEO_MODE_MAX_LEVELS:
+    number = pd.api.types.is_numeric_dtype(frame[column]) and not pd.api.types.is_bool_dtype(frame[column])  # as point_profile reads it
+    if number or not 2 <= len(counts) <= GEO_MODE_MAX_LEVELS:
         raise IngestionError(
             "invalid_options", f"where {where}: {column!r} is not a category to split by (2–{GEO_MODE_MAX_LEVELS} values, not a number)"
         )

@@ -27,6 +27,7 @@ from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points, upload_id
 from insight_graph_service.core.workspace import Workspace
+from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
 from subgroup_miner.spatial import SpatialError, compactness
@@ -83,9 +84,16 @@ def _owner(ws: Workspace, dataset_id: str) -> dict[str, Any]:
     return owner
 
 
-def geo_profile(loaded: Any) -> dict[str, Any]:
-    """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers."""
-    ctx = loaded.spatial
+def geo_profile(loaded: Any, miner: MinerConfig) -> dict[str, Any]:
+    """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers;
+    ``types`` keeps the values a per-type counter would count (as many events as ``check_counts`` asks) and its
+    ``column=value,…`` spec reads back as they are (no ``,``, no edge spaces, no ``=`` in the column)."""
+    ctx, least = loaded.spatial, miner.min_rows * miner.min_cell_points
+    types = {
+        col: {v: n for v, n in values.items() if n >= least and v == v.strip() and v and "," not in v}
+        for col, values in ctx.types.items()
+        if "=" not in col and col == col.strip()
+    }
     return {
         "option": loaded.geo,
         "resolution": ctx.resolution,
@@ -98,6 +106,7 @@ def geo_profile(loaded: Any) -> dict[str, Any]:
         "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
         "glossary": ctx.glossary,
         **({"exposure": ctx.exposure} if ctx.exposure else {}),  # what a per-type count is per (docs/02_discovery.md §2.9)
+        "types": {col: values for col, values in types.items() if values},
     }
 
 

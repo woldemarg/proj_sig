@@ -154,7 +154,7 @@ const WALK = Object.fromEntries(["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "
 
 async function pickInsight(pid, view) {
   let d;
-  if (!isDev() && personTab() === "ads") { inspect(pid); return; }  // the graph's chat is not the person's: the drawer describes it
+  if (!isDev() && personTab() === "ads") return GeoMap.has(pid) ? undefined : inspect(pid, GeoMap.offMap(pid));  // the map's focus and card describe it
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
   S.threads.graph.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
   showTab("graph");
