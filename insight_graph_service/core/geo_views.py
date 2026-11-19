@@ -25,7 +25,7 @@ from graph_query_engine.vertical import affinity, restating, scale_chain, scale_
 from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points
+from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points, upload_id
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
@@ -180,7 +180,8 @@ def _export_reading(
     of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
     over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
     ``layer``: a layer link run's context layer by its name, its points read as the run read them (its filter, an aligned
-    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over."""
+    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over. A stored file that no longer
+    holds its upload's bytes is ``source_changed``: its insights describe another table (docs/13_trust.md, P5)."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
     if not geo or dataset_id in hidden_datasets(ws.list_batches()):
@@ -204,6 +205,9 @@ def _export_reading(
         span = {"window": list(window[2:])} if window else {}
         return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
     reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)
+    # ponytail: the dataset's own file alone; a layer's copy has no digest of its own on the record (the run's id mixes it in)
+    if record.get("upload_id") and reading[0].is_file() and upload_id(reading[0], record.get("where")) != record["upload_id"]:
+        raise PipelineError("source_changed", f"{dataset_id}: its stored file no longer holds the bytes its insights were mined from")
     return table | {"time": record.get("time"), "where": record.get("where")}, reading, resolution
 
 
