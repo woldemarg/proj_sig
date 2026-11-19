@@ -187,8 +187,8 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert job["stage"] == "done" and set(job["timings"]) == {"search", "ads", "joint"} and job["session_id"] == SID, job
         # the graph is asked with the polygon the rows are read against, and no model; the text found nothing inside, so the zone alone stands
         assert seen["chat"] == [
-            {"question": ask["question"], "geometry": POLYGON, "use_llm": False},
-            {"question": "", "geometry": POLYGON, "use_llm": False},
+            {"question": ask["question"], "geometry": POLYGON, "use_llm": False, "period_only": True},
+            {"question": "", "geometry": POLYGON, "use_llm": False, "period_only": True},
         ]
         assert [(i["key"], i["zones"]) for i in job["insights"]] == [("P1", {"Z1": True}), ("P2", {"Z1": False}), ("P4", {"Z1": False})]
         # every table's zones and rows at the base table's resolution: one cell column to join on
@@ -231,16 +231,18 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["error"]["code"] == "ads_busy"
         assert (len(seen["uploads"]), len(seen["chat"])) == (sent, asked)  # refused before the graph is asked or a file replaced
 
-        # the graph reads the period bar alone: a period in the text is ADS's, the bar's goes beside it
+        # the graph reads the period bar alone (period_only): a period in the text is ADS's, the bar's goes beside it, and
+        # the words go as written, a token that only looks like a period (2019-20) a literal the graph keeps
         seen["chat"].clear()
         seen["busy"] = False
         dated = ask | {
-            "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026?",
+            "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026 за сезон 2019-20?",
             "period": ["2026-08-09T00:00", "2026-08-18T00:00"],
         }
         job = finished(client, client.post("/api/ads/jobs", json=dated).json()["job_id"])
         sent = seen["chat"][0]
-        assert sent["period"] == dated["period"] and sent["question"].split() == ["Скільки", "подій", "у", "чи", "?"]
+        assert sent["period"] == dated["period"] and sent["period_only"] is True
+        assert sent["question"].split() == "Скільки подій у 2026-W33 чи Q3 2026 за сезон 2019-20?".split()  # the header line alone goes
         assert dated["question"] in job["ads_query"] and "A period the question names bounds every figure" in job["ads_query"]
 
         # the conversation's end: its tables deleted from ADS, the session closed
@@ -298,7 +300,7 @@ def test_a_question_needs_no_zone():
     ask = {"question": "Де найбільше подій?", "tables": TABLES[:1]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
-        assert job["stage"] == "done" and seen["chat"] == [{"question": ask["question"], "use_llm": False}]  # the whole map: no geometry
+        assert job["stage"] == "done" and seen["chat"] == [{"question": ask["question"], "use_llm": False, "period_only": True}]  # no geometry
         assert [b["zones"] for _, b in seen["zone_rows"]] == [[]] and seen["uploads"] == ["events_dsa_r8.csv", "zones.md"]  # no zones file
         query = job["ads_query"]
         assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
@@ -317,7 +319,8 @@ def test_a_question_needs_no_zone():
 
 
 def test_the_bridge_strips_the_periods_the_graph_reads():
-    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period, so none overrides the bar's."""
+    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period: a question of periods alone
+    has no words for the graph, which is not asked about it (its words go as written, ``period_only``)."""
     samples = "2031-W13, 2031-q1, Q1 2031, 2031-03-24 10:00, 2031-03; not 2019-20, x2031-03, 2031-03-24-1, 12031-03"
     assert [m.group(0) for m in _PERIODS.finditer(samples)] == [m.group(0) for m in PERIOD.finditer(samples)]
 

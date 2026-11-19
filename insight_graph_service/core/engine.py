@@ -230,12 +230,18 @@ class Engine:
         return self._search(question, state, as_of, period, **zone).payload() if state.graph.insights else empty_payload(question)
 
     def _search(
-        self, question: str, state: CommittedState, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any
+        self,
+        question: str,
+        state: CommittedState,
+        as_of: datetime | None = None,
+        period: tuple[datetime, datetime] | None = None,
+        period_only: bool = False,  # the period beside the text is its only one (search)
+        **zone: Any,
     ) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
         hidden = frozenset() if zone.pop("include_hidden", False) else uploads.hidden_datasets(self.ws.list_batches())  # model A
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden)
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden, period_only)
         found.seconds = time.perf_counter() - start
         return found
 

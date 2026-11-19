@@ -79,6 +79,7 @@ class SearchIn(BaseModel):
     resolution: int | None = Field(None, ge=0, le=15)  # the zone weighs the geo datasets of at most this resolution
     as_of: str | None = None  # the reference date, ISO; the latest data when absent
     period: list[str] | None = Field(None, min_length=2, max_length=2)  # [start, end): temporal.parse_period; the question's own period wins
+    period_only: bool = False  # ``period`` (or none) is the question's only period: one its text names is not read (the ADS bridge)
     include_hidden: bool = False  # a hidden layer's runs too, this once (model A: left out by default)
 
 
@@ -338,7 +339,7 @@ def create_app(engine: Engine) -> FastAPI:
             raise PipelineError("invalid_options", f"as_of: not an ISO date or date and time: {body.as_of!r}") from exc
         period = asked_period(*body.period) if body.period else None
         zone = {"cells": body.cells, "geometry": body.geometry, "resolution": body.resolution}
-        return engine.evidence(body.question, as_of, period, include_hidden=body.include_hidden, **zone).to_dict()
+        return engine.evidence(body.question, as_of, period, period_only=body.period_only, include_hidden=body.include_hidden, **zone).to_dict()
 
     @app.post("/api/patterns/{pattern_id}/verify")
     def verify_pattern(pattern_id: str) -> dict[str, Any]:
