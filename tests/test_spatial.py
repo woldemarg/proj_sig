@@ -748,6 +748,8 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
         {"center": [181, lat], "radius_m": 10.0},
         {"center": [lon, 91], "radius_m": 10.0},
         [lon, lat],
+        {"type": "Polygon", "coordinates": [[[lon, lat]] * 4]},  # no area: H3's own failure, not a ValueError
+        {"type": "Polygon", "coordinates": [[[lon, lat], [lon + 0.1, lat], [lon + 0.2, lat], [lon, lat]]]},  # collinear
     ):
         with pytest.raises(SpatialError):
             geometry_to_cells(bad, 7)
@@ -814,6 +816,8 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
         refused = client.post("/api/search", json={"cells": ["nope"]})
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
+        flat = client.post("/api/search", json={"geometry": {"type": "Polygon", "coordinates": [[[1.0, 2.0]] * 4]}})  # no area
+        assert flat.status_code == 400 and flat.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"question": " "}).status_code == 400
 
 
