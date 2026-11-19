@@ -22,8 +22,7 @@ function adsBody() {
   const focus = [...document.querySelectorAll("#ads-zones input:checked")].map((i) => i.value);
   const drawn = Object.fromEntries(GeoMap.zones().filter((z) => focus.includes(z.id)).map((z) => [z.id, z.polygon]));
   const before = Object.entries(S.adsZones).filter(([id]) => !(id in drawn));  // the conversation's earlier zones, the oldest first
-  const zones = [...before.slice(Math.max(0, before.length + Object.keys(drawn).length - ADS_MAX_ZONES)), ...Object.entries(drawn)]
-    .map(([id, polygon]) => ({ id, polygon }));
+  const zones = [...before, ...Object.entries(drawn)].slice(-ADS_MAX_ZONES).map(([id, polygon]) => ({ id, polygon }));  // the question's own last
   const p = S.period;  // SIG reads the period bar alone; ADS reads the question's words
   return { question: $("ads-question").value.trim(), tables, zones, focus, ...(S.adsSession ? { session_id: S.adsSession } : {}), ...(p ? { period: [p.start, p.end] } : {}) };
 }
