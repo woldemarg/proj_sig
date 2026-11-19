@@ -511,7 +511,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.click("#pb-presets button:has-text('останній тиждень')")
         assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
-        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        served = engine.maps().period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
         assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
         pick_dataset(page, other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
         page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
@@ -551,9 +551,11 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert whole >= here >= acting  # the region's count, the cell's part of it and the part acting: one base
         every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
         page.evaluate(f"GeoMap.addZone({{type: 'Polygon', coordinates: [{every}]}}); GeoMap.openZone(GeoMap.zones()[0].id)")  # every cell
+        assert page.evaluate("GeoMap.zones()[0].cells.length") == sum(1 for c in counted if c)  # the cells the days draw: none hidden
+        assert page.evaluate("GeoMap.addZone(G.data.features.find((f) => !f.properties.points_in_period).geometry)") == 0  # nothing drawn
         assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
         page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
-        assert page.locator("#map-metric option[value='points_in_period']").count() == 1
+        assert page.text_content("#map-metric option[value='points_in_period']") == "події за період"  # the chrome's words
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
         page.wait_for_function("G.idle.size > 0 && document.querySelectorAll('#map-window .mw-i.off').length > 0", timeout=10000)
         listed = page.evaluate(rows)

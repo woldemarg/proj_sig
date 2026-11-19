@@ -257,7 +257,8 @@ async function refreshHealth() {
     syncTabs();
     const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
       : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
-      : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
+      : ["", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];  // not opt: shown at any width, as the person needs it
+    S.adsTitle = `${adsTxt}. ${adsWhy}`;  // the zone's ADS button says the same when it is off
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();

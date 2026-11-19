@@ -189,7 +189,13 @@ def _table_line(t: dict[str, Any]) -> str:
     part = f", only its rows where {t['where']}" if t.get("where") else ""  # a filtered reading of the file
     disk = {0: "per cell", 1: "per cell with its six neighbours"}.get(t.get("ring", 0), f"per cell with its {t.get('ring')} rings of neighbours")
     span = f", only its points within {t['window'][0]}..{t['window'][1]}" if t.get("window") else ""  # an aligned run's window
-    layer = f"; the points SIG's condition context_{t['layer']}_band counts {disk}{span}" if t.get("layer") else ""
+    grid = (  # the run counted the layer on its own cells; the export gives every table the base table's (one join column)
+        f"; SIG counted them on the run's H3 resolution {t['resolution']} grid; their h3 columns here are the main table's resolution "
+        f"{t['cells_at']}, so a cell here is not the place that condition counted"
+        if t["resolution"] != t["cells_at"]
+        else ""
+    )
+    layer = f"; the points SIG's condition context_{t['layer']}_band counts {disk}{span}{grid}" if t.get("layer") else ""
     return f"{t['df']} ({t['file']}: {t['filename']}{part}{counted}{layer})"
 
 
@@ -266,8 +272,9 @@ def _zones_text(base: dict[str, Any], tables: list[dict[str, Any]]) -> str:
     return (
         f"\nZones: df_zones ({ZONES_FILE}) lists, for every zone of this conversation, the rows it holds: zone_id, table (a table's file "
         "name), row_id, aoi_zone = inside (the point lies inside the zone's polygon) | adjacent (outside it, in the zone's cells or their "
-        f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} has no point: it is in no zone and in no comparison group. Any "
-        "other row not listed for a zone is far from it. To read a table against zone Z, drop its rows without a point, take the "
+        f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} (NaN once pandas reads the CSV) has no point: it is in no zone "
+        "and in no comparison group. Any other row not listed for a zone is far from it. To read a table against zone Z, drop its "
+        f"rows without a point (h3_r{base['cells_at']} NaN or empty) before anything else, take the "
         "df_zones rows with zone_id == Z and table == the table's file, left-join them to the table on row_id and fill a missing "
         "aoi_zone with 'far'. df_zones lists this question's tables only "
         f"({', '.join(t['file'] for t in tables)}); a table an earlier question sent is not placed in the zones. "
@@ -306,7 +313,7 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                     "- row_id: a row's number in its table, the key df_zones joins on.",
                     f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its "
                     "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point "
-                    f"not listed is far, a row without one (empty h3 cell) is in no group. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+                    f"not listed is far, a row without one (an empty h3 cell, NaN in pandas) is in no group, never far. It lists the tables {', '.join(t['file'] for t in tables)} only.",
                 ]
                 if zones
                 else ["- No zone is drawn in this conversation: the questions are about the whole map."]

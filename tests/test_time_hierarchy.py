@@ -232,6 +232,10 @@ def test_a_period_asked_beside_the_question_reads_as_one_written_in_it_and_yield
     assert [s.pattern_id for s in asked.seeds] == [s.pattern_id for s in written.seeds] and asked.parsed.when == week
     assert asked.evidence.as_of["recency"] is False and "\nPERIOD: 2031-03-24 to 2031-03-30, both days included\n" in asked.evidence.to_prompt()
     assert engine.search(QUESTION.rstrip("?") + " in 2031-04?", period=week).parsed.when == period_interval("2031-04")  # the text wins
+    # period_only (the ADS bridge: the bar is SIG's only period, one the text names is ADS's): the text's is not read
+    only = engine.search(QUESTION.rstrip("?") + " in 2031-04?", period=week, period_only=True)
+    assert (only.parsed.when, only.parsed.when_asked) == (week, True) and [s.pattern_id for s in only.seeds] == [s.pattern_id for s in asked.seeds]
+    assert engine.search(QUESTION.rstrip("?") + " in 2031-04?", period_only=True).parsed.when is None  # no bar: no period at all
     for bad in (("2031-03-30", "2031-03-24"), ("2031-03-24T06:00", "2031-03-24T06:00"), ("2031-03-24T06:00+02:00", "2031-03-25")):
         with pytest.raises(ValueError):
             parse_period(*bad)
@@ -253,6 +257,8 @@ def test_a_period_asked_beside_the_question_reads_as_one_written_in_it_and_yield
             assert refused.status_code in (400, 422) and (refused.status_code == 422 or refused.json()["code"] == "invalid_options")
         ok = client.post("/api/search", json={"question": QUESTION, "period": ["2031-03-24", "2031-03-30"]})
         assert ok.status_code == 200 and "PERIOD: 2031-03-24 to 2031-03-30" in ok.json()["evidence_prompt"]
+        only = client.post("/api/search", json={"question": QUESTION + " in 2031-04", "period": ["2031-03-24", "2031-03-30"], "period_only": True})
+        assert "PERIOD: 2031-03-24 to 2031-03-30" in only.json()["evidence_prompt"]
 
 
 def test_without_a_period_fresher_findings_rank_first_and_none_is_dropped(timed, hashed_engine, monkeypatch):
