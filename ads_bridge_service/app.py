@@ -281,7 +281,11 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     def write_report(question: str, report: str, domain: str) -> str:
         """The final report from the ADS report with the zone's methodology and the glossary; "" without its required sections."""
-        prompt = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render(user_query=question, report=report, domain_knowledge=domain)
+        prompt = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render(
+            user_query=question,
+            report=report,
+            domain_knowledge=domain,
+        )  # an LLM prompt, not HTML: no autoescape (code scanning alert #7, dismissed as a false positive, is this line)
         body = {"model": "synthesis", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": JOINT_MAX_TOKENS}
         resp = _checked(http.post(f"{settings.ads_llm_url}/v1/chat/completions", json=body), "ads_failed", "ADS LLM gateway")
         out = resp.json()["choices"][0]["message"]["content"]
