@@ -453,8 +453,8 @@ function init() {
   on(thread, ".insight-card .nb", (el) => reveal(el.dataset.id, { walk: true }));
   on(thread, ".insight-card .ic-theme", (el) => { inspect(el.dataset.id); GeoMap.openTheme(el.dataset.id); });
   on(thread, ".insight-card .ic-ask", (el) => {  // asked with its place: the cells it is drawn by on the open map, as a zone
-    const p = turnOf(el).insight.node.props, cells = GeoMap.placeOf(p.id);
-    ask(askAbout(p), cells.length ? { cells } : false);  // never with a zone selected for other questions
+    const d = turnOf(el).insight, cells = GeoMap.placeOf(d.node.id);
+    ask(askAbout(d), cells.length ? { cells } : false);  // never with a zone selected for other questions
   });
   on(thread, ".insight-card .ic-graph", async (el) => {  // a filter on another dataset would hide its node
     const p = turnOf(el).insight.node.props, sel = $("dataset-filter");

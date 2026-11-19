@@ -343,7 +343,7 @@ def asked_metrics(spatial: SpatialContext | None) -> frozenset[str]:
 def means_of(data: pd.DataFrame, spatial: SpatialContext | None) -> list[str]:
     """The per-type counters read by their mean: those whose map median is 0 — more than half the cells hold none of
     the type, so a cohort's median stays 0 until half of it moves, however much more often the type occurs there (the
-    cross-layer experiments of 2026-11-04: robbery 3.5 times as frequent next to bars, median 0 on both sides). Never
+    cross-layer experiments of 2026-11-04: one type 3.5 times as frequent next to a layer's points, median 0 on both sides). Never
     under a zone baseline, whose columns are residuals, not counts; never for a table."""
     if spatial is None or spatial.baseline == "zone":
         return []

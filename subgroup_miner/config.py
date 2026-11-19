@@ -24,7 +24,8 @@ class MinerConfig:
     context_permutations: int = 199  # draws of the cross-type null (the layer dealt anew within each parent cell); 0 turns the test off
     weight_by_events: bool = True  # a share's median test with each cell weighing its events (Kish's n x the Moran factor); mining stays per cell.
     # On by default: unweighted, a cell of 5 events reads a ~5 % type's share as 0 and a busy one as not, so «more events» read as
-    # «another mix» (the cross-layer experiments of 2026-11-04: label-shuffled crimes 3/12 runs with a share finding, 0/12 weighted)
+    # «another mix» (the cross-layer experiments of 2026-11-04: type labels shuffled over every event, 3/12 runs with a share
+    # finding unweighted, 0/12 weighted)
 
     # discovery (docs/02_discovery.md) — EDA defaults preserved
     compute_budget: int = 5000  # step3 compute_budget
