@@ -87,6 +87,8 @@ def test_the_narrator_verbalises_and_checks_the_evidence(recorded, llm_stub, cap
             assert dated.status_code == 200 and bodies[-1] == {"question": "empty?", "as_of": "2031-04-01"}
             client.post("/api/chat/query", json={"question": "empty?", "period": ["2031-03-24", "2031-03-30"]})
             assert bodies[-1] == {"question": "empty?", "period": ["2031-03-24", "2031-03-30"]}
+            only = client.post("/api/chat/query", json={"question": "empty?", "period_only": True})  # the bridge's flag, passed on as given
+            assert only.status_code == 200 and bodies[-1] == {"question": "empty?", "period_only": True}
             health = client.get("/api/chat/health").json()
             assert health["insight_graph"]["reachable"] and health["llm"]["reachable"]
 

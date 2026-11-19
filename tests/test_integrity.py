@@ -217,10 +217,10 @@ def test_a_changed_geo_record_is_not_drawn_on_the_map(cfg, points_csv):
     engine = make_engine(cfg)
     assert engine.graph().nodes[forged]["props"]["integrity"] == "mismatch"
     with pytest.raises(PipelineError, match="no intact pattern"):
-        engine.geo_pattern(ds, forged)
-    assert engine.geo_pattern(ds, intact)["n_points"] > 0
-    assert forged not in {i["id"] for t in engine.geo_window(ds, "-180,-90,180,90")["themes"] for i in t["insights"]}
-    assert engine.geo_overlay(ds)["patterns"][forged]["integrity"] == "mismatch"  # what the console's map reads to leave it out
+        engine.maps().pattern(ds, forged)
+    assert engine.maps().pattern(ds, intact)["n_points"] > 0
+    assert forged not in {i["id"] for t in engine.maps().window(ds, "-180,-90,180,90")["themes"] for i in t["insights"]}
+    assert engine.maps().overlay(ds)["patterns"][forged]["integrity"] == "mismatch"  # what the console's map reads to leave it out
     listed = [
         it for group in node_details(engine.graph(), intact, engine.settings.thresholds)["neighbors"].values() for it in group if it["id"] == forged
     ]
