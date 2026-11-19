@@ -99,8 +99,14 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
         assert page.evaluate(mirror) == [False, ""]
         page.evaluate("document.body.classList.remove('dev')")  # the person's time switch: ticked, it asks the column
-        assert not page.is_visible("#time-user")
+        assert not page.is_visible("#time-user") and page.input_value("#geo-user") == "auto@auto"  # events: the level asked
+        page.fill("#geo-user", "auto@7")
+        assert page.input_value("#geo") == "auto@7"
+        page.check("#role-table")
+        assert not page.is_visible("#geo-user")
+        page.check("#role-events")
         page.check("#use-time")
+        assert page.input_value("#time") == "timestamp"  # the usual name, to confirm or change
         page.fill("#time-user", "when")
         assert page.input_value("#time") == "when"
         page.uncheck("#use-time")

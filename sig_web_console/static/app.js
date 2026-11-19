@@ -381,10 +381,12 @@ function init() {
     ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
     drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length && !input.disabled) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event("change")); } });
   });
-  $("geo").addEventListener("input", syncTable);
-  $("time").addEventListener("input", mirrorTime);
+  $("geo").addEventListener("input", () => { syncTable(); mirrorUser(); });
+  $("geo-user").addEventListener("input", () => { $("geo").value = $("geo-user").value; syncTable(); });
+  $("time").addEventListener("input", mirrorUser);
   $("time-user").addEventListener("input", () => { $("time").value = $("time-user").value; });
   $("use-time").addEventListener("change", () => {  // unticked: no time column sent, the column kept for a tick back
+    if ($("use-time").checked && !$("time-user").value.trim()) $("time-user").value = "timestamp";  // the usual name, to confirm or change
     $("time").value = $("use-time").checked ? $("time-user").value : "";
     if ($("use-time").checked) $("time-user").focus();
   });

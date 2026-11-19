@@ -268,10 +268,11 @@ function syncTable() {  // a table's geo is held, not sent: its field disabled
 function fillOptions(o = {}) {  // the fields a shipped set's manifest fills: as it says, or their defaults for a file of one's own
   for (const id of ["bins", "categories", "geo", "time", "tz", "source"]) $(id).value = o[id] ?? "";
   $("grid").value = o.grid || "auto"; $("table").checked = o.table !== false;
-  mirrorTime();
+  mirrorUser();
 }
 
-function mirrorTime() {  // the person's switch and column show the time column the upload sends (#time)
+function mirrorUser() {  // the person's fields show what the upload sends: the geo option (#geo), the time column (#time)
+  $("geo-user").value = $("geo").value;
   $("time-user").value = $("time").value; $("use-time").checked = Boolean($("time").value.trim());
 }
 
@@ -293,7 +294,7 @@ function setRole(r, layerOnly = false) {
   $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
-  syncTable();
+  syncTable(); mirrorUser();
 }
 
 const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
