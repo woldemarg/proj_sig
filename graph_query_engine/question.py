@@ -56,7 +56,7 @@ STOPWORDS = frozenset(
     # a question's frame, «what is special there»: never a metric (the model put особливого on points, 0.43)
     "special notable unusual interesting remarkable anything something особливого особливе особливі особливий цікавого цікаве цікаві".split()
 )
-PHRASE_MIN_COVER = 0.75  # a condition named in words: the share of its phrase's words a question holds (two words at least)
+PHRASE_MIN_COVER = 0.75  # a condition named in words: the share of its phrase's words a question holds (two words, or a declared name of one)
 CHAR_MIN = 0.30  # char_wb (3–5) TF-IDF cosine floor (measured: inflections >= 0.33, typos >= 0.36, distractors <= 0.23)
 CHAR_MAX_LEN_DIFF = 3  # a same-script surface variant stays about as long as the literal (marginally -> margin is 0.89 but 4 letters longer)
 MARGIN_MIN, MARGIN_K, LOWE_MAX = 0.15, 5, 0.85  # dense gates: local margin over the catalog, Lowe's ratio
