@@ -292,6 +292,10 @@ def test_a_layer_goes_as_a_context_table():
         assert "df_bars_dsa_layer_r8 (bars_dsa_layer_r8.csv: bars" in query
         assert "context_bars_band counts per cell with its six neighbours, only its points within 2031-03-01..2031-03-31" in query
         assert "is a context layer of the main table" in query and "bars_dsa_layer_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
+        assert "an empty h3_r8 (NaN once pandas reads the CSV) has no point" in query and "NaN in pandas" in seen["files"]["zones.md"]
+        assert "the run's H3 resolution" not in query  # the layer's cells at the run's own level: nothing to say
+        coarse = client.post("/api/ads/preview", json={"question": "Q?", "tables": [TABLES[1], bars]}).json()["parts"][3]["text"]
+        assert "SIG counted them on the run's H3 resolution 8 grid; their h3 columns here are the main table's resolution 5" in coarse
         same = name_tables(
             [
                 {"dataset_id": "ds-a", "filename": "crimes_2024_2025_robbery_x.csv", "resolution": 8},

@@ -89,6 +89,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         layer, points = json.loads(got.headers["x-rows"]), pd.read_csv(io.BytesIO(got.content), keep_default_na=False)
         assert (layer["layer"], layer["filename"], layer["total"], layer["ring"], layer["window"]) == ("bars", "bars.csv", 4, 1, span["window"])
         assert list(points[f"h3_r{res}"] != "") == [True, True, False, False]  # the run counted the window's points alone
+        read = pd.read_csv(io.BytesIO(got.content))[f"h3_r{res}"]  # as an ADS kernel reads it, pandas' defaults: no point is NaN, not ""
+        assert list(read.isna()) == [False, False, True, True] and (read != "").all()  # so the task's recipe names NaN
         placed = json.loads(
             client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z1", "polygon": shape}], "layer": "bars"}).headers["x-zones"]
         )
