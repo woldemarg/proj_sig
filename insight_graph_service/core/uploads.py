@@ -152,6 +152,13 @@ def apply_declared(record: dict[str, Any], changes: dict[str, Any], glossary: st
     return warnings
 
 
+def upload_doc(batches: Sequence[dict[str, Any]], upload_id: str) -> dict[str, Any] | None:
+    """The metadata document of an upload's READY readings (one PATCH writes them all), their columns together, for a
+    reading that comes later; None without one."""
+    docs = [b["metadata_doc"] for b in batches if b.get("upload_id") == upload_id and b.get("status") == "READY" and b.get("metadata_doc")]
+    return {"dataset": docs[0]["dataset"], "columns": {c: f for d in docs for c, f in d["columns"].items()}} if docs else None
+
+
 def fit_declared(declared: dict[str, Any], columns: Collection[str], strict: bool = False, frame: Any = None) -> tuple[dict[str, Any], list[str]]:
     """``declared`` (``user_glossary`` / ``metadata_doc``, parsed) kept to the dataset's ``columns``: a column it does not
     hold, as itself, its band or a geo derivation (``wording.source_column``), is dropped with a warning, or refused for

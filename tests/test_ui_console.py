@@ -111,6 +111,11 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         assert page.input_value("#time") == "when"
         page.uncheck("#use-time")
         assert page.input_value("#time") == "" and not page.is_visible("#time-user")
+        page.check("#role-table")
+        page.check("#role-events")
+        page.check("#use-time")  # a role changed meanwhile: the column kept for a tick back is still there
+        assert page.input_value("#time") == "when"
+        page.uncheck("#use-time")
         page.evaluate("document.body.classList.add('dev')")
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
         for field, value in {"#time": "when", "#where": "kind=a"}.items():
@@ -235,6 +240,11 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         doc = b"Planted\n\nDescription: planted points\n\nColumns:\n\nkind\n  Description: the planted type\n"
         chooser.value.set_files(files=[{"name": "doc.md", "mimeType": "text/markdown", "buffer": doc}])
         page.wait_for_selector(".ds-docs", timeout=20000)
+        assert page.inner_text("#upload-msg") == "Документ метаданих додано: описано 1 колонку датасету."
+        with page.expect_file_chooser() as chooser:
+            page.click(".ds-group[data-upload] .ds-doc >> nth=0")
+        chooser.value.set_files(files=[{"name": "empty.md", "mimeType": "text/markdown", "buffer": b" \n"}])
+        page.wait_for_function("$('upload-msg').textContent.startsWith('Файл порожній')", timeout=10000)  # no removal by an empty file
         ready = [b for b in engine.ws.list_batches() if b["status"] == "READY"]  # the level and its layer run
         assert "документ · 1 колонка" in page.inner_text(".ds-docs") and len(ready) > 1 and all(b.get("metadata_doc") for b in ready)
         page.click(".ds-doc-x")

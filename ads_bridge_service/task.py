@@ -327,19 +327,22 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
 
 def build_metadata_md(tables: list[dict[str, Any]], docs: dict[str, dict[str, Any]]) -> str:
     """The uploader's metadata documents of the tables sent (``docs``: dataset id -> ``{dataset, columns}``; a layer's points
-    have none of their own): each file's description and its columns' meanings as declared; "" when none has one."""
+    have none of their own): each file's description and its columns' meanings as declared. Sent with every question, so
+    a document taken off replaces the copy ADS holds (its API deletes no .md)."""
     parts: list[str] = []
     for t in tables:
         doc = {} if t.get("layer") else docs.get(t["dataset_id"]) or {}
-        if not doc.get("columns"):
-            continue
         about = (doc.get("dataset") or {}).get("description")
+        if not (doc.get("columns") or about):
+            continue
         parts += ["", f"## {t['file']} ({t['filename']})", *([about] if about else [])]
-        for col, f in doc["columns"].items():
+        for col, f in (doc.get("columns") or {}).items():
             meaning = f.get("assistant_context") or f.get("description") or ""
             title = f" ({f['title_uk']})" if f.get("title_uk") and f["title_uk"] != col else ""
             parts.append(f"- {col}{title}{': ' + meaning if meaning else ''}")
-    return "\n".join(["# Columns as the uploader describes them", *parts]) + "\n" if parts else ""
+    return (
+        "\n".join(["# Columns as the uploader describes them", *(parts or ["", "No table of this question has a document of its uploader."])]) + "\n"
+    )
 
 
 def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:

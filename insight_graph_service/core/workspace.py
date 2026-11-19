@@ -40,7 +40,7 @@ import shutil
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -511,6 +511,14 @@ class Workspace:
                 dest = trash / path.resolve().relative_to(root)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(path), str(dest))
+
+    def keep_batches(self, batch_ids: Sequence[str], trash: Path) -> None:
+        """Copies of the batch records into ``trash`` (inside the checkpoint), so a rollback puts them back as they were."""
+        root = self.root.resolve()
+        for batch_id in batch_ids:
+            dest = trash / self.batch_path(batch_id).resolve().relative_to(root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.batch_path(batch_id), dest)
 
     def save_graph(self, snapshot: dict[str, Any]) -> None:
         atomic_write_json(self.graph_path, snapshot)

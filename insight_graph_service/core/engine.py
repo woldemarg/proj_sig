@@ -433,6 +433,8 @@ class Engine:
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
+        doc = uploads.upload_doc(self.ws.list_batches(), upload_id) if metadata is None else None  # a new level takes the upload's
+        held = {b.get("level") for b in self.ws.list_batches() if b.get("upload_id") == upload_id and b.get("status") == "READY"}
         return [  # the table level leaves the point columns out
             self.submit(
                 path,
@@ -444,6 +446,7 @@ class Engine:
                 count_values=counts if g else (),
                 baseline=baseline if g else None,
                 context_ring=ring,
+                inherited={"metadata_doc": doc} if doc and level not in held else None,
                 **options,
             )
             for g, level in levels
@@ -800,13 +803,15 @@ class Engine:
         (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
         refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
         the same transaction (docs/06_graph_and_storage.md §6.8). An upload id changes every READY reading of the upload,
-        its layer runs too, in one write (``supersedes`` stays a dataset's)."""
+        its layer runs too, in one write (``supersedes`` stays a dataset's); ``busy`` while a batch of it is still to run."""
         changes = uploads.resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._writing():
-            ids = [b["batch_id"] for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b.get("upload_id"))]
-            records = [r for i in ids if (r := self.ws.load_batch(i)) and r["status"] == "READY"]  # copies to edit
+            mine = [b for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b.get("upload_id"))]
+            if any(b["status"] not in TERMINAL for b in mine):  # a level or run still to come would miss the change
+                raise PipelineError("busy", f"{dataset_id} has a batch in progress")
+            records = [r for b in mine if b["status"] == "READY" and (r := self.ws.load_batch(b["batch_id"]))]  # copies to edit
             if not records:
                 raise PipelineError("unknown_dataset", dataset_id)
             if any(compute_metadata_integrity(r) == "mismatch" for r in records):  # a PATCH would sign the forged fields as genuine
@@ -815,13 +820,15 @@ class Engine:
                 )
             record = records[0]
             own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
-            if changes.get("supersedes") and (dataset_id not in own or changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}):
-                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: only a dataset replaces another, never its own upload")
+            if "supersedes" in changes and record["dataset_id"] != dataset_id:
+                raise PipelineError("invalid_options", f"supersedes is a dataset's: {dataset_id} is an upload")
+            if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
+                raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")
             warnings = [w for r in records for w in uploads.apply_declared(r, changes, glossary, metadata)]
             replaced = uploads.targets(record, self.ws.list_batches(), own) if changes.get("supersedes") else None
             ontology = self.ontology()
-            # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
             with self.ws.transaction({"dataset_id": dataset_id}, journal=bool(replaced)) as cp:
+                self.ws.keep_batches([r["batch_id"] for r in records], Path(cp["dir"]) / "removed")  # a rollback restores them
                 superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
                 if replaced:
                     ontology.save()
@@ -837,7 +844,7 @@ class Engine:
                 "reliability": record.get("reliability", "F"),
                 "indicators": record.get("indicators", {}),
                 "user_glossary": record.get("user_glossary", {}),
-                "metadata_columns": len((record.get("metadata_doc") or {}).get("columns", {})),
+                "metadata_columns": max(len((r.get("metadata_doc") or {}).get("columns", {})) for r in records),  # the most a reading holds
                 "supersedes": record.get("supersedes"),
                 **({"warnings": warnings} if warnings else {}),
                 **({"superseded": superseded} if superseded else {}),

@@ -205,7 +205,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return tables, ("\n".join(lines) + "\n").encode("utf-8")
 
     def table_docs(tables: list[dict[str, Any]]) -> bytes:
-        """The metadata documents of the tables (a layer's points have none of their own), as ``metadata.md``; empty without one."""
+        """The metadata documents of the tables (a layer's points have none of their own), as ``metadata.md``."""
         docs = {
             t["dataset_id"]: _checked(
                 http.get(f"{settings.ads_graph_url}/api/datasets/{quote(t['dataset_id'], safe='')}/metadata"), "sig_failed", "SIG metadata"
@@ -320,6 +320,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             zones = {z.id: z.polygon for z in body.zones}
             findings = zone_findings(body, zones)
             tables, placed = place_tables(body)
+            docs = table_docs(tables)  # the graph's part, before an ADS session opens
             sources = finding_files(findings)
             job["insights"] = findings
             job["ads_query"] = "".join(p["text"] for p in build_query_parts(body.question, tables, body.focus, list(zones), findings))
@@ -330,7 +331,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
             files = {ZONES_FILE: placed} if zones else {}  # a conversation without a zone has no zones file
-            files |= {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")} | ({METADATA_MD: doc} if (doc := table_docs(tables)) else {})
+            files |= {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8"), METADATA_MD: docs}
             upload(job["session_id"], tables, files)
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)

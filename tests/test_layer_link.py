@@ -27,7 +27,7 @@ from insight_graph_service.server.app import create_app
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import NONE_NEARBY
 from subgroup_miner.discovery import _event_weights, _median_z, _per_event, _weighted_median, _weighted_stats, recompute_statistics, run_discovery
-from subgroup_miner.ingestion import load_dataset, parse_ring
+from subgroup_miner.ingestion import check_counts, load_dataset, parse_ring
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -140,6 +140,10 @@ def test_a_chosen_value_becomes_a_counter_the_bands_restate_and_no_band_of_its_o
     assert plain_ctx.types["sector"] == sectors.to_dict() and list(plain_ctx.types["sector"]) == list(sectors.index)  # most first
     offered = geo_profile(SimpleNamespace(spatial=plain_ctx, geo="auto"), MinerConfig(min_rows=int(sectors.iloc[0]), min_cell_points=1))["types"]
     assert offered["sector"] == {sectors.index[0]: int(sectors.iloc[0])}  # a value too rare to count is not offered
+    odd = frame.assign(flag=frame["sector"] == "north", zone=np.where(frame["sector"] == "north", "east, west", " south"))
+    types = geo_profile(SimpleNamespace(spatial=cells_of(odd)[1], geo="auto"), MinerConfig(min_rows=1, min_cell_points=1))["types"]
+    specs = ",".join(f"{c}={v}" for c, values in types.items() for v in values)
+    assert "flag" in types and "zone" not in types and {c["status"] for c in check_counts(odd, specs, 1)} == {"ok"}  # offered = counted
     table, ctx, warnings = cells_of(frame, count_values=["channel=phone", "sector=north"])
     phone = (frame["channel"] == "phone").to_numpy()
     expected = np.bincount(ctx.point_cell[phone], minlength=len(table)).astype(float)

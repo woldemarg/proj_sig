@@ -86,9 +86,14 @@ def _owner(ws: Workspace, dataset_id: str) -> dict[str, Any]:
 
 def geo_profile(loaded: Any, miner: MinerConfig) -> dict[str, Any]:
     """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers;
-    ``types`` keeps the values a per-type counter would count (as many events as ``check_counts`` asks)."""
+    ``types`` keeps the values a per-type counter would count (as many events as ``check_counts`` asks) and its
+    ``column=value,…`` spec reads back as they are (no ``,``, no edge spaces, no ``=`` in the column)."""
     ctx, least = loaded.spatial, miner.min_rows * miner.min_cell_points
-    types = {col: {v: n for v, n in values.items() if n >= least} for col, values in ctx.types.items()}
+    types = {
+        col: {v: n for v, n in values.items() if n >= least and v == v.strip() and v and "," not in v}
+        for col, values in ctx.types.items()
+        if "=" not in col and col == col.strip()
+    }
     return {
         "option": loaded.geo,
         "resolution": ctx.resolution,

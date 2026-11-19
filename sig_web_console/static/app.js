@@ -388,7 +388,7 @@ function init() {
   $("use-time").addEventListener("change", () => {  // unticked: no time column sent, the column kept for a tick back
     if ($("use-time").checked && !$("time-user").value.trim()) $("time-user").value = "timestamp";  // the usual name, to confirm or change
     $("time").value = $("use-time").checked ? $("time-user").value : "";
-    if ($("use-time").checked) $("time-user").focus();
+    if ($("use-time").checked) $("time-user").select();  // typing replaces the proposed name
   });
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
@@ -469,7 +469,7 @@ function init() {
   });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
   on($("batches"), ".ds-doc", (el, e) => { e.stopImmediatePropagation(); $("doc-file").dataset.upload = el.dataset.doc; $("doc-file").click(); });
-  on($("batches"), ".ds-doc-x", (el, e) => { e.stopImmediatePropagation(); setDoc(el.dataset.docClear, ""); });
+  on($("batches"), ".ds-doc-x", (el, e) => { e.stopImmediatePropagation(); setDoc(el.dataset.docClear, null); });
   $("doc-file").addEventListener("change", async () => {  // the picked document's text, then the input empty for the same file again
     const f = $("doc-file").files[0]; $("doc-file").value = "";
     if (f) setDoc($("doc-file").dataset.upload, await f.text());

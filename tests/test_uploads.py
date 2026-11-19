@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import upload_levels
+from conftest import geo_frame, upload_levels
 from fastapi.testclient import TestClient
 
 from insight_contracts import dataset_node_id
@@ -153,3 +153,44 @@ def test_a_geo_level_reads_a_declared_source_column_and_keeps_the_derived_phrase
     (offered,) = geo_datasets(engine.ws)
     assert offered["glossary"]["points"] == "number of events in the map cell"  # the map's suggestions read the derived phrases
     assert graph.nodes[dataset_node_id(fine["dataset_id"])]["props"]["user_glossary"] == json.loads(glossary)
+
+
+def test_an_uploads_document_goes_on_every_reading_at_once_and_on_a_level_added_later(engine, tmp_path, monkeypatch):
+    """``PATCH /api/datasets/{upload id}`` with ``metadata`` (docs/08_interface.md §8.1): ``busy`` while a level of the upload
+    is still to run; every READY reading or none (a failed write puts the records and the graph back); a level the upload
+    gains later takes the document, the levels it already holds are skipped without a word about it; ``supersedes`` stays
+    a dataset's, and a dataset without an upload still supersedes another."""
+    path = tmp_path / "points.csv"
+    geo_frame(3).to_csv(path, index=False)
+    with path.open("rb") as f:
+        queued = engine.upload(path.name, f, geo="auto@8,7")
+    up, doc = engine.process(queued[0]["batch_id"])["upload_id"], "About\n\nDescription: planted\n\nColumns:\n\nchannel\n  Description: how\n"
+    with pytest.raises(PipelineError) as busy:
+        engine.update_dataset_metadata(up, metadata=doc)
+    assert busy.value.code == "busy"  # level 7 still to run would miss it
+    engine.process(queued[1]["batch_id"])
+    graph, save, saved = engine.ws.load_graph(), engine.ws.save_batch, []
+
+    def full_disk(record):
+        saved.append(record["batch_id"])
+        if len(saved) == 2:
+            raise OSError("disk full")
+        save(record)
+
+    monkeypatch.setattr(engine.ws, "save_batch", full_disk)
+    with pytest.raises(OSError):
+        engine.update_dataset_metadata(up, metadata=doc)
+    monkeypatch.undo()
+    assert not any(b.get("metadata_doc") for b in engine.ws.list_batches()) and engine.ws.load_graph() == graph  # all or none
+    assert len(engine.update_dataset_metadata(up, metadata=doc)["datasets"]) == 2
+    with pytest.raises(PipelineError) as refused:
+        engine.update_dataset_metadata(up, supersedes="")
+    assert refused.value.code == "invalid_options"
+    *skipped, table = upload_levels(engine, path, geo="auto@8,7", table=True)
+    assert [b["status"] for b in skipped] == ["SKIPPED", "SKIPPED"] and not any("metadata" in w for b in skipped for w in b["warnings"])
+    assert table["status"] == "READY" and set(table["metadata_doc"]["columns"]) == {"channel"}  # the upload's document, fitted
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    geo_frame(4).drop(columns=["latitude", "longitude"]).to_csv(a, index=False)
+    geo_frame(5).drop(columns=["latitude", "longitude"]).to_csv(b, index=False)
+    old, new = engine.ingest_file(a), engine.ingest_file(b)
+    assert "upload_id" not in new and engine.update_dataset_metadata(new["dataset_id"], supersedes=old["dataset_id"])["superseded"]

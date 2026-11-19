@@ -131,16 +131,18 @@ function uploadDoc(levels, busy) {
   const off = busy ? " disabled" : "", has = n > 0 || !!about;
   const button = `<button type="button" class="ds-doc ds-icon" data-doc="${up}"${off} aria-label="${has ? "Замінити документ метаданих" : "Додати документ метаданих"}" ` +
     `title="${busy ? "Іде обробка: зачекайте" : has ? "Замінити документ метаданих" : "Додати документ метаданих (.md, .txt): опис датасету й колонок для відповідей"}">${ICON.doc}</button>`;
-  const line = has ? `<div class="ds-src ds-docs">${chip("", `документ · ${plural(n, "колонка", "колонки", "колонок")}`, about || "Документ метаданих: опис колонок для відповідей")}` +
-    `<button type="button" class="ds-doc-x" data-doc-clear="${up}"${off} aria-label="Прибрати документ метаданих" title="Прибрати документ метаданих">×</button></div>` : "";
+  const line = has ? `<div class="ds-src ds-docs">${chip("", `документ · ${plural(n, "колонка", "колонки", "колонок")}`, about || "Документ метаданих: довідка про колонки для відповідей")}` +
+    `<button type="button" class="ds-doc-x" data-doc-clear="${up}"${off} aria-label="Прибрати документ метаданих" title="${busy ? "Іде обробка: зачекайте" : "Прибрати документ метаданих"}">×</button></div>` : "";
   return [button, line];
 }
 
 async function setDoc(upload, text) {
-  /* the upload's metadata document added or replaced, or removed (""), on every reading of it at once */
+  /* the upload's metadata document added or replaced, or removed (null), on every reading of it at once */
+  if (text !== null && !text.trim()) { setUploadMsg("Файл порожній: документ метаданих не змінено.", true); return; }
   try {
-    await api(`/api/datasets/${encodeURIComponent(upload)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ metadata: text }) });
-    setUploadMsg(text ? "Документ метаданих додано." : "Документ метаданих прибрано.");
+    const r = await api(`/api/datasets/${encodeURIComponent(upload)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ metadata: text ?? "" }) });
+    setUploadMsg(text === null ? "Документ метаданих прибрано." : r.metadata_columns ? `Документ метаданих додано: описано ${plural(r.metadata_columns, "колонку", "колонки", "колонок")} датасету.`
+      : "Документ метаданих додано, але жодна його колонка не збіглася з колонками датасету.", text !== null && !r.metadata_columns);
   } catch (e) { setUploadMsg(`Документ метаданих не прийнято: ${e.message}`, true); }
   await refreshBatches();
 }
@@ -318,7 +320,7 @@ function setRole(r, layerOnly = false) {
   $("geo").disabled = r === "table";  // held for a switch back: a shipped set keeps its level
   if (r && r !== "table" && !$("geo").value.trim()) $("geo").value = r === "layer" ? "auto" : "auto@auto";
   $("upload-btn").textContent = r === "layer" ? "Зберегти шар" : "Аналізувати";
-  syncTable(); mirrorUser();
+  syncTable(); $("geo-user").value = $("geo").value;
 }
 
 const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -326,7 +328,7 @@ function renderTypes(box, input, types) {
   /* a checkbox per value under its column's name, with its events, kept in ``input`` as column=value, …; without types the
      field is typed by hand */
   box.innerHTML = Object.entries(types).map(([col, values]) => `<div class="tp-col"><div class="tp-name">${esc(human(col))}</div>` +
-    Object.entries(values).map(([v, n]) => `<label class="tp-opt"><input type="checkbox" class="tp" data-v="${esc(`${col}=${v}`)}">${esc(human(v))}<span class="muted">${num(n, 0)}</span></label>`).join("") + `</div>`).join("");
+    Object.entries(values).map(([v, n]) => `<label class="tp-opt"><input type="checkbox" class="tp" data-v="${esc(`${col}=${v}`)}">${esc(human(v))}<span class="muted">${plural(n, "подія", "події", "подій")}</span></label>`).join("") + `</div>`).join("");
   box.closest(".types").classList.toggle("has-types", box.children.length > 0);
   box.parentElement.open = false;
   syncTypes(box, input);
@@ -417,7 +419,7 @@ async function hideLayer(upload, on) {  // PATCH /api/uploads/{id}: the server h
 
 async function upload() {
   const f = $("file").files[0], sample = $("sample").value; if (!f && !sample) return;
-  const fd = new FormData(), geo = $("geo").disabled ? "" : $("geo").value;
+  const fd = new FormData(), geo = $("geo").disabled ? "" : $("geo").value.trim() || ($("role-events").checked ? "auto@auto" : "");  // events need a level
   if (f) fd.append("file", f); else fd.append("demo", sample);  // a shipped dataset: the server reads its own copy
   fd.append("bins", $("bins").value); fd.append("categories", $("categories").value); fd.append("geo", geo);
   if ($("time").value.trim()) { fd.append("time", $("time").value); fd.append("tz", $("tz").value); }  // a layer's too: its span, for a run's time rule
