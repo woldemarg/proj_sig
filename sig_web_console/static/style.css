@@ -121,7 +121,7 @@ details.adv[open] > summary { margin-bottom: 8px; }
 .link-opt { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .link-opt:hover, .link-opt.on { border-color: var(--accent); background: var(--accent-soft); } .link-opt:disabled { opacity: .5; cursor: progress; }
 .link-opt .muted { font-size: 12px; white-space: nowrap; }
-.link-dev { margin-bottom: 6px; } #link-drop { margin: 8px 0 4px; } #link-drop:has(input:disabled) { opacity: .5; cursor: progress; }
+.link-ring { margin-bottom: 6px; } #link-drop { margin: 8px 0 4px; } #link-drop:has(input:disabled) { opacity: .5; cursor: progress; }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--r-xs); font-size: 11.5px; font-weight: 620; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.bad { background: var(--bad-soft); color: var(--bad); }
@@ -438,6 +438,6 @@ a.cite:hover { background: var(--accent); color: var(--accent-ink); }
 .tp-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; } .tp-sum.none { color: var(--muted); }
 .tp-box { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-lg); }
 .tp-name { padding: 6px 8px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.tp-opt { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--r-xs); font-size: 13px; cursor: pointer; } .tp-opt:hover { background: var(--surface-2); }
+.tp-opt { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--r-xs); font-size: 13px; cursor: pointer; } .tp-opt:hover { background: var(--surface-2); } .tp-opt .muted { margin-left: auto; }
 .tp { accent-color: var(--accent); margin: 0; }
 body:not(.dev) .types.has-types > .field { display: none; }  /* picked from the list; the developer may still type */

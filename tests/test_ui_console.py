@@ -189,7 +189,7 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
-        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the dialog's types and disk
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: every shipped layer set in the list
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
@@ -471,8 +471,4 @@ def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_wi
         page.evaluate("runLink({ layer: 'L' })")
         page.wait_for_function("$('link-msg').textContent === 'refused'", timeout=10000)
         assert page.evaluate("[$('link-counts').value, $('link-ring').value]") == ["kind=a", "1"]  # as picked
-        shares = """profileTypes({ profile: { numerics: ["share_Primary Type_THEFT", "share_this_is_x_yes"], geo: { glossary: {
-          "share_Primary Type_THEFT": "share of the cell's events whose Primary Type is THEFT",
-          "share_this_is_x_yes": "share of the cell's events whose this is x is yes (every such event also has: a b)" } } } })"""
-        assert page.evaluate(shares) == {"Primary Type": ["THEFT"], "this_is_x": ["yes"]}
     assert not errors, errors

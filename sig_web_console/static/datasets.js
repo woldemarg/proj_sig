@@ -296,26 +296,12 @@ function setRole(r, layerOnly = false) {
   syncTable();
 }
 
-// the types a dataset holds for *більше подій* (docs/08_interface.md §8.2): column -> values, picked in a drop-down list
-function profileTypes(b) {
-  /* a mined geo level's shares, share_<column>_<value>: the split whose words the share's glossary states exactly
-     (spatial: "share of the cell's events whose <column, _ as space> is <value>"), so a column with a space or an "is" holds */
-  const p = b.profile || {}, words = (p.geo || {}).glossary || {}, out = {};
-  for (const key of (p.numerics || []).filter((k) => k.startsWith("share_"))) {
-    const rest = key.slice(6), text = words[key] || "";
-    for (let i = rest.indexOf("_"); i > 0; i = rest.indexOf("_", i + 1)) {
-      const col = rest.slice(0, i), value = rest.slice(i + 1), said = `share of the cell's events whose ${human(col)} is ${value}`;
-      if (text === said || text.startsWith(`${said} `)) { (out[col] ||= []).push(value); break; }
-    }
-  }
-  return out;
-}
-
 const typesOf = (input) => input.value.split(",").map((s) => s.trim()).filter(Boolean);
 function renderTypes(box, input, types) {
-  /* a checkbox per value under its column's name, kept in ``input`` as column=value, …; without types the field is typed by hand */
+  /* a checkbox per value under its column's name, with its events, kept in ``input`` as column=value, …; without types the
+     field is typed by hand */
   box.innerHTML = Object.entries(types).map(([col, values]) => `<div class="tp-col"><div class="tp-name">${esc(human(col))}</div>` +
-    values.map((v) => `<label class="tp-opt"><input type="checkbox" class="tp" data-v="${esc(`${col}=${v}`)}">${esc(human(v))}</label>`).join("") + `</div>`).join("");
+    Object.entries(values).map(([v, n]) => `<label class="tp-opt"><input type="checkbox" class="tp" data-v="${esc(`${col}=${v}`)}">${esc(human(v))}<span class="muted">${num(n, 0)}</span></label>`).join("") + `</div>`).join("");
   box.closest(".types").classList.toggle("has-types", box.children.length > 0);
   box.parentElement.open = false;
   syncTypes(box, input);
@@ -326,7 +312,7 @@ function syncTypes(box, input) {
   const chosen = typesOf(input), sum = box.parentElement.querySelector(".tp-sum");
   box.querySelectorAll(".tp").forEach((el) => { el.checked = chosen.includes(el.dataset.v); });
   const byCol = Map.groupBy(chosen, (t) => t.slice(0, t.indexOf("=")));
-  sum.textContent = chosen.length ? [...byCol].map(([col, ts]) => `${human(col)}: ${ts.map((t) => human(t.slice(col.length + 1))).join(", ")}`).join(" · ") : "жодного — лише склад подій";
+  sum.textContent = chosen.length ? [...byCol].map(([col, ts]) => `${human(col)}: ${ts.map((t) => human(t.slice(col.length + 1))).join(", ")}`).join(" · ") : "не обрано — перевіримо лише склад подій";
   sum.classList.toggle("none", !chosen.length);
 }
 
@@ -357,7 +343,7 @@ function openLink(batchId) {
   $("link-or").hidden = !opts.length; $("link-or").toggleAttribute("data-dev", opts.every((o) => o.hasAttribute("data-dev")));  // no ready layer: no "or"
   $("link-file").disabled = false; pickLink(null);
   $("link-counts").value = (b.count_values || []).filter((c) => c.status === "ok").map((c) => `${c.column}=${c.value}`).join(", ");  // the base's, to confirm or change
-  renderTypes($("link-types"), $("link-counts"), profileTypes(b));
+  renderTypes($("link-types"), $("link-counts"), (b.profile?.geo || {}).types || {});  // the base level's values, by events
   $("link-dialog").showModal();
 }
 

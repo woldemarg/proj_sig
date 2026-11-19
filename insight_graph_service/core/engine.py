@@ -586,7 +586,7 @@ class Engine:
             **({"points": loaded.points} if loaded.points else {}),  # signed with the profile: what places a table level
         }
         if loaded.spatial:
-            record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})
+            record["profile"]["geo"] = geo_views.geo_profile(loaded, self.settings.miner) | ({"levels": selection} if selection else {})
         if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
             record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
             kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}

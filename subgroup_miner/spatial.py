@@ -94,6 +94,7 @@ class SpatialContext:
     events: np.ndarray | None = None  # per cell its events as counted: a share's test weighs them (never the zoned ``points``)
     type_counters: list[str] = field(default_factory=list)  # the per-type counters asked (``count_<column>_<value>``)
     levels: dict[str, tuple[str, str]] = field(default_factory=dict)  # a share or a per-type counter -> (its column, its value)
+    types: dict[str, dict[str, int]] = field(default_factory=dict)  # categorical column -> its values' located events, most first
 
 
 def parse_geo(spec: str, default_resolution: int) -> tuple[str, int]:
@@ -557,6 +558,7 @@ def build_cells(
         events=counts,  # the frame copies its columns; the zone rebinds them, never writes into these
         type_counters=[c for cs in counted.values() for c in cs],
         levels=levels,
+        types={col: dict(zip(map(str, order), np.bincount(c[c >= 0], minlength=len(order)).tolist())) for col, (c, order) in profile.codes.items()},
     )
     return table, ctx, warnings
 
