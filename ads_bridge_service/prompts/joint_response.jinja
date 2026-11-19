@@ -1,19 +1,18 @@
 {#- The final report's prompt over the ADS report; <User_Domain_Knowledge> holds the zone's methodology and
     the SIG glossary; <grounding_rules> rule 8 keeps the report's section of established insights. -#}
-{%- set is_uk = (query_language | default("en") | lower) == "uk" -%}
-{%- set lang = "Ukrainian" if is_uk else "English" -%}
-{%- set results_heading = "## Результати аналізу" if is_uk else "## Analysis results" -%}
-{%- set method_heading = "## Методологія" if is_uk else "## Methodology" -%}
-{%- set pronouns = "`я`, `мене`, `мій`" if is_uk else "`I`, `me`, `my`" -%}
-{%- set first_person = "Я" if is_uk else "I" -%}
-{%- set opener_verbs = "зіставив, дослідив, проаналізував, узагальнив, оцінив, порівняв, перевірив, простежив" if is_uk else "compared, examined, reviewed, summarized, assessed, ranked, checked, traced" -%}
-{%- set key_example = "`category` -> `категорія`" if is_uk else "`категорія` -> `category`" -%}
-{%- set no_period = "період не вказано" if is_uk else "period not specified" -%}
-{%- set units = "`km` -> `км`, `h` -> `год`" if is_uk else "standard English abbreviations (`km`, `h`)" -%}
-{%- set num_format = "Thousands separator is a space (`1 193`), decimal mark a point as in the report (`39.4%`), consistently." if is_uk else "Thousands separator is a comma (`1,193`), decimal mark a point (`39.4%`), consistently." -%}
-{%- set hist_col = "`Гістограма [назва величини в родовому відмінку]` (e.g. `Гістограма кількості`)" if is_uk else "`Histogram of [metric name]` (e.g. `Histogram of count`)" -%}
-{%- set summary_labels = "`Всього`, `Разом`, `Total`" if is_uk else "`Total`, `Overall`, `Всього`" -%}
-{%- set empty_reply = "Не вдалося виконати аналіз, звіт порожній." if is_uk else "Failed to perform analysis, the report is empty." -%}
+{%- set lang = "Ukrainian" -%}
+{%- set results_heading = "## Результати аналізу" -%}
+{%- set method_heading = "## Методологія" -%}
+{%- set pronouns = "`я`, `мене`, `мій`" -%}
+{%- set first_person = "Я" -%}
+{%- set opener_verbs = "зіставив, дослідив, проаналізував, узагальнив, оцінив, порівняв, перевірив, простежив" -%}
+{%- set key_example = "`category` -> `категорія`" -%}
+{%- set no_period = "період не вказано" -%}
+{%- set units = "`km` -> `км`, `h` -> `год`" -%}
+{%- set num_format = "Thousands separator is a space (`1 193`), decimal mark a point as in the report (`39.4%`), consistently." -%}
+{%- set hist_col = "`Гістограма [назва величини в родовому відмінку]` (e.g. `Гістограма кількості`)" -%}
+{%- set summary_labels = "`Всього`, `Разом`, `Total`" -%}
+{%- set empty_reply = "Не вдалося виконати аналіз, звіт порожній." -%}
 
 <assistant_role>
 
@@ -50,17 +49,16 @@ the answer language; always drop seconds, fractional seconds, and the timezone.
 
 - By default, keep only the calendar date — day, month, year — in prose, bullets, and table
   cells. A range keeps both dates: `from 2026-08-12T00:00:00 to 2026-09-04T20:51:21.120000` →
-  {% if is_uk %}«з 12 серпня по 4 вересня 2026 року»{% else %}«from 12 August to 4 September 2026»{% endif %}.
+  «з 12 серпня по 4 вересня 2026 року».
 - Keep the time of day (hours and minutes) only when it carries meaning for the query or the
   finding: the user asked about a time window, or the report analyses hours of the day, shifts,
   or day/night activity. Then write it as `HH:MM` after the date:
   `2026-08-14T14:00:00Z … 2026-08-14T18:00:00Z` →
-  {% if is_uk %}«14 серпня 2026 року з 14:00 до 18:00»{% else %}«14 August 2026, 14:00 to 18:00»{% endif %}.
+  «14 серпня 2026 року з 14:00 до 18:00».
 
 Time and timezone are not figures to preserve; removing them by default is required, not an
 omission. Dates already written in words follow the rules below.
 
-{% if is_uk -%}
 Localize every date, month, weekday, quarter, and fiscal label into natural Ukrainian, including
 in table cells and bold text. Numbers never change; only words and their order do.
 
@@ -83,12 +81,6 @@ February, March, April, May, June, July, August, September, October, November, D
 Feb, Mar, Apr, Jun, Jul, Aug, Sep, Sept, Oct, Nov, Dec, Monday, Tuesday, Wednesday, Thursday,
 Friday, Saturday, Sunday, Mon, Tue, Wed, Thu, Fri, Sat, Sun, Q1, Q2, Q3, Q4, H1, H2, FY, YTD,
 YoY, MoM, WoW, MTD, QTD.
-{%- else -%}
-Write every date, month, weekday, quarter, and fiscal label in natural English, including inside
-table cells: «14 October 2024», «9–31 August 2026», «Q3 2024», «2026-08-15» → «15 August 2026».
-Numbers never change. Render Ukrainian temporal words in English («15 серпня» → «15 August»,
-«у жовтні» → «in October»).
-{%- endif %}
 
 </temporal_localization>
 
@@ -251,11 +243,7 @@ If the report is empty or missing, ignore all other rules and reply exactly:
 {{ report }}
 </Analytical_Report>
 
-{% if is_uk -%}
 Language: Ukrainian. Answer in Ukrainian even if the report above is in English. Dates and months
 in Ukrainian; names and codes such as `OPEN-SUN` unchanged.
-{%- else -%}
-Language: English. Answer in English even if the report above contains Ukrainian.
-{%- endif %}
 
 Answer:
