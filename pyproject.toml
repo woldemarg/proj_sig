@@ -11,7 +11,7 @@ miner = [
     "numpy>=2.2",
     "pandas>=2.2",
     "scipy>=1.11",
-    "pysubgroup==0.7.7",
+    "pysubgroup==2.0.0",
     "h3>=4.0",
     "pyarrow>=15",  # .parquet uploads
 ]
@@ -47,12 +47,12 @@ dev = [
     { include-group = "narrator" },
     { include-group = "broker" },
     { include-group = "ads" },
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-xdist==3.8.0",  # -n auto in pytest.ini: the suite across every core
-    "ruff==0.16.9",
-    "playwright==1.63.0",  # optional: the browser smoke test (uses an installed Chromium)
+    "ruff==0.17.5",
+    "playwright==1.65.2",  # optional: the browser smoke test (uses an installed Chromium)
     "rdflib==7.6.0",  # the GeoSPARQL export test (tests/test_spatial.py)
-    "pyshacl==0.40.1",  # its SHACL validation against tests/vendor/geosparql_validator.ttl
+    "pyshacl==0.40.2",  # its SHACL validation against tests/vendor/geosparql_validator.ttl
     "mypy==2.4.1",
 ]
 
