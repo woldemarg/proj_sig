@@ -2,7 +2,7 @@
 # The web console (docs/08_interface.md): nginx serving the static UI and routing /api/ to the two services.
 # Build context: the repository root.
 
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine
 COPY sig_web_console/nginx.conf /etc/nginx/conf.d/default.conf
 COPY sig_web_console/static /usr/share/nginx/html
 # the base image's unprivileged nginx user, stated so scanners see it
