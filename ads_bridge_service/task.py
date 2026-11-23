@@ -11,6 +11,7 @@ MAX_INSIGHTS = 10  # the graph's evidence holds about ten; a question about seve
 MIN_ZONE_INSIGHTS = 3  # a zone's share of them, however many zones the question names
 ZONES_FILE = "zones.csv"  # which rows each zone of the conversation holds, by table and row_id
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
+METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
 
 SIG_TERMS = (
@@ -188,7 +189,13 @@ def _table_line(t: dict[str, Any]) -> str:
     part = f", only its rows where {t['where']}" if t.get("where") else ""  # a filtered reading of the file
     disk = {0: "per cell", 1: "per cell with its six neighbours"}.get(t.get("ring", 0), f"per cell with its {t.get('ring')} rings of neighbours")
     span = f", only its points within {t['window'][0]}..{t['window'][1]}" if t.get("window") else ""  # an aligned run's window
-    layer = f"; the points SIG's condition context_{t['layer']}_band counts {disk}{span}" if t.get("layer") else ""
+    grid = (  # the run counted the layer on its own cells; the export gives every table the base table's (one join column)
+        f"; SIG counted them on the run's H3 resolution {t['resolution']} grid; their h3 columns here are the main table's resolution "
+        f"{t['cells_at']}, so a cell here is not the place that condition counted"
+        if t["resolution"] != t["cells_at"]
+        else ""
+    )
+    layer = f"; the points SIG's condition context_{t['layer']}_band counts {disk}{span}{grid}" if t.get("layer") else ""
     return f"{t['df']} ({t['file']}: {t['filename']}{part}{counted}{layer})"
 
 
@@ -265,8 +272,9 @@ def _zones_text(base: dict[str, Any], tables: list[dict[str, Any]]) -> str:
     return (
         f"\nZones: df_zones ({ZONES_FILE}) lists, for every zone of this conversation, the rows it holds: zone_id, table (a table's file "
         "name), row_id, aoi_zone = inside (the point lies inside the zone's polygon) | adjacent (outside it, in the zone's cells or their "
-        f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} has no point: it is in no zone and in no comparison group. Any "
-        "other row not listed for a zone is far from it. To read a table against zone Z, drop its rows without a point, take the "
+        f"ring-1 neighbours). A row with an empty h3_r{base['cells_at']} (NaN once pandas reads the CSV) has no point: it is in no zone "
+        "and in no comparison group. Any other row not listed for a zone is far from it. To read a table against zone Z, drop its "
+        f"rows without a point (h3_r{base['cells_at']} NaN or empty) before anything else, take the "
         "df_zones rows with zone_id == Z and table == the table's file, left-join them to the table on row_id and fill a missing "
         "aoi_zone with 'far'. df_zones lists this question's tables only "
         f"({', '.join(t['file'] for t in tables)}); a table an earlier question sent is not placed in the zones. "
@@ -305,7 +313,7 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                     "- row_id: a row's number in its table, the key df_zones joins on.",
                     f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its "
                     "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point "
-                    f"not listed is far, a row without one (empty h3 cell) is in no group. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+                    f"not listed is far, a row without one (an empty h3 cell, NaN in pandas) is in no group, never far. It lists the tables {', '.join(t['file'] for t in tables)} only.",
                 ]
                 if zones
                 else ["- No zone is drawn in this conversation: the questions are about the whole map."]
@@ -314,6 +322,26 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
             f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
             f"- SIG's findings come from: {sources}. The graph holds other datasets too; a finding from another file is context, not a fact about the base layer.",
         ]
+    )
+
+
+def build_metadata_md(tables: list[dict[str, Any]], docs: dict[str, dict[str, Any]]) -> str:
+    """The uploader's metadata documents of the tables sent (``docs``: dataset id -> ``{dataset, columns}``; a layer's points
+    have none of their own): each file's description and its columns' meanings as declared. Sent with every question, so
+    a document taken off replaces the copy ADS holds (its API deletes no .md)."""
+    parts: list[str] = []
+    for t in tables:
+        doc = {} if t.get("layer") else docs.get(t["dataset_id"]) or {}
+        about = (doc.get("dataset") or {}).get("description")
+        if not (doc.get("columns") or about):
+            continue
+        parts += ["", f"## {t['file']} ({t['filename']})", *([about] if about else [])]
+        for col, f in (doc.get("columns") or {}).items():
+            meaning = f.get("assistant_context") or f.get("description") or ""
+            title = f" ({f['title_uk']})" if f.get("title_uk") and f["title_uk"] != col else ""
+            parts.append(f"- {col}{title}{': ' + meaning if meaning else ''}")
+    return (
+        "\n".join(["# Columns as the uploader describes them", *(parts or ["", "No table of this question has a document of its uploader."])]) + "\n"
     )
 
 

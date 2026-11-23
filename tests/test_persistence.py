@@ -349,12 +349,12 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv,
     period = parse_period("2031-03-24", "2031-03-30")
     reads = (
         engine.export_geosparql,
-        engine.geo_datasets,
-        lambda: engine.geo_overlay("x"),
-        lambda: engine.geo_cells_pack("x"),
-        lambda: engine.geo_period_counts("x", period),
-        lambda: engine.geo_table_rows("x"),
-        lambda: engine.geo_zone_rows("x", []),
+        lambda: engine.maps().datasets(),
+        lambda: engine.maps().overlay("x"),
+        lambda: engine.maps().cells_pack("x"),
+        lambda: engine.maps().period_counts("x", period),
+        lambda: engine.maps().table_rows("x"),
+        lambda: engine.maps().zone_rows("x", []),
     )  # the map and its exports too
     for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:

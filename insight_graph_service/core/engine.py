@@ -230,12 +230,18 @@ class Engine:
         return self._search(question, state, as_of, period, **zone).payload() if state.graph.insights else empty_payload(question)
 
     def _search(
-        self, question: str, state: CommittedState, as_of: datetime | None = None, period: tuple[datetime, datetime] | None = None, **zone: Any
+        self,
+        question: str,
+        state: CommittedState,
+        as_of: datetime | None = None,
+        period: tuple[datetime, datetime] | None = None,
+        period_only: bool = False,  # the period beside the text is its only one (search)
+        **zone: Any,
     ) -> SearchResult:
         start = time.perf_counter()
         self.ws.check_representation(self.encoder.spec)  # query and stored vectors must share one frame
         hidden = frozenset() if zone.pop("include_hidden", False) else uploads.hidden_datasets(self.ws.list_batches())  # model A
-        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden)
+        found = search(question, state, self.encoder, self.settings.query, self.place_scores(state, **zone), as_of, period, hidden, period_only)
         found.seconds = time.perf_counter() - start
         return found
 
@@ -250,12 +256,12 @@ class Engine:
             attractors={a.id: a.centroid for a in ontology.attractors()},
         )
 
-    def _derive(self, ontology: LatentOntology, pending: dict[str, Any] | None = None) -> tuple[dict[str, Any], CommittedState]:
+    def _derive(self, ontology: LatentOntology, pending: Sequence[dict[str, Any]] = ()) -> tuple[dict[str, Any], CommittedState]:
         """The snapshot of the workspace's state (saved) and the read state of the same journal read; ``pending`` (the
-        batch being committed) counts as READY. Runs inside a write, before its commit point."""
+        batches being committed) count as READY. Runs inside a write, before its commit point."""
         batches = {b["batch_id"]: b for b in self.ws.list_batches()}
-        if pending is not None:
-            batches[pending["batch_id"]] = {**pending, "status": "READY"}
+        for p in pending:
+            batches[p["batch_id"]] = {**p, "status": "READY"}
         records, vectors = self.ws.patterns(), self.ws.vectors()
         geo = []  # every READY geo dataset's stored cells and extents: the spatial plane is derived, never journaled
         for b in batches.values():
@@ -427,6 +433,7 @@ class Engine:
         }
         if table:  # the geo and the table levels share bins and categories: each applies those it has
             options["strict"] = False
+        doc = uploads.upload_doc(self.ws.list_batches(), upload_id) if metadata is None else None  # a new reading takes the upload's
         return [  # the table level leaves the point columns out
             self.submit(
                 path,
@@ -438,6 +445,7 @@ class Engine:
                 count_values=counts if g else (),
                 baseline=baseline if g else None,
                 context_ring=ring,
+                inherited={"metadata_doc": doc} if doc else None,
                 **options,
             )
             for g, level in levels
@@ -586,14 +594,15 @@ class Engine:
             **({"points": loaded.points} if loaded.points else {}),  # signed with the profile: what places a table level
         }
         if loaded.spatial:
-            record["profile"]["geo"] = geo_views.geo_profile(loaded) | ({"levels": selection} if selection else {})
+            record["profile"]["geo"] = geo_views.geo_profile(loaded, self.settings.miner) | ({"levels": selection} if selection else {})
         if unknown := sorted(set(record.get("indicators", {})) - set(result.profile.numerics)):
             record["warnings"].append(f"indicators: no metric named {unknown} in the dataset (its metrics: {result.profile.numerics}); dropped")
             kept = {k: v for k, v in record.pop("indicators").items() if k not in unknown}
             record.update({"indicators": kept} if kept else {})
+        own = uploads.from_upload(record, self.ws.list_batches())  # nobody sent it: its columns this level lacks go unsaid
         if declared := {k: record.pop(k) for k in ["user_glossary", "metadata_doc"] if k in record}:  # kept to the columns the level holds
             fitted, warnings = uploads.fit_declared(declared, [*result.profile.numerics, *result.profile.categoricals], frame=loaded.frame)
-            record["warnings"] += warnings
+            record["warnings"] += [w for w in warnings if not (own and w.startswith("metadata:"))]
             record.update({k: v for k, v in fitted.items() if v})
         self.ws.save_profile(record["dataset_id"], record["profile"])
         return result
@@ -661,7 +670,7 @@ class Engine:
                 self.ws.record_representation(mined.spec)
                 self.ws.commit_batch_seq(seq)
                 record["metadata_digest"] = metadata_digest(record)  # what the graph reads of the dataset, signed
-                snapshot, state = self._derive(ontology, pending=record)  # loaded before the commit point
+                snapshot, state = self._derive(ontology, pending=[record])  # loaded before the commit point
                 if state.catalog is None:
                     record["warnings"].append("literal catalog not built at the commit (see the service log); the first question builds it")
 
@@ -674,56 +683,15 @@ class Engine:
             self.ws.save_batch(record)  # the commit point: Workspace.recover keeps the writes of a READY batch
         return snapshot, state
 
-    # the map's reads (core/geo_views.py): refused on a degraded workspace, each over the graph of one commit
-
     @_healthy
-    def geo_datasets(self) -> list[dict[str, Any]]:
-        return geo_views.geo_datasets(self.ws)
-
-    @_healthy
-    def geo_cells_pack(self, dataset_id: str) -> bytes:
-        return geo_views.geo_cells_pack(self.ws, dataset_id)
+    def maps(self) -> geo_views.MapReads:
+        """The map's reads (core/geo_views.py) over the graph of one commit; refused on a degraded workspace."""
+        return geo_views.MapReads(self.ws, self.graph(), self.settings.thresholds, self.settings.geo_max_points)
 
     def _load(self, record: dict[str, Any], shared: bool = False) -> LoadedDataset:
         """The batch's stored file read with its own options, as its processing read it; ``shared`` for a level being
         processed, never for a re-check (``verify``), which reads the file as it is now."""
         return load_dataset(Path(record["source_path"]), self.settings.miner, shared=shared, **uploads.reading(record))
-
-    @_healthy
-    def geo_pattern(self, dataset_id: str, pattern_id: str, rings: bool = False, period: tuple[datetime, datetime] | None = None) -> dict[str, Any]:
-        return geo_views.geo_pattern(self.ws, self.graph(), dataset_id, pattern_id, self.settings.geo_max_points, rings, period)
-
-    @_healthy
-    def geo_table_rows(self, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
-        return geo_views.geo_table_rows(self.ws, dataset_id, resolution, layer)
-
-    @_healthy
-    def geo_zone_rows(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], **options: Any) -> tuple[bytes, dict[str, Any]]:
-        return geo_views.geo_zone_rows(self.ws, dataset_id, zones, **options)  # resolution, layer
-
-    @_healthy
-    def geo_overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
-        return geo_views.geo_overlay(self.ws, self.graph(), dataset_id, self.settings.thresholds, datasets)
-
-    @_healthy
-    def geo_period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
-        idle = geo_views.idle_insights(self.ws, self.graph(), dataset_id, period, self.settings.thresholds, datasets)
-        return geo_views.geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
-
-    @_healthy
-    def geo_projected(self, dataset_id: str) -> list[dict[str, Any]]:
-        return geo_views.geo_projected(self.ws, self.graph(), dataset_id, self.settings.thresholds)
-
-    @_healthy
-    def geo_window(
-        self,
-        dataset_id: str,
-        bbox: str,
-        level: int | None = None,
-        datasets: tuple[str, ...] = (),
-        period: tuple[datetime, datetime] | None = None,
-    ) -> dict[str, Any]:
-        return geo_views.geo_window(self.ws, self.graph(), dataset_id, bbox, self.settings.thresholds, level, datasets, period)
 
     def warm_map(self) -> None:
         """``geo_views.warm`` over the committed graph (the server queues it on the batch thread after a commit and at a
@@ -763,7 +731,8 @@ class Engine:
         record["status"] = "SKIPPED"
         record["duplicate_of"] = duplicate["batch_id"]
         record["warnings"].append(f"dataset already ingested in {duplicate['batch_id']} (idempotent skip)")
-        if any(record.get(k) for k in ("source", "reliability", "indicators", "user_glossary", "metadata_doc")):
+        own = uploads.from_upload(record, self.ws.list_batches())  # the upload's own document is no change asked
+        if any(record.get(k) for k in ("source", "reliability", "indicators", "user_glossary", *(() if own else ("metadata_doc",)))):
             record["warnings"].append(
                 "a re-upload does not change the source, reliability, indicators, glossary or metadata document:"
                 f" PATCH /api/datasets/{record['dataset_id']}"
@@ -834,47 +803,49 @@ class Engine:
         ``supersedes`` (None: unchanged, "": undeclared) on its batch record and recompile the snapshot: no new batch, no mining, the same pattern ids
         (docs/06_graph_and_storage.md §6.2). An indicator or a glossary entry for a column the dataset does not have is
         refused (a documented one is left out, with a warning), and so is a record that fails its metadata digest (``metadata_mismatch``); a dataset or upload it now supersedes is deleted in
-        the same transaction (docs/06_graph_and_storage.md §6.8)."""
+        the same transaction (docs/06_graph_and_storage.md §6.8). An upload id changes every READY reading of the upload,
+        its layer runs too, in one write (``supersedes`` stays a dataset's); ``busy`` while a batch of it is still to run."""
         changes = uploads.resolve_dataset_metadata(source, reliability, indicators)
         if supersedes is not None:
             changes["supersedes"] = uploads.check_target(self.ws.list_batches(), supersedes) or None
         with self._writing():
-            record = self.ws.ready_batch_for(dataset_id)
-            if record is None:
+            mine = [b for b in self.ws.list_batches() if dataset_id in (b.get("dataset_id"), b.get("upload_id"))]
+            if any(b["status"] not in TERMINAL for b in mine):  # a level or run still to come would miss the change
+                raise PipelineError("busy", f"{dataset_id} has a batch in progress")
+            records = [r for b in mine if b["status"] == "READY" and (r := self.ws.load_batch(b["batch_id"]))]  # copies to edit
+            if not records:
                 raise PipelineError("unknown_dataset", dataset_id)
-            if compute_metadata_integrity(record) == "mismatch":  # a PATCH would sign the forged fields as genuine
+            if any(compute_metadata_integrity(r) == "mismatch" for r in records):  # a PATCH would sign the forged fields as genuine
                 raise PipelineError(
                     "metadata_mismatch", f"{dataset_id}: its batch record no longer matches its digest; delete it and upload it again"
                 )
+            record = records[0]
             own = {b.get("dataset_id") for b in self.ws.list_batches() if record.get("upload_id") and b.get("upload_id") == record["upload_id"]}
+            if "supersedes" in changes and record["dataset_id"] != dataset_id:
+                raise PipelineError("invalid_options", f"supersedes is a dataset's: {dataset_id} is an upload")
             if changes.get("supersedes") and changes["supersedes"] in {dataset_id, record.get("upload_id"), *own}:
                 raise PipelineError("invalid_options", f"supersedes {changes['supersedes']}: {dataset_id} cannot replace itself or its own upload")
-            unknown = sorted(set(changes.get("indicators") or {}) - set(record["profile"].get("numerics", [])))
-            if unknown:
-                raise PipelineError("invalid_options", f"indicators: no metric named {unknown} in {dataset_id}")
-            columns = [*record["profile"].get("numerics", []), *record["profile"].get("categoricals", [])]
-            declared, warnings = uploads.resolve_declared_metadata(glossary, metadata, columns, strict=True)
-            changes.update(declared)
-            record.update(changes)
-            for cleared in [k for k, v in changes.items() if v is None]:
-                del record[cleared]
+            warnings = [w for r in records for w in uploads.apply_declared(r, changes, glossary, metadata)]
             replaced = uploads.targets(record, self.ws.list_batches(), own) if changes.get("supersedes") else None
             ontology = self.ontology()
-            # ponytail: a crash after save_batch and before the marker goes rolls the snapshot back under the new record until the next commit
             with self.ws.transaction({"dataset_id": dataset_id}, journal=bool(replaced)) as cp:
+                self.ws.keep_batches([r["batch_id"] for r in records], Path(cp["dir"]) / "removed")  # a rollback restores them
                 superseded = self._remove(*replaced, ontology, Path(cp["dir"]) / "removed") if replaced else None
                 if replaced:
                     ontology.save()
-                record["metadata_digest"] = metadata_digest(record)  # a PATCH signs the record again
-                snapshot, state = self._derive(ontology, pending=record)
-                self.ws.save_batch(record)
+                for r in records:
+                    r["metadata_digest"] = metadata_digest(r)  # a PATCH signs the record again
+                snapshot, state = self._derive(ontology, pending=records)
+                for r in records:
+                    self.ws.save_batch(r)
             return {
                 "dataset_id": dataset_id,
+                "datasets": [r["dataset_id"] for r in records],
                 "source": record.get("source"),
                 "reliability": record.get("reliability", "F"),
                 "indicators": record.get("indicators", {}),
                 "user_glossary": record.get("user_glossary", {}),
-                "metadata_columns": len((record.get("metadata_doc") or {}).get("columns", {})),
+                "metadata_columns": max(len((r.get("metadata_doc") or {}).get("columns", {})) for r in records),  # the most a reading holds
                 "supersedes": record.get("supersedes"),
                 **({"warnings": warnings} if warnings else {}),
                 **({"superseded": superseded} if superseded else {}),

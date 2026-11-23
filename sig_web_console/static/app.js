@@ -257,7 +257,8 @@ async function refreshHealth() {
     syncTabs();
     const [adsCls, adsTxt, adsWhy] = ads?.ok ? ["ok", "ADS активний", "ADS готовий: зону на мапі можна спитати в ADS"]
       : S.adsSeen ? ["bad", "ADS недоступний", `Не відповідає: ${ads ? [!ads.ads.reachable && "ADS", !ads.llm.reachable && "його LLM-шлюз"].filter(Boolean).join(", ") : "міст до ADS"}`]
-      : ["opt", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];
+      : ["", "ADS вимкнено", "Стек запущено без ADS (compose.ads.yaml)"];  // not opt: shown at any width, as the person needs it
+    S.adsTitle = `${adsTxt}. ${adsWhy}`;  // the zone's ADS button says the same when it is off
     const llm = chat.llm || {};
     const llmCls = llm.reachable ? (llm.model_available ? "ok" : "warn") : "bad";
     const model = String(llm.model || "LLM").split("/").pop();
@@ -327,6 +328,12 @@ function clearAnswer() {
   S.hl = null; clearHighlight(); $("clear-btn").hidden = true; renderSphere(); GeoMap.clear();
 }
 
+function pickDataset(id) {
+  /* the rail's filter: one dataset, or every one for "" */
+  if ($("dataset-filter").value === id) return;
+  $("dataset-filter").value = id; refreshBatches();
+}
+
 function syncTabs() {
   /* the chat's tabs: the developer's both (ADS once it answers or holds a conversation), the person's one chat */
   const shown = isDev() ? ["graph", ...(S.adsSeen || S.threads.ads.length ? ["ads"] : [])] : [personTab()];
@@ -364,7 +371,6 @@ function init() {
     if (keys) el.title = keys.map((k) => (TERMS[k] ? `${word(k)}: ${TERMS[k][1]}` : k)).join("\n");
   });
   // upload and a layer's file: click or drop
-  $("metadata").addEventListener("change", () => { $("metadata-name").textContent = ($("metadata").files[0] || {}).name || ""; });  // the native control speaks the browser's language
   $("file").addEventListener("change", () => {  // a file of one's own replaces a chosen shipped dataset
     const f = $("file").files[0];
     if (f) { if ($("sample").value) fillOptions(); $("sample").value = ""; $("sample-hint").textContent = ""; fileRole(f).then((r) => setRole(r)); } else setRole("");
@@ -375,12 +381,14 @@ function init() {
     ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
     drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length && !input.disabled) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event("change")); } });
   });
-  $("geo").addEventListener("input", syncTable);
-  $("time").addEventListener("input", mirrorTime);
+  $("geo").addEventListener("input", () => { syncTable(); mirrorUser(); });
+  $("geo-user").addEventListener("input", () => { $("geo").value = $("geo-user").value; syncTable(); });
+  $("time").addEventListener("input", mirrorUser);
   $("time-user").addEventListener("input", () => { $("time").value = $("time-user").value; });
   $("use-time").addEventListener("change", () => {  // unticked: no time column sent, the column kept for a tick back
+    if ($("use-time").checked && !$("time-user").value.trim()) $("time-user").value = "timestamp";  // the usual name, to confirm or change
     $("time").value = $("use-time").checked ? $("time-user").value : "";
-    if ($("use-time").checked) $("time-user").focus();
+    if ($("use-time").checked) $("time-user").select();  // typing replaces the proposed name
   });
   window.addEventListener("pageshow", syncTable);  // a value the browser restored fires no input
   $("upload-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
@@ -445,8 +453,8 @@ function init() {
   on(thread, ".insight-card .nb", (el) => reveal(el.dataset.id, { walk: true }));
   on(thread, ".insight-card .ic-theme", (el) => { inspect(el.dataset.id); GeoMap.openTheme(el.dataset.id); });
   on(thread, ".insight-card .ic-ask", (el) => {  // asked with its place: the cells it is drawn by on the open map, as a zone
-    const p = turnOf(el).insight.node.props, cells = GeoMap.placeOf(p.id);
-    ask(askAbout(p), cells.length ? { cells } : false);  // never with a zone selected for other questions
+    const d = turnOf(el).insight, cells = GeoMap.placeOf(d.node.id);
+    ask(askAbout(d), cells.length ? { cells } : false);  // never with a zone selected for other questions
   });
   on(thread, ".insight-card .ic-graph", async (el) => {  // a filter on another dataset would hide its node
     const p = turnOf(el).insight.node.props, sel = $("dataset-filter");
@@ -460,6 +468,12 @@ function init() {
     if (!box.dataset.loaded) { box.dataset.loaded = "1"; showRefusals(box).catch(() => { box.dataset.loaded = ""; }); }
   });
   on($("batches"), ".ds-link", (el, e) => { e.stopImmediatePropagation(); openLink(el.dataset.link); });
+  on($("batches"), ".ds-doc", (el, e) => { e.stopImmediatePropagation(); $("doc-file").dataset.upload = el.dataset.doc; $("doc-file").click(); });
+  on($("batches"), ".ds-doc-x", (el, e) => { e.stopImmediatePropagation(); setDoc(el.dataset.docClear, null); });
+  $("doc-file").addEventListener("change", async () => {  // the picked document's text, then the input empty for the same file again
+    const f = $("doc-file").files[0]; $("doc-file").value = "";
+    if (f) setDoc($("doc-file").dataset.upload, await f.text());
+  });
   on($("batches"), ".ds-hide", (el, e) => { e.stopImmediatePropagation(); hideLayer(el.dataset.hide, !!el.dataset.on); });
   $("link-form").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -477,7 +491,10 @@ function init() {
   $("upload-dialog").addEventListener("close", resetUpload);  // Esc too
   on($("batches"), ".ds.clickable", (el, e) => {  // a click on the row filters by it; one in its folded record does not
     if (e.target.closest(".ds-more")) return;
-    const sel = $("dataset-filter"); sel.value = sel.value === el.dataset.ds ? "" : el.dataset.ds; refreshBatches();
+    pickDataset($("dataset-filter").value === el.dataset.ds ? "" : el.dataset.ds);
+  });
+  document.querySelector(".rail").addEventListener("click", (e) => {  // a click off the rows and controls drops the dataset
+    if (!e.target.closest(".ds, .ds-src, button, a, input, summary, .msg, .col-resize")) pickDataset("");
   });
   on($("ins-table"), ".var-toggle", (el, e) => {  // a leader's variants shown or folded again, the row not opened
     e.stopImmediatePropagation();
@@ -512,13 +529,14 @@ function init() {
     if ((e.key !== "Enter" && e.key !== " ") || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.target.matches(KEYED)) return;
     e.preventDefault(); e.target.click();
   });
-  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer; a text field keeps its own
+  document.addEventListener("keydown", (e) => {  // Esc closes one layer a press: a polygon being drawn, the map's popup, its focus, its zone, the drawer, the picked dataset; a text field keeps its own
     if (e.key !== "Escape" || e.target.matches("textarea, input:not([type]), input[type=text], input[type=search]") || document.querySelector("dialog[open]")) return;  // a dialog closes itself
     if (!$("pb-pop").hidden) { Timeline.openPop(false); $("pb-label").focus(); return; }
     if (GeoMap.cancelDraw() || GeoMap.closePopup()) return;
     if (S.view === "map" && GeoMap.focused()) { GeoMap.unfocus(); return; }
     if (S.view === "map" && GeoMap.zones().length) { GeoMap.clearZones(); return; }
-    closeDrawer();
+    if (!$("drawer").hidden) { closeDrawer(); return; }
+    pickDataset("");
   });
   initResize();
   new ResizeObserver(([e]) => $("map-view").style.setProperty("--bottom", `${e.contentRect.height}px`)).observe(document.querySelector(".map-bottom"));  // the map's top panels end above its foot

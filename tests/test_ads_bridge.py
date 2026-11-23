@@ -3,7 +3,9 @@ report, against one stub that plays the narrator, the graph service's exports, t
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import time
 from typing import Any
 
@@ -17,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from ads_bridge_service.app import _PERIODS, create_app, error_code
 from ads_bridge_service.settings import AdsSettings
-from ads_bridge_service.task import name_tables
+from ads_bridge_service.task import build_metadata_md, name_tables
 from insight_contracts.wording import PERIOD
 
 POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2, 50.1], [30.0, 50.1], [30.0, 50.0]]]}
@@ -43,9 +45,15 @@ def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | No
 
 
 def upstream(
-    seen: dict[str, Any], polls: int = 1, report: str = "ADS: 3 events ![plot](/workspace/a.png)", final: str | None = FINAL, flaky: int = 0
+    seen: dict[str, Any],
+    polls: int = 1,
+    report: str = "ADS: 3 events ![plot](/workspace/a.png)",
+    final: str | None = FINAL,
+    flaky: int = 0,
+    hold: threading.Event | None = None,
 ) -> FastAPI:
-    """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is down."""
+    """``polls``: status reads until the job ends; ``flaky``: 502s before the first of them; ``final`` None: the gateway is
+    down; ``hold``: the gateway answers once it is set."""
     app = FastAPI()
     left = {"polls": polls, "flaky": flaky}
 
@@ -84,6 +92,13 @@ def upstream(
     def rows(dataset_id: str, resolution: int, layer: str | None = None):
         seen.setdefault("rows", []).append((dataset_id, resolution) if layer is None else (dataset_id, resolution, layer))
         return Response(f"rows of {dataset_id}".encode(), media_type="text/csv") if table(dataset_id) else unknown(dataset_id)
+
+    @app.get("/api/datasets/{dataset_id}/metadata")
+    def metadata(dataset_id: str) -> Any:
+        seen.setdefault("metadata", []).append(dataset_id)
+        if seen.get("docs") == "down":
+            return JSONResponse({"detail": "graph down"}, status_code=500)
+        return seen.get("docs", {}).get(dataset_id, {})
 
     @app.get("/health")
     def health():
@@ -151,6 +166,8 @@ def upstream(
         if final is None:
             return JSONResponse({"detail": "gateway down"}, status_code=503)
         seen["prompt"] = (await req.json())["messages"][0]["content"]
+        while hold and not hold.is_set():
+            await asyncio.sleep(0.01)
         return {"choices": [{"message": {"content": final}}]}
 
     return app
@@ -171,7 +188,14 @@ def settings(url: str, **over: Any) -> AdsSettings:
 
 
 def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
-    seen: dict[str, Any] = {}
+    seen: dict[str, Any] = {
+        "docs": {
+            "ds-a": {
+                "dataset": {"description": "planted events"},
+                "columns": {"seen_at": {"title_uk": "коли", "assistant_context": "the event's time"}, "kind": {}},
+            }
+        }
+    }
     ask = {"question": "Скільки подій у зоні?", "tables": TABLES, "zones": [{"id": "Z1", "polygon": POLYGON}], "focus": ["Z1"]}
     files = ("events_dsa_r8.csv", "bars_dsb_r8.csv")  # the name, the dataset and the base table's resolution: one file per session
     with serve(upstream(seen, polls=3, flaky=2)) as url, TestClient(create_app(settings(url))) as client:  # two bad status reads, read again
@@ -187,13 +211,19 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert job["stage"] == "done" and set(job["timings"]) == {"search", "ads", "joint"} and job["session_id"] == SID, job
         # the graph is asked with the polygon the rows are read against, and no model; the text found nothing inside, so the zone alone stands
         assert seen["chat"] == [
-            {"question": ask["question"], "geometry": POLYGON, "use_llm": False},
-            {"question": "", "geometry": POLYGON, "use_llm": False},
+            {"question": ask["question"], "geometry": POLYGON, "use_llm": False, "period_only": True},
+            {"question": "", "geometry": POLYGON, "use_llm": False, "period_only": True},
         ]
         assert [(i["key"], i["zones"]) for i in job["insights"]] == [("P1", {"Z1": True}), ("P2", {"Z1": False}), ("P4", {"Z1": False})]
         # every table's zones and rows at the base table's resolution: one cell column to join on
         assert [(d, b["resolution"]) for d, b in seen["zone_rows"]] == [("ds-a", 8), ("ds-b", 8)] and seen["rows"] == [("ds-a", 8), ("ds-b", 8)]
-        assert seen["uploads"] == [*files, "zones.csv", "zones.md"] and seen["files"][files[0]] == "rows of ds-a"
+        assert seen["uploads"] == [*files, "zones.csv", "zones.md", "metadata.md"] and seen["files"][files[0]] == "rows of ds-a"
+        assert seen["files"]["metadata.md"].splitlines()[2:] == [
+            f"## {files[0]} (events.csv)",
+            "planted events",
+            "- seen_at (коли): the event's time",
+            "- kind",
+        ]
         assert seen["files"]["zones.csv"].splitlines() == ["zone_id,table,row_id,aoi_zone"] + [
             f"Z1,{f},{r}" for f in files for r in ("0,inside", "3,adjacent")
         ]
@@ -217,9 +247,11 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             "focus": ["Z2", "Z1"],
             "question": "Чим Z2 відрізняється?",
         }
+        seen["docs"] = {}  # the document taken off between the questions: the copy ADS holds is replaced, not kept
         job = finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])
         assert job["stage"] == "done" and job["session_id"] == SID and seen["sessions"] == 1 and "closed" not in seen
-        assert seen["uploads"][4:] == ["zones.csv", "zones.md"] and len(seen["rows"]) == 2  # the tables went once
+        assert seen["uploads"][5:] == ["zones.csv", "zones.md", "metadata.md"] and len(seen["rows"]) == 2  # the tables went once
+        assert "No table of this question has a document" in seen["files"]["metadata.md"]
         assert {line.split(",")[0] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"Z1", "Z2"} and "Zone Z2" in seen["files"]["zones.md"]
         assert seen["query"].count("Compare the areas of interest Z2, Z1: ") == 1 and "O1 · in zone: Z2 yes, Z1 yes" in seen["query"]
         lone = ask | {"session_id": SID, "zones": two["zones"]}  # Z2 is the conversation's, the question is about Z1 alone
@@ -231,16 +263,18 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["error"]["code"] == "ads_busy"
         assert (len(seen["uploads"]), len(seen["chat"])) == (sent, asked)  # refused before the graph is asked or a file replaced
 
-        # the graph reads the period bar alone: a period in the text is ADS's, the bar's goes beside it
+        # the graph reads the period bar alone (period_only): a period in the text is ADS's, the bar's goes beside it, and
+        # the words go as written, a token that only looks like a period (2019-20) a literal the graph keeps
         seen["chat"].clear()
         seen["busy"] = False
         dated = ask | {
-            "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026?",
+            "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026 за сезон 2019-20?",
             "period": ["2026-08-09T00:00", "2026-08-18T00:00"],
         }
         job = finished(client, client.post("/api/ads/jobs", json=dated).json()["job_id"])
         sent = seen["chat"][0]
-        assert sent["period"] == dated["period"] and sent["question"].split() == ["Скільки", "подій", "у", "чи", "?"]
+        assert sent["period"] == dated["period"] and sent["period_only"] is True
+        assert sent["question"].split() == "Скільки подій у 2026-W33 чи Q3 2026 за сезон 2019-20?".split()  # the header line alone goes
         assert dated["question"] in job["ads_query"] and "A period the question names bounds every figure" in job["ads_query"]
 
         # the conversation's end: its tables deleted from ADS, the session closed
@@ -274,12 +308,16 @@ def test_a_layer_goes_as_a_context_table():
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and seen["rows"] == [("ds-a", 8), ("ds-a", 8, "bars")]
         assert [b.get("layer") for _, b in seen["zone_rows"]] == [None, "bars"]
-        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_layer_r8.csv", "zones.csv", "zones.md"]
+        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_layer_r8.csv", "zones.csv", "zones.md", "metadata.md"]
         assert {line.split(",")[1] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"events_dsa_r8.csv", "bars_dsa_layer_r8.csv"}
         query = job["ads_query"]
         assert "df_bars_dsa_layer_r8 (bars_dsa_layer_r8.csv: bars" in query
         assert "context_bars_band counts per cell with its six neighbours, only its points within 2031-03-01..2031-03-31" in query
         assert "is a context layer of the main table" in query and "bars_dsa_layer_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
+        assert "an empty h3_r8 (NaN once pandas reads the CSV) has no point" in query and "NaN in pandas" in seen["files"]["zones.md"]
+        assert "the run's H3 resolution" not in query  # the layer's cells at the run's own level: nothing to say
+        coarse = client.post("/api/ads/preview", json={"question": "Q?", "tables": [TABLES[1], bars]}).json()["parts"][3]["text"]
+        assert "SIG counted them on the run's H3 resolution 8 grid; their h3 columns here are the main table's resolution 5" in coarse
         same = name_tables(
             [
                 {"dataset_id": "ds-a", "filename": "crimes_2024_2025_robbery_x.csv", "resolution": 8},
@@ -298,8 +336,12 @@ def test_a_question_needs_no_zone():
     ask = {"question": "Де найбільше подій?", "tables": TABLES[:1]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
-        assert job["stage"] == "done" and seen["chat"] == [{"question": ask["question"], "use_llm": False}]  # the whole map: no geometry
-        assert [b["zones"] for _, b in seen["zone_rows"]] == [[]] and seen["uploads"] == ["events_dsa_r8.csv", "zones.md"]  # no zones file
+        assert job["stage"] == "done" and seen["chat"] == [{"question": ask["question"], "use_llm": False, "period_only": True}]  # no geometry
+        assert [b["zones"] for _, b in seen["zone_rows"]] == [[]] and seen["uploads"] == [
+            "events_dsa_r8.csv",
+            "zones.md",
+            "metadata.md",
+        ]  # no zones file
         query = job["ads_query"]
         assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
         assert "`in zone`" not in query and "inside vs adjacent" not in query and "zones it is in" not in query  # no zone sentence
@@ -311,13 +353,17 @@ def test_a_question_needs_no_zone():
         assert job["stage"] == "done" and len(seen["chat"]) == 2 and "SIG has no insights for this question." in job["ads_query"]
         kept = ask | {"session_id": SID, "zones": [{"id": "Z1", "polygon": POLYGON}], "question": "А в Z1?"}  # Z1 asked before, now unticked
         job = finished(client, client.post("/api/ads/jobs", json=kept).json()["job_id"])
-        assert seen["uploads"][-2:] == ["zones.csv", "zones.md"] and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
+        assert (
+            seen["uploads"][-3:] == ["zones.csv", "zones.md", "metadata.md"]
+            and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
+        )
         assert "unless the question names a zone of df_zones" in job["ads_query"] and "other zones (Z1)" in job["ads_query"]
         assert "inside vs adjacent" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
 
 
 def test_the_bridge_strips_the_periods_the_graph_reads():
-    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period, so none overrides the bar's."""
+    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period: a question of periods alone
+    has no words for the graph, which is not asked about it (its words go as written, ``period_only``)."""
     samples = "2031-W13, 2031-q1, Q1 2031, 2031-03-24 10:00, 2031-03; not 2019-20, x2031-03, 2031-03-24-1, 12031-03"
     assert [m.group(0) for m in _PERIODS.finditer(samples)] == [m.group(0) for m in PERIOD.finditer(samples)]
 
@@ -343,6 +389,22 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         assert (job["failed_stage"], job["error"]["code"]) == ("ads", "cancelled") and seen["cancelled"] == seen["closed"] == SID
         assert sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in seen["files"] if f.endswith(".csv"))  # its tables gone
         assert not client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]  # an ended job has nothing to stop
+    seen, hold = {}, threading.Event()
+    with serve(upstream(seen, hold=hold)) as url, TestClient(create_app(settings(url))) as client:  # it ends while the report is written
+        job_id = client.post("/api/ads/jobs", json=ask).json()["job_id"]
+        while client.get(f"/api/ads/jobs/{job_id}").json()["stage"] != "joint":
+            time.sleep(0.01)
+        assert client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]
+        hold.set()  # the report's one LLM call ends; the job then stops and closes its session
+        job = finished(client, job_id)
+        assert (job["failed_stage"], job["error"]["code"]) == ("joint", "cancelled") and seen["closed"] == SID
+    seen = {}
+    with serve(upstream(seen, polls=10**6)) as url:  # the bridge stops while ADS runs the job: cancelled in ADS, the session kept
+        with TestClient(create_app(settings(url))) as client:
+            client.post("/api/ads/jobs", json=ask)
+            while "query" not in seen:
+                time.sleep(0.01)
+        assert seen["cancelled"] == SID and "closed" not in seen  # the conversation's next question goes on in it
     with serve(upstream({}, final=None)) as url, TestClient(create_app(settings(url))) as client:  # no final report: ADS's stands
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and job["joint_report"] == "" and "503" in job["joint_error"] and job["ads_report"]
@@ -352,6 +414,12 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         gone = ask | {"tables": [{"dataset_id": "ds-gone", "filename": "gone.csv", "resolution": 8}]}
         job = finished(client, client.post("/api/ads/jobs", json=gone).json()["job_id"])
         assert (job["failed_stage"], job["error"]["code"]) == ("search", "sig_failed") and "unknown_dataset" in job["error"]["detail"]
+    seen = {"docs": "down"}
+    with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:  # the graph fails to give a document
+        job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
+        assert (job["failed_stage"], job["error"]["code"]) == ("search", "sig_failed") and "sessions" not in seen  # no ADS session opened
+    about = build_metadata_md(name_tables(TABLES[:1]), {"ds-a": {"dataset": {"description": "planted events"}, "columns": {}}})
+    assert about.splitlines()[2:] == ["## events_dsa_r8.csv (events.csv)", "planted events"]  # a description alone still goes
     with serve(upstream({}, final="no sections")) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and job["joint_report"] == "" and job["ads_report"]  # the ADS report stands alone
@@ -401,6 +469,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.evaluate(draw)
                 if not with_ads:  # the person's one chat is the graph's: no ADS to ask, its form never opens
                     assert page.inner_text("#ads-pill") == "ADS вимкнено" and page.is_disabled(".sig-pop .pp-ads")
+                    assert page.get_attribute(".sig-pop .pp-ads", "title").startswith("ADS вимкнено.")  # the pill's own state, not «недоступний»
+                    page.set_viewport_size({"width": 1280, "height": 900})  # a laptop: the developer's chips fold away, this pill stays
+                    assert page.is_visible("#ads-pill")
                     assert page.is_visible(".chat-tabs [data-tab='graph']") and not page.is_visible(".chat-tabs [data-tab='ads']")
                     page.evaluate("openAds()")
                     assert page.evaluate("S.tab === 'graph' && !$('ads-dialog').open")
@@ -433,6 +504,9 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.checked)") == [True]
                 zone = page.evaluate("GeoMap.zones()[0].id")  # the popup's zone, ticked
                 assert page.evaluate("[...document.querySelectorAll('#ads-zones input:checked')].map((i) => i.value)") == [zone]
+                many = "Object.assign(S.adsZones, Object.fromEntries([...Array(60)].map((_, i) => [`X${i}`, GeoMap.zones()[0].polygon])))"
+                ids = page.evaluate(f"{many}; adsBody().zones.map((z) => z.id)")  # a long conversation: the bridge takes 50, the oldest go
+                assert len(ids) == 50 and ids[-1] == zone and ids[0] == "X11" and page.evaluate("S.adsZones = {}; true")
                 coarser = "G.datasets.push({...G.datasets[0], dataset_id: 'coarser', resolution: G.datasets[0].resolution - 1}); openAds()"
                 page.evaluate(coarser)  # another level of the same upload: its rows go once
                 assert page.evaluate("[...document.querySelectorAll('#ads-tables input')].map((i) => i.value)") == [page.evaluate("GeoMap.current()")]
@@ -464,11 +538,12 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 assert card.locator(".ads-stage.ok").count() == 3 and card.locator(".md-table td").all_inner_texts() == ["у зоні", "3"]
                 assert f"зона {zone}" in page.locator(".msg-user").last.inner_text() and page.evaluate("S.adsSession") == SID
                 assert page.evaluate("S.chat.at(-1).ads.ads_query") == seen["query"]
-                page.evaluate("GeoMap.pick(Object.keys(G.patterns)[0])")  # the person's insight from the map: the drawer, not the graph's chat
-                page.wait_for_function("!$('drawer').hidden")
-                assert page.evaluate("!S.threads.graph.length")
+                page.evaluate("GeoMap.pick(Object.keys(G.patterns)[0])")  # the person's insight from the map: its focus and card alone
+                page.wait_for_function("G.focusId && !$('map-card').hidden")
+                page.wait_for_timeout(500)  # a drawer would open after its node's read
+                assert page.evaluate("$('drawer').hidden && !S.threads.graph.length")
                 table = next(f for f in seen["files"] if f.startswith("points_"))
-                assert set(seen["files"]) == {table, "zones.csv", "zones.md"} and seen["files"]["zones.csv"].startswith(
+                assert set(seen["files"]) == {table, "zones.csv", "zones.md", "metadata.md"} and seen["files"]["zones.csv"].startswith(
                     "zone_id,table,row_id,aoi_zone\n"
                 )
                 assert seen["files"][table].splitlines()[0].startswith("row_id,")  # the graph service's rows, a row_id to join the zones on
@@ -476,6 +551,8 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.press("#question", "Enter")
                 page.wait_for_function("S.chat.length === 2 && S.chat.at(-1).ads.stage === 'done'", timeout=30000)
                 assert seen["sessions"] == 1 and seen["uploads"].count(table) == 1 and seen["query"].count("А по годинах?") == 1
+                asked = page.evaluate("S.adsLast.question")  # headed by the bar's period, as the form heads the first: ADS bounds by it
+                assert asked.startswith("Період: 2019-03-04 — ") and asked.endswith("\n\nА по годинах?"), asked
                 page.evaluate("S.period = {start: '2026-08-09T06:00', end: '2026-08-10T18:00'}")  # the period changed: the form again
                 page.fill("#question", "А вночі?")
                 page.press("#question", "Enter")

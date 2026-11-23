@@ -221,7 +221,7 @@ def browser(engine: Engine) -> dict[str, Any] | str:
         page.goto(f"{url}/")
         page.wait_for_function("typeof S !== 'undefined' && S.cy && S.cy.nodes('[kind=\"Pattern\"]').length > 0", timeout=120000)
         out["graph_s"] = round(time.perf_counter() - start, 2)
-        if not engine.geo_datasets():
+        if not engine.maps().datasets():
             return out | {"map": "no geo dataset"}
         page.wait_for_function("!document.getElementById('map-tab').hidden", timeout=600000)  # after the geo list loads
         start = time.perf_counter()

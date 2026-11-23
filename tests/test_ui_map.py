@@ -103,9 +103,6 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.fill("#geo", "auto@5")
         page.fill("#bins", f"{bins},median_income:4")
         page.fill("#glossary", '{"ocean_proximity": "близькість до океану"}')  # the declared language goes with the file
-        page.set_input_files(
-            "#metadata", files=[{"name": "housing.md", "mimeType": "text/markdown", "buffer": b"Columns:\nmedian_income\n  Title (uk): dohid\n"}]
-        )
         page.click("#upload-btn")
         page.wait_for_function("G.projected.some((p) => p.level === 'table')", timeout=60000)
         page.wait_for_function("W.data.themes.some((t) => t.insights.some((i) => G.patterns[i.id].level === 'table'))", timeout=10000)
@@ -121,14 +118,19 @@ def test_the_form_adds_the_base_level_to_a_geo_file_while_the_map_is_open(cfg, d
         page.wait_for_function("W.data && W.data.regions === 1", timeout=10000)
         region = f"G.overlay.features.find((f) => f.properties.resolution === W.data.level && f.properties.rows.includes({busiest}.properties.row))"
         assert page.evaluate(f"{region}.properties.n") == page.evaluate("W.data.insights") and page.evaluate(listing) != wide
+        doc = httpx.patch(f"{url}/api/datasets/{geo['upload_id']}", json={"metadata": "Columns:\nmedian_income\n  Title (uk): dohid\n"}, timeout=60)
         levels = httpx.get(f"{url}/api/batches", params={"upload_id": geo["upload_id"]}).json()
+        assert sorted(doc.json()["datasets"]) == sorted(b["dataset_id"] for b in levels if b["status"] == "READY")  # every reading at once
         assert sorted((b["level"], b["status"]) for b in levels) == [("5", "READY"), ("5", "SKIPPED"), ("table", "READY")]
         assert page.evaluate(  # the upload by its shipped set's title, its levels under it
             f"[...document.querySelectorAll(\".ds-group[data-upload='{geo['upload_id']}'] .ds-name\")].map((n) => n.textContent)"
         ) == ["Житло Каліфорнії (мапа)", "мапа · рівень 5", "таблиця"]
         table = next(b for b in levels if b["level"] == "table")
         assert table["user_glossary"] == {"ocean_proximity": "близькість до океану"} and set(table["metadata_doc"]["columns"]) == {"median_income"}
+        assert httpx.get(f"{url}/api/datasets/{table['dataset_id']}/metadata").json()["columns"] == {"median_income": {"title_uk": "dohid"}}  # ADS's
         chips = f".ds[data-ds='{table['dataset_id']}'] .ds-src .chip"
+        page.evaluate("refreshBatches()")  # the document came by the API: the rail reads it on its next refresh
+        page.wait_for_selector(f"{chips}:has-text('документ')", state="attached", timeout=30000)
         assert page.locator(chips).all_text_contents()[-2:] == ["глосарій · 1 колонка", "документ · 1 колонка"]  # under the folded record
         # a PATCH re-signs the record: the next refresh reads the graph and the map again, the map card in the new words
         patched = httpx.patch(f"{url}/api/datasets/{geo['dataset_id']}", json={"glossary": '{"median_house_value": "вартість житла"}'}, timeout=60)
@@ -344,6 +346,7 @@ def test_an_insight_goes_from_the_map_to_the_chat_and_back(cfg, tmp_path):
         (asked,) = page.evaluate("__asked")
         assert asked["cells"] and all(isinstance(c, str) and re.fullmatch(r"[0-9a-f]{15}", c) for c in asked["cells"])
         assert asked["cells"] == page.evaluate(f"GeoMap.placeOf('{base}')")
+        assert asked["question"].endswith(f" там, де {node_details(graph, base, engine.settings.thresholds)['reading']['where']}")  # its own words
         assert "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         assert base in page.evaluate("S.chat.at(-1).qa.view.evidence.items.map((i) => i.pattern_id)")
         items = page.evaluate("S.chat.at(-1).qa.view.evidence.items")
@@ -509,7 +512,7 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         page.click("#pb-presets button:has-text('останній тиждень')")
         assert page.evaluate("S.period") == {"start": "2019-03-28T00:00", "end": "2019-04-04T00:00"}
         page.wait_for_function("G.metric === 'points_in_period'", timeout=10000)
-        served = engine.geo_period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
+        served = engine.maps().period_counts(level["dataset_id"], parse_period("2019-03-28", "2019-04-03"))["points"]
         assert f"Події за 28.03.2019 — 03.04.2019: {served:,}." in page.inner_text("#map-period").replace("\u00a0", "")
         pick_dataset(page, other["dataset_id"])  # no day of it: the stretch goes, and the map hears of it
         page.wait_for_function("S.period === null && G.metric === 'points' && document.getElementById('map-period').hidden", timeout=20000)
@@ -549,9 +552,11 @@ def test_the_period_bar_repaints_the_cells_and_sets_aside_the_map_insights_its_d
         assert whole >= here >= acting  # the region's count, the cell's part of it and the part acting: one base
         every = "(() => { const [[w, s], [e, n]] = G.cellBox; return [[w - 1, s - 1], [e + 1, s - 1], [e + 1, n + 1], [w - 1, n + 1], [w - 1, s - 1]]; })()"
         page.evaluate(f"GeoMap.addZone({{type: 'Polygon', coordinates: [{every}]}}); GeoMap.openZone(GeoMap.zones()[0].id)")  # every cell
+        assert page.evaluate("GeoMap.zones()[0].cells.length") == sum(1 for c in counted if c)  # the cells the days draw: none hidden
+        assert page.evaluate("GeoMap.addZone(G.data.features.find((f) => !f.properties.points_in_period).geometry)") == 0  # nothing drawn
         assert page.text_content(".sig-pop .pp-head").replace("\u00a0", "").endswith(f"· {sum(counted)} подій за період")
         page.wait_for_function("/у періоді: \\d+$/.test(document.querySelector('.sig-pop .pp-here').textContent)", timeout=10000)
-        assert page.locator("#map-metric option[value='points_in_period']").count() == 1
+        assert page.text_content("#map-metric option[value='points_in_period']") == "події за період"  # the chrome's words
         page.evaluate("Timeline.setPeriod('2019-04-02T00:00', '2019-04-04T00:00'); Timeline.apply()")  # after every core, no event in it
         page.wait_for_function("G.idle.size > 0 && document.querySelectorAll('#map-window .mw-i.off').length > 0", timeout=10000)
         listed = page.evaluate(rows)

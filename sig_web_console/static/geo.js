@@ -618,7 +618,8 @@ function finishPolygon() {
 }
 
 const cellId = (f) => f.properties.h3 || f.properties.id.split(":")[2];
-const drawnCells = () => (G.others.length ? (G.overlay || empty()).features : G.data ? G.data.features : []);  // the open dataset's cells, or «Усі датасети»'s hexes
+// the open dataset's cells, but for those the period bar's days hide (no point in them), or «Усі датасети»'s hexes
+const drawnCells = () => (G.others.length ? (G.overlay || empty()).features : G.data ? G.data.features.filter((f) => !G.periodOn || f.properties[PERIOD_METRIC]) : []);
 
 function zoneCells(ring) {
   /* the drawn cells (in «Усі датасети» the drawn level's hexes) whose centre the ring holds */
@@ -665,12 +666,14 @@ function paintZone() {
 const cellPoints = (p) => (G.periodOn ? p[PERIOD_METRIC] || 0 : p.points ?? 0);  // a cell's points, in the bar's days while the cells show them
 const zoneShown = (z) => !G.others.length && Boolean(G.data) && G.data.features.some((f) => z.cells.has(f.properties.h3));  // a cell of the zone is drawn
 
+const metricName = (k) => (k === PERIOD_METRIC ? "події за період" : human(k));  // the console's own count in its words, a column by its name
+
 function listMetrics() {
   /* the cells' numeric columns as the colour choices, the one in use kept when the cells still have it */
   const fs = G.data.features, keys = new Set([...Object.keys(fs[0] ? fs[0].properties : {}), ...(G.periodOn ? [PERIOD_METRIC] : [])]);  // a cell with no point in the days has no count
   const numeric = [...keys].filter((k) => k !== "row" && fs.some((f) => typeof f.properties[k] === "number"));
   if (!numeric.includes(G.metric)) G.metric = numeric[0] || "points";
-  $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(human(k))}</option>`).join("");
+  $("map-metric").innerHTML = numeric.map((k) => `<option value="${esc(k)}" ${k === G.metric ? "selected" : ""}>${esc(metricName(k))}</option>`).join("");
 }
 
 async function paintPeriod() {
@@ -720,7 +723,7 @@ function colorBy(metric) {
   const valued = ["==", ["typeof", ["get", metric]], "number"];
   G.map.setPaintProperty("cells-fill", "fill-color", ["case", valued, stops.length ? step : RAMP[3], "#141a26"]);
   $("map-ramp").innerHTML = `<div class="ramp">${RAMP.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` +
-    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(human(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
+    `<div class="ramp-lbl"><span>${num(vals[0])}</span><span>${esc(metricName(metric))} · квантилі</span><span>${num(vals[vals.length - 1])}</span></div>`;
 }
 
 function wireHud() {
@@ -766,6 +769,7 @@ function renderCard(p, item, pts) {
       .map(([k, v, dev]) => `<span${dev ? " data-dev" : ""}>${k}</span><b${dev ? " data-dev" : ""}>${v}</b>`).join("")}</div>` +  // dev: the developer mode's
     (p.numbers && p.numbers.n_eff ? `<div class="mc-note" data-dev>${esc(p.numbers.n_eff)}</div>` : "") +
     (p.numbers && p.numbers.p_context ? `<div class="mc-note">не ${esc(word("context_confounded"))}<span data-dev> · ${term("p_context")}: ${esc(p.numbers.p_context)}</span></div>` : "") +
+    layerNote(pts) +
     (item ? `<div class="mc-path">${esc(word(reached(item)))}</div>` : "");
   $("map-card").hidden = false;
 }
@@ -779,6 +783,13 @@ function trustTags(pid) {
 }
 
 const cardPoints = (pts) => `${num(pts.n_points, 0)}${pts.in_period ? " за період" : ""}`;  // an insight's points, the bar's days' when /patterns read them
+
+const layerNote = (pts) => {  // a run insight's layer beside it: its points near, and how many of them the map draws when thinned
+  const lp = pts && (pts.layer_points || [])[0];
+  if (!lp) return "";
+  const n = lp.points.length < lp.n_points ? `показано ${num(lp.points.length, 0)} з ${num(lp.n_points, 0)}` : num(lp.n_points, 0);
+  return `<div class="mc-note">точки шару «${esc(layerName(lp.name))}» поруч: ${n}</div>`;
+};
 
 const LISA_WORDS = { "hot spot": "гаряча точка", "cold spot": "холодна точка" };
 
@@ -816,7 +827,7 @@ function openPopup(html, lngLat, zone = null, anchor) {
   GeoMap.closePopup();
   const trash = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>`;
   const buttons = !zone ? "" : `<button type="button" class="pp-ask" data-dev>Запитати про цю зону</button>` +
-    `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="ADS недоступний: його стан показано вгорі сторінки"`}>Запитати про це ADS</button>` +
+    `<button type="button" class="pp-ads"${S.ads ? "" : ` disabled title="${esc(S.adsTitle || "ADS вимкнено.")}"`}>Запитати про це ADS</button>` +
     `<button type="button" class="pp-drop">${trash}Видалити зону</button>`;
   const popup = G.popup = new maplibregl.Popup({ maxWidth: "360px", className: "sig-pop", anchor }).setLngLat(lngLat).setHTML(`<div class="pp">${html}${buttons}</div>`).addTo(G.map);
   popup.on("close", () => { if (G.popup === popup) G.popup = null; });

@@ -369,7 +369,14 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
             rings = [r for poly in geometry["coordinates"] for r in poly]
             cells = {h3.latlng_to_cell(float(lat), float(lon), resolution) for ring in rings for lon, lat in ring}
         return frozenset(cells)
-    except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:  # h3's errors are ValueErrors, as is SpatialError
+    except (
+        AttributeError,
+        KeyError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        h3.H3BaseException,
+    ) as exc:  # SpatialError is a ValueError; H3 refuses a ring of no area with its own
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 

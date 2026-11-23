@@ -1,15 +1,21 @@
 """The console reads a layer link in words (the cross-layer experiments of 2026-11-04, X-7, X-9, X-14): a condition and a
 metric in the words every reading uses, not the column's name; one effect found under several conditions as one row with
 its variants; the «no layer nearby» mirror of a finding marked as its complement; the bands of a layer in the concept's
-words; a zoned value read as relative to its zone; the drivers in Ukrainian; the layer's points beside a focused insight."""
+words; a zoned value read as relative to its zone; the drivers in Ukrainian; a run insight asked in its own words; the
+layer's points beside a focused insight."""
 
 from __future__ import annotations
 
 from conftest import make_config, make_engine, toy_insight
 from fastapi.testclient import TestClient
 from test_crosstype import RES, cross_run, planted, upload_file
+from test_multilingual_retrieval import toy_graph
+from test_scope_words import geo_pattern
 
+from graph_query_engine.graph import insight_reading
+from graph_query_engine.question import parse_query
 from insight_contracts import Condition, PhenomenonThresholds, Shift, wording
+from insight_graph_service.core import geo_views
 from insight_graph_service.server.app import create_app
 from insight_graph_service.server.views import variant_groups
 
@@ -81,12 +87,57 @@ def test_the_drivers_read_in_ukrainian():
     assert wording.driver_words("anything else", {}, True) == "anything else"
 
 
-def test_a_focused_run_insight_brings_its_layers_points(tmp_path):
-    """``GET /api/geo/{ds}/patterns/{pid}`` of a run's insight holds its layer's points in and around its cells, so the
-    map draws the two layers side by side; an insight of no layer holds none."""
+def test_a_layer_band_shared_with_another_column_binds_only_in_the_insights_words():
+    """A band value is held by every band column: asked by its values alone («… для q3 no cluster q2») the layer's band
+    and the neighbours' band bind any column; asked as *Запитати граф про це* asks it now (``askAbout``, chat.js: «… там,
+    де <its reading's where>») each binds to its own column."""
+    scope = ["context_shops_band=q3", "lisa_points=no cluster", "neighbours_points_band=q2"]
+    graph = toy_graph([geo_pattern("P8", scope), geo_pattern("P9", ["context_shops_band=q2", "neighbours_points_band=q3"])])
+    where = insight_reading(graph, "P8", PhenomenonThresholds())["where"]
+    assert {("*", "q3"), ("*", "q2")} <= set(parse_query("Розкажи про margin для q3 no cluster q2", graph).conditions)
+    assert set(parse_query(f"Розкажи про margin там, де {where}", graph).conditions) == {tuple(c.split("=", 1)) for c in scope}
+
+
+def test_a_run_insight_asked_in_its_own_words_keeps_its_scope_and_seeds_the_search(tmp_path):
+    """A run's insight asked as *Запитати граф про це* asks it, with its cells as the zone: the question holds each of its
+    conditions, the layer's band included, bound to its column, and the search still seeds it."""
     engine, client, run = run_of(tmp_path)
     found = [p["id"] for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"]]
+    assert found
     with client:
-        drawn = client.get(f"/api/geo/{run['dataset_id']}/patterns/{found[0]}").json()
-    (layer,) = drawn["layer_points"]
-    assert layer["name"] == "schools" and layer["points"] and all(len(p) == 2 for p in layer["points"])
+        graph = engine.graph()
+        for pid in found:
+            node = client.get(f"/api/nodes/{pid}").json()
+            props = node["node"]["props"]
+            question = f"Розкажи про {props['target'].replace('_', ' ')} там, де {node['reading']['where']}"  # askAbout's words
+            parsed = parse_query(question, graph)
+            exact = {(c["attribute"], c["value"]) for c in props["conditions"]}
+            assert any(a.startswith("context_") for a, _ in exact)  # a layer's band among them
+            assert exact <= set(parsed.conditions), (question, parsed.conditions)  # a count_<c>_<v> target may add <c>=<v>
+            assert not [v for a, v in parsed.conditions if a == "*" and v in {v for _, v in exact}]
+            cells = client.get(f"/api/geo/{run['dataset_id']}/patterns/{pid}").json()["cells"]
+            items = client.post("/api/search", json={"question": question, "cells": cells}).json()["view"]["evidence"]["items"]
+            assert (items[0]["pattern_id"], items[0]["role"]) == (pid, "seed")
+
+
+def test_a_focused_run_insight_brings_its_layers_points(tmp_path, monkeypatch):
+    """``GET /api/geo/{ds}/patterns/{pid}`` of a run's insight holds its layer's points in and around its cells, so the
+    map draws the two layers side by side — the same through the run's own dataset and through its base level's, whose
+    map draws the run's insights while no row of the rail is picked; an insight of the base's own holds none. Past
+    ``LAYER_POINTS_MAX`` they are thinned evenly, every k-th of all of them in file order, ``n_points`` counting all."""
+    engine, client, run = run_of(tmp_path)
+    found = [p["id"] for p in engine.ws.patterns() if p["dataset_id"] == run["dataset_id"]]
+    level = [r for r in engine.ws.list_batches() if r["upload_id"] == run["upload_id"] and "cross" not in r and r.get("level") == run["level"]]
+    base = level[0]["dataset_id"]
+    own = next(p["id"] for p in engine.ws.patterns() if p["dataset_id"] == base)
+    with client:
+        drawn = [client.get(f"/api/geo/{ds}/patterns/{found[0]}").json()["layer_points"] for ds in (run["dataset_id"], base)]
+        assert drawn[0] == drawn[1]  # whichever map draws it
+        (layer,) = drawn[0]
+        assert layer["name"] == "schools" and len(layer["points"]) == layer["n_points"] > 2 and all(len(p) == 2 for p in layer["points"])
+        assert client.get(f"/api/geo/{base}/patterns/{own}").json()["layer_points"] == []
+        monkeypatch.setattr(geo_views, "LAYER_POINTS_MAX", layer["n_points"] // 2)
+        (thin,) = client.get(f"/api/geo/{base}/patterns/{found[0]}").json()["layer_points"]
+    step = -(-layer["n_points"] // geo_views.LAYER_POINTS_MAX)  # ceil: every k-th, the first and the last stretch of the file alike
+    assert thin["n_points"] == layer["n_points"] and thin["points"] == layer["points"][::step]
+    assert len(thin["points"]) <= geo_views.LAYER_POINTS_MAX

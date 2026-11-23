@@ -192,15 +192,15 @@ def test_geo_batch_end_to_end(engine, points_csv):
             assert p["target"] not in ("points", "when_active_days")
     hot = [p for p in patterns if {"attribute": "lisa_points", "value": "hot spot"} in p["conditions"] and p["effect_size"] > 0]
     assert any(p["target"] in ("share_channel_phone", "load_median", "when_late_share") for p in hot)  # the planted effects
-    cells = json.loads(engine.geo_cells_pack(record["dataset_id"]))  # the package of the file written with the batch
+    cells = json.loads(engine.maps().cells_pack(record["dataset_id"]))  # the package of the file written with the batch
     assert len(cells["rings"]) == geo["cells"] and {p["id"] for p in cells["patterns"]} == {p["id"] for p in patterns}
     assert all(len(c) == geo["cells"] for c in cells["columns"].values()) and not [k for k in cells["columns"] if k.endswith("_band")]
-    one = engine.geo_pattern(record["dataset_id"], patterns[0]["id"])
+    one = engine.maps().pattern(record["dataset_id"], patterns[0]["id"])
     assert len(one["cells"]) == patterns[0]["support"] and 0 < len(one["points"]) <= one["n_points"]
-    assert engine.geo_datasets()[0]["dataset_id"] == record["dataset_id"]
+    assert engine.maps().datasets()[0]["dataset_id"] == record["dataset_id"]
     engine.ws.save_batch({**record, "status": "FAILED"})  # a batch that failed after its files were written serves no map
     with pytest.raises(PipelineError):
-        engine.geo_cells_pack(record["dataset_id"])
+        engine.maps().cells_pack(record["dataset_id"])
 
 
 def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv):
@@ -226,7 +226,7 @@ def test_the_map_is_read_ahead_of_the_console_after_a_commit(engine, points_csv)
     engine.submit(points_csv)
     engine.warm_map()
     assert not {("projection", ds, frozenset()), ("overlay", ds, frozenset())} & engine.graph().memo.keys()
-    for read in (engine.geo_overlay, engine.geo_projected):  # its record deleted after its files were read: refused, no TypeError
+    for read in (engine.maps().overlay, engine.maps().projected):  # its record deleted after its files were read: refused, no TypeError
         with mock.patch.object(engine.ws, "ready_batch_for", return_value=None), pytest.raises(PipelineError, match="not a geo dataset"):
             read(ds)
 
@@ -443,7 +443,7 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     # the map as a window on the graph: every other level's insights on the finest level's cells, each by every cell
     # holding its events
     fine, table_ids = done[0]["dataset_id"], {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == table}
-    projected = {p["id"]: p for p in engine.geo_projected(fine)}
+    projected = {p["id"]: p for p in engine.maps().projected(fine)}
     assert table_ids <= set(projected) and {p["level"] for p in projected.values()} == {"res 7", "table"}
     assert all(p["rows"] for p in projected.values())
     point_cell, coarse = (
@@ -452,21 +452,28 @@ def test_one_upload_makes_one_dataset_per_level(engine, points_csv):
     )
     for pid, rows in engine.ws.load_covers(done[1]["dataset_id"]).items():
         assert sorted(projected[pid]["rows"]) == np.unique(point_cell[np.isin(coarse, rows) & (point_cell >= 0)]).tolist()
-    everything = engine.geo_window(fine, "-180,-90,180,90")  # the whole map: every region's rows
+    everything = engine.maps().window(fine, "-180,-90,180,90")  # the whole map: every region's rows
     listed = {i["id"]: i for t in everything["themes"] for i in t["insights"]}
     assert table_ids & set(listed) and all(i["lift"] >= 1 for i in listed.values())
-    assert engine.geo_window(fine, "0,0,1,1")["themes"] == []  # nothing there
-    overlay = engine.geo_overlay(fine)
+    assert engine.maps().window(fine, "0,0,1,1")["themes"] == []  # nothing there
+    overlay = engine.maps().overlay(fine)
     with mock.patch.object(engine.ws, "load_geo", side_effect=AssertionError("a repeated view reads no file")):  # once per commit
-        assert engine.geo_window(fine, "-180,-90,180,90") == everything and engine.geo_overlay(fine) is overlay
+        assert engine.maps().window(fine, "-180,-90,180,90") == everything and engine.maps().overlay(fine) is overlay
     pid = next(iter(table_ids & set(listed)))
-    drawn = engine.geo_pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
+    drawn = engine.maps().pattern(fine, pid)  # drawn where it is counted: by every cell holding its events
     assert drawn["n_points"] == listed[pid]["points"] and set(drawn["rows"]) == set(projected[pid]["rows"])
+    # a deletion overlapping the read (its covers gone, its files moved away) reads as one before it: unknown_dataset, no 500
+    covers = engine.ws.load_covers
+    with mock.patch.object(engine.ws, "load_covers", side_effect=lambda ds: covers(ds) if ds == fine else {}), pytest.raises(PipelineError) as gone:
+        engine.maps().pattern(fine, pid)
+    with mock.patch.object(engine.ws, "load_geo", side_effect=FileNotFoundError("moved")), pytest.raises(PipelineError) as moved:
+        engine.maps().pattern(fine, pid)
+    assert gone.value.code == moved.value.code == "unknown_dataset"
     with pytest.raises(PipelineError, match="west,south"):
-        engine.geo_window(fine, "nowhere")
+        engine.maps().window(fine, "nowhere")
     plain = engine.ingest_file(points_csv)  # the same file as a plain table: as many rows as the map has points, but no upload
     plain_ids = {p["id"] for p in engine.ws.patterns() if p["dataset_id"] == plain["dataset_id"]}
-    assert plain["status"] == "READY" and plain_ids and not plain_ids & {p["id"] for p in engine.geo_projected(fine)}
+    assert plain["status"] == "READY" and plain_ids and not plain_ids & {p["id"] for p in engine.maps().projected(fine)}
     assert not any(e["source"] in plain_ids for e in engine.graph().edges if e["type"] == "IN_REGION")  # nor is it placed
     engine.delete_dataset(plain["dataset_id"])
     upload_id = done[0]["upload_id"]
@@ -508,7 +515,7 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     base = [pid for pid, ins in graph.insights.items() if ins.dataset_id == table]
     pid = max(base, key=lambda p: graph.insight(p).weight)
     cells = engine.ws.load_geo(fine, ("cells",))["cells"]
-    footprint_cells = [str(cells[r]) for r in {p["id"]: p for p in engine.geo_projected(fine)}[pid]["rows"]]
+    footprint_cells = [str(cells[r]) for r in {p["id"]: p for p in engine.maps().projected(fine)}[pid]["rows"]]
     assert engine.place_scores(engine.committed(), cells=footprint_cells)[pid] > 0
     assert any(s.pattern_id == pid and s.matched["place"] > 0 for s in engine.search("", cells=footprint_cells).seeds)
     asked = TestClient(create_app(engine)).post("/api/search", json={"question": "", "cells": footprint_cells}).json()  # as the card asks
@@ -517,7 +524,7 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     zones = found.evidence.zones
     assert zones and all(set(z["holds"]) <= set(base) for z in zones)
     assert all(z["id"] in {r for r, _ in places(graph, h, z["resolution"])} for z in zones for h in z["holds"])  # placed there
-    drawn = {f["properties"]["id"] for f in engine.geo_overlay(fine)["features"]}
+    drawn = {f["properties"]["id"] for f in engine.maps().overlay(fine)["features"]}
     for question in ("Where is load median higher?", "What is on the map?", "Where is load higher?", "Where is the night share higher?"):
         asked = engine.search(question).evidence  # every region the ZONES or a SCALE CHAIN name is on the map
         assert {z["id"] for z in asked.zones} | {r["id"] for c in asked.scale_chains for r in c["regions"]} <= drawn
@@ -541,7 +548,7 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     every = {n["id"] for n in finer.graph().of_kind("Region")}
     assert any(r.startswith("R:8:") for r in every)  # regions finer than the map of 7 (where the level of 9 lies)
     assert all(n["props"]["patterns"] == len(finer.graph().holders(n["id"])) for n in finer.graph().of_kind("Region"))  # the r7 cells too
-    drawn = finer.geo_overlay(levels[1]["dataset_id"])["features"]
+    drawn = finer.maps().overlay(levels[1]["dataset_id"])["features"]
     assert drawn and all(f["properties"]["resolution"] < 7 for f in drawn)  # none inside one of its cells, nor its cells
 
 
@@ -748,6 +755,8 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
         {"center": [181, lat], "radius_m": 10.0},
         {"center": [lon, 91], "radius_m": 10.0},
         [lon, lat],
+        {"type": "Polygon", "coordinates": [[[lon, lat]] * 4]},  # no area: H3's own failure, not a ValueError
+        {"type": "Polygon", "coordinates": [[[lon, lat], [lon + 0.1, lat], [lon + 0.2, lat], [lon, lat]]]},  # collinear
     ):
         with pytest.raises(SpatialError):
             geometry_to_cells(bad, 7)
@@ -814,6 +823,8 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
         refused = client.post("/api/search", json={"cells": ["nope"]})
         assert refused.status_code == 400 and refused.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"cells": zone, "geometry": {"bbox": [0, 0, 1, 1]}}).status_code == 400
+        flat = client.post("/api/search", json={"geometry": {"type": "Polygon", "coordinates": [[[1.0, 2.0]] * 4]}})  # no area
+        assert flat.status_code == 400 and flat.json()["code"] == "invalid_options"
         assert client.post("/api/search", json={"question": " "}).status_code == 400
 
 
@@ -974,7 +985,7 @@ def test_a_geo_dataset_with_a_time_column_counts_each_cells_points_in_a_period(c
         assert not engine.ws.add_point_times(ds, added["point_time"])  # it has them
     (plain,) = upload_levels(engine, path, geo="auto@7")
     assert "point_time" not in engine.ws.load_geo(plain["dataset_id"])
-    assert engine.geo_period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {
+    assert engine.maps().period_counts(plain["dataset_id"], parse_period("2019-03-04", "2019-03-10")) == {
         "counts": None,
         "points": 0,
         "timed": False,

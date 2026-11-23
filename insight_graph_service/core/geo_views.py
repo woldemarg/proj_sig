@@ -25,8 +25,9 @@ from graph_query_engine.vertical import affinity, restating, scale_chain, scale_
 from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
-from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points
+from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points, upload_id
 from insight_graph_service.core.workspace import Workspace
+from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
 from subgroup_miner.spatial import SpatialError, compactness
@@ -83,9 +84,16 @@ def _owner(ws: Workspace, dataset_id: str) -> dict[str, Any]:
     return owner
 
 
-def geo_profile(loaded: Any) -> dict[str, Any]:
-    """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers."""
-    ctx = loaded.spatial
+def geo_profile(loaded: Any, miner: MinerConfig) -> dict[str, Any]:
+    """A geo level's ``profile.geo`` (docs/02_discovery.md §2.9), written to its batch record: what ``geo_datasets`` offers;
+    ``types`` keeps the values a per-type counter would count (as many events as ``check_counts`` asks) and its
+    ``column=value,…`` spec reads back as they are (no ``,``, no edge spaces, no ``=`` in the column)."""
+    ctx, least = loaded.spatial, miner.min_rows * miner.min_cell_points
+    types = {
+        col: {v: n for v, n in values.items() if n >= least and v == v.strip() and v and "," not in v}
+        for col, values in ctx.types.items()
+        if "=" not in col and col == col.strip()
+    }
     return {
         "option": loaded.geo,
         "resolution": ctx.resolution,
@@ -98,6 +106,7 @@ def geo_profile(loaded: Any) -> dict[str, Any]:
         "moran_i": {k: round(v, 4) for k, v in ctx.moran.items()},
         "glossary": ctx.glossary,
         **({"exposure": ctx.exposure} if ctx.exposure else {}),  # what a per-type count is per (docs/02_discovery.md §2.9)
+        "types": {col: values for col, values in types.items() if values},
     }
 
 
@@ -180,7 +189,8 @@ def _export_reading(
     of the export: the dataset's own by default; only a resolution some geo dataset is analysed at is taken (a finer one
     over a wide zone is millions of cells). A hidden layer's dataset is not served, as the map does not offer it.
     ``layer``: a layer link run's context layer by its name, its points read as the run read them (its filter, an aligned
-    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over."""
+    run's window), instead of the dataset's own rows; ``ring`` the disk its band counts over. A stored file that no longer
+    holds its upload's bytes is ``source_changed``: its insights describe another table (docs/13_trust.md, P5)."""
     record = _owner(ws, dataset_id)
     geo = (record.get("profile") or {}).get("geo")
     if not geo or dataset_id in hidden_datasets(ws.list_batches()):
@@ -204,6 +214,9 @@ def _export_reading(
         span = {"window": list(window[2:])} if window else {}
         return table | {"time": window and window[0], "where": where} | span, (path, locator, where, window), resolution
     reading = (Path(record["source_path"]), point_columns(record)[1] or "auto", record.get("where"), None)
+    # ponytail: the dataset's own file alone; a layer's copy has no digest of its own on the record (the run's id mixes it in)
+    if record.get("upload_id") and reading[0].is_file() and upload_id(reading[0], record.get("where")) != record["upload_id"]:
+        raise PipelineError("source_changed", f"{dataset_id}: its stored file no longer holds the bytes its insights were mined from")
     return table | {"time": record.get("time"), "where": record.get("where")}, reading, resolution
 
 
@@ -390,20 +403,24 @@ def _pattern_json(ins: Insight, rows: np.ndarray, **extra: Any) -> dict[str, Any
     }
 
 
-LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it: the nearest so many
+LAYER_POINTS_MAX = 2000  # a focused insight's layer points drawn beside it, at most
 
 
 def layer_points(record: dict[str, Any], cells: np.ndarray) -> list[dict[str, Any]]:
     """A run's layers' points in and around ``cells`` (their disk one ring wider than the run's), as the run counted them
-    (its window and filter): ``[{name, points: [[lon, lat], …]}]``, the map draws the two layers side by side. A
-    dataset of no layer has none."""
+    (its window and filter): ``[{name, n_points, points: [[lon, lat], …]}]``, ``n_points`` all of them and ``points`` at
+    most ``LAYER_POINTS_MAX``, every k-th in file order as an insight's own points are thinned, so the layer's density
+    holds over the whole disk and span; the map draws the two layers side by side. A dataset of no layer has none."""
     if not record.get("cross") or not len(cells):
         return []
     out = []
     for name, path, locator, window, where in context_files(record):
         source = read_context(name, Path(path), locator, window, where)[0]
-        near = points_near(source, cells, record.get("context_ring", 1) + 1, LAYER_POINTS_MAX)
-        out.append({"name": name, "points": [[round(float(source.lon[i]), 6), round(float(source.lat[i]), 6)] for i in near]})
+        near = points_near(source, cells, record.get("context_ring", 1) + 1)
+        drawn = near[:: max(1, int(np.ceil(len(near) / LAYER_POINTS_MAX)))]
+        out.append(
+            {"name": name, "n_points": int(len(near)), "points": [[round(float(source.lon[i]), 6), round(float(source.lat[i]), 6)] for i in drawn]}
+        )
     return out
 
 
@@ -422,41 +439,46 @@ def geo_pattern(
     With the ``level`` it was found at and its numbers, and on request its cells' ``rings``, so a map that holds no cell
     of this dataset draws and describes it. With a ``period``, the points are those in it (``points_in_period``) when the
     dataset has their times (``in_period``)."""
-    geo = _geo(ws, dataset_id)
-    rows = ws.load_covers(dataset_id).get(pattern_id)
-    if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
-        raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
-    if rows is not None:
-        inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
-    else:
-        found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
-        batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
-        members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
-        if batch is None or members is None:  # unknown here, or its dataset deleted since this commit
-            raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
-        rows, level = found.events, found.level
-        src = members(ws.load_covers(batch["dataset_id"])[pattern_id])
-        inside = src[np.isin(geo["point_cell"][src], rows)]
-    timed = points_in_period(ws, dataset_id, period) if period is not None else None
-    if timed is not None:
-        inside = inside[timed[inside]]
-    step = max(1, int(np.ceil(len(inside) / max_points)))
-    points = geo["lonlat"][inside[::step]]
-    ins = graph.insight(pattern_id)
-    return {
-        "pattern_id": pattern_id,
-        "cells": [str(c) for c in geo["cells"][rows]],
-        "rows": rows.tolist(),
-        "n_points": int(len(inside)),
-        "in_period": timed is not None,  # the points are those of the asked period
-        "points": np.round(points.astype(float), 5).tolist(),
-        "level": level,
-        "effect_size": ins.effect_size,
-        "phenomenon_type": ins.phenomenon_type,
-        "support": ins.support,
-        "weight": ins.weight,
-        "layer_points": layer_points(ws.ready_batch_for(dataset_id) or {}, geo["cells"][rows]),  # the run's layer beside it
-    } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
+    try:
+        geo = _geo(ws, dataset_id)
+        rows = ws.load_covers(dataset_id).get(pattern_id)
+        if rows is not None and (pattern_id not in graph.nodes or graph.tampered(pattern_id)):
+            raise PipelineError("unknown_dataset", f"no intact pattern {pattern_id} in {dataset_id}")
+        if rows is not None:
+            inside, level = np.flatnonzero(np.isin(geo["point_cell"], rows)), f"res {graph.facts(pattern_id).resolution}"
+        else:
+            found = _projection(ws, graph, dataset_id)["patterns"].get(pattern_id)
+            batch = ws.ready_batch_for(graph.insight(pattern_id).dataset_id) if found else None
+            members = member_rows(ws, batch, _owner(ws, dataset_id), len(geo["point_cell"])) if batch else None
+            own = ws.load_covers(batch["dataset_id"]).get(pattern_id) if batch and members else None
+            if own is None or members is None:  # unknown here, or its dataset deleted since this commit (its record, or its covers, gone)
+                raise PipelineError("unknown_dataset", f"no pattern {pattern_id} in {dataset_id}")
+            rows, level = found.events, found.level
+            src = members(own)
+            inside = src[np.isin(geo["point_cell"][src], rows)]
+        timed = points_in_period(ws, dataset_id, period) if period is not None else None
+        if timed is not None:
+            inside = inside[timed[inside]]
+        step = max(1, int(np.ceil(len(inside) / max_points)))
+        points = geo["lonlat"][inside[::step]]
+        ins = graph.insight(pattern_id)
+        return {
+            "pattern_id": pattern_id,
+            "cells": [str(c) for c in geo["cells"][rows]],
+            "rows": rows.tolist(),
+            "n_points": int(len(inside)),
+            "in_period": timed is not None,  # the points are those of the asked period
+            "points": np.round(points.astype(float), 5).tolist(),
+            "level": level,
+            "effect_size": ins.effect_size,
+            "phenomenon_type": ins.phenomenon_type,
+            "support": ins.support,
+            "weight": ins.weight,
+            # the insight's run's layer beside it, whichever map draws it: a base map holds a run's insights, not its layer
+            "layer_points": layer_points(ws.ready_batch_for(ins.dataset_id) or {}, geo["cells"][rows]),
+        } | ({"rings": [cell_boundary(str(c)) for c in geo["cells"][rows]]} if rings else {})
+    except FileNotFoundError as exc:  # a deletion moved the dataset's files while this read them: as a read after it
+        raise PipelineError("unknown_dataset", f"{dataset_id} is not a geo dataset") from exc
 
 
 def geo_overlay(ws: Workspace, graph: DualGraph, dataset_id: str, thresholds: PhenomenonThresholds, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -825,3 +847,46 @@ def export_geosparql(ws: Workspace, graph: DualGraph) -> str:
             if pid in graph.nodes:
                 extents[pid] = [str(c) for c in geo["cells"][rows]]
     return build_turtle(graph, extents)
+
+
+class MapReads(NamedTuple):
+    """The map's reads (docs/08_interface.md §8.1) over one workspace and the graph of one commit, with the settings they
+    take: what ``Engine.maps`` hands out while the workspace is usable."""
+
+    ws: Workspace
+    graph: DualGraph
+    thresholds: PhenomenonThresholds
+    max_points: int  # a pattern's points sent to the map
+
+    def datasets(self) -> list[dict[str, Any]]:
+        return geo_datasets(self.ws)
+
+    def cells_pack(self, dataset_id: str) -> bytes:
+        return geo_cells_pack(self.ws, dataset_id)
+
+    def pattern(self, dataset_id: str, pattern_id: str, rings: bool = False, period: tuple[datetime, datetime] | None = None) -> dict[str, Any]:
+        return geo_pattern(self.ws, self.graph, dataset_id, pattern_id, self.max_points, rings, period)
+
+    def table_rows(self, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
+        return geo_table_rows(self.ws, dataset_id, resolution, layer)
+
+    def zone_rows(
+        self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
+    ) -> tuple[bytes, dict[str, Any]]:
+        return geo_zone_rows(self.ws, dataset_id, zones, resolution, layer)
+
+    def overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        return geo_overlay(self.ws, self.graph, dataset_id, self.thresholds, datasets)
+
+    def period_counts(self, dataset_id: str, period: tuple[datetime, datetime], datasets: tuple[str, ...] = ()) -> dict[str, Any]:
+        """The cells' points in ``period`` and the listed insights that do not act in it (``idle_insights``)."""
+        idle = idle_insights(self.ws, self.graph, dataset_id, period, self.thresholds, datasets)
+        return geo_period_counts(self.ws, dataset_id, period) | {"idle": idle}
+
+    def projected(self, dataset_id: str) -> list[dict[str, Any]]:
+        return geo_projected(self.ws, self.graph, dataset_id, self.thresholds)
+
+    def window(
+        self, dataset_id: str, bbox: str, level: int | None = None, datasets: tuple[str, ...] = (), period: tuple[datetime, datetime] | None = None
+    ) -> dict[str, Any]:
+        return geo_window(self.ws, self.graph, dataset_id, bbox, self.thresholds, level, datasets, period)

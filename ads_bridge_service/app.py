@@ -29,9 +29,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from ads_bridge_service.settings import AdsSettings
 from ads_bridge_service.task import (
+    METADATA_MD,
     ZONES_FILE,
     ZONES_MD,
     build_domain_md,
+    build_metadata_md,
     build_query_parts,
     build_zones_md,
     finding_files,
@@ -51,7 +53,8 @@ MAX_ZONES = 50  # the zones a conversation may hold (the graph service's MAX_EXP
 ZONES_HEADER = "zone_id,row_id,aoi_zone"  # the graph service's zone_rows CSV
 SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # ADS's: a uuid4, a path segment as it is
 ZONE_ID = r"^[A-Za-z0-9_-]{1,16}$"  # the graph service's zone ids
-# the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD)
+# the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD): what is left without them
+# tells whether the question has words for the graph (the bridge imports nothing of the repository)
 _PERIODS = re.compile(r"(?<![\w-])(?:\d{4}-W\d{2}|\d{4}-Q[1-4]|Q[1-4]\s+\d{4}|\d{4}-\d{2}(?:-\d{2})?)(?![\d-])", re.I)
 _HEADER = re.compile(r"^Період:.*$", re.M)  # the console's period line: ADS's, no words of the question
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
@@ -143,18 +146,28 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
+        # the bridge stops: a job it leaves running in ADS is cancelled there (ADR-356 §4), so the session it keeps takes the
+        # conversation's next question; ponytail: a crash or a SIGKILL runs none of this
+        with jobs_lock:
+            running = [j["session_id"] for j in jobs.values() if j["stage"] == "ads" and j["session_id"]]
+        for sid in running:
+            with contextlib.suppress(httpx.HTTPError):
+                http.post(f"{settings.ads_url}/sessions/{sid}/jobs/cancel", timeout=5)
         http.close()
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
     def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
         """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
-        centres it holds, and the period bar's days, never a period the question's text names (that one is ADS's). Neither
-        a zone nor words left: nothing to seed the graph, no findings."""
-        text = _PERIODS.sub(" ", _HEADER.sub(" ", question))
-        if not polygon and not text.strip():
+        centres it holds, and the period bar's days alone (``period_only``): a period the question's text names is ADS's,
+        so the graph does not read it, and keeps a token that only looks like one as a word. A text of periods alone has
+        no words for the graph: a zone is asked alone, the whole map not at all (the graph seeds something for any text)."""
+        text = _HEADER.sub(" ", question)
+        if not _PERIODS.sub(" ", text).strip():
+            text = ""
+        if not polygon and not text:
             return []
-        ask = {"question": text, "use_llm": False} | ({"geometry": polygon} if polygon else {})
+        ask = {"question": text, "use_llm": False, "period_only": True} | ({"geometry": polygon} if polygon else {})
         if period:
             ask["period"] = period
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
@@ -190,6 +203,17 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 zone, _, rest = line.partition(",")
                 lines.append(f"{zone},{t['file']},{rest}")
         return tables, ("\n".join(lines) + "\n").encode("utf-8")
+
+    def table_docs(tables: list[dict[str, Any]]) -> bytes:
+        """The metadata documents of the tables (a layer's points have none of their own), as ``metadata.md``."""
+        docs = {
+            t["dataset_id"]: _checked(
+                http.get(f"{settings.ads_graph_url}/api/datasets/{quote(t['dataset_id'], safe='')}/metadata"), "sig_failed", "SIG metadata"
+            ).json()
+            for t in tables
+            if not t.get("layer")
+        }
+        return build_metadata_md(tables, docs).encode("utf-8")
 
     def session_files(sid: str) -> dict[str, str]:
         """The files the bridge sent the session, name -> ADS's path: a table sent on an earlier question is not sent again."""
@@ -271,8 +295,10 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
     def write_report(question: str, report: str, domain: str) -> str:
         """The final report from the ADS report with the zone's methodology and the glossary; "" without its required sections."""
         prompt = Template(JOINT_TEMPLATE.read_text(encoding="utf-8")).render(
-            user_query=question, report=report, domain_knowledge=domain, query_language="uk"
-        )
+            user_query=question,
+            report=report,
+            domain_knowledge=domain,
+        )  # an LLM prompt, not HTML: no autoescape (code scanning alert #7, dismissed as a false positive, is this line)
         body = {"model": "synthesis", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": JOINT_MAX_TOKENS}
         resp = _checked(http.post(f"{settings.ads_llm_url}/v1/chat/completions", json=body), "ads_failed", "ADS LLM gateway")
         out = resp.json()["choices"][0]["message"]["content"]
@@ -294,6 +320,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             zones = {z.id: z.polygon for z in body.zones}
             findings = zone_findings(body, zones)
             tables, placed = place_tables(body)
+            docs = table_docs(tables)  # the graph's part, before an ADS session opens
             sources = finding_files(findings)
             job["insights"] = findings
             job["ads_query"] = "".join(p["text"] for p in build_query_parts(body.question, tables, body.focus, list(zones), findings))
@@ -304,7 +331,8 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
             files = {ZONES_FILE: placed} if zones else {}  # a conversation without a zone has no zones file
-            upload(job["session_id"], tables, files | {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8")})
+            files |= {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8"), METADATA_MD: docs}
+            upload(job["session_id"], tables, files)
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)
             enter("joint")
@@ -313,6 +341,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             except Exception as exc:  # ADS's report stands without the final one
                 log.exception("ADS job %s: no final report", job["job_id"])
                 job.update(joint_report="", joint_error=f"{type(exc).__name__}: {exc}")
+            check(job)  # a conversation that ended while the report was written: its one LLM call done, the job stops
             enter("done")
         except Cancelled:  # its conversation ended: the session it holds is closed (again, if the console closed it first)
             if job["session_id"]:

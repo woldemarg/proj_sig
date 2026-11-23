@@ -99,18 +99,28 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         assert page.input_value("#geo") == "auto@auto" and page.is_enabled("#role-table")
         assert page.evaluate(mirror) == [False, ""]
         page.evaluate("document.body.classList.remove('dev')")  # the person's time switch: ticked, it asks the column
-        assert not page.is_visible("#time-user")
+        assert not page.is_visible("#time-user") and page.input_value("#geo-user") == "auto@auto"  # events: the level asked
+        page.fill("#geo-user", "auto@7")
+        assert page.input_value("#geo") == "auto@7"
+        page.check("#role-table")
+        assert not page.is_visible("#geo-user")
+        page.check("#role-events")
         page.check("#use-time")
+        assert page.input_value("#time") == "timestamp"  # the usual name, to confirm or change
         page.fill("#time-user", "when")
         assert page.input_value("#time") == "when"
         page.uncheck("#use-time")
         assert page.input_value("#time") == "" and not page.is_visible("#time-user")
+        page.check("#role-table")
+        page.check("#role-events")
+        page.check("#use-time")  # a role changed meanwhile: the column kept for a tick back is still there
+        assert page.input_value("#time") == "when"
+        page.uncheck("#use-time")
         page.evaluate("document.body.classList.add('dev')")
         page.evaluate("document.querySelector('#upload-form details.adv').open = true")  # every field of the upload, held
         for field, value in {"#time": "when", "#where": "kind=a"}.items():
             page.fill(field, value)
         page.select_option("#baseline", "zone")
-        page.set_input_files("#metadata", str(tmp_path / "rows.csv"))
         sent: list[bytes] = []
 
         def refuse(route: Route) -> None:
@@ -126,11 +136,10 @@ def test_the_form_proposes_a_role_and_the_user_can_change_it(cfg, tmp_path):
         )  # said in the dialog, which stays open
         page.unroute("**/api/upload")
         page.fill("#time", "")  # the layer below: its points alone
-        page.set_input_files("#metadata", [])
         assert {m.decode() for m in re.findall(rb'; name="([^"]+)"', sent[0])} == {
             *("file", "bins", "categories", "geo", "table", "time", "tz", "grid", "where", "baseline"),
-            *("source", "reliability", "indicators", "glossary", "metadata"),
-        }
+            *("source", "reliability", "indicators", "glossary"),
+        }  # the metadata document is the rail's, per upload
         page.check("#role-layer")  # changed by hand: the points kept as a layer
         assert page.text_content("#upload-btn") == "Зберегти шар"
         page.click("#upload-btn")
@@ -189,13 +198,14 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
     with serve(app, port=port) as url, httpx.Client(base_url=url, timeout=120) as client, sync_api.sync_playwright() as p:
         a = upload_file(client, "target.csv", target, f"lat,lon@{RES}", count_values="kind=a")["upload_id"]
         page = p.chromium.launch(executable_path=exe).new_page(viewport={"width": 1500, "height": 900})
-        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: the dialog's types and disk
+        page.add_init_script("localStorage.setItem('sig-dev', 'on')")  # the developer mode: every shipped layer set in the list
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"{url}/")
         page.wait_for_selector(".ds-link", timeout=20000)
         page.click(".ds-link")
         assert page.is_visible("#link-drop") and page.is_visible("#link-or")  # one's own file apart from the ready layers
+        assert "CSV, TSV, TXT, Parquet" in page.inner_text("#link-drop") and "CSV, TSV, TXT, Parquet" in page.text_content("#drop")
         assert (page.input_value("#link-counts"), page.input_value("#link-ring")) == (
             "kind=a",
             "0",
@@ -225,6 +235,21 @@ def test_the_add_context_layer_action_stores_a_layer_and_runs_it_one_to_one_on_o
         settled()
         page.evaluate("refreshBatches()")
         assert page.locator(".ds-link").count() == 1  # the base alone: neither the run nor the layer
+        with page.expect_file_chooser() as chooser:  # an upload's metadata document, from its row: every reading and run at once
+            page.click(".ds-group[data-upload] .ds-doc >> nth=0")
+        doc = b"Planted\n\nDescription: planted points\n\nColumns:\n\nkind\n  Description: the planted type\n"
+        chooser.value.set_files(files=[{"name": "doc.md", "mimeType": "text/markdown", "buffer": doc}])
+        page.wait_for_selector(".ds-docs", timeout=20000)
+        assert page.inner_text("#upload-msg") == "Документ метаданих додано: описано 1 колонку датасету."
+        with page.expect_file_chooser() as chooser:
+            page.click(".ds-group[data-upload] .ds-doc >> nth=0")
+        chooser.value.set_files(files=[{"name": "empty.md", "mimeType": "text/markdown", "buffer": b" \n"}])
+        page.wait_for_function("$('upload-msg').textContent.startsWith('Файл порожній')", timeout=10000)  # no removal by an empty file
+        ready = [b for b in engine.ws.list_batches() if b["status"] == "READY"]  # the level and its layer run
+        assert "документ · 1 колонка" in page.inner_text(".ds-docs") and len(ready) > 1 and all(b.get("metadata_doc") for b in ready)
+        page.click(".ds-doc-x")
+        page.wait_for_selector(".ds-docs", state="detached", timeout=20000)
+        assert not any(b.get("metadata_doc") for b in engine.ws.list_batches())
         (layer,) = [b["upload_id"] for b in engine.ws.list_batches() if b["status"] == "LAYER"]
         page.click(".ds-link")
         page.click("#link-pick summary")
@@ -471,8 +496,4 @@ def test_the_rail_tree_says_why_no_layer_shows_a_levels_runs_once_and_deletes_wi
         page.evaluate("runLink({ layer: 'L' })")
         page.wait_for_function("$('link-msg').textContent === 'refused'", timeout=10000)
         assert page.evaluate("[$('link-counts').value, $('link-ring').value]") == ["kind=a", "1"]  # as picked
-        shares = """profileTypes({ profile: { numerics: ["share_Primary Type_THEFT", "share_this_is_x_yes"], geo: { glossary: {
-          "share_Primary Type_THEFT": "share of the cell's events whose Primary Type is THEFT",
-          "share_this_is_x_yes": "share of the cell's events whose this is x is yes (every such event also has: a b)" } } } })"""
-        assert page.evaluate(shares) == {"Primary Type": ["THEFT"], "this_is_x": ["yes"]}
     assert not errors, errors

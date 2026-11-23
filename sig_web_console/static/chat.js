@@ -127,9 +127,9 @@ function followUps(turn) {
   const out = [];
   if (atts[0]) out.push(`Де ще трапляється «${atts[0].label}»?`);
   const cross = items.find((i) => i.transversal_only);
-  if (cross) out.push(`Розкажи про ${cross.target} для ${cross.scope.map((c) => c.split("=")[1]).join(" ")}`);
+  if (cross) out.push(`Розкажи про ${human(cross.target)}${whereOf(cross.reading)}`);  // as askAbout asks
   const seed = items[0];
-  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.map(human).join(" і ")}?`);  // as askAbout names them
+  if (seed && seed.statistics.covariance && seed.statistics.covariance.pair) out.push(`Як пов'язані ${seed.statistics.covariance.pair.map(human).join(" і ")}${whereOf(seed.reading)}?`);
   return out.slice(0, 3);
 }
 
@@ -154,16 +154,19 @@ const WALK = Object.fromEntries(["CONTRASTS", "CONTRASTS (in)", "SPECIALIZES", "
 
 async function pickInsight(pid, view) {
   let d;
-  if (!isDev() && personTab() === "ads") { inspect(pid); return; }  // the graph's chat is not the person's: the drawer describes it
+  if (!isDev() && personTab() === "ads") return GeoMap.has(pid) ? undefined : inspect(pid, GeoMap.offMap(pid));  // the map's focus and card describe it
   try { d = await api(`/api/nodes/${encodeURIComponent(pid)}`); } catch (e) { return; }
   S.threads.graph.push({ question: d.reading.where, picked: true, insight: d, view });  // the insight in words, as its card reads it
   showTab("graph");
 }
 
-function askAbout(p) {
-  const where = p.conditions.map((c) => c.value).join(" ");
+// an insight's scope in its own words: a band value (q3, none nearby) names its column only through them (docs/07 §7.1.1)
+const whereOf = (reading) => (reading && reading.where ? ` там, де ${reading.where}` : "");
+
+function askAbout(d) {
+  const p = d.node.props;
   return p.phenomenon_type === "covariance" && p.covariance && p.covariance.pair
-    ? `Як пов'язані ${p.covariance.pair.map(human).join(" і ")} для ${where}?` : `Розкажи про ${human(p.target)} для ${where}`;
+    ? `Як пов'язані ${p.covariance.pair.map(human).join(" і ")}${whereOf(d.reading)}?` : `Розкажи про ${human(p.target)}${whereOf(d.reading)}`;
 }
 
 function insightCard(turn) {
@@ -175,7 +178,7 @@ function insightCard(turn) {
   const links = [...steps, ...Object.entries(WALK).flatMap(([type, note]) => (d.neighbors[type] || []).filter((it) => it.integrity !== "mismatch").map((it) => ({ ...it, word: note })))]
     .filter((it) => !seen.has(it.id) && seen.add(it.id)).slice(0, 8);
   return `<div class="bot-card insight-card"><div class="answer-box">` +
-    `<div class="ic-tags">${w ? chip("", levelName(w.level)) : ""}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Відкрити тему">${word("theme")} · ${esc(theme.label)}</a>` : ""}</div>` +
+    `<div class="ic-tags">${w ? chip("", levelName(w.level)) : ""}${layerChip(p.dataset_id)}${theme ? `<a class="ic-theme" data-id="${esc(theme.id)}" tabindex="0" role="button" title="Відкрити тему">${word("theme")} · ${esc(theme.label)}</a>` : ""}</div>` +
     `<p><b>${esc(d.reading.where)}</b></p><p>${esc(d.reading.what)}</p>` +
     `<div class="ev-stats">${term("support")}: ${num(p.support, 0)} (${num(p.support_fraction * 100, 1)}%) · ${term("weight")}: ${num(p.weight)}` +
     (w ? ` · ${term("cells_in_view")}: ${num(w.cells, 0)} · ${term("points")}: ${num(w.points, 0)} (${num(w.share * 100, 0)}%) · ${term("window_lift")}: ${esc(w.lift_words)}` : "") + `</div>` +

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import h3
 import numpy as np
@@ -88,6 +89,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         layer, points = json.loads(got.headers["x-rows"]), pd.read_csv(io.BytesIO(got.content), keep_default_na=False)
         assert (layer["layer"], layer["filename"], layer["total"], layer["ring"], layer["window"]) == ("bars", "bars.csv", 4, 1, span["window"])
         assert list(points[f"h3_r{res}"] != "") == [True, True, False, False]  # the run counted the window's points alone
+        read = pd.read_csv(io.BytesIO(got.content))[f"h3_r{res}"]  # as an ADS kernel reads it, pandas' defaults: no point is NaN, not ""
+        assert list(read.isna()) == [False, False, True, True] and (read != "").all()  # so the task's recipe names NaN
         placed = json.loads(
             client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z1", "polygon": shape}], "layer": "bars"}).headers["x-zones"]
         )
@@ -95,6 +98,11 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert client.get(f"/api/geo/{ds}/rows", params={"layer": "nope"}).json()["code"] == "unknown_dataset"
         bare = client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})  # no zone: the table's counts alone
         assert bare.text.strip() == "zone_id,row_id,aoi_zone" and json.loads(bare.headers["x-zones"])["zones"] == {}
+        # the stored file is no longer the upload the insights were mined from: no row of another table goes out under this id
+        stored = Path(engine.ws.ready_batch_for(ds)["source_path"])
+        stored.write_bytes(stored.read_bytes() + b"\n")
+        for changed in (client.get(f"/api/geo/{ds}/rows"), client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})):
+            assert (changed.status_code, changed.json()["code"]) == (409, "source_changed")
 
 
 def test_a_row_without_a_point_is_in_no_place():

@@ -34,6 +34,7 @@ class QueryIn(BaseModel):
     resolution: int | None = None
     as_of: str | None = None  # the reference date, passed to POST /api/search as given
     period: list[str] | None = None  # [start, end), the console's period bar, passed as given
+    period_only: bool | None = None  # ``period`` (or none) the only period, one the text names not read: passed as given (the ADS bridge)
 
 
 def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None = None) -> FastAPI:
@@ -80,7 +81,7 @@ def create_app(settings: NarratorSettings | None = None, llm: ChatModel | None =
                         "at": datetime.now(UTC).isoformat(timespec="seconds"),
                         "question": qa.question,
                         **body.model_dump(
-                            include={"cells", "geometry", "resolution", "as_of", "period"}, exclude_none=True
+                            include={"cells", "geometry", "resolution", "as_of", "period", "period_only"}, exclude_none=True
                         ),  # a zone and dates, to replay it
                         "mode": qa.answer_mode,
                         "metrics": qa.metrics,

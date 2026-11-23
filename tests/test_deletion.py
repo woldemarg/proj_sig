@@ -139,8 +139,8 @@ def test_a_new_version_supersedes_every_level_of_the_old_in_one_transaction(tmp_
 
     derive = engine._derive
 
-    def crash(ontology, pending=None):
-        if pending and "superseded" in pending:
+    def crash(ontology, pending=()):
+        if any("superseded" in p for p in pending):
             raise RuntimeError("crash after the removal, before the commit point")
         return derive(ontology, pending)
 

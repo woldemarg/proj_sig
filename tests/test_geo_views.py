@@ -19,12 +19,12 @@ def test_the_period_bar_counts_the_window_and_a_patterns_points_in_its_days(engi
     geo_frame().to_csv(path, index=False)
     (level,) = upload_levels(engine, path, geo="auto@8", time="when")
     ds, week = level["dataset_id"], parse_period("2019-03-04", "2019-03-10")
-    counts = engine.geo_period_counts(ds, week)["counts"]
-    whole, part = engine.geo_window(ds, "-180,-90,180,90"), engine.geo_window(ds, "-180,-90,180,90", period=week)
+    counts = engine.maps().period_counts(ds, week)["counts"]
+    whole, part = engine.maps().window(ds, "-180,-90,180,90"), engine.maps().window(ds, "-180,-90,180,90", period=week)
     assert whole["period_points"] is None and part["period_points"] == sum(counts) < part["points"] == whole["points"]
     assert part["themes"] == whole["themes"]
     pid = next(iter(engine.ws.load_covers(ds)))
-    full, cut = engine.geo_pattern(ds, pid), engine.geo_pattern(ds, pid, period=week)
+    full, cut = engine.maps().pattern(ds, pid), engine.maps().pattern(ds, pid, period=week)
     assert cut["n_points"] == sum(counts[r] for r in full["rows"]) < full["n_points"] and cut["rows"] == full["rows"]
     assert cut["in_period"] and not full["in_period"]
 
@@ -39,11 +39,11 @@ def test_the_insights_idle_in_the_days_are_every_level_the_map_lists(engine, tmp
     levels = upload_levels(engine, path, geo="auto@8,7", time="when", grid="week", tz="Europe/Kyiv")
     ds = next(r["dataset_id"] for r in levels if (r.get("profile") or {}).get("geo", {}).get("resolution") == 8)
     graph, late = engine.graph(), parse_period("2019-04-02", "2019-04-04")
-    listed = {p for f in engine.geo_overlay(ds)["features"] for ids in f["properties"]["ids"].values() for p in ids}
+    listed = {p for f in engine.maps().overlay(ds)["features"] for ids in f["properties"]["ids"].values() for p in ids}
     timed = {p for p in listed if (t := graph.trajectories.get(p)) and (t.get("core") or t["events"])}
     found = graph.members(late)
     acting = {*found["active"], *(p for p, _ in found["peaked"]), *(p for p, _ in found["dropped"])}
-    idle = engine.geo_period_counts(ds, late)["idle"]
+    idle = engine.maps().period_counts(ds, late)["idle"]
     assert set(idle) == timed - acting and {graph.insight(p).dataset_id for p in idle} - {ds}  # another level's too
 
 
@@ -90,14 +90,14 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
             assert all(drawn[pid] & set(np.flatnonzero(s.idx == r).tolist()) for pid in region)
     finest = sets[levels[-1]]
     assert any(set(listed) - own for listed, own in zip(finest.listed, finest.own, strict=True))  # some only from above
-    overlay = {f["properties"]["id"]: f["properties"] for f in engine.geo_overlay(ds)["features"]}
+    overlay = {f["properties"]["id"]: f["properties"] for f in engine.maps().overlay(ds)["features"]}
     for props in [p for p in overlay.values() if p["resolution"] == 5][:12]:  # a view of one region lists its n
         lon, lat = centres[props["rows"][0]]
-        alone = engine.geo_window(ds, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", 5)
+        alone = engine.maps().window(ds, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", 5)
         assert alone["regions"] == 1 and alone["insights"] == props["n"]
     split = float(np.median(centres[:, 0]))
     for bbox in (f"-180,-90,{split},90", f"{split},-90,180,90", "-180,-90,180,90"):
-        window = engine.geo_window(ds, bbox, 5)
+        window = engine.maps().window(ds, bbox, 5)
         rows = sorted((i for t in window["themes"] for i in t["insights"]), key=lambda i: i["rank"])
         focus = np.unique(at.idx[window_view(centres, bbox)])
         expected = _rows(graph, ds, {p: 0 for r in focus for p in at.listed[r]})
@@ -110,9 +110,9 @@ def test_the_window_lists_the_insights_characteristic_of_its_regions(engine, tmp
         assert all(i["regions"] == 0 for i in rows if i["wider"]) and (
             not own or max(own) < min([i["rank"] for i in rows if i["wider"]], default=len(rows))
         )
-    assert engine.geo_window(ds, "-180,-90,180,90")["level"] == 7
+    assert engine.maps().window(ds, "-180,-90,180,90")["level"] == 7
     with pytest.raises(PipelineError, match="region level"):
-        engine.geo_window(ds, "-180,-90,180,90", 8)
+        engine.maps().window(ds, "-180,-90,180,90", 8)
 
 
 def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
@@ -131,36 +131,36 @@ def test_a_map_counts_the_union_of_its_datasets(engine, points_csv, tmp_path):
     assert map_set(engine.ws, a, (coarse["dataset_id"], b)) == (a, b) and map_set(engine.ws, a, ()) == (a,)
     with pytest.raises(PipelineError, match="not geo datasets"):
         map_set(engine.ws, a, ("ds-nope",))
-    alone = {f["properties"]["id"]: f["properties"]["n"] for f in engine.geo_overlay(a)["features"]}
-    theirs = {f["properties"]["id"]: f["properties"]["n"] for f in engine.geo_overlay(b)["features"]}
-    both = engine.geo_overlay(a, (b,))["features"]
+    alone = {f["properties"]["id"]: f["properties"]["n"] for f in engine.maps().overlay(a)["features"]}
+    theirs = {f["properties"]["id"]: f["properties"]["n"] for f in engine.maps().overlay(b)["features"]}
+    both = engine.maps().overlay(a, (b,))["features"]
     assert {f["properties"]["id"] for f in both} == set(alone) | set(theirs)
     assert all(f["properties"]["n"] == alone.get(f["properties"]["id"], 0) + theirs.get(f["properties"]["id"], 0) for f in both)
     shared = next(p for f in both if alone.get((p := f["properties"])["id"]) and theirs.get(p["id"]))  # a region where both list rows
     lon, lat = cell_centres(engine.ws.load_geo(a, ("cells",))["cells"])[shared["rows"][0]]
-    window = engine.geo_window(a, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", shared["resolution"], (b,))
+    window = engine.maps().window(a, f"{lon - 1e-7},{lat - 1e-7},{lon + 1e-7},{lat + 1e-7}", shared["resolution"], (b,))
     rows = [i for t in window["themes"] for i in t["insights"]]
     assert window["insights"] == len(rows) == shared["n"] and {i["dataset_id"] for i in rows} == {a, b}
     c = coarse["dataset_id"]  # a coarser map with a finer upload: the map's own levels read both
     levels = set(_region_sets(engine.ws, engine.graph(), c))
-    coarser = engine.geo_overlay(c, (b,))["features"]
+    coarser = engine.maps().overlay(c, (b,))["features"]
     assert {f["properties"]["resolution"] for f in coarser} <= levels
     assert all(
         any(f["properties"]["ids"].get(b) for f in coarser if f["properties"]["resolution"] == lv) for lv in levels
     )  # the finer file at every level
-    assert engine.geo_window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
-    overlay = engine.geo_overlay(a, (b,))  # what «Усі датасети» reads: each region's count per dataset, every listed insight's trust
+    assert engine.maps().window(c, "-180,-90,180,90", None, (b,))["level"] == max(levels)
+    overlay = engine.maps().overlay(a, (b,))  # what «Усі датасети» reads: each region's count per dataset, every listed insight's trust
     assert all(sum(map(len, f["properties"]["ids"].values())) == f["properties"]["n"] for f in overlay["features"])
     away = {pid: t["map_dataset"] for pid, t in overlay["patterns"].items() if "map_dataset" in t}
     assert set(away) == set(_projection(engine.ws, engine.graph(), b)["patterns"]) and set(away.values()) == {b}
-    drawn = engine.geo_pattern(b, next(iter(away)), rings=True)  # a map holding none of its cells draws it by their rings
+    drawn = engine.maps().pattern(b, next(iter(away)), rings=True)  # a map holding none of its cells draws it by their rings
     assert (
-        "rings" not in engine.geo_pattern(b, next(iter(away)))
+        "rings" not in engine.maps().pattern(b, next(iter(away)))
         and len(drawn["rings"]) == len(drawn["cells"]) > 0
         and drawn["level"] == "res 8"
         and {"effect_size", "support", "weight"} <= set(drawn)
     )
-    assert {d["upload_id"] for d in engine.geo_datasets()} == {fine["upload_id"], other["upload_id"]}
+    assert {d["upload_id"] for d in engine.maps().datasets()} == {fine["upload_id"], other["upload_id"]}
 
 
 def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_csv):
@@ -174,7 +174,7 @@ def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_cs
     graph = engine.graph()
     contested = 0
     for ds in (fine, coarse):
-        listed = {i["id"]: i for t in engine.geo_window(ds["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
+        listed = {i["id"]: i for t in engine.maps().window(ds["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
         rank = sorted(
             (p for p in listed if graph.facts(p).resolution is not None),
             key=lambda p: (graph.insight(p).dataset_id != ds["dataset_id"], -graph.facts(p).resolution, p),
@@ -191,8 +191,10 @@ def test_one_result_of_two_levels_lists_once_at_the_maps_level(engine, points_cs
                 )
     assert contested  # the case that needs the rule: one level restated by several hosts
     # a panned view keeps its hosts: they follow which levels it lists, never its numbers or their order
-    listed = {i["id"]: i["lift"] for t in engine.geo_window(coarse["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
-    listed |= {a["id"]: 1.0 for t in engine.geo_window(coarse["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"] for a in i["also"]}
+    listed = {i["id"]: i["lift"] for t in engine.maps().window(coarse["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"]}
+    listed |= {
+        a["id"]: 1.0 for t in engine.maps().window(coarse["dataset_id"], "-180,-90,180,90")["themes"] for i in t["insights"] for a in i["also"]
+    }
     hosts = _fold_levels(graph, coarse["dataset_id"], listed)
     assert hosts == _fold_levels(graph, coarse["dataset_id"], {q: -v for q, v in reversed(listed.items())}) and any(hosts.values())
 
@@ -209,7 +211,7 @@ def test_a_map_without_a_located_point_lists_nothing(engine, points_csv):
     proj = dict(geo_views._projection(engine.ws, engine.graph(), ds))
     proj["per_cell"] = np.zeros_like(proj["per_cell"])
     with mock.patch.object(geo_views, "_projection", return_value=proj):
-        window = engine.geo_window(ds, "-180,-90,180,90")
+        window = engine.maps().window(ds, "-180,-90,180,90")
     assert window["themes"] == [] and window["insights"] == 0 and window["points"] == 0 and window["cells"] == len(proj["per_cell"])
 
 
@@ -241,9 +243,9 @@ def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, poin
 
     fine, coarse, table = upload_levels(engine, points_csv, geo="auto@8,7", table=True)
     graph, thresholds = engine.graph(), engine.settings.thresholds
-    overlay = engine.geo_overlay(fine["dataset_id"])["patterns"]
-    projected = {p["id"]: p["reading"] for p in engine.geo_projected(fine["dataset_id"])}
-    window = engine.geo_window(fine["dataset_id"], "-180,-90,180,90")
+    overlay = engine.maps().overlay(fine["dataset_id"])["patterns"]
+    projected = {p["id"]: p["reading"] for p in engine.maps().projected(fine["dataset_id"])}
+    window = engine.maps().window(fine["dataset_id"], "-180,-90,180,90")
     rows = [i["id"] for t in window["themes"] for i in t["insights"]]
     readings = {pid: t["reading"] for pid, t in overlay.items()} | projected
     assert table["dataset_id"] in {graph.insight(p).dataset_id for p in overlay} and coarse["dataset_id"] in {
