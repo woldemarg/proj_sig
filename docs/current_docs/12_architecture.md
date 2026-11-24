@@ -171,7 +171,7 @@ Before torch loads, the graph service checks presence and sizes again and refuse
 - **Workers.** It runs one uvicorn worker, because the workspace has one writer.
 - **Health.** `/api/health` runs on the event loop, so it answers while a batch runs.
 
-**Memory and versions.** The graph service needs about 3 GB of RAM on CPU (3.0 GB idle, measured on the demo; Neo4j 0.45–0.6 GB, the other services under 50 MB each). `uv.lock` holds the exact package versions, the same for the host and the images. Each Python image installs its group from it in a build stage (`uv sync --frozen`) and copies only the resulting `/venv` into the runtime stage, so uv and the download cache stay out of the image. matplotlib, which pysubgroup declares for plots SIG never draws, is overridden out of the lock.
+**Memory and versions.** The graph service needs about 3 GB of RAM on CPU (3.0 GB idle, measured on the demo; Neo4j 0.45–0.6 GB, the other services under 50 MB each). `uv.lock` holds the exact package versions, the same for the host and the images. Each Python image installs its group from it in a build stage (`uv sync --frozen`) and copies only the resulting `/venv` into the runtime stage, so uv and the download cache stay out of the image.
 
 **Why these services.** Each one has its own runtime, state and reason to change:
 - **The graph service** holds the embedding model, the workspace and the in-memory graph. Retrieval needs all three, so search lives here, beside the topology it walks.

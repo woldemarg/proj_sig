@@ -11,7 +11,6 @@ miner = [
     "numpy>=2.2",
     "pandas>=2.2",
     "scipy>=1.11",
-    "pysubgroup==0.7.7",
     "h3>=4.0",
     "pyarrow>=15",  # .parquet uploads
 ]
@@ -62,8 +61,6 @@ default-groups = ["dev"]
 conflicts = [[{ group = "cpu" }, { group = "cu130" }]]
 # the newest torch with a cu130 build: one version for the host, the CPU and the GPU image
 constraint-dependencies = ["torch==2.14.1"]
-# pysubgroup declares matplotlib for its plots, which SIG never draws
-override-dependencies = ["matplotlib; sys_platform == 'never'"]
 
 [tool.uv.sources]
 torch = [
@@ -129,5 +126,5 @@ module = ["subgroup_miner.vendor.*", "attractor_topology.vendor.*"]  # vendored:
 follow_imports = "silent"
 
 [[tool.mypy.overrides]]
-module = ["h3", "pandas", "pandas.*", "pysubgroup", "scipy", "scipy.*", "sklearn.*", "statsmodels", "statsmodels.*"]  # no stubs or py.typed
+module = ["h3", "pandas", "pandas.*", "scipy", "scipy.*", "sklearn.*", "statsmodels", "statsmodels.*"]  # no stubs or py.typed
 ignore_missing_imports = true

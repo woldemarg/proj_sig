@@ -24,6 +24,8 @@
 
 14. `step4` (2026-11-18): a subgroup's locations are reduced only over the columns where it has a value; the others stay NaN, as `nanmedian` / `nanmean` left them, without their all-NaN warnings; `step4b` reads no hidden shift in a metric the subgroup has no value of (its NaN location never passed the threshold).
 
+15. Selectors (2026-11-24): pysubgroup is no longer a dependency. `EqualitySelector` and `Conjunction` are two local dataclasses that match rows (`column.to_numpy() == value`) and write a selector (`a=='x' AND b=='y'`, sorted) as pysubgroup 0.7.7 did, so the expressions in records and goldens are unchanged; `extract_dimension_attrs` reads the conjunction's selectors. Checked against 0.7.7 on 5,173 conjunctions of the shipped demo data: identical strings and masks. pysubgroup 2.x is a rewrite with another API, and SIG used only these two classes of it.
+
 ## Removals
 10. These parts are removed: the standalone runner (the guarded load of a data file from the original eda project at the top, and the workflow at the bottom); `step5_integrate_and_materialize`, a print-only report; and the then-unused `zscore` import. The miner never called them. `subgroup_miner/discovery.py` computes the runner's `temp_index` with the same formula (`_z_positive`: z-score, fill 0, clip at 0). Step 5's integrated index is not computed, because nothing read it.
 
@@ -33,4 +35,4 @@
 | `housing.csv` (a realistic demo dataset) | eda project: `data/housing.csv` | `data/housing.csv` (local, git-ignored); a copy without `total_bedrooms` (the one column with nulls) is shipped as the map demo, `data/demo/california_housing.csv` — the California housing data of Pace & Barry (1997, StatLib), public domain |
 
 ## Taking upstream changes
-Do not re-copy the file over its local changes. Re-apply an upstream change by hand, keeping edits 1–14 (upstream changes to step 5 or the runner do not apply), then run `python -m pytest`. `subgroup_miner/discovery.py` stays the boundary where vendored results become `Insight` records.
+Do not re-copy the file over its local changes. Re-apply an upstream change by hand, keeping edits 1–15 (upstream changes to step 5 or the runner do not apply), then run `python -m pytest`. `subgroup_miner/discovery.py` stays the boundary where vendored results become `Insight` records.

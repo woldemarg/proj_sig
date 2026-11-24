@@ -111,7 +111,7 @@ One concept, one name per layer. Code and these docs use the first column, the U
 | representation fingerprint | 10 hex of `sha1(EmbeddingSpec fields)` | `3d08cee697` (GPU), `5098e2b028` (CPU) | [4.6](04_representation.md#46-representation-identity-and-versions) |
 | citation key | `P` + 1-based rank in the evidence | `[P1]`, grouped `[P4, P7]` | [7.4](07_question_answering.md#74-the-evidence-object) |
 | condition expression | `attribute=value` (no spaces, no quotes) | `category=phones` | [3.1](03_insights.md#31-the-insight-record) |
-| EDA selector | pysubgroup's rendering, kept verbatim as provenance | `category=='phones' AND region=='US'` | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
+| EDA selector | the selector's rendering (pysubgroup 0.7.7's, kept by the vendored `EqualitySelector`), kept verbatim as provenance | `category=='phones' AND region=='US'` | [2.2](02_discovery.md#22-the-eda-engine-in-five-steps) |
 
 Same bytes and options give the same dataset id; the same dataset and conditions give the same pattern id. That is what makes re-ingestion idempotent and lets the pattern id double as the duplicate guard.
 
