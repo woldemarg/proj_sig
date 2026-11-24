@@ -14,7 +14,7 @@ from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.temporal import recency, time_score
-from insight_contracts import Insight
+from insight_contracts import Insight, ZonePlace
 from insight_contracts.text import humanize
 
 SEED_TOP_K = 3
@@ -113,11 +113,11 @@ def resolve_seeds(
     encoder: QueryEncoder,
     pattern_vectors: dict[str, np.ndarray],
     config: QueryConfig,
-    place_scores: dict[str, float] | None = None,
+    place_scores: dict[str, ZonePlace] | None = None,
     as_of: datetime | None = None,
     hidden: frozenset[str] = frozenset(),
 ) -> list[SeedMatch]:
-    """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> overlap; without a
+    """Score every Pattern against the parsed query (and the zone's ``place_scores``, pattern id -> its place, by overlap; without a
     period, its freshness at ``as_of``, the reference date) and pick diverse top seeds. A question that names a period
     and nothing the catalog knows seeds from the period's own patterns (``DualGraph.members``), as a zone without text
     seeds from what lies in it (docs/07_question_answering.md §7.2)."""
@@ -138,7 +138,7 @@ def resolve_seeds(
                 qvec,
                 pattern_vectors.get(pid),
                 config,
-                None if place_scores is None else place_scores.get(pid, 0.0),
+                None if place_scores is None else place.overlap if (place := place_scores.get(pid)) else 0.0,
                 time_score(graph.trajectories[pid], query.when) if query.when and pid in graph.trajectories else None,
                 fresh(pid),
             )

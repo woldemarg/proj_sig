@@ -6,7 +6,7 @@ from __future__ import annotations
 import h3
 import numpy as np
 import pytest
-from conftest import geo_frame, upload_levels
+from conftest import HOT, geo_frame, upload_levels
 
 from insight_graph_service.core.engine import PipelineError
 
@@ -257,3 +257,37 @@ def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, poin
     words = " ".join(f"{r['where']} {r['what']}" for r in readings.values())
     assert glossary and not [g for g in glossary.values() if g in words] and "подій комірки" in words and "сусідні комірки" in words
     assert all(t["reading"].startswith("Повторювана картина") if t["id"] else t["label"] == "без теми" for t in window["themes"])
+
+
+def test_a_zone_tells_how_each_insight_lies_in_it():
+    """Over events, an insight wholly in the zone is inside, one partly in it but denser there than on the map
+    concentrated, one spread at the map's rate map-wide, one that only touches it elsewhere, one without an event there
+    outside (docs/07_question_answering.md §7.2); a zone holding the whole map makes every insight map-wide."""
+    from subgroup_miner.spatial_plane import zone_measures
+
+    centre = h3.latlng_to_cell(*HOT, 7)
+    cells = np.array(sorted(h3.grid_disk(centre, 5)))
+    per_cell = np.full(len(cells), 10)  # 910 events, the zone's 7 cells 70 of them
+    ring = {k: np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, k)))) for k in range(6)}
+    disk = np.flatnonzero(np.isin(cells, list(h3.grid_disk(centre, 1))))
+    shapes = {
+        "local": disk,
+        "dense": np.concatenate([disk, ring[3]]),
+        "spread": np.arange(len(cells)),
+        "edge": np.concatenate([ring[0], ring[2], ring[3], ring[4]]),
+        "out": ring[5],
+    }
+    prints = {k: (r, per_cell[r]) for k, r in shapes.items()}
+    places = zone_measures(cells, per_cell, prints, frozenset(h3.grid_disk(centre, 1)))
+    assert {k: p.fit for k, p in places.items()} == {
+        "local": "inside",
+        "dense": "concentrated",
+        "spread": "map-wide",
+        "edge": "elsewhere",
+        "out": "outside",
+    }
+    local, spread = places["local"], places["spread"]
+    assert (local.share, local.cover, local.lift) == (1.0, 1.0, round(100 / (70 * 70 / 910 + 30), 2))  # prior 30
+    assert spread.share == round(70 / 910, 4) and spread.lift == 1.0 and places["out"].share == places["out"].cover == 0.0
+    whole = zone_measures(cells, per_cell, prints, frozenset(str(c) for c in cells))
+    assert {p.fit for k, p in whole.items()} == {"map-wide"} and whole["local"].share == 1.0

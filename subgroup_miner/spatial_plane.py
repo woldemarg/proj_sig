@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``zone_measures``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -18,13 +18,14 @@ import h3
 import numpy as np
 from scipy.stats import binom, false_discovery_control
 
-from insight_contracts import region_node_id
+from insight_contracts import ZonePlace, region_node_id
 from subgroup_miner.spatial import (
     COLOCATED_TOP,
     GEO_COLOCATION_MIN,
     GEO_FOOTPRINT_SHARE,
     GEO_LIFT_MIN,
     GEO_LIFT_MIN_REGIONS,
+    GEO_LIFT_PRIOR,
     GEO_LINK_FDR,
     GEO_LINK_MIN_EVENTS,
     GEO_LOCATED_MIN,
@@ -468,19 +469,43 @@ def build_projection(cells: np.ndarray, other: np.ndarray) -> Callable[[np.ndarr
     return lambda rows: np.flatnonzero(np.isin(parent, rows))
 
 
-def zone_overlap(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:
-    """How much each pattern and ``zone`` are one place: ``|P ∩ Z| / sqrt(|P| · |Z|)`` over one dataset's cells (``geo.npz``)
-    and extents (``covers``), ``Z`` the dataset's cells inside the zone (``cells_inside``). A focus that is the zone
-    scores 1, as does a pattern that is; a pattern far larger or smaller than the zone scores little; one outside it 0."""
+def zone_measures(
+    cells: np.ndarray, per_cell: np.ndarray, prints: dict[str, tuple[np.ndarray, np.ndarray]], zone: frozenset[str]
+) -> dict[str, ZonePlace]:
+    """How each pattern lies in ``zone`` over one level's ``cells`` (``geo.npz``), ``per_cell`` the map's events in each
+    and ``prints`` pattern -> (its cell rows, its events in each) (docs/07_question_answering.md §7.2). ``overlap`` is
+    ``|P ∩ Z| / sqrt(|P| · |Z|)`` over cells; ``share``, ``cover`` and ``lift`` are over events, ``Z`` the cells inside
+    the zone (``cells_inside``)."""
     if not len(cells):
         return {}
     inside = cells_inside(cells, zone)
-    out, size = {}, int(inside.sum())
-    for pid, rows in covers.items():
-        rows = np.unique(np.asarray(rows, dtype=np.int64))
-        hit = int(inside[rows].sum())
-        out[pid] = round(hit / float(np.sqrt(len(rows) * size)), 4) if hit else 0.0
+    size, n_zone, total = int(inside.sum()), int(per_cell[inside].sum()), int(per_cell.sum())
+    out = {}
+    for pid, (rows, counts) in prints.items():
+        hit = inside[rows]
+        x, mine = int(counts[hit].sum()), int(counts.sum())
+        expected = mine * n_zone / total if total else 0.0
+        out[pid] = ZonePlace(
+            overlap=round(int(hit.sum()) / float(np.sqrt(len(rows) * size)), 4) if hit.any() else 0.0,
+            share=round(x / mine, 4) if mine else 0.0,
+            cover=round(x / n_zone, 4) if n_zone else 0.0,
+            lift=round((x + GEO_LIFT_PRIOR) / (expected + GEO_LIFT_PRIOR), 2),
+            fit=zone_fit(x, mine, expected),
+        )
     return out
+
+
+def zone_fit(x: int, mine: int, expected: float) -> str:
+    """One of ``ZONE_FITS`` for an insight of ``mine`` located events with ``x`` of them in a zone where the map's rate
+    puts ``expected``: the raw ratio ``x / expected`` decides, the prior only ranks (docs/07_question_answering.md §7.2)."""
+    if not x:
+        return "outside"
+    ratio = x / expected if expected else math.inf
+    if x >= GEO_FOOTPRINT_SHARE * mine and ratio >= GEO_LIFT_MIN:
+        return "inside"
+    if x < link_min_events(mine):
+        return "elsewhere"
+    return "concentrated" if ratio >= GEO_LIFT_MIN else "map-wide" if ratio >= 1 / GEO_LIFT_MIN else "elsewhere"
 
 
 def footprint(point_cell: np.ndarray, members: np.ndarray, share: float = GEO_FOOTPRINT_SHARE) -> tuple[np.ndarray, np.ndarray]:

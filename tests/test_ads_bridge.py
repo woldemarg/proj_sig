@@ -32,7 +32,6 @@ FINAL = "## Результати аналізу\nу зоні 3 події\n## М
 def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | None = 8, **more) -> dict[str, Any]:
     return {
         "provenance": {"dataset_id": dataset, "spatial": {"resolution": resolution} if resolution else None},
-        **more,
         "key": key,
         "pattern_id": f"P-{key}",
         "scope": ["lisa_points=hot spot"],
@@ -41,7 +40,28 @@ def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | No
         "validation": "adjusted p 0.001",
         "trust": "source F",
         "credibility": credibility,
+        **more,
     }
+
+
+def place(fit: str, share: float = 0.0, cover: float = 0.0, lift: float = 1.0) -> dict[str, Any]:
+    return {"overlap": 0.5, "share": share, "cover": cover, "lift": lift, "fit": fit}
+
+
+PLACES = {  # how each finding lies in the two test zones; P-P4, a table level the map does not place, in neither
+    json.dumps(POLYGON): {
+        "P-P1": place("inside", 0.9, 0.3, 4.2),
+        "P-P5": place("concentrated", 0.4, 0.1, 2.6),
+        "P-P2": place("map-wide", 0.1, 0.05, 1.0),
+        "P-Q1": place("outside"),
+    },
+    json.dumps(OTHER): {
+        "P-P1": place("concentrated", 0.3, 0.2, 2.0),
+        "P-Q1": place("inside", 0.95, 0.5, 6.0),
+        "P-P2": place("elsewhere", 0.01, 0.0, 0.2),
+        "P-P5": place("outside"),
+    },
+}
 
 
 def upstream(
@@ -60,12 +80,21 @@ def upstream(
     @app.post("/api/chat/query")
     def chat(body: dict[str, Any]):
         seen.setdefault("chat", []).append(body)
-        inside = {} if body["question"] else {"P1": 0.6}  # the text alone finds nothing in the zone
-        files = {"P1": "events.csv", "P2": "other.csv", "P3": "events.csv", "P4": "events.csv"}
+        files = {"P1": "events.csv", "P2": "other.csv", "P3": "events.csv", "P4": "events.csv", "P5": "events.csv"}
         provenance = [{"key": k, "filename": f} for k, f in files.items()]
-        # P3: P1 again at another level, folded into it; P4: the base file's table level, a dataset of its own
-        items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6)]
-        return {"view": {"evidence": {"items": items, "area": inside, "provenance": provenance}}}
+        if body.get("geometry") == OTHER:  # another zone's evidence: its own P1 is another finding than the first zone's
+            items = [item("P1", 6, pattern_id="P-Q1"), item("P2", 6, pattern_id="P-P1")]
+        elif body["question"]:  # P3: P1 again at another level, folded into it; P4: the base file's table level, a dataset of its own
+            items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6)]
+        else:  # the zone alone finds the finding concentrated in it, which the text did not seed
+            items = [item("P5", 6), item("P1", 6)]
+        return {"view": {"evidence": {"items": items, "provenance": provenance}}}
+
+    @app.post("/api/geo/places")
+    def places(body: dict[str, Any]):
+        seen.setdefault("places", []).append(body)
+        out = {z["id"]: PLACES[json.dumps(z["polygon"])] for z in body["zones"]}
+        return {z: {pid: p for pid, p in here.items() if pid in body["pattern_ids"]} for z, here in out.items()}
 
     def table(dataset_id: str) -> dict[str, Any] | None:
         if dataset_id not in ("ds-a", "ds-b"):
@@ -209,12 +238,19 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert started.status_code == 202
         job = finished(client, started.json()["job_id"])
         assert job["stage"] == "done" and set(job["timings"]) == {"search", "ads", "joint"} and job["session_id"] == SID, job
-        # the graph is asked with the polygon the rows are read against, and no model; the text found nothing inside, so the zone alone stands
+        # the graph is asked with the polygon the rows are read against, and no model, for the text and for the zone alone
         assert seen["chat"] == [
             {"question": ask["question"], "geometry": POLYGON, "use_llm": False, "period_only": True},
             {"question": "", "geometry": POLYGON, "use_llm": False, "period_only": True},
         ]
-        assert [(i["key"], i["zones"]) for i in job["insights"]] == [("P1", {"Z1": True}), ("P2", {"Z1": False}), ("P4", {"Z1": False})]
+        assert seen["places"] == [{"zones": [{"id": "Z1", "polygon": POLYGON}], "pattern_ids": ["P-P1", "P-P2", "P-P4", "P-P5"]}]
+        # by fit, then lift: the zone's own first, the map-wide one after them, the unplaced table level last but before elsewhere
+        assert [(i["pattern_id"], (i["places"]["Z1"] or {}).get("fit")) for i in job["insights"]] == [
+            ("P-P1", "inside"),
+            ("P-P5", "concentrated"),
+            ("P-P2", "map-wide"),
+            ("P-P4", None),
+        ]
         # every table's zones and rows at the base table's resolution: one cell column to join on
         assert [(d, b["resolution"]) for d, b in seen["zone_rows"]] == [("ds-a", 8), ("ds-b", 8)] and seen["rows"] == [("ds-a", 8), ("ds-b", 8)]
         assert seen["uploads"] == [*files, "zones.csv", "zones.md", "metadata.md"] and seen["files"][files[0]] == "rows of ds-a"
@@ -231,9 +267,12 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert "Zone Z1: a polygon" in seen["files"]["zones.md"] and "SIG analysed this table at H3 resolution 5" in seen["files"]["zones.md"]
         query = seen["query"]
         assert query == job["ads_query"] and ask["question"] in query and "Z1: inside=3, adjacent=1, far=1, no point=0, cells=5" in query
-        assert "O1 · in zone: Z1 yes" in query and "established: points: strong increase" in query and "O2 · in zone: Z1 no" in query
+        assert "O1 · Z1: inside (90% of its events, 30% of the zone's events, x4.2 the map's rate)" in query
+        assert "O2 · Z1: concentrated (40% of its events" in query and "established: points: strong increase" in query
+        assert "O3 · Z1: map-wide (10% of its events, 5% of the zone's events, x1.0 the map's rate)" in query
         assert "file: other.csv (another dataset of the graph" in query and query.count("another dataset of the graph") == 1
-        assert "O3 · in zone: Z1 no" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
+        assert "O4 · Z1: place not measured" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
+        assert "`map-wide` (in the zone at about the map's rate" in query and "Shared (" not in query  # one zone: nothing to share
         assert "bars.csv, only its rows where kind=bar, 5 rows" in query and "Time: seen_at in df_events_dsa_r8" in query
         assert "h3_r8, h3_r7, h3_r6 are H3 cell ids" in query and "left-join them to the table on row_id" in query
         assert job["ads_report"] == "ADS: 3 events plot" and "closed" not in seen  # no link into ADS's own workspace; the session stays
@@ -253,7 +292,15 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert seen["uploads"][5:] == ["zones.csv", "zones.md", "metadata.md"] and len(seen["rows"]) == 2  # the tables went once
         assert "No table of this question has a document" in seen["files"]["metadata.md"]
         assert {line.split(",")[0] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"Z1", "Z2"} and "Zone Z2" in seen["files"]["zones.md"]
-        assert seen["query"].count("Compare the areas of interest Z2, Z1: ") == 1 and "O1 · in zone: Z2 yes, Z1 yes" in seen["query"]
+        query = seen["query"]
+        assert query.count("Compare the areas of interest Z2, Z1: ") == 1
+        # each zone's own first (5 each), every finding placed in both zones; Z2's P1 is not Z1's P1
+        assert [i["pattern_id"] for i in job["insights"]] == ["P-Q1", "P-P1", "P-P5", "P-P2", "P-P4"]
+        assert "O1 · Z2: inside (95% of its events, 50% of the zone's events, x6.0 the map's rate); Z1: outside" in query
+        assert "O2 · Z2: concentrated (30% of its events, 20% of the zone's events, x2.0 the map's rate); Z1: inside (90%" in query
+        assert "O4 · Z2: elsewhere (1% of its events" in query and "O5 · Z2: place not measured; Z1: place not measured" in query
+        summary = "Shared (inside or concentrated in several zones): O2 (Z2, Z1).\nOne zone only: O1 (Z2), O3 (Z1).\nMap-wide (as everywhere): O4."
+        assert summary in query
         lone = ask | {"session_id": SID, "zones": two["zones"]}  # Z2 is the conversation's, the question is about Z1 alone
         assert (
             "The conversation's other zones (Z2) are in df_zones too"
@@ -344,7 +391,7 @@ def test_a_question_needs_no_zone():
         ]  # no zones file
         query = job["ads_query"]
         assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
-        assert "`in zone`" not in query and "inside vs adjacent" not in query and "zones it is in" not in query  # no zone sentence
+        assert "`map-wide`" not in query and "inside vs adjacent" not in query and "how it lies in each zone" not in query  # no zone sentence
         assert "No zone is drawn" in seen["files"]["zones.md"] and "# Уся мапа: методика" in seen["prompt"]
         two = ask | {"session_id": SID, "question": "А по місяцях?"}  # a follow-up of a conversation without zones
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["stage"] == "done" and seen["sessions"] == 1

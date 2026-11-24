@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ads_bridge_service.settings import AdsSettings
 from ads_bridge_service.task import (
+    MAX_INSIGHTS,
     METADATA_MD,
     ZONES_FILE,
     ZONES_MD,
@@ -173,18 +174,21 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
 
     def zone_findings(body: AskIn, zones: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone. No
-        zone asked: the whole map's findings, in no zone."""
+        """Each asked zone's findings, its answer to the text and to the zone alone (the text may seed out of the zone),
+        merged with how each lies in every asked zone. No zone asked: the whole map's findings, in no zone."""
         if not body.focus:
-            return [{k: v for k, v in it.items() if k != "inside"} | {"zones": {}} for it in ask_graph(body.question, None, body.period)]
-        by_zone = {}
+            return [it | {"places": {}} for it in ask_graph(body.question, None, body.period)[:MAX_INSIGHTS]]
+        by_zone: dict[str, list[dict[str, Any]]] = {}
         for z in body.focus:
-            found = ask_graph(body.question, zones[z], body.period)
-            if not any(f["inside"] for f in found):  # the text pulled the seeds out of the zone: the zone alone, if it holds any
-                alone = ask_graph("", zones[z], body.period)
-                found = alone if any(f["inside"] for f in alone) else found
-            by_zone[z] = found
-        return merge_findings(by_zone)
+            found: dict[str, dict[str, Any]] = {}
+            for text in dict.fromkeys((body.question, "")):
+                for it in ask_graph(text, zones[z], body.period):
+                    found.setdefault(it["pattern_id"], it)
+            by_zone[z] = list(found.values())
+        ids = sorted({it["pattern_id"] for found in by_zone.values() for it in found})
+        ask = {"zones": [{"id": z, "polygon": zones[z]} for z in body.focus], "pattern_ids": ids}
+        places = _checked(http.post(f"{settings.ads_graph_url}/api/geo/places", json=ask), "sig_failed", "SIG places").json() if ids else {}
+        return merge_findings(by_zone, places)
 
     def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], bytes]:
         """The picked tables, each with what the graph service tells of it and its rows per zone, and the zones file: which

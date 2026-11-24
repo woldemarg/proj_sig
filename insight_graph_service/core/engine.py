@@ -35,7 +35,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from insight_contracts import EvidencePayload, Insight, Rejection
+from insight_contracts import EvidencePayload, Insight, Rejection, ZonePlace
 from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, annotate_batch, batch_metrics, check_time, pattern_records, series_times
 from insight_graph_service.core.errors import PipelineError
@@ -247,7 +247,7 @@ class Engine:
 
     def place_scores(
         self, state: CommittedState, cells: list[str] | None = None, geometry: dict[str, Any] | None = None, resolution: int | None = None
-    ) -> dict[str, float] | None:
+    ) -> dict[str, ZonePlace] | None:
         return geo_views.place_scores(self.ws, state.graph, cells, geometry, resolution)
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:

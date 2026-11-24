@@ -22,7 +22,7 @@ import numpy as np
 
 from graph_query_engine.graph import DualGraph, declared_words, insight_reading, primary_anchor, theme_glossary
 from graph_query_engine.vertical import affinity, restating, scale_chain, scale_label
-from insight_contracts import Insight, PhenomenonThresholds, dataset_node_id, region_node_id, wording
+from insight_contracts import Insight, PhenomenonThresholds, ZonePlace, dataset_node_id, region_node_id, wording
 from insight_graph_service.core.errors import PipelineError
 from insight_graph_service.core.geosparql import build_turtle
 from insight_graph_service.core.uploads import context_files, hidden_datasets, point_columns, same_points, upload_id
@@ -30,7 +30,7 @@ from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
-from subgroup_miner.spatial import SpatialError, compactness
+from subgroup_miner.spatial import GEO_LIFT_PRIOR, SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
     cell_centres,
@@ -40,10 +40,8 @@ from subgroup_miner.spatial_plane import (
     link_min_events,
     parse_zone,
     region_features,
-    zone_overlap,
+    zone_measures,
 )
-
-WINDOW_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a region and to their expected count: ranking, not membership (docs/08 §8.7)
 
 
 def geo_datasets(ws: Workspace) -> list[dict[str, Any]]:
@@ -112,8 +110,8 @@ def geo_profile(loaded: Any, miner: MinerConfig) -> dict[str, Any]:
 
 def place_scores(
     ws: Workspace, graph: DualGraph, cells: list[str] | None, geometry: dict[str, Any] | None, resolution: int | None
-) -> dict[str, float] | None:
-    """Every geo pattern's overlap with a map zone (``zone_overlap``, docs/07_question_answering.md §7.2), over the geo
+) -> dict[str, ZonePlace] | None:
+    """How every geo pattern lies in a map zone (``zone_measures``, docs/07_question_answering.md §7.2), over the geo
     datasets of at most ``resolution`` (None: all), and every placed base pattern's by the cells holding its events on the geo level
     that places it, of at most ``resolution`` too; ``geometry`` becomes the cells of the finest of them. None: no zone."""
     if cells is None and geometry is None:
@@ -154,26 +152,24 @@ def _placed_by(graph: DualGraph) -> dict[tuple[str, str], set[str]]:
 
 def _zone_scores(
     ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...], tables: tuple[tuple[str, str], ...], strict: bool = True
-) -> dict[str, float]:
-    """``zone_overlap`` over the stored cells and extents of each geo dataset in ``levels``, and over each (table level,
-    geo level placing it) of ``tables`` by the cells holding the table's patterns' events on that level; ``strict``: a
-    missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
-    out: dict[str, float] = {}
-    for dataset_id, _ in levels:
-        geo, covers = ws.load_geo(dataset_id, ("cells",)), ws.load_covers(dataset_id)
+) -> dict[str, ZonePlace]:
+    """``zone_measures`` over the stored cells and extents of each geo dataset in ``levels``, its cells weighed by their
+    points, and over each (table level, geo level placing it) of ``tables`` by the cells holding the table's patterns'
+    events on that level; ``strict``: a missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
+    out: dict[str, ZonePlace] = {}
+    for dataset_id, by in [(d, None) for d, _ in levels] + [(t, by) for t, by in tables]:
+        geo, covers = ws.load_geo(by or dataset_id, ("cells", "point_cell")), ws.load_covers(dataset_id)
         if geo is None or not covers:
             if strict:
                 raise FileNotFoundError(dataset_id)
             continue
-        out.update(zone_overlap(geo["cells"], covers, zone))
-    for table, placed_by in tables:
-        geo, covers = ws.load_geo(placed_by, ("cells", "point_cell")), ws.load_covers(table)
-        if geo is None or not covers:
-            if strict:
-                raise FileNotFoundError(table)
-            continue
-        prints = {pid: footprint(geo["point_cell"], rows, 1.0)[0] for pid, rows in covers.items()}  # a table's rows are the points
-        out.update(zone_overlap(geo["cells"], prints, zone))
+        point_cell = geo["point_cell"]
+        per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
+        if by is None:  # a geo dataset's rows are its cells
+            prints = {pid: (cells, per_cell[cells]) for pid, cells in ((p, np.unique(rows)) for p, rows in covers.items())}
+        else:  # a table's rows are the points
+            prints = {pid: footprint(point_cell, rows, 1.0) for pid, rows in covers.items()}
+        out.update(zone_measures(geo["cells"], per_cell, prints, zone))
     return out
 
 
@@ -582,7 +578,7 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: froze
                 if graph.nodes[pid]["props"].get("geo") == "partial" or not mine:
                     continue
                 x = events[pid] = np.bincount(idx[p.events], weights=p.counts, minlength=len(ids))
-                lift = (x + WINDOW_LIFT_PRIOR) / (mine * here / total + WINDOW_LIFT_PRIOR)
+                lift = (x + GEO_LIFT_PRIOR) / (mine * here / total + GEO_LIFT_PRIOR)
                 for r in np.flatnonzero((x >= link_min_events(mine)) & (lift >= 1)):
                     listed[r][pid] = float(lift[r])
                     own[r].add(pid)

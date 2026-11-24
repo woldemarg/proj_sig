@@ -19,6 +19,7 @@ from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import LiteralCatalog, ParsedQuery, build_catalog, parse_query
 from graph_query_engine.seeds import SeedMatch, resolve_seeds
 from graph_query_engine.traversal import LATTICE_EDGES, TraversalResult, structural_closure, traverse
+from insight_contracts import ZonePlace
 from insight_contracts.payload import CITATION_FIELDS, EvidencePayload
 
 _HIGHLIGHT_KEYS = ("seeds", "traversed", "anchors", "evidence", "edges", "transversal_only")
@@ -107,15 +108,15 @@ def search(
     state: CommittedState,
     encoder: QueryEncoder,
     config: QueryConfig,
-    place_scores: dict[str, float] | None = None,
+    place_scores: dict[str, ZonePlace] | None = None,
     as_of: datetime | None = None,
     period: tuple[datetime, datetime] | None = None,
     hidden_datasets: frozenset[str] = frozenset(),
     period_only: bool = False,
 ) -> SearchResult:
     """The evidence for ``question`` over one committed state; ``hidden_datasets`` (a hidden layer's runs) are left out
-    before the walk — never a seed, a step, a vertical item or evidence, and no slot of the budget (model A); ``place_scores`` (pattern id -> its overlap with an asked
-    map zone) weigh the seeds, and the question may then be empty; ``as_of`` is the reference date the findings' freshness
+    before the walk — never a seed, a step, a vertical item or evidence, and no slot of the budget (model A); ``place_scores`` (pattern id -> how it lies in an asked
+    map zone) weigh the seeds by their overlap, and the question may then be empty; ``as_of`` is the reference date the findings' freshness
     counts from — the graph's latest data when not asked; ``period`` is a period asked beside the text (the console's
     period bar), which a period written in the question overrides, unless ``period_only``: then it is the question's only
     period, none or the bar's (the ADS bridge, whose question's words name ADS's period), and a period the text names is

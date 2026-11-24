@@ -134,6 +134,22 @@ class GraphEdge:
         }
 
 
+ZONE_FITS = ("inside", "concentrated", "map-wide", "elsewhere", "outside")  # how a pattern lies in an asked zone, most of it first
+
+
+@dataclass(frozen=True)
+class ZonePlace:
+    """How one pattern lies in an asked map zone (docs/07_question_answering.md §7.2): ``overlap`` its cells against the
+    zone's (the seeds' measure); over its located events ``share`` in the zone, ``cover`` of the zone's events, ``lift``
+    against the map's rate (smoothed, for ranking) and ``fit``, one of ``ZONE_FITS``."""
+
+    overlap: float
+    share: float
+    cover: float
+    lift: float
+    fit: str
+
+
 def attractor_node_id(attractor_id: int) -> str:
     return f"A-{int(attractor_id)}"
 

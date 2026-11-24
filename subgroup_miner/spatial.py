@@ -60,6 +60,7 @@ GEO_LEVELS_MAX = 3  # ``@auto``: levels chosen, the finest included
 GEO_FOOTPRINT_SHARE = 0.8  # geo_coverage's footprint of a base insight: the busiest cells holding this share of its points
 GEO_LOCATED_MIN = 0.8  # a base insight with fewer of its events located is partial, without a place (docs/06 §6.1)
 GEO_LIFT_MIN = 1.5  # a base insight's region by over-representation: its share there over the map's
+GEO_LIFT_PRIOR = 30  # pseudo-events added to an insight's events in a place and to their expected count: ranking, not membership
 GEO_LIFT_MIN_REGIONS = 12  # a level of fewer occupied regions places a base insight by share, one of more by lift
 GEO_LINK_MIN_EVENTS = 30  # a base insight's events in its region at least (a small insight: 5 % of them, 5 at least)
 GEO_LINK_FDR = 0.05  # Benjamini-Hochberg over the level's occupied regions, for the lift rule

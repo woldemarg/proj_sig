@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -89,6 +90,11 @@ class ZoneIn(BaseModel):
 
 
 MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cells and a line of X-Zones
+
+
+class PlacesIn(BaseModel):
+    zones: list[ZoneIn] = Field(min_length=1, max_length=MAX_EXPORT_ZONES)
+    pattern_ids: list[str] = Field(min_length=1, max_length=500)  # the findings to place; one a zone does not weigh is left out
 
 
 class ZonesIn(BaseModel):
@@ -389,6 +395,15 @@ def create_app(engine: Engine) -> FastAPI:
     def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
         data, counts = engine.maps().zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
         return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
+
+    @app.post("/api/geo/places")
+    def geo_places(body: PlacesIn) -> dict[str, dict[str, dict[str, Any]]]:
+        state, wanted = engine.committed(), set(body.pattern_ids)
+        out = {}
+        for z in body.zones:
+            places = engine.place_scores(state, geometry=z.polygon) or {}
+            out[z.id] = {pid: asdict(p) for pid, p in places.items() if pid in wanted}
+        return out
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:
