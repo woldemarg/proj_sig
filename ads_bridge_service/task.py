@@ -10,6 +10,7 @@ from typing import Any
 MAX_INSIGHTS = 10  # the graph's evidence holds about ten; a question about several zones shares them
 MIN_ZONE_INSIGHTS = 3  # a zone's share of them, however many zones the question names
 ZONES_FILE = "zones.csv"  # which rows each zone of the conversation holds, by table and row_id
+ZONE_CELLS_FILE = "zone_cells.csv"  # every cell of each zone of the conversation, with rows or without
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
@@ -279,7 +280,11 @@ def _zones_text(base: dict[str, Any], tables: list[dict[str, Any]]) -> str:
         "aoi_zone with 'far'. df_zones lists this question's tables only "
         f"({', '.join(t['file'] for t in tables)}); a table an earlier question sent is not placed in the zones. "
         "Zones may overlap: a row can be in several. A point in the same cell as a zone is not inside it. A zone's own figures are its "
-        "inside rows only; adjacent and far rows are comparison groups, never part of the zone's own figures."
+        "inside rows only; adjacent and far rows are comparison groups, never part of the zone's own figures. "
+        f"df_zone_cells ({ZONE_CELLS_FILE}) lists every h3_r{base['cells_at']} cell of each zone (zone_id, h3_r{base['cells_at']}: the "
+        "cells whose centre the polygon holds), cells without rows included: a zone's figures per cell or per km² divide by all of them, "
+        "and a cell without rows counts 0; cells around a zone (its neighbours, a ring or a distance from it) are taken around these cells, "
+        "empty ones counted too."
     )
 
 
@@ -314,6 +319,8 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                     f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its "
                     "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point "
                     f"not listed is far, a row without one (an empty h3 cell, NaN in pandas) is in no group, never far. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+                    f"- {ZONE_CELLS_FILE}: zone_id, h3_r{tables[0]['cells_at']}; every cell of each zone whose centre the polygon holds, a cell "
+                    "without rows included (it counts 0).",
                 ]
                 if zones
                 else ["- No zone is drawn in this conversation: the questions are about the whole map."]

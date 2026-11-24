@@ -1,5 +1,6 @@
 """The graph service's geo exports (docs/08_interface.md §8.8): a geo dataset's rows with a ``row_id`` and their cells
-(``GET /api/geo/{dataset}/rows``), and which of them drawn zones hold (``POST /api/geo/{dataset}/zone_rows``)."""
+(``GET /api/geo/{dataset}/rows``), which of them drawn zones hold (``POST /api/geo/{dataset}/zone_rows``) and every
+cell of each zone (``POST /api/geo/{dataset}/zone_cells``)."""
 
 from __future__ import annotations
 
@@ -70,12 +71,26 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
             assert client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z", "polygon": bad}]}).json()["code"] == "invalid_options"
         twice = {"zones": [{"id": "Z", "polygon": shape}, {"id": "Z", "polygon": shape}]}
         assert client.post(f"/api/geo/{ds}/zone_rows", json=twice).json()["code"] == "invalid_options"
+        # every cell of each zone, with rows or without, the cells zone_rows counts: what a zone's per-cell figures divide by
+        lone = h3.cell_to_boundary(h3.latlng_to_cell(-60.0, 100.0, res))  # one cell far from every point: no row in it
+        empty = {"type": "Polygon", "coordinates": [[[lon, lat] for lat, lon in (*lone, lone[0])]]}
+        asked = [{"id": "Z1", "polygon": shape}, {"id": "Z3", "polygon": empty}]
+        got = client.post(f"/api/geo/{ds}/zone_cells", json={"zones": asked})
+        cells = pd.read_csv(io.BytesIO(got.content))
+        counted = json.loads(client.post(f"/api/geo/{ds}/zone_rows", json={"zones": asked}).headers["x-zones"])["zones"]
+        assert got.headers["content-type"].startswith("text/csv") and list(cells.columns) == ["zone_id", f"h3_r{res}"]
+        assert set(cells.loc[cells["zone_id"] == "Z1", f"h3_r{res}"]) == set(zone) and counted["Z3"]["inside"] == 0
+        assert cells["zone_id"].value_counts().to_dict() == {z: c["zone_cells"] for z, c in counted.items()} == {"Z1": len(zone), "Z3": 1}
+        for refused in (twice, {"zones": [{"id": "Z", "polygon": {"type": "Point", "coordinates": [0, 0]}}]}, {"zones": asked, "resolution": 12}):
+            assert client.post(f"/api/geo/{ds}/zone_cells", json=refused).json()["code"] == "invalid_options"
         assert client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "a,b", "polygon": shape}]}).status_code == 422
         other = ({7, 8} - {res}).pop()  # the upload's other level: another table's cells, the same places
         at = json.loads(
             client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z1", "polygon": shape}], "resolution": other}).headers["x-zones"]
         )
         assert at["resolution"] == other and at["zones"]["Z1"]["inside"] == z1["inside"]
+        listed = client.post(f"/api/geo/{ds}/zone_cells", json={"zones": asked, "resolution": other}).text.splitlines()
+        assert listed[0] == f"zone_id,h3_r{other}" and {h3.get_resolution(line.split(",")[1]) for line in listed[1:]} == {other}
         assert json.loads(client.get(f"/api/geo/{ds}/rows", params={"resolution": other}).headers["x-rows"])["columns"][1] == f"h3_r{other}"
         assert client.get(f"/api/geo/{ds}/rows", params={"resolution": 12}).json()["code"] == "invalid_options"  # no dataset's level
         assert client.get("/api/geo/ds-unknown/rows").json()["code"] == "unknown_dataset"
@@ -101,7 +116,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         # the stored file is no longer the upload the insights were mined from: no row of another table goes out under this id
         stored = Path(engine.ws.ready_batch_for(ds)["source_path"])
         stored.write_bytes(stored.read_bytes() + b"\n")
-        for changed in (client.get(f"/api/geo/{ds}/rows"), client.post(f"/api/geo/{ds}/zone_rows", json={"zones": []})):
+        exports = (client.get(f"/api/geo/{ds}/rows"), *(client.post(f"/api/geo/{ds}/{e}", json={"zones": []}) for e in ("zone_rows", "zone_cells")))
+        for changed in exports:
             assert (changed.status_code, changed.json()["code"]) == (409, "source_changed")
 
 
