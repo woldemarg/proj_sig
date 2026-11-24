@@ -67,7 +67,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
             and halved == set(busy.loc[busy["longitude"] < mid, "row_id"])
             and placed["zones"]["Z2"]["inside"] >= len(halved)
         )
-        for bad in ({"type": "Point", "coordinates": [0, 0]}, {"type": "Polygon", "coordinates": [[]]}):
+        multi = {"type": "MultiPolygon", "coordinates": [shape["coordinates"]]}  # the outline as a one-part MultiPolygon
+        for bad in ({"type": "Point", "coordinates": [0, 0]}, {"type": "Polygon", "coordinates": [[]]}, multi):
             assert client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "Z", "polygon": bad}]}).json()["code"] == "invalid_options"
         twice = {"zones": [{"id": "Z", "polygon": shape}, {"id": "Z", "polygon": shape}]}
         assert client.post(f"/api/geo/{ds}/zone_rows", json=twice).json()["code"] == "invalid_options"
@@ -81,7 +82,8 @@ def test_a_datasets_rows_go_once_and_each_zone_by_its_row_ids(tmp_path, points_c
         assert got.headers["content-type"].startswith("text/csv") and list(cells.columns) == ["zone_id", f"h3_r{res}"]
         assert set(cells.loc[cells["zone_id"] == "Z1", f"h3_r{res}"]) == set(zone) and counted["Z3"]["inside"] == 0
         assert cells["zone_id"].value_counts().to_dict() == {z: c["zone_cells"] for z, c in counted.items()} == {"Z1": len(zone), "Z3": 1}
-        for refused in (twice, {"zones": [{"id": "Z", "polygon": {"type": "Point", "coordinates": [0, 0]}}]}, {"zones": asked, "resolution": 12}):
+        drawn_only = [{"zones": [{"id": "Z", "polygon": p}]} for p in ({"type": "Point", "coordinates": [0, 0]}, multi)]
+        for refused in (twice, *drawn_only, {"zones": asked, "resolution": 12}):
             assert client.post(f"/api/geo/{ds}/zone_cells", json=refused).json()["code"] == "invalid_options"
         assert client.post(f"/api/geo/{ds}/zone_rows", json={"zones": [{"id": "a,b", "polygon": shape}]}).status_code == 422
         other = ({7, 8} - {res}).pop()  # the upload's other level: another table's cells, the same places

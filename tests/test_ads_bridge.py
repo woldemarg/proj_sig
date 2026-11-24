@@ -257,6 +257,8 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert "A group is a set of cells and the rows in them. The zone is its inside rows over all its cells (df_zone_cells)" in query
         assert "divide by all its cells, a cell without rows counting 0" in query and "h3.cell_area(cell, unit='km^2')" in query
         assert "never taken from the tables, which hold only the cells with rows" in query  # a belt's empty cells are generated
+        # the rings a belt needs are named: grid_disk's default is one ring, adjacent under another name (review MATH-2)
+        assert "h3.grid_disk(cell, k) around the zone's cells, k the asked number of rings or, for a distance, enough rings to reach past it" in query
         assert "- zone_cells.csv: zone_id, h3_r8;" in seen["files"]["zones.md"]
         assert job["ads_report"] == "ADS: 3 events plot" and "closed" not in seen  # no link into ADS's own workspace; the session stays
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]

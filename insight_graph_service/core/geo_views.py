@@ -35,6 +35,7 @@ from subgroup_miner.spatial_plane import (
     cell_boundary,
     cell_centres,
     cell_column_names,
+    drawn_zone_cells,
     event_regions,
     footprint,
     geometry_to_cells,
@@ -250,12 +251,12 @@ def geo_zone_rows(
 
 def geo_zone_cells(ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
     """Every cell of each drawn zone at the ``resolution`` ``geo_zone_rows`` reads the zones at, with rows or without: CSV
-    ``zone_id,h3_r<resolution>``, the cells it counts as ``zone_cells`` (``geometry_to_cells``: those whose centres the
-    polygon holds), what a reader divides a zone's per-cell figures by and draws rings around."""
+    ``zone_id,h3_r<resolution>``, the cells it counts as ``zone_cells`` (``drawn_zone_cells``: those whose centres the
+    polygon holds, a drawn zone being a Polygon), what a reader divides a zone's per-cell figures by and draws rings around."""
     _check_ids(zones)
     _, _, resolution = _export_reading(ws, dataset_id, resolution)
     try:
-        lines = [f"zone_id,{cell_column_names(resolution)[0]}", *(f"{z},{c}" for z, p in zones for c in sorted(geometry_to_cells(p, resolution)))]
+        lines = [f"zone_id,{cell_column_names(resolution)[0]}", *(f"{z},{c}" for z, p in zones for c in sorted(drawn_zone_cells(p, resolution)))]
     except SpatialError as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
     return ("\n".join(lines) + "\n").encode("utf-8")
