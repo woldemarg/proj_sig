@@ -248,7 +248,15 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert "O3 · in zone: Z1 no" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
         assert "bars.csv, only its rows where kind=bar, 5 rows" in query and "Time: seen_at in df_events_dsa_r8" in query
         assert "h3_r8, h3_r7, h3_r6 are H3 cell ids" in query and "left-join them to the table on row_id" in query
-        assert "df_zone_cells (zone_cells.csv) lists every h3_r8 cell of each zone" in query and "a cell without rows counts 0" in query
+        # the comparison groups are the question's: adjacent is SIG's one-ring default, never the only surroundings offered
+        assert "Comparison groups: the question defines them" in query and "inside vs adjacent vs far" not in query
+        assert "adjacent is one ring of cells around the zone" in query and "(inside, adjacent, far;" not in query
+        assert "a split within the zone (its cells with against without layer points" in query  # a layer split stays in the zone
+        assert "df_zone_cells (zone_cells.csv) lists every h3_r8 cell of each zone" in query
+        # one definition of a group for every comparison: its cells and their rows, all its cells the denominator, km² from h3
+        assert "A group is a set of cells and the rows in them. The zone is its inside rows over all its cells (df_zone_cells)" in query
+        assert "divide by all its cells, a cell without rows counting 0" in query and "h3.cell_area(cell, unit='km^2')" in query
+        assert "never taken from the tables, which hold only the cells with rows" in query  # a belt's empty cells are generated
         assert "- zone_cells.csv: zone_id, h3_r8;" in seen["files"]["zones.md"]
         assert job["ads_report"] == "ADS: 3 events plot" and "closed" not in seen  # no link into ADS's own workspace; the session stays
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
@@ -361,7 +369,7 @@ def test_a_question_needs_no_zone():
         assert "zone_cells" not in seen  # nor their cells
         query = job["ads_query"]
         assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
-        assert "`in zone`" not in query and "inside vs adjacent" not in query and "zones it is in" not in query  # no zone sentence
+        assert "`in zone`" not in query and "Comparison groups" not in query and "zones it is in" not in query  # no zone sentence
         assert "No zone is drawn" in seen["files"]["zones.md"] and "# Уся мапа: методика" in seen["prompt"]
         two = ask | {"session_id": SID, "question": "А по місяцях?"}  # a follow-up of a conversation without zones
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["stage"] == "done" and seen["sessions"] == 1
@@ -375,7 +383,7 @@ def test_a_question_needs_no_zone():
             and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
         )
         assert "unless the question names a zone of df_zones" in job["ads_query"] and "other zones (Z1)" in job["ads_query"]
-        assert "inside vs adjacent" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
+        assert "Comparison groups" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
 
 
 def test_the_bridge_strips_the_periods_the_graph_reads():
