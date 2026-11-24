@@ -88,7 +88,7 @@ def score_pattern(
     if place is not None and query.text.strip():
         score += SEED_PLACE_WEIGHT * place
     elif place is not None:
-        score = ins.weight + place + SEED_OWN_TIER * own if place else 0.0
+        score = ins.weight + place + SEED_OWN_TIER * own if place or own else 0.0  # own: its events, though no cell centre, in the zone
     if time is not None:
         score += SEED_TIME_WEIGHT * time
     if fresh is not None:
@@ -105,6 +105,7 @@ def score_pattern(
             "scope_conflicts": conflicts,
         }
         | ({"place": place} if place is not None else {})
+        | ({"own": 1.0} if own else {})
         | ({"time": round(time, 3)} if time is not None else {})
         | ({"recency": round(fresh, 3)} if fresh is not None else {}),
     )
@@ -165,7 +166,7 @@ def resolve_seeds(
         near = {o for s in seeds if place <= s.matched.get("place", 0.0) for _, o in graph.incident(s.pattern_id, ["SPECIALIZES"])}
         if cand.pattern_id not in near:
             seeds.append(cand)
-    pool = [s for s in scored if s.matched.get("place")] if alone else scored  # a zone alone: only what lies in it
+    pool = [s for s in scored if s.matched.get("place") or s.matched.get("own")] if alone else scored  # a zone alone: what lies in it
     if (
         query.when and not query.when_asked and not query.is_lexical and pool
     ):  # a period written and nothing the catalog knows: the question is about it

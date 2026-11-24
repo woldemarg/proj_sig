@@ -477,6 +477,8 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
     assert not searched(state, "", place_scores={"P1": _place(0.0, "outside")}).seeds
     broad = {"P1": _place(0.55, "map-wide", 0.3, 1.1), "P2": _place(0.2, "inside", 0.97, 3.3)}  # P1 shares more cells
     assert [s.pattern_id for s in searched(state, "", place_scores=broad).seeds] == ["P2"]
+    edge = {"P1": _place(0.3, "map-wide", 0.3, 1.1), "P2": _place(0.0, "inside", 1.0, 50.0)}  # its events in, no cell centre: overlap 0
+    assert [(s.pattern_id, s.matched.get("own")) for s in searched(state, "", place_scores=edge).seeds] == [("P2", 1.0)]
     below = searched(state, "", place_scores={"P2": _place(0.004, "map-wide", 0.12, 1.0)})  # P1 not weighed
     assert [(s.pattern_id, s.matched.get("fallback")) for s in below.seeds] == [("P2", "place")]
     wide = below.payload()
