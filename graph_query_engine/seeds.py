@@ -14,13 +14,14 @@ from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.temporal import recency, time_score
-from insight_contracts import Insight, ZonePlace
+from insight_contracts import ZONE_FITS, Insight, ZonePlace
 from insight_contracts.text import humanize
 
 SEED_TOP_K = 3
 SEED_MIN_SCORE = 0.25
 SEED_RELATIVE_MIN = 0.75  # seeds must score >= this fraction of the best seed
 SEED_PLACE_WEIGHT = 0.35  # a map zone: the weight of a pattern's overlap with it (docs/07_question_answering.md §7.2)
+SEED_OWN_TIER = 2.0  # a zone alone: its own findings above any other (weight + overlap is at most 2)
 SEED_TIME_WEIGHT = 0.35  # a calendar period in the question: the weight of the pattern's measurement in it (same section)
 SEED_RECENCY_WEIGHT = 0.35  # no period in the question: the weight of the pattern's freshness at the reference date (same section)
 
@@ -44,10 +45,12 @@ def score_pattern(
     place: float | None = None,
     time: float | None = None,
     fresh: float | None = None,
+    own: bool = False,
 ) -> SeedMatch:
     """Seed score of one pattern: lexical match (target, scope, direction) + semantic cosine + weight, plus
     ``SEED_PLACE_WEIGHT`` × how much it and the asked map zone are one place (``place``; None: no zone); a zone without
-    text: weight + place, 0 outside the zone. ``time``: how much the asked period it was measured in (``temporal.time_score``;
+    text: weight + place, 0 outside the zone, and ``SEED_OWN_TIER`` more for one the zone holds as its own (``own``: inside or
+    concentrated, docs/07_question_answering.md §7.2). ``time``: how much the asked period it was measured in (``temporal.time_score``;
     None: no period asked, or a pattern without a series) adds ``SEED_TIME_WEIGHT`` × it; ``fresh``: its freshness at the
     reference date when no period is asked (``temporal.recency``; None: a period asked, or no core) adds
     ``SEED_RECENCY_WEIGHT`` × it — bonuses, never a penalty."""
@@ -85,7 +88,7 @@ def score_pattern(
     if place is not None and query.text.strip():
         score += SEED_PLACE_WEIGHT * place
     elif place is not None:
-        score = ins.weight + place if place else 0.0
+        score = ins.weight + place + SEED_OWN_TIER * own if place else 0.0
     if time is not None:
         score += SEED_TIME_WEIGHT * time
     if fresh is not None:
@@ -141,6 +144,7 @@ def resolve_seeds(
                 None if place_scores is None else place.overlap if (place := place_scores.get(pid)) else 0.0,
                 time_score(graph.trajectories[pid], query.when) if query.when and pid in graph.trajectories else None,
                 fresh(pid),
+                alone and place is not None and place.fit in ZONE_FITS[:2],
             )
             for pid, ins in graph.insights.items()
             if not graph.tampered(pid) and pid not in hidden  # a tampered or hidden pattern never starts a walk

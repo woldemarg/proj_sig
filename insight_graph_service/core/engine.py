@@ -250,6 +250,15 @@ class Engine:
     ) -> dict[str, ZonePlace] | None:
         return geo_views.place_scores(self.ws, state.graph, cells, geometry, resolution)
 
+    @_healthy
+    def places(self, zones: list[tuple[str, dict[str, Any]]], pattern_ids: list[str]) -> dict[str, dict[str, ZonePlace]]:
+        """How each of ``pattern_ids`` lies in each drawn zone (id, GeoJSON), as a question with that zone reads it; a
+        pattern of a level the zone does not weigh is left out (``POST /api/geo/places``)."""
+        if len({z for z, _ in zones}) != len(zones):
+            raise PipelineError("invalid_options", "two zones share an id")
+        state, wanted = self.committed(), set(pattern_ids)
+        return {z: {pid: p for pid, p in (self.place_scores(state, geometry=g) or {}).items() if pid in wanted} for z, g in zones}
+
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
         return LatentFrame(
             patterns={r["id"]: vectors[r["row_id"]] for r in records} if len(vectors) else {},

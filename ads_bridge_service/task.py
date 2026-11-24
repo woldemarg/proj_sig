@@ -13,12 +13,14 @@ ZONES_FILE = "zones.csv"  # which rows each zone of the conversation holds, by t
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
-FIT_RANK = {"inside": 0, "concentrated": 1, "map-wide": 2, None: 3, "elsewhere": 4, "outside": 5}  # None: a level the zone does not weigh
+FIT_RANK = {"inside": 0, "concentrated": 1, "map-wide": 2, None: 3, "few": 4, "elsewhere": 5}  # None: a level the zone does not weigh
 ZONE_OWN = ("inside", "concentrated")  # the fits that make an insight the zone's own
 
 SIG_TERMS = (
     "points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
-    "their number; <column>_mode = the cell's most frequent value; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
+    "their number; <column>_mode = the cell's most frequent value; <column>_median = the median of the cell's events; <time>_late_share "
+    "(read 'timestamp late share') = share of the cell's events in the second half of the data's period, not a time of day; "
+    "<time>_active_days = number of different days with events in the cell; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
     "neighbours; lisa_points = local Moran class of event counts (hot spot, cold spot, high outlier, low outlier, no cluster); "
     "context_<layer>_band = none nearby, or the quantile of context points in the cell; shift = the subgroup's median against the map's median "
     "in robust sd"
@@ -27,10 +29,12 @@ SIG_TERMS = (
 # What an insight is and how to read it, ahead of the user's question (the query is the part ADS never trims)
 IN_ZONE = (
     "- The line after the id says, for each zone of the question, how the insight lies in it over its located events: `inside` (almost wholly "
-    "in the zone), `concentrated` (partly in it, but denser there than on the whole map), `map-wide` (in the zone at about the map's rate: it "
-    "holds there as everywhere and is no trait of the zone), `elsewhere` (it only touches the zone and describes other places) or `outside`; "
-    "then the share of its events in the zone, the share of the zone's events it holds, and its rate there against the map's (x1 = as on the "
-    "whole map). `place not measured`: an insight of a table level the map does not place.\n"
+    "in the zone, and rarer than the map outside it), `concentrated` (partly in it, but at least 1.5 times denser there than on the whole map, "
+    "beyond chance), `map-wide` (in the zone at about the map's rate: it holds there as everywhere and is no trait of the zone), `few` (too "
+    "few of its events in the zone to tell), `elsewhere` (rarer in the zone than on the map: it describes other places) or `outside`; then "
+    "the share of its events in the zone, the share of the zone's events it holds, and its rate there against the map's (x1 = as on the whole "
+    "map). `place not measured`: an insight of a table level the map does not place. Zones may overlap: an insight in several overlapping "
+    "zones may lie in their common part only.\n"
 )
 INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
 
@@ -95,6 +99,9 @@ SIG_GLOSSARY = """## Словник термінів графа інсайтів
   - `low outlier`: тиха комірка серед жвавих сусідів.
   - `no cluster`: комірка не входить ні в жваве, ні в тихе скупчення. Це звичайне місце без вираженого скупчення, а не відсутність подій.
 - `context_<шар>_band`: скільки точок контекстного шару в самій комірці. `none nearby` означає жодної, `q1…q4` чверті серед комірок, де вони є.
+- `<колонка часу>_late_share` (у тексті `timestamp late share`): частка подій комірки в другій половині періоду даних. Це не час доби і не ніч.
+- `<колонка часу>_active_days`: скільки різних днів у комірці були події. `<колонка>_median`: медіана колонки серед подій комірки.
+- Як інсайт лежить у зоні (рядок після його id). Код класу в звіті заміни українською назвою: `inside` → «у виділеній зоні» (майже всі його події в зоні); `concentrated` → «густіше у виділеній зоні» (щонайменше в 1,5 раза частіше, ніж за часткою зони на мапі, і не випадково); `map-wide` → «як по всій мапі» (у зоні так само часто, як скрізь: не особливість зони); `few` → «замало подій у зоні» (замало, щоб судити); `elsewhere` → «переважно в інших місцях»; `outside` → «поза виділеною зоною». Числа: частка подій інсайту в зоні, частка подій зони, що припадає на інсайт, і частота в зоні проти мапи, яку пиши множником: «×0,8 від мапи» (×1 означає як на всій мапі), а не «у 0,8 раза менше».
 - Зсув `<метрика>: mild|moderate|strong|extreme increase|decrease, ±z sd (median a vs b overall)`: медіана метрики в комірках підгрупи (a) проти медіани всієї мапи (b). `sd` є робастним стандартним відхиленням, тобто різницею медіан, поділеною на MAD. Слова сили: mild означає слабкий, moderate помірний, strong сильний, extreme надзвичайно сильний.
 - `bootstrap stability`: частка повторних вибірок, у яких підгрупа відтворюється; 1.0 означає завжди.
 - `adjusted p`: p-значення після поправки на множинні порівняння; що менше, то менш імовірно, що знахідка випадкова.
@@ -155,7 +162,7 @@ def select_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
 def merge_findings(by_zone: dict[str, list[dict[str, Any]]], places: dict[str, dict[str, dict[str, Any]]]) -> list[dict[str, Any]]:
     """The findings of every zone of the question, each once, with ``places`` (zone -> how it lies there, None where the
     zone does not weigh its level) for every asked zone; each zone brings its first ``MAX_INSIGHTS / zones`` (at least
-    ``MIN_ZONE_INSIGHTS``) by fit, then lift, then credibility, zone by zone."""
+    ``MIN_ZONE_INSIGHTS``) by fit, then lift, then credibility, zone by zone, none outside it."""
     share = max(MIN_ZONE_INSIGHTS, MAX_INSIGHTS // max(len(by_zone), 1))
     merged: dict[str, dict[str, Any]] = {}
     for zone, findings in by_zone.items():
@@ -163,9 +170,10 @@ def merge_findings(by_zone: dict[str, list[dict[str, Any]]], places: dict[str, d
 
         def rank(it: dict[str, Any]) -> tuple[int, float, int]:
             p = here.get(it["pattern_id"]) or {}
-            return FIT_RANK[p.get("fit")], -p.get("lift", 0.0), CRED_RANK.get(it.get("credibility") or 0, 9)
+            return FIT_RANK.get(p.get("fit"), len(FIT_RANK)), -p.get("lift", 0.0), CRED_RANK.get(it["credibility"], 9)
 
-        for it in sorted(findings, key=rank)[:share]:
+        kept = [it for it in findings if (here.get(it["pattern_id"]) or {}).get("fit") != "outside"]  # another zone brings its own
+        for it in sorted(kept, key=rank)[:share]:
             merged.setdefault(it["pattern_id"], it | {"places": {z: (places.get(z) or {}).get(it["pattern_id"]) for z in by_zone}})
     return list(merged.values())
 
@@ -183,7 +191,7 @@ def _place_text(p: dict[str, Any] | None) -> str:
         return "place not measured"
     if p["fit"] == "outside":
         return "outside"
-    return f"{p['fit']} ({p['share']:.0%} of its events, {p['cover']:.0%} of the zone's events, x{p['lift']:.1f} the map's rate)"
+    return f"{p['fit']} ({p['share']:.0%} of its events, {p['cover']:.0%} of the zone's events, x{p['ratio']:.1f} the map's rate)"
 
 
 def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list[str]:

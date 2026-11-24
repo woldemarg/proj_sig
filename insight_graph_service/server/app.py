@@ -398,12 +398,8 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.post("/api/geo/places")
     def geo_places(body: PlacesIn) -> dict[str, dict[str, dict[str, Any]]]:
-        state, wanted = engine.committed(), set(body.pattern_ids)
-        out = {}
-        for z in body.zones:
-            places = engine.place_scores(state, geometry=z.polygon) or {}
-            out[z.id] = {pid: asdict(p) for pid, p in places.items() if pid in wanted}
-        return out
+        found = engine.places([(z.id, z.polygon) for z in body.zones], body.pattern_ids)
+        return {z: {pid: asdict(p) for pid, p in here.items()} for z, here in found.items()}
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:

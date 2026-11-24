@@ -13,7 +13,7 @@ from doubles import HashingEmbedder
 from test_traversal import edge, pattern
 
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds, ZonePlace
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds, ZoneFit, ZonePlace
 
 QUESTION = "Why is margin lower for phones in the US?"
 
@@ -446,18 +446,19 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     assert [z["id"] for z in found.evidence.zones] == ["R:5:a"] and "- Z1 = R:5:a (res 5): contains P1" in found.payload().evidence_prompt
 
 
-def _place(overlap: float, fit: str, share: float = 0.0, lift: float = 1.0) -> ZonePlace:
-    return ZonePlace(overlap=overlap, share=share, cover=0.1, lift=lift, fit=fit)
+def _place(overlap: float, fit: ZoneFit, share: float = 0.0, lift: float = 1.0) -> ZonePlace:
+    return ZonePlace(overlap=overlap, share=share, cover=0.1, ratio=lift, lift=lift, fit=fit)
 
 
 def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
-    """Without text a zone seeds only the patterns it holds, by overlap: the best of them when none reaches SEED_MIN_SCORE,
-    none when it holds none; the AREA line names how each lies in it, never a pattern the zone did not weigh."""
+    """Without text a zone seeds only the patterns it holds, its own (inside, concentrated) before a broader one with
+    more of its cells, the best of them when none reaches SEED_MIN_SCORE, none when it holds none; the AREA line names
+    how each lies in it, never a pattern the zone did not weigh."""
     snap = snapshot()
     snap["nodes"][:2] = [pattern("P1", ["region=US", "category=phones"], w=0.2), pattern("P2", ["region=EU", "category=tablets"], w=0.2)]
     state = state_of(snap)
     found = searched(state, "", place_scores={"P2": _place(0.01, "inside", 0.94, 5.5), "P1": _place(0.0, "outside")})
-    assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", "place")]
+    assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", None)]  # its own: above the floor
     assert set(found.traversal.baselines) == {"structural_only", "transversal_only", "not_structurally_reachable"}
     keys = {it.pattern_id: it.key for it in found.evidence.items}
     prompt = found.payload().evidence_prompt
@@ -465,12 +466,23 @@ def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
     assert f"[{keys['P2']}] role=seed | in the asked area | scope:" in prompt and f"[{keys['P1']}] role=" in prompt
     assert f"[{keys['P1']}] role={found.evidence.items[1].role} | outside the asked area" in prompt
     assert "(у виділеній зоні)" in found.payload().evidence_summary and "(поза виділеною зоною)" in found.payload().evidence_summary
-    assert found.payload().view["evidence"]["area"][keys["P2"]] == {"overlap": 0.01, "share": 0.94, "cover": 0.1, "lift": 5.5, "fit": "inside"}
+    assert found.payload().view["evidence"]["area"][keys["P2"]] == {
+        "overlap": 0.01,
+        "share": 0.94,
+        "cover": 0.1,
+        "ratio": 5.5,
+        "lift": 5.5,
+        "fit": "inside",
+    }
     assert not searched(state, "", place_scores={"P1": _place(0.0, "outside")}).seeds
-    wide = searched(state, "", place_scores={"P2": _place(0.004, "map-wide", 0.12, 1.0)}).payload()  # P1 not weighed
+    broad = {"P1": _place(0.55, "map-wide", 0.3, 1.1), "P2": _place(0.2, "inside", 0.97, 3.3)}  # P1 shares more cells
+    assert [s.pattern_id for s in searched(state, "", place_scores=broad).seeds] == ["P2"]
+    below = searched(state, "", place_scores={"P2": _place(0.004, "map-wide", 0.12, 1.0)})  # P1 not weighed
+    assert [(s.pattern_id, s.matched.get("fallback")) for s in below.seeds] == [("P2", "place")]
+    wide = below.payload()
     assert f"{keys['P2']} map-wide (12%, ×1.0)" in wide.evidence_prompt and "| map-wide (in the asked area as everywhere)" in wide.evidence_prompt
     assert "outside it" not in next(line for line in wide.evidence_prompt.splitlines() if line.startswith("AREA:"))
-    assert "(по всій мапі, у зоні як скрізь)" in wide.evidence_summary and "- у виділеній зоні: жодного свідчення" in wide.evidence_summary
+    assert "(як по всій мапі)" in wide.evidence_summary and "- у виділеній зоні: жодного свідчення" in wide.evidence_summary
 
 
 def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():

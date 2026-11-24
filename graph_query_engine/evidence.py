@@ -24,7 +24,7 @@ from graph_query_engine.question import ParsedQuery
 from graph_query_engine.temporal import core_age, time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import SpatialProvenance, ZonePlace, dataset_node_id, metric_node_id, wording
+from insight_contracts import ZONE_FITS, SpatialProvenance, ZonePlace, dataset_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -47,19 +47,13 @@ SCALE_TEXT = {  # the scale label of a geo item (docs/07_question_answering.md �
 }  # insufficient (no coarser level planned) stays on the item, unprinted: a one-level upload's prompt does not change
 AREA_TAG = {  # an item of a level the zone weighed, by its ZonePlace.fit
     "inside": " | in the asked area",
-    "concentrated": " | concentrated in the asked area",
+    "concentrated": " | denser in the asked area",
     "map-wide": " | map-wide (in the asked area as everywhere)",
-    "elsewhere": " | mostly outside the asked area",
+    "few": " | few events in the asked area",
+    "elsewhere": " | mostly elsewhere than the asked area",
     "outside": " | outside the asked area",
 }
-AREA_WORDS = {
-    "inside": " (у виділеній зоні)",
-    "concentrated": " (зосереджено у виділеній зоні)",
-    "map-wide": " (по всій мапі, у зоні як скрізь)",
-    "elsewhere": " (переважно поза виділеною зоною)",
-    "outside": " (поза виділеною зоною)",
-}
-IN_AREA = ("inside", "concentrated")  # the fits that make a finding the asked area's own
+IN_AREA = ZONE_FITS[:2]  # the fits that make a finding the asked area's own
 WEAKEST_FIRST = (5, 6, 2, 1)
 PLAIN_HEAD = {  # the PLAIN LANGUAGE heading: a geo item's rows are map cells, a table's are its own
     True: "rows are map cells built from point events; a subgroup is a set of map cells",
@@ -151,13 +145,13 @@ class Evidence:
             parsed_bits.append("scope=" + ",".join(p["conditions"]))
         lines.append("PARSED: " + (" | ".join(parsed_bits) or "no explicit metric/scope recognised"))
         if self.area is not None:  # findings of the levels the zone weighed; it says nothing of the others
-            placed = ", ".join(f"{k} {v.fit} ({v.share:.0%}, ×{v.lift:.1f})" for k, v in self.area.items() if v.fit != "outside")
+            placed = ", ".join(f"{k} {v.fit} ({v.share:.0%}, ×{v.ratio:.1f})" for k, v in self.area.items() if v.fit != "outside")
             outside = ", ".join(k for k, v in self.area.items() if v.fit == "outside")
             lines.append(
                 "AREA: the question is about a map area; "
                 + (
                     "how each finding lies in it (the share of its located events in the area, and its rate there against the map's): "
-                    f"{placed}; inside and concentrated are the area's own, map-wide holds there as everywhere, elsewhere mostly describes other places"
+                    f"{placed}; inside and concentrated are the area's own, map-wide holds there as everywhere, few has too few events there to tell, elsewhere mostly describes other places"
                     if placed
                     else "none of the findings lies in it"
                 )
@@ -472,7 +466,7 @@ class Evidence:
             tag = f" ({wording.name(reached)}: {wording.TERMS[reached][1]})" if reached else ""
             tag += f" ({wording.name('scale_' + it.scale)})" if it.scale in SCALE_TEXT else ""
             tag += "".join(f" (також [{key}])" for key in it.also)
-            tag += AREA_WORDS[self.area[it.key].fit] if self.area and it.key in self.area else ""
+            tag += f" ({wording.name('fit_' + self.area[it.key].fit)})" if self.area and it.key in self.area else ""
             tag += f" ({_trust_words(it.reliability, it.credibility)})" if it.trust and len(trust) > 1 else ""
             tag += f" ({it.time['words']})" if it.time else ""
             n = it.statistics["support"]

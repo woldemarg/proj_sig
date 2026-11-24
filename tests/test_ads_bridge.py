@@ -45,7 +45,7 @@ def item(key: str, credibility: int, dataset: str = "ds-a", resolution: int | No
 
 
 def place(fit: str, share: float = 0.0, cover: float = 0.0, lift: float = 1.0) -> dict[str, Any]:
-    return {"overlap": 0.5, "share": share, "cover": cover, "lift": lift, "fit": fit}
+    return {"overlap": 0.5, "share": share, "cover": cover, "ratio": lift, "lift": lift, "fit": fit}
 
 
 PLACES = {  # how each finding lies in the two test zones; P-P4, a table level the map does not place, in neither
@@ -54,6 +54,7 @@ PLACES = {  # how each finding lies in the two test zones; P-P4, a table level t
         "P-P5": place("concentrated", 0.4, 0.1, 2.6),
         "P-P2": place("map-wide", 0.1, 0.05, 1.0),
         "P-Q1": place("outside"),
+        "P-P6": place("outside"),
     },
     json.dumps(OTHER): {
         "P-P1": place("concentrated", 0.3, 0.2, 2.0),
@@ -85,7 +86,7 @@ def upstream(
         if body.get("geometry") == OTHER:  # another zone's evidence: its own P1 is another finding than the first zone's
             items = [item("P1", 6, pattern_id="P-Q1"), item("P2", 6, pattern_id="P-P1")]
         elif body["question"]:  # P3: P1 again at another level, folded into it; P4: the base file's table level, a dataset of its own
-            items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6)]
+            items = [item("P2", 1, "ds-x"), item("P3", 6, "ds-a5", 5, folded_into="P1"), item("P4", 6, "ds-t", None), item("P1", 6), item("P6", 1)]
         else:  # the zone alone finds the finding concentrated in it, which the text did not seed
             items = [item("P5", 6), item("P1", 6)]
         return {"view": {"evidence": {"items": items, "provenance": provenance}}}
@@ -243,8 +244,8 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             {"question": ask["question"], "geometry": POLYGON, "use_llm": False, "period_only": True},
             {"question": "", "geometry": POLYGON, "use_llm": False, "period_only": True},
         ]
-        assert seen["places"] == [{"zones": [{"id": "Z1", "polygon": POLYGON}], "pattern_ids": ["P-P1", "P-P2", "P-P4", "P-P5"]}]
-        # by fit, then lift: the zone's own first, the map-wide one after them, the unplaced table level last but before elsewhere
+        assert seen["places"] == [{"zones": [{"id": "Z1", "polygon": POLYGON}], "pattern_ids": ["P-P1", "P-P2", "P-P4", "P-P5", "P-P6"]}]
+        # by fit, then lift: the zone's own first, the map-wide one after them, the unplaced table level last; P6, outside, left out
         assert [(i["pattern_id"], (i["places"]["Z1"] or {}).get("fit")) for i in job["insights"]] == [
             ("P-P1", "inside"),
             ("P-P5", "concentrated"),
@@ -314,6 +315,10 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         # the words go as written, a token that only looks like a period (2019-20) a literal the graph keeps
         seen["chat"].clear()
         seen["busy"] = False
+        bare = ask | {"question": "Період: 2026-08-09 — 2026-08-17 (включно)\n2026-W33"}  # periods alone: the zone is asked once, alone
+        assert finished(client, client.post("/api/ads/jobs", json=bare).json()["job_id"])["stage"] == "done"
+        assert [c["question"] for c in seen["chat"]] == [""]
+        seen["chat"].clear()
         dated = ask | {
             "question": "Період: 2026-08-09 — 2026-08-17 (включно)\nСкільки подій у 2026-W33 чи Q3 2026 за сезон 2019-20?",
             "period": ["2026-08-09T00:00", "2026-08-18T00:00"],

@@ -30,7 +30,7 @@ from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
-from subgroup_miner.spatial import GEO_LIFT_PRIOR, SpatialError, compactness
+from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
     cell_centres,
@@ -39,7 +39,9 @@ from subgroup_miner.spatial_plane import (
     geometry_to_cells,
     link_min_events,
     parse_zone,
+    points_in_zone,
     region_features,
+    smoothed_lift,
     zone_measures,
 )
 
@@ -153,23 +155,18 @@ def _placed_by(graph: DualGraph) -> dict[tuple[str, str], set[str]]:
 def _zone_scores(
     ws: Workspace, zone: frozenset[str], levels: tuple[tuple[str, int], ...], tables: tuple[tuple[str, str], ...], strict: bool = True
 ) -> dict[str, ZonePlace]:
-    """``zone_measures`` over the stored cells and extents of each geo dataset in ``levels``, its cells weighed by their
-    points, and over each (table level, geo level placing it) of ``tables`` by the cells holding the table's patterns'
-    events on that level; ``strict``: a missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
+    """``zone_measures`` over the stored cells, points and extents of each geo dataset in ``levels``, and over each
+    (table level, geo level placing it) of ``tables`` by the table's patterns' events on that level; ``strict``: a
+    missing file raises ``FileNotFoundError`` instead of leaving its patterns out."""
     out: dict[str, ZonePlace] = {}
-    for dataset_id, by in [(d, None) for d, _ in levels] + [(t, by) for t, by in tables]:
-        geo, covers = ws.load_geo(by or dataset_id, ("cells", "point_cell")), ws.load_covers(dataset_id)
+    for dataset_id, by in [(d, None) for d, _ in levels] + list(tables):
+        geo, covers = ws.load_geo(by or dataset_id, ("cells", "point_cell", "lonlat")), ws.load_covers(dataset_id)
         if geo is None or not covers:
             if strict:
                 raise FileNotFoundError(dataset_id)
             continue
-        point_cell = geo["point_cell"]
-        per_cell = np.bincount(point_cell[point_cell >= 0], minlength=len(geo["cells"]))
-        if by is None:  # a geo dataset's rows are its cells
-            prints = {pid: (cells, per_cell[cells]) for pid, cells in ((p, np.unique(rows)) for p, rows in covers.items())}
-        else:  # a table's rows are the points
-            prints = {pid: footprint(point_cell, rows, 1.0) for pid, rows in covers.items()}
-        out.update(zone_measures(geo["cells"], per_cell, prints, zone))
+        in_zone = points_in_zone(geo["lonlat"], zone)
+        out.update(zone_measures(geo["cells"], geo["point_cell"], in_zone, covers, zone, by_points=by is not None))
     return out
 
 
@@ -578,7 +575,7 @@ def _region_sets(ws: Workspace, graph: DualGraph, dataset_id: str, hidden: froze
                 if graph.nodes[pid]["props"].get("geo") == "partial" or not mine:
                     continue
                 x = events[pid] = np.bincount(idx[p.events], weights=p.counts, minlength=len(ids))
-                lift = (x + GEO_LIFT_PRIOR) / (mine * here / total + GEO_LIFT_PRIOR)
+                lift = smoothed_lift(x, mine * here / total)
                 for r in np.flatnonzero((x >= link_min_events(mine)) & (lift >= 1)):
                     listed[r][pid] = float(lift[r])
                     own[r].add(pid)

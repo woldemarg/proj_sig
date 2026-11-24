@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_measures``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``points_in_zone``, ``zone_measures``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -18,7 +18,7 @@ import h3
 import numpy as np
 from scipy.stats import binom, false_discovery_control
 
-from insight_contracts import ZonePlace, region_node_id
+from insight_contracts import ZoneFit, ZonePlace, region_node_id
 from subgroup_miner.spatial import (
     COLOCATED_TOP,
     GEO_COLOCATION_MIN,
@@ -438,7 +438,8 @@ def zone_places(lat: np.ndarray, lon: np.ndarray, cell: np.ndarray, resolution: 
     inside = np.isfinite(lat) & np.isfinite(lon) & _in_polygon(lon, lat, polygon)
     zone = geometry_to_cells(polygon, resolution)
     near = set().union(*(h3.grid_disk(c, ZONE_RING) for c in zone))
-    outside = np.where(cell == "", "unlocated", np.where(np.isin(cell, list(near)), "adjacent", "far"))
+    nearby = np.fromiter((c in near for c in cell), dtype=bool, count=len(cell))  # hashed: np.isin over strings is quadratic
+    outside = np.where(cell == "", "unlocated", np.where(nearby, "adjacent", "far"))
     return np.where(inside, "inside", outside), len(zone)
 
 
@@ -469,43 +470,75 @@ def build_projection(cells: np.ndarray, other: np.ndarray) -> Callable[[np.ndarr
     return lambda rows: np.flatnonzero(np.isin(parent, rows))
 
 
+def points_in_zone(lonlat: np.ndarray, zone: frozenset[str]) -> np.ndarray:
+    """Which points a zone holds: those whose cell at a zone cell's resolution is a zone cell, whatever level counts them,
+    so an event is in the zone or not alike on every level (docs/07_question_answering.md §7.2)."""
+    lon, lat = (lonlat[:, 0], lonlat[:, 1]) if len(lonlat) else (np.zeros(0), np.zeros(0))
+    inside = np.zeros(len(lon), dtype=bool)
+    by_res: defaultdict[int, set[str]] = defaultdict(set)
+    for c in zone:
+        by_res[h3.get_resolution(c)].add(c)
+    for res, group in by_res.items():
+        inside |= np.fromiter((c in group for c in point_cells(lat, lon, res)), dtype=bool, count=len(lon))
+    return inside
+
+
 def zone_measures(
-    cells: np.ndarray, per_cell: np.ndarray, prints: dict[str, tuple[np.ndarray, np.ndarray]], zone: frozenset[str]
+    cells: np.ndarray, point_cell: np.ndarray, in_zone: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str], by_points: bool
 ) -> dict[str, ZonePlace]:
-    """How each pattern lies in ``zone`` over one level's ``cells`` (``geo.npz``), ``per_cell`` the map's events in each
-    and ``prints`` pattern -> (its cell rows, its events in each) (docs/07_question_answering.md §7.2). ``overlap`` is
-    ``|P ∩ Z| / sqrt(|P| · |Z|)`` over cells; ``share``, ``cover`` and ``lift`` are over events, ``Z`` the cells inside
-    the zone (``cells_inside``)."""
+    """How each pattern lies in ``zone`` over one level's ``cells`` and points (``geo.npz``; ``in_zone``:
+    ``points_in_zone``), ``covers`` pattern -> its rows: cell rows, or point rows when ``by_points`` (a table level placed
+    by this one) (docs/07_question_answering.md §7.2). ``overlap`` is ``|P ∩ Z| / sqrt(|P| · |Z|)`` over cells, ``Z`` the
+    cells inside the zone (``cells_inside``); ``share``, ``cover``, ``ratio`` and ``lift`` are over located events."""
     if not len(cells):
         return {}
     inside = cells_inside(cells, zone)
-    size, n_zone, total = int(inside.sum()), int(per_cell[inside].sum()), int(per_cell.sum())
+    located = point_cell >= 0
+    held = located & in_zone
+    per_cell, zone_cell = (np.bincount(point_cell[m], minlength=len(cells)) for m in (located, held))
+    size, n_zone, total = int(inside.sum()), int(held.sum()), int(located.sum())
     out = {}
-    for pid, (rows, counts) in prints.items():
-        hit = inside[rows]
-        x, mine = int(counts[hit].sum()), int(counts.sum())
+    for pid, rows in covers.items():
+        rows = np.asarray(rows, dtype=np.int64)
+        if by_points:
+            points = rows[located[rows]]
+            extent, x, mine = np.unique(point_cell[points]), int(in_zone[points].sum()), len(points)
+        else:
+            extent = np.unique(rows)
+            x, mine = int(zone_cell[extent].sum()), int(per_cell[extent].sum())
+        hit = int(inside[extent].sum())
         expected = mine * n_zone / total if total else 0.0
         out[pid] = ZonePlace(
-            overlap=round(int(hit.sum()) / float(np.sqrt(len(rows) * size)), 4) if hit.any() else 0.0,
+            overlap=round(hit / float(np.sqrt(len(extent) * size)), 4) if hit else 0.0,
             share=round(x / mine, 4) if mine else 0.0,
             cover=round(x / n_zone, 4) if n_zone else 0.0,
-            lift=round((x + GEO_LIFT_PRIOR) / (expected + GEO_LIFT_PRIOR), 2),
-            fit=zone_fit(x, mine, expected),
+            ratio=round(x / expected, 2) if expected else 0.0,
+            lift=round(float(smoothed_lift(x, expected)), 2),
+            fit=zone_fit(x, mine, n_zone, total),
         )
     return out
 
 
-def zone_fit(x: int, mine: int, expected: float) -> str:
-    """One of ``ZONE_FITS`` for an insight of ``mine`` located events with ``x`` of them in a zone where the map's rate
-    puts ``expected``: the raw ratio ``x / expected`` decides, the prior only ranks (docs/07_question_answering.md §7.2)."""
+def smoothed_lift(x: float | np.ndarray, expected: float | np.ndarray) -> np.ndarray:
+    """An insight's events in a place against the map's rate, ``GEO_LIFT_PRIOR`` pseudo-events added to both: ranking only."""
+    return np.asarray((np.asarray(x) + GEO_LIFT_PRIOR) / (np.asarray(expected) + GEO_LIFT_PRIOR))
+
+
+def zone_fit(x: int, mine: int, n_zone: int, total: int) -> ZoneFit:
+    """How an insight of ``mine`` located events, ``x`` of them in a zone of ``n_zone`` of the map's ``total``, lies in
+    it (docs/07_question_answering.md §7.2): ``inside`` or ``concentrated`` only where the zone's events fall in it
+    beyond chance (the binomial tail of IN_REGION, docs/06_graph_and_storage.md §6.1), ``few`` below a place's least events."""
     if not x:
         return "outside"
-    ratio = x / expected if expected else math.inf
-    if x >= GEO_FOOTPRINT_SHARE * mine and ratio >= GEO_LIFT_MIN:
+    expected = mine * n_zone / total
+    beyond = binom.sf(x - 1, n_zone, mine / total) <= GEO_LINK_FDR
+    if beyond and x >= GEO_FOOTPRINT_SHARE * mine and mine - x <= (mine - expected) / GEO_LIFT_MIN:  # and rarer than the map outside
         return "inside"
     if x < link_min_events(mine):
-        return "elsewhere"
-    return "concentrated" if ratio >= GEO_LIFT_MIN else "map-wide" if ratio >= 1 / GEO_LIFT_MIN else "elsewhere"
+        return "few"
+    if beyond and x >= GEO_LIFT_MIN * expected:
+        return "concentrated"
+    return "map-wide" if x >= expected / GEO_LIFT_MIN else "elsewhere"
 
 
 def footprint(point_cell: np.ndarray, members: np.ndarray, share: float = GEO_FOOTPRINT_SHARE) -> tuple[np.ndarray, np.ndarray]:

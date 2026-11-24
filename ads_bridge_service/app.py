@@ -61,6 +61,13 @@ _HEADER = re.compile(r"^Період:.*$", re.M)  # the console's period line: A
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
 
 
+def graph_text(question: str) -> str:
+    """The question's words for the graph: the ``Період:`` line out, and none when only periods are left (a period the
+    text names is ADS's: the graph does not read it, and keeps a token that only looks like one as a word)."""
+    text = _HEADER.sub(" ", question)
+    return text if _PERIODS.sub(" ", text).strip() else ""
+
+
 class TableIn(BaseModel):
     dataset_id: str
     filename: str
@@ -158,14 +165,10 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
-        """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
-        centres it holds, and the period bar's days alone (``period_only``): a period the question's text names is ADS's,
-        so the graph does not read it, and keeps a token that only looks like one as a word. A text of periods alone has
-        no words for the graph: a zone is asked alone, the whole map not at all (the graph seeds something for any text)."""
-        text = _HEADER.sub(" ", question)
-        if not _PERIODS.sub(" ", text).strip():
-            text = ""
+    def ask_graph(text: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
+        """A zone's evidence (None: the whole map's) for ``graph_text``'s words: the graph reads the polygon as the cells
+        of its finest geo level whose centres it holds, and the period bar's days alone (``period_only``). No words: a zone
+        is asked alone, the whole map not at all (the graph seeds something for any text)."""
         if not polygon and not text:
             return []
         ask = {"question": text, "use_llm": False, "period_only": True} | ({"geometry": polygon} if polygon else {})
@@ -177,11 +180,11 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         """Each asked zone's findings, its answer to the text and to the zone alone (the text may seed out of the zone),
         merged with how each lies in every asked zone. No zone asked: the whole map's findings, in no zone."""
         if not body.focus:
-            return [it | {"places": {}} for it in ask_graph(body.question, None, body.period)[:MAX_INSIGHTS]]
+            return [it | {"places": {}} for it in ask_graph(graph_text(body.question), None, body.period)[:MAX_INSIGHTS]]
         by_zone: dict[str, list[dict[str, Any]]] = {}
         for z in body.focus:
             found: dict[str, dict[str, Any]] = {}
-            for text in dict.fromkeys((body.question, "")):
+            for text in dict.fromkeys((graph_text(body.question), "")):
                 for it in ask_graph(text, zones[z], body.period):
                     found.setdefault(it["pattern_id"], it)
             by_zone[z] = list(found.values())

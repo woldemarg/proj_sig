@@ -41,10 +41,10 @@ Rules:
 6. Items reached only by location lie in the same area of the map; that does not show the findings are related.
    Say they are in the same area; do not explain one by the other, not even as a hypothesis.
    AREA: the question is about a map area the user selected. Answer it from the findings marked "in the asked area"
-   or "concentrated in the asked area"; if none is, say so first. A finding marked "map-wide" holds in the area as
-   everywhere: say so, never present it as a trait of the area. Findings marked "mostly outside" or "outside the asked
-   area" are not about it: keep them apart, after the area's own findings, as the same picture elsewhere. Findings with
-   no mark are from other levels or tables.
+   or "denser in the asked area"; if none is, say so first. A finding marked "map-wide" holds in the area as
+   everywhere: say so, never present it as a trait of the area; one marked "few events" has too few there to tell.
+   Findings marked "mostly elsewhere" or "outside the asked area" are not about it: keep them apart, after the area's
+   own findings, as the same picture elsewhere. Findings with no mark are from other levels or tables.
 7. SCALE: a "scale:" line and the SCALE CHAIN follow a finding to coarser and finer levels of the same phenomenon.
    Say whether it holds at the coarser level or reverses there; "not found at the coarser level" means it is not
    confirmed there on its own, never that it is local.

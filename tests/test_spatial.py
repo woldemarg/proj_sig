@@ -727,8 +727,8 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     from subgroup_miner.spatial_plane import cell_boundary, geometry_to_cells, parse_zone, zone_measures
 
     def overlaps(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:  # one event per cell
-        ones = np.ones(len(cells), dtype=np.int64)
-        return {pid: p.overlap for pid, p in zone_measures(cells, ones, {k: (r, ones[r]) for k, r in covers.items()}, zone).items()}
+        points = np.arange(len(cells))
+        return {pid: p.overlap for pid, p in zone_measures(cells, points, points < 0, covers, zone, by_points=False).items()}
 
     crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
     assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
