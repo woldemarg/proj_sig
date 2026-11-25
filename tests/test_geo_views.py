@@ -6,9 +6,11 @@ from __future__ import annotations
 import h3
 import numpy as np
 import pytest
-from conftest import geo_frame, upload_levels
+from conftest import HOT, geo_frame, upload_levels
+from fastapi.testclient import TestClient
 
 from insight_graph_service.core.engine import PipelineError
+from insight_graph_service.server.app import create_app
 
 
 def test_the_period_bar_counts_the_window_and_a_patterns_points_in_its_days(engine, tmp_path):
@@ -257,3 +259,85 @@ def test_every_map_read_says_an_insight_in_the_same_ukrainian_words(engine, poin
     words = " ".join(f"{r['where']} {r['what']}" for r in readings.values())
     assert glossary and not [g for g in glossary.values() if g in words] and "подій комірки" in words and "сусідні комірки" in words
     assert all(t["reading"].startswith("Повторювана картина") if t["id"] else t["label"] == "без теми" for t in window["themes"])
+
+
+def test_a_zone_tells_how_each_insight_lies_in_it():
+    """Over located events (docs/07_question_answering.md §7.2): an insight wholly in the zone is inside, one partly in it
+    but denser there beyond chance concentrated, one spread at the map's rate map-wide, one with too few events there
+    few, one rarer there than on the map elsewhere, one without an event there outside; the ratio shown is the raw one
+    the fit reads; a zone holding the whole map makes every insight map-wide."""
+    from subgroup_miner.spatial_plane import cell_centres, points_in_zone, zone_measures
+
+    centre = h3.latlng_to_cell(*HOT, 7)
+    cells = np.array(sorted(h3.grid_disk(centre, 5)))
+    point_cell = np.repeat(np.arange(len(cells)), 10)  # 910 events, 10 per cell; the zone's 7 cells hold 70
+    lonlat = cell_centres(cells)[point_cell]
+    ring = {k: np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, k)))) for k in range(6)}
+    disk = np.flatnonzero(np.isin(cells, list(h3.grid_disk(centre, 1))))
+    covers = {
+        "local": disk,
+        "dense": np.concatenate([disk, ring[3]]),
+        "spread": np.arange(len(cells)),
+        "few": np.concatenate([ring[0], ring[2], ring[3], ring[4]]),
+        "rare": np.concatenate([disk[:3], ring[3], ring[4], ring[5]]),
+        "out": ring[5],
+    }
+    zone = frozenset(h3.grid_disk(centre, 1))
+    places = zone_measures(cells, point_cell, points_in_zone(lonlat, zone), covers, zone, by_points=False)
+    fits = {"local": "inside", "dense": "concentrated", "spread": "map-wide", "few": "few", "rare": "elsewhere", "out": "outside"}
+    assert {k: p.fit for k, p in places.items()} == fits
+    local, dense, spread = places["local"], places["dense"], places["spread"]
+    assert (local.share, local.cover, local.ratio, local.lift) == (1.0, 1.0, 13.0, round(100 / (70 * 70 / 910 + 30), 2))  # prior 30
+    assert dense.ratio == round(70 / (250 * 70 / 910), 2) > dense.lift  # the fit and the number shown read the raw ratio
+    assert spread.share == round(70 / 910, 4) and spread.ratio == spread.lift == 1.0 and places["out"].share == places["out"].cover == 0.0
+    whole = frozenset(str(c) for c in cells)
+    assert {p.fit for p in zone_measures(cells, point_cell, np.ones(910, dtype=bool), covers, whole, by_points=False).values()} == {"map-wide"}
+
+
+def test_a_zones_fit_needs_more_than_chance_and_reads_one_place_on_every_level():
+    """Five events where 3.3 are expected are no concentration (binomial tail 0.24), fifteen where 5 are are; an insight
+    wholly in a zone of three quarters of the map is inside, one spread over it map-wide; and an event is in the zone or
+    not alike on a coarse level and a fine one, so a coarse cell holding the zone counts only its points in it."""
+    from subgroup_miner.spatial_plane import points_in_zone, zone_fit, zone_measures
+
+    assert zone_fit(5, 100, 1000, 30000) == "map-wide" and zone_fit(15, 150, 1000, 30000) == "concentrated"
+    assert zone_fit(100, 100, 750, 1000) == "inside" and zone_fit(75, 100, 750, 1000) == zone_fit(85, 100, 750, 1000) == "map-wide"
+    assert zone_fit(4, 6, 50, 1000) == "few"  # two thirds of a small insight's events in the zone: too few to tell
+
+    centre = h3.latlng_to_cell(*HOT, 7)
+    fine = np.array(sorted(c for p in h3.grid_disk(centre, 1) for c in h3.cell_to_children(p, 9)))
+    lonlat = np.array([h3.cell_to_latlng(str(c))[::-1] for c in fine])  # one event at each fine cell's centre
+    coarse = np.array(sorted({h3.latlng_to_cell(lat, lon, 7) for lon, lat in lonlat}))
+    on_coarse = np.searchsorted(coarse, [h3.latlng_to_cell(lat, lon, 7) for lon, lat in lonlat])
+    mine = np.flatnonzero(coarse[on_coarse] == centre)  # the centre coarse cell's events
+    zone = frozenset(h3.grid_disk(h3.cell_to_center_child(centre, 9), 1))
+    in_zone = points_in_zone(lonlat, zone)
+    seen = [
+        zone_measures(coarse, on_coarse, in_zone, {"P": np.unique(on_coarse[mine])}, zone, by_points=False)["P"],
+        zone_measures(fine, np.arange(len(fine)), in_zone, {"P": mine}, zone, by_points=False)["P"],
+        zone_measures(coarse, on_coarse, in_zone, {"P": mine}, zone, by_points=True)["P"],  # a table level placed by the coarse one
+    ]
+    assert in_zone.sum() == 7 and len({(p.share, p.cover, p.ratio, p.fit) for p in seen}) == 1 and seen[0].cover == 1.0
+
+
+def test_the_places_of_findings_in_drawn_zones_are_a_questions(engine, points_csv):
+    """``POST /api/geo/places`` places each asked finding in each drawn zone as a question with that zone does, an id it
+    does not weigh left out; two zones of one id are refused, and so is a workspace the engine cannot use."""
+    from dataclasses import asdict
+
+    upload_levels(engine, points_csv, geo="auto@8,7", table=True)
+    ids = sorted(engine.graph().insights)
+    hot = dict(h3.cells_to_geo(list(h3.grid_disk(h3.latlng_to_cell(*HOT, 8), 3))))
+    with TestClient(create_app(engine)) as client:
+        found = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": hot}], "pattern_ids": [*ids, "P-none"]})
+        assert found.status_code == 200
+        asked = engine.place_scores(engine.committed(), geometry=hot) or {}
+        assert found.json() == {"Z1": {pid: asdict(p) for pid, p in asked.items()}} and set(found.json()["Z1"]) <= set(ids)
+        assert {p["fit"] for p in found.json()["Z1"].values()} & {"inside", "concentrated"}  # the planted cluster lies in it
+        twice = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": hot}] * 2, "pattern_ids": ids})
+        assert twice.status_code == 400 and twice.json()["code"] == "invalid_options"
+        boxed = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": {"bbox": [0, 0, 1, 1]}}], "pattern_ids": ids})
+        assert boxed.status_code == 400 and "Polygon" in boxed.json()["detail"]  # a drawn zone, as the exports read it
+        engine.problem = "workspace was built with another representation"
+        refused = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": hot}], "pattern_ids": ids})
+        assert refused.status_code == 409 and refused.json()["code"] == "workspace_degraded"

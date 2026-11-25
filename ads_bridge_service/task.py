@@ -14,17 +14,29 @@ ZONE_CELLS_FILE = "zone_cells.csv"  # every cell of each zone of the conversatio
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
+FIT_RANK = {"inside": 0, "concentrated": 1, "map-wide": 2, None: 3, "few": 4, "elsewhere": 5}  # None: a level the zone does not weigh
+ZONE_OWN = ("inside", "concentrated")  # the fits that make an insight the zone's own
 
 SIG_TERMS = (
     "points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
-    "their number; <column>_mode = the cell's most frequent value; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
+    "their number; <column>_mode = the cell's most frequent value; <column>_median = the median of the cell's events; <time>_late_share "
+    "(read 'timestamp late share') = share of the cell's events in the second half of the data's period, not a time of day; "
+    "<time>_active_days = number of different days with events in the cell; neighbours_<counter>_band q1…q4 = quartile of the counter summed over the six "
     "neighbours; lisa_points = local Moran class of event counts (hot spot, cold spot, high outlier, low outlier, no cluster); "
     "context_<layer>_band = none nearby, or the quantile of context points in the cell; shift = the subgroup's median against the map's median "
     "in robust sd"
 )
 
 # What an insight is and how to read it, ahead of the user's question (the query is the part ADS never trims)
-IN_ZONE = "- `in zone` says, for each zone of the question it was found for, whether those cells overlap that zone.\n"
+IN_ZONE = (
+    "- The line after the id says, for each zone of the question, how the insight lies in it over its located events: `inside` (almost wholly "
+    "in the zone, and rarer than the map outside it), `concentrated` (partly in it, but at least 1.5 times denser there than on the whole map, "
+    "beyond chance), `map-wide` (in the zone at about the map's rate: it holds there as everywhere and is no trait of the zone), `few` (too "
+    "few of its events in the zone to tell), `elsewhere` (rarer in the zone than on the map: it describes other places) or `outside`; then "
+    "the share of its events in the zone, the share of the zone's events it holds, and its rate there against the map's (x1 = as on the whole "
+    "map). `place not measured`: an insight of a table level the map does not place. Zones may overlap: an insight in several overlapping "
+    "zones may lie in their common part only.\n"
+)
 INSIGHT_PRIMER = f"""Read this first: established insights about this dataset.
 
 Before this task a separate statistical system (SIG) mined these very tables and validated what it found (bootstrap stability and a multiple-testing correction). Each insight O# below is a result already computed and validated for this dataset, not a suggestion.
@@ -65,11 +77,13 @@ def build_guidance(zoned: bool) -> str:
         + "\n- The insights are computed: quote those that bear on the question by id with their numbers, and add what they do not state "
         f"(dates, counts{' in the zone' if zoned else ''}, breakdowns).\n"
         "- End the report with one section 'Established insights'. List only the insights that bear on the question (their condition or "
-        f"metric is what the question asks about){', the ones in a zone first. For each give its id and the zones it is in' if zoned else '. For each give its id'}, "
+        f"metric is what the question asks about){', the ones inside or concentrated in a zone first. For each give its id and how it lies in each zone' if zoned else '. For each give its id'}, "
         "copy its 'established' lines word for word (a median pair reads 'median a vs b overall'; sd is the unit of the shift, not of a "
         "median), and add one sentence on what it adds to your own figures. When no insight bears on the question, say so in one sentence."
         + (
-            " An insight with 'no' for a zone describes other places than that zone: say so, never present it as a fact about that zone."
+            " An insight map-wide in a zone holds there as everywhere: say so, never present it as a trait of that zone; one elsewhere or outside"
+            " a zone describes other places than that zone. An insight inside or concentrated in several zones is what they share; one in a"
+            " single zone sets it apart."
             if zoned
             else ""
         )
@@ -96,6 +110,9 @@ SIG_GLOSSARY = """## Словник термінів графа інсайтів
   - `low outlier`: тиха комірка серед жвавих сусідів.
   - `no cluster`: комірка не входить ні в жваве, ні в тихе скупчення. Це звичайне місце без вираженого скупчення, а не відсутність подій.
 - `context_<шар>_band`: скільки точок контекстного шару в самій комірці. `none nearby` означає жодної, `q1…q4` чверті серед комірок, де вони є.
+- `<колонка часу>_late_share` (у тексті `timestamp late share`): частка подій комірки в другій половині періоду даних. Це не час доби і не ніч.
+- `<колонка часу>_active_days`: скільки різних днів у комірці були події. `<колонка>_median`: медіана колонки серед подій комірки.
+- Як інсайт лежить у зоні (рядок після його id). Код класу в звіті заміни українською назвою: `inside` → «у виділеній зоні» (майже всі його події в зоні); `concentrated` → «густіше у виділеній зоні» (щонайменше в 1,5 раза частіше, ніж за часткою зони на мапі, і не випадково); `map-wide` → «як по всій мапі» (у зоні так само часто, як скрізь: не особливість зони); `few` → «замало подій у зоні» (замало, щоб судити); `elsewhere` → «переважно в інших місцях»; `outside` → «поза виділеною зоною». Числа: частка подій інсайту в зоні, частка подій зони, що припадає на інсайт, і частота в зоні проти мапи, яку пиши множником: «×0,8 від мапи» (×1 означає як на всій мапі), а не «у 0,8 раза менше».
 - Зсув `<метрика>: mild|moderate|strong|extreme increase|decrease, ±z sd (median a vs b overall)`: медіана метрики в комірках підгрупи (a) проти медіани всієї мапи (b). `sd` є робастним стандартним відхиленням, тобто різницею медіан, поділеною на MAD. Слова сили: mild означає слабкий, moderate помірний, strong сильний, extreme надзвичайно сильний.
 - `bootstrap stability`: частка повторних вибірок, у яких підгрупа відтворюється; 1.0 означає завжди.
 - `adjusted p`: p-значення після поправки на множинні порівняння; що менше, то менш імовірно, що знахідка випадкова.
@@ -124,15 +141,12 @@ def name_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def select_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
-    """The answer's evidence items for the task: the ones the zone weighed as inside (place > 0) first, the most
-    credible first, then the ones outside it the answer also tells; at most MAX_INSIGHTS, in the graph's own words. An
-    item folded into another (the same finding at another level of its upload) is told by its host alone, as the
-    graph's own prompt tells it."""
+    """The answer's evidence items for the task, the most credible first, in the graph's own words. An item folded into
+    another (the same finding at another level of its upload) is told by its host alone, as the graph's own prompt tells it."""
     evidence = (qa.get("view") or {}).get("evidence") or {}
-    area = evidence.get("area") or {}
     source = {p["key"]: p for p in evidence.get("provenance") or []}
     shown = [it for it in evidence.get("items", []) if not it.get("folded_into")]
-    items = sorted(shown, key=lambda it: (-((area.get(it["key"]) or 0) > 0), CRED_RANK.get(it.get("credibility"), 9)))
+    items = sorted(shown, key=lambda it: CRED_RANK.get(it.get("credibility"), 9))
 
     def level(it: dict[str, Any]) -> str:
         resolution = ((it.get("provenance") or {}).get("spatial") or {}).get("resolution")
@@ -140,12 +154,11 @@ def select_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
 
     return [
         {
-            "key": it["key"],
             "pattern_id": it["pattern_id"],
             "dataset_id": (it.get("provenance") or {}).get("dataset_id") or (source.get(it["key"]) or {}).get("dataset_id", ""),
             "level": level(it),
             "filename": (source.get(it["key"]) or {}).get("filename", ""),
-            "inside": (area.get(it["key"]) or 0) > 0,
+            "credibility": it.get("credibility"),
             "layer": next((c for c in it.get("scope") or [] if c.startswith("context_")), ""),  # a cross-layer condition
             "headline": it.get("headline", ""),
             "scope": it.get("scope_text", ""),
@@ -153,18 +166,26 @@ def select_findings(qa: dict[str, Any]) -> list[dict[str, Any]]:
             "validation": it.get("validation", ""),
             "trust": it.get("trust", ""),
         }
-        for it in items[:MAX_INSIGHTS]
+        for it in items
     ]
 
 
-def merge_findings(by_zone: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """The findings of every zone of the question, each once, with ``zones`` (zone id -> inside it) for the zones whose
-    evidence holds it; each zone brings its first ``MAX_INSIGHTS / zones`` (at least ``MIN_ZONE_INSIGHTS``), zone by zone."""
+def merge_findings(by_zone: dict[str, list[dict[str, Any]]], places: dict[str, dict[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The findings of every zone of the question, each once, with ``places`` (zone -> how it lies there, None where the
+    zone does not weigh its level) for every asked zone; each zone brings its first ``MAX_INSIGHTS / zones`` (at least
+    ``MIN_ZONE_INSIGHTS``) by fit, then lift, then credibility, zone by zone, none outside it."""
     share = max(MIN_ZONE_INSIGHTS, MAX_INSIGHTS // max(len(by_zone), 1))
     merged: dict[str, dict[str, Any]] = {}
     for zone, findings in by_zone.items():
-        for it in findings[:share]:
-            merged.setdefault(it["key"], {k: v for k, v in it.items() if k != "inside"} | {"zones": {}})["zones"][zone] = it["inside"]
+        here = places.get(zone) or {}
+
+        def rank(it: dict[str, Any]) -> tuple[int, float, int]:
+            p = here.get(it["pattern_id"]) or {}
+            return FIT_RANK.get(p.get("fit"), len(FIT_RANK)), -p.get("lift", 0.0), CRED_RANK.get(it["credibility"], 9)
+
+        kept = [it for it in findings if (here.get(it["pattern_id"]) or {}).get("fit") != "outside"]  # another zone brings its own
+        for it in sorted(kept, key=rank)[:share]:
+            merged.setdefault(it["pattern_id"], it | {"places": {z: (places.get(z) or {}).get(it["pattern_id"]) for z in by_zone}})
     return list(merged.values())
 
 
@@ -176,13 +197,21 @@ def finding_files(findings: list[dict[str, Any]]) -> dict[str, list[str]]:
     return out
 
 
+def _place_text(p: dict[str, Any] | None) -> str:
+    if p is None:
+        return "place not measured"
+    if p["fit"] == "outside":
+        return "outside"
+    return f"{p['fit']} ({p['share']:.0%} of its events, {p['cover']:.0%} of the zone's events, x{p['ratio']:.1f} the map's rate)"
+
+
 def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list[str]:
-    """One block per insight: the id and its place, the cell condition, each shift, its validation and its trust; an
-    insight of another dataset than the base table's says which: another level of its file, or another file."""
+    """One block per insight: the id and how it lies in each zone, the cell condition, each shift, its validation and
+    its trust; an insight of another dataset than the base table's says which: another level of its file, or another file."""
     out = []
     for n, it in enumerate(findings, 1):
-        place = ", ".join(f"{z} {'yes' if inside else 'no'}" for z, inside in it["zones"].items())
-        lines = [f"O{n} · in zone: {place}" if place else f"O{n}", f"  cells where: {it['scope'] or '—'}"]
+        place = "; ".join(f"{z}: {_place_text(p)}" for z, p in it["places"].items())
+        lines = [f"O{n} · {place}" if place else f"O{n}", f"  cells where: {it['scope'] or '—'}"]
         lines += [f"  established: {s}" for s in it["shift"]]
         lines += [f"  {k}: {it[k]}" for k in ("validation", "trust") if it.get(k)]
         if it.get("layer"):
@@ -193,6 +222,18 @@ def insight_blocks(findings: list[dict[str, Any]], base: dict[str, Any]) -> list
             lines.append(f"  level: {it['level']} of the base table's file (its cells are of that level, not of the base table's h3_r columns)")
         out.append("\n".join(lines))
     return out
+
+
+def zones_summary(findings: list[dict[str, Any]]) -> str:
+    """Which insights several asked zones share, which set one zone apart and which are map-wide, by the O# ids."""
+    own = {n: [z for z, p in it["places"].items() if p and p["fit"] in ZONE_OWN] for n, it in enumerate(findings, 1)}
+    wide = [f"O{n}" for n, it in enumerate(findings, 1) if not own[n] and any(p and p["fit"] == "map-wide" for p in it["places"].values())]
+    parts = (
+        ("Shared (inside or concentrated in several zones)", [f"O{n} ({', '.join(zs)})" for n, zs in own.items() if len(zs) > 1]),
+        ("One zone only", [f"O{n} ({zs[0]})" for n, zs in own.items() if len(zs) == 1]),
+        ("Map-wide (as everywhere)", wide),
+    )
+    return "\n".join(f"{name}: {', '.join(ids) or 'none'}." for name, ids in parts)
 
 
 def _table_line(t: dict[str, Any]) -> str:
@@ -260,6 +301,8 @@ def build_query_parts(
         blocks = "(after the ask)"
     else:
         blocks = "\n\n".join(insight_blocks(findings, base)) or f"SIG has no insights for {'these zones' if focus else 'this question'}."
+        if findings and len(focus) > 1:
+            blocks = zones_summary(findings) + "\n\n" + blocks
     if not focus and zones:  # the conversation's zones stay in df_zones: a question may still name one
         frame = "No zone is ticked for this question: analyse the whole map (every row of the tables), unless the question names a zone of df_zones: "
     elif not focus:

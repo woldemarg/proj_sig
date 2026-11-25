@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, get_args
 
 SNAPSHOT_VERSION = 15  # the snapshot layout (docs/11_reference.md §11.5)
 
@@ -132,6 +132,24 @@ class GraphEdge:
             "weight": self.weight,
             "props": self.props,
         }
+
+
+ZoneFit = Literal["inside", "concentrated", "map-wide", "few", "elsewhere", "outside"]
+ZONE_FITS: tuple[ZoneFit, ...] = get_args(ZoneFit)  # how a pattern lies in an asked zone, the zone's own first
+
+
+@dataclass(frozen=True)
+class ZonePlace:
+    """How one pattern lies in an asked map zone (docs/07_question_answering.md §7.2): ``overlap`` its cells against the
+    zone's (the seeds' measure); over its located events ``share`` in the zone, ``cover`` of the zone's events, ``ratio``
+    against the map's rate (the number shown), ``lift`` the same smoothed (for ranking) and ``fit``."""
+
+    overlap: float
+    share: float
+    cover: float
+    ratio: float
+    lift: float
+    fit: ZoneFit
 
 
 def attractor_node_id(attractor_id: int) -> str:

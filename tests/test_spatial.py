@@ -516,7 +516,7 @@ def test_a_base_insight_is_placed_in_the_answer_the_map_and_its_panel(engine, po
     pid = max(base, key=lambda p: graph.insight(p).weight)
     cells = engine.ws.load_geo(fine, ("cells",))["cells"]
     footprint_cells = [str(cells[r]) for r in {p["id"]: p for p in engine.maps().projected(fine)}[pid]["rows"]]
-    assert engine.place_scores(engine.committed(), cells=footprint_cells)[pid] > 0
+    assert engine.place_scores(engine.committed(), cells=footprint_cells)[pid].overlap > 0
     assert any(s.pattern_id == pid and s.matched["place"] > 0 for s in engine.search("", cells=footprint_cells).seeds)
     asked = TestClient(create_app(engine)).post("/api/search", json={"question": "", "cells": footprint_cells}).json()  # as the card asks
     assert "AREA:" in asked["evidence_prompt"] and pid in asked["view"]["highlight"]["seeds"]
@@ -724,7 +724,11 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     member says; a circle and a box take the cells whose centres they hold, a shape smaller than a cell the cell under it;
     anything else, a box across 180° and a point out of range too, is refused. A zone cell of another resolution is placed
     by its centre, also where the centre lies outside its H3 parent."""
-    from subgroup_miner.spatial_plane import cell_boundary, geometry_to_cells, parse_zone, zone_overlap
+    from subgroup_miner.spatial_plane import cell_boundary, geometry_to_cells, parse_zone, zone_measures
+
+    def overlaps(cells: np.ndarray, covers: dict[str, np.ndarray], zone: frozenset[str]) -> dict[str, float]:  # one event per cell
+        points = np.arange(len(cells))
+        return {pid: p.overlap for pid, p in zone_measures(cells, points, points < 0, covers, zone, by_points=False).items()}
 
     crossing = "85f385a3fffffff"  # the ring the map draws past 180° (cell_boundary) is the same one cell (M10-F01)
     assert geometry_to_cells({"type": "Polygon", "coordinates": [cell_boundary(crossing)]}, 5) == {crossing}
@@ -767,20 +771,20 @@ def test_a_geometry_becomes_the_cells_of_a_zone():
     cells = np.array(sorted(h3.grid_disk(centre, 3)))
     inner = np.flatnonzero(np.isin(cells, list(h3.grid_disk(centre, 1))))
     covers = {"A": inner, "B": np.flatnonzero(np.isin(cells, list(h3.grid_ring(centre, 3))))}
-    assert zone_overlap(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
-    assert zone_overlap(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
+    assert overlaps(cells, covers, frozenset(h3.grid_disk(centre, 1))) == {"A": 1.0, "B": 0.0}  # A is the zone, B outside it
+    assert overlaps(cells, covers, frozenset(h3.cell_to_children(centre, 9)[:1]))["A"] == round(1 / 7**0.5, 4)  # a finer cell: its parent
     coarse = h3.latlng_to_cell(*h3.cell_to_latlng(centre), 6)
     below = {str(c) for c in cells if centre_region(str(c), 6) == coarse}  # a coarser cell: the centres it holds
     hit = len(below & set(h3.grid_disk(centre, 1)))
-    assert zone_overlap(cells, covers, frozenset([coarse]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
+    assert overlaps(cells, covers, frozenset([coarse]))["A"] == round(hit / (7 * len(below)) ** 0.5, 4)
     fine = "8829aab493fffff"  # its centre lies clearly (no tie) in another resolution-5 cell than its H3 parent
     holder, parent = centre_region(fine, 5), h3.cell_to_parent(fine, 5)
     assert holder != parent
-    assert zone_overlap(np.array([holder, parent]), {"holder": np.array([0]), "parent": np.array([1])}, frozenset([fine])) == {
+    assert overlaps(np.array([holder, parent]), {"holder": np.array([0]), "parent": np.array([1])}, frozenset([fine])) == {
         "holder": 1.0,
         "parent": 0.0,
     }
-    assert zone_overlap(np.array([fine]), {"fine": np.array([0])}, frozenset([holder])) == {"fine": 1.0}
+    assert overlaps(np.array([fine]), {"fine": np.array([0])}, frozenset([holder])) == {"fine": 1.0}
 
 
 def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
@@ -808,7 +812,7 @@ def test_a_zone_from_the_map_is_the_same_question(tmp_path, points_csv):
 
     place = engine.place_scores(engine.committed(), cells=zone)
     alone = engine.search("", cells=zone)
-    assert alone.seeds and all(place.get(s.pattern_id, 0) > 0 for s in alone.seeds)
+    assert alone.seeds and all(place[s.pattern_id].overlap > 0 for s in alone.seeds)
     assert alone.payload().evidence_prompt.startswith("QUESTION: (no text")
     polygon = engine.search("", geometry=h3.h3shape_to_geo(h3.cells_to_h3shape(zone)))
     assert [(s.pattern_id, s.score) for s in polygon.seeds] == [(s.pattern_id, s.score) for s in alone.seeds]

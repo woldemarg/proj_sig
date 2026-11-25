@@ -333,7 +333,7 @@ def test_browser_renders_graph_and_highlights_path(cfg, tmp_path, demo_csv):
         page.wait_for_function(f"document.querySelectorAll('.answer-box').length > {answers}", timeout=30000)
         assert page.evaluate("S.chat.at(-1).zone") == n and "AREA:" in page.evaluate("S.chat.at(-1).qa.prompt")
         badges = "[...[...document.querySelectorAll('.msg-bot')].at(-1).querySelectorAll('.ev .role')].map((b) => b.textContent)"
-        assert {"у виділеній зоні", "поза виділеною зоною"} & set(page.evaluate(badges))  # each item of the zone's levels says which
+        assert {n for k, (n, _) in TERMS.items() if k.startswith("fit_")} & set(page.evaluate(badges))  # how each item lies in the zone
         assert page.is_visible(".msg-bot[data-turn='0'] .bot-pane[data-pane='0'] .ev")  # the first answer's open panel survives the next
         page.fill("#question", "Де найбільше households?")  # the chat box asks about the selected zone too
         page.press("#question", "Enter")

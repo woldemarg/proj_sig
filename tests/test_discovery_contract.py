@@ -105,13 +105,14 @@ def test_selection_keeps_planted_phenomena(discovered):
 
 
 def test_pass1_mask_cache_is_the_selectors_cover(demo_df):
-    """Pass 1 reads a conjunction's rows from one cached mask per (attribute, value): the rows pysubgroup's own
-    ``covers`` selects, whatever the order in which conjunctions share a selector."""
+    """Pass 1 reads a conjunction's rows from one cached mask per (attribute, value): the rows its selectors' own
+    ``covers`` select together, whatever the order in which conjunctions share a selector."""
     profile = eda.step1_profile_data(demo_df)
     space = eda.step3_generate_search_space(profile, eda.step2_evaluate_macro_groupings(profile, min_categories=3))
     masks: dict[tuple[str, object], Any] = {}
     for selector in [*space, *reversed(space)]:
-        assert np.array_equal(eda.cached_covers(selector, profile["data_safe"], masks), selector.covers(profile["data_safe"]))
+        rows = np.all([s.covers(profile["data_safe"]) for s in selector.selectors], axis=0)
+        assert np.array_equal(eda.cached_covers(selector, profile["data_safe"], masks), rows)
     assert len(masks) < len(space)  # each (attribute, value) once, not once per conjunction
 
 

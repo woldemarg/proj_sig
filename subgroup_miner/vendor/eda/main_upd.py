@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
-import pysubgroup as ps
 import itertools
+from dataclasses import dataclass
+from typing import Any
 from scipy.spatial.distance import jensenshannon
 import warnings
 
@@ -50,19 +51,38 @@ def volume_preference_score(p):
     return np.sqrt(p) * (1 - p)
 
 
+@dataclass(frozen=True)
+class EqualitySelector:
+    """``attribute_name == attribute_value``, matched and written as pysubgroup 0.7.7 did (edit 15)."""
+
+    attribute_name: str
+    attribute_value: Any
+
+    @property
+    def selectors(self):
+        return (self,)
+
+    def covers(self, data):
+        return data[self.attribute_name].to_numpy() == self.attribute_value
+
+    def __str__(self):
+        value = self.attribute_value
+        return f"{self.attribute_name}=='{value}'" if isinstance(value, (str, bytes)) else f"{self.attribute_name}=={value}"
+
+
+@dataclass(frozen=True)
+class Conjunction:
+    """Selectors that all hold; written as their strings, sorted, joined by `` AND `` (pysubgroup 0.7.7's form)."""
+
+    selectors: tuple
+
+    def __str__(self):
+        return " AND ".join(sorted(str(s) for s in self.selectors))
+
+
 def extract_dimension_attrs(selector):
-    """Recursively extracts attribute names from pysubgroup selectors."""
-    if hasattr(selector, "attribute_name"):
-        return {selector.attribute_name}
-    if hasattr(selector, "selectors"):
-        return set().union(
-            *[extract_dimension_attrs(s) for s in selector.selectors]
-        )
-    if hasattr(selector, "_selectors"):
-        return set().union(
-            *[extract_dimension_attrs(s) for s in selector._selectors]
-        )
-    return set()
+    """The attribute names of a selector or a conjunction."""
+    return {s.attribute_name for s in selector.selectors}
 
 
 def subgroup_from_indices(data, row_indices):
@@ -239,19 +259,18 @@ def step3_generate_search_space(profile, top_categories, compute_budget=5000):
 
         for val in valid_uniques:
             if str(val) not in ["nan", "<NA>", "None"]:
-                base_selectors.append(ps.EqualitySelector(col, val))
+                base_selectors.append(EqualitySelector(col, val))
                 level_share[(col, val)] = float(val_frequencies[val])
 
     def expected_share(conj):
         # independence approximation of the subgroup size: pairs with a tiny expected
         # support fail the pass-1 size screen anyway, so they are the first to give way
         # when the search space exceeds the budget
-        sels = getattr(conj, "selectors", None) or getattr(conj, "_selectors", None) or []
-        return float(np.prod([level_share[(s.attribute_name, s.attribute_value)] for s in sels]))
+        return float(np.prod([level_share[(s.attribute_name, s.attribute_value)] for s in conj.selectors]))
 
     search_vectors = []
     combo_2d = [
-        ps.Conjunction([s1, s2])
+        Conjunction((s1, s2))
         for s1, s2 in itertools.combinations(base_selectors, 2)
         if s1.attribute_name != s2.attribute_name
     ]
@@ -259,7 +278,7 @@ def step3_generate_search_space(profile, top_categories, compute_budget=5000):
     if len(combo_2d) <= compute_budget:
         search_vectors += combo_2d
         combo_3d = [
-            ps.Conjunction([s1, s2, s3])
+            Conjunction((s1, s2, s3))
             for s1, s2, s3 in itertools.combinations(base_selectors, 3)
             if len({s1.attribute_name, s2.attribute_name, s3.attribute_name})
             == 3
@@ -291,8 +310,8 @@ def correlation_change(local_ranks, global_corr, allowed):
 
 
 def cached_covers(selector, data, masks):
-    """``selector.covers(data)`` with each (attribute, value) mask computed once per pass and kept in ``masks``:
-    pysubgroup converts the whole column to NumPy on every call, the pass's main cost on a large table."""
+    """A conjunction's rows, each (attribute, value) mask computed once per pass and kept in ``masks``: a selector
+    converts the whole column to NumPy on every call, the pass's main cost on a large table."""
     out = None
     for sel in selector.selectors:
         key = (sel.attribute_name, sel.attribute_value)

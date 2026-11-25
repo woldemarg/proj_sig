@@ -35,7 +35,7 @@ from attractor_topology.ontology import LatentOntology
 from graph_query_engine.graph import DualGraph, LatentFrame
 from graph_query_engine.question import build_catalog
 from graph_query_engine.search import CommittedState, SearchResult, empty_payload, search
-from insight_contracts import EvidencePayload, Insight, Rejection
+from insight_contracts import EvidencePayload, Insight, Rejection, ZonePlace
 from insight_graph_service.core import geo_views, uploads, verify
 from insight_graph_service.core.batch import admit_insights, annotate_batch, batch_metrics, check_time, pattern_records, series_times
 from insight_graph_service.core.errors import PipelineError
@@ -247,8 +247,20 @@ class Engine:
 
     def place_scores(
         self, state: CommittedState, cells: list[str] | None = None, geometry: dict[str, Any] | None = None, resolution: int | None = None
-    ) -> dict[str, float] | None:
+    ) -> dict[str, ZonePlace] | None:
         return geo_views.place_scores(self.ws, state.graph, cells, geometry, resolution)
+
+    @_healthy
+    def places(self, zones: list[tuple[str, dict[str, Any]]], pattern_ids: list[str]) -> dict[str, dict[str, ZonePlace]]:
+        """How each of ``pattern_ids`` lies in each drawn zone (id, GeoJSON), as a question with that zone reads it; a
+        pattern of a level the zone does not weigh is left out (``POST /api/geo/places``)."""
+        if len({z for z, _ in zones}) != len(zones):
+            raise PipelineError("invalid_options", "two zones share an id")
+        for _, g in zones:  # a drawn zone, as the zone exports read it
+            if g.get("type") != "Polygon":
+                raise PipelineError("invalid_options", f"a drawn zone is a GeoJSON Polygon, not {g.get('type')!r}")
+        state, wanted = self.committed(), set(pattern_ids)
+        return {z: {pid: p for pid, p in (self.place_scores(state, geometry=g) or {}).items() if pid in wanted} for z, g in zones}
 
     def _load_frame(self, records: list[dict[str, Any]], vectors: np.ndarray, ontology: LatentOntology) -> LatentFrame:
         return LatentFrame(

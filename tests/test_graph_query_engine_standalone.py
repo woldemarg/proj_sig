@@ -13,7 +13,7 @@ from doubles import HashingEmbedder
 from test_traversal import edge, pattern
 
 from graph_query_engine import CommittedState, DualGraph, LatentFrame, QueryConfig, empty_payload, search
-from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds
+from insight_contracts import SNAPSHOT_VERSION, EvidencePayload, PhenomenonThresholds, ZoneFit, ZonePlace
 
 QUESTION = "Why is margin lower for phones in the US?"
 
@@ -446,28 +446,45 @@ def test_zones_rank_the_regions_holding_the_findings_the_asked_way():
     assert [z["id"] for z in found.evidence.zones] == ["R:5:a"] and "- Z1 = R:5:a (res 5): contains P1" in found.payload().evidence_prompt
 
 
+def _place(overlap: float, fit: ZoneFit, share: float = 0.0, lift: float = 1.0) -> ZonePlace:
+    return ZonePlace(overlap=overlap, share=share, cover=0.1, ratio=lift, lift=lift, fit=fit)
+
+
 def test_a_zone_alone_seeds_from_inside_it_even_below_the_floor():
-    """Without text a zone seeds only the patterns it holds: the best of them when none reaches SEED_MIN_SCORE, none
-    when it holds none; the AREA line names in and out, never a pattern the zone did not weigh."""
+    """Without text a zone seeds only the patterns it holds, its own (inside, concentrated) before a broader one with
+    more of its cells, the best of them when none reaches SEED_MIN_SCORE, none when it holds none; the AREA line names
+    how each lies in it, never a pattern the zone did not weigh."""
     snap = snapshot()
     snap["nodes"][:2] = [pattern("P1", ["region=US", "category=phones"], w=0.2), pattern("P2", ["region=EU", "category=tablets"], w=0.2)]
     state = state_of(snap)
-    found = searched(state, "", place_scores={"P2": 0.01, "P1": 0.0})
-    assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", "place")]
+    found = searched(state, "", place_scores={"P2": _place(0.01, "inside", 0.94, 5.5), "P1": _place(0.0, "outside")})
+    assert [(s.pattern_id, s.matched.get("fallback")) for s in found.seeds] == [("P2", None)]  # its own: above the floor
     assert set(found.traversal.baselines) == {"structural_only", "transversal_only", "not_structurally_reachable"}
     keys = {it.pattern_id: it.key for it in found.evidence.items}
-    assert (
-        f"in it, with how closely each one's map cells match it (100% = the same cells): {keys['P2']} 1%; outside it: {keys['P1']}."
-        in found.payload().evidence_prompt
-    )
     prompt = found.payload().evidence_prompt
+    assert f"against the map's): {keys['P2']} inside (94%, ×5.5);" in prompt and f"; outside it: {keys['P1']}." in prompt
     assert f"[{keys['P2']}] role=seed | in the asked area | scope:" in prompt and f"[{keys['P1']}] role=" in prompt
     assert f"[{keys['P1']}] role={found.evidence.items[1].role} | outside the asked area" in prompt
     assert "(у виділеній зоні)" in found.payload().evidence_summary and "(поза виділеною зоною)" in found.payload().evidence_summary
-    assert not searched(state, "", place_scores={"P1": 0.0}).seeds
-    unweighed = searched(state, "", place_scores={"P2": 0.004}).payload().evidence_prompt  # P1 not weighed
-    assert f"{keys['P2']} <1%" in unweighed  # in the zone, however little
-    assert "outside it" not in next(line for line in unweighed.splitlines() if line.startswith("AREA:"))
+    assert found.payload().view["evidence"]["area"][keys["P2"]] == {
+        "overlap": 0.01,
+        "share": 0.94,
+        "cover": 0.1,
+        "ratio": 5.5,
+        "lift": 5.5,
+        "fit": "inside",
+    }
+    assert not searched(state, "", place_scores={"P1": _place(0.0, "outside")}).seeds
+    broad = {"P1": _place(0.55, "map-wide", 0.3, 1.1), "P2": _place(0.2, "inside", 0.97, 3.3)}  # P1 shares more cells
+    assert [s.pattern_id for s in searched(state, "", place_scores=broad).seeds] == ["P2"]
+    edge = {"P1": _place(0.3, "map-wide", 0.3, 1.1), "P2": _place(0.0, "inside", 1.0, 50.0)}  # its events in, no cell centre: overlap 0
+    assert [(s.pattern_id, s.matched.get("own")) for s in searched(state, "", place_scores=edge).seeds] == [("P2", 1.0)]
+    below = searched(state, "", place_scores={"P2": _place(0.004, "map-wide", 0.12, 1.0)})  # P1 not weighed
+    assert [(s.pattern_id, s.matched.get("fallback")) for s in below.seeds] == [("P2", "place")]
+    wide = below.payload()
+    assert f"{keys['P2']} map-wide (12%, ×1.0)" in wide.evidence_prompt and "| map-wide (in the asked area as everywhere)" in wide.evidence_prompt
+    assert "outside it" not in next(line for line in wide.evidence_prompt.splitlines() if line.startswith("AREA:"))
+    assert "(як по всій мапі)" in wide.evidence_summary and "- у виділеній зоні: жодного свідчення" in wide.evidence_summary
 
 
 def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():
@@ -487,7 +504,7 @@ def test_a_zone_keeps_a_finer_pattern_inside_it_among_the_seeds():
         return [s.pattern_id for s in found.seeds], {it.pattern_id: it.role for it in found.evidence.items}["I"]
 
     assert roles(None) == (["O", "Y"], "structural")
-    assert roles({"I": 0.1, "O": 0.0, "Y": 0.0}) == (["O", "I", "Y"], "seed")
+    assert roles({"I": _place(0.1, "inside"), "O": _place(0.0, "outside"), "Y": _place(0.0, "outside")}) == (["O", "I", "Y"], "seed")
 
 
 def test_a_tampered_pattern_takes_no_place_in_the_walk_or_a_region():

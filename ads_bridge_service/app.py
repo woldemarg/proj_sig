@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ads_bridge_service.settings import AdsSettings
 from ads_bridge_service.task import (
+    MAX_INSIGHTS,
     METADATA_MD,
     ZONE_CELLS_FILE,
     ZONES_FILE,
@@ -59,6 +60,13 @@ ZONE_ID = r"^[A-Za-z0-9_-]{1,16}$"  # the graph service's zone ids
 _PERIODS = re.compile(r"(?<![\w-])(?:\d{4}-W\d{2}|\d{4}-Q[1-4]|Q[1-4]\s+\d{4}|\d{4}-\d{2}(?:-\d{2})?)(?![\d-])", re.I)
 _HEADER = re.compile(r"^Період:.*$", re.M)  # the console's period line: ADS's, no words of the question
 _WORKSPACE_REFS = re.compile(r"<iframe[^>]*>.*?</iframe>|!?\[([^\]]*)\]\(/workspace/[^)]*\)", re.S)  # files of ADS's own workspace
+
+
+def graph_text(question: str) -> str:
+    """The question's words for the graph: the ``Період:`` line out, and none when only periods are left (a period the
+    text names is ADS's: the graph does not read it, and keeps a token that only looks like one as a word)."""
+    text = _HEADER.sub(" ", question)
+    return text if _PERIODS.sub(" ", text).strip() else ""
 
 
 class TableIn(BaseModel):
@@ -158,14 +166,10 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="SIG ADS bridge", lifespan=lifespan)
 
-    def ask_graph(question: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
-        """A zone's evidence (None: the whole map's): the graph reads the polygon as the cells of its finest geo level whose
-        centres it holds, and the period bar's days alone (``period_only``): a period the question's text names is ADS's,
-        so the graph does not read it, and keeps a token that only looks like one as a word. A text of periods alone has
-        no words for the graph: a zone is asked alone, the whole map not at all (the graph seeds something for any text)."""
-        text = _HEADER.sub(" ", question)
-        if not _PERIODS.sub(" ", text).strip():
-            text = ""
+    def ask_graph(text: str, polygon: dict[str, Any] | None, period: list[str] | None) -> list[dict[str, Any]]:
+        """A zone's evidence (None: the whole map's) for ``graph_text``'s words: the graph reads the polygon as the cells
+        of its finest geo level whose centres it holds, and the period bar's days alone (``period_only``). No words: a zone
+        is asked alone, the whole map not at all (the graph seeds something for any text)."""
         if not polygon and not text:
             return []
         ask = {"question": text, "use_llm": False, "period_only": True} | ({"geometry": polygon} if polygon else {})
@@ -174,18 +178,21 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return select_findings(_checked(http.post(f"{settings.ads_narrator_url}/api/chat/query", json=ask), "sig_failed", "SIG").json())
 
     def zone_findings(body: AskIn, zones: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        """Each asked zone's findings, merged; a zone whose answer to the text holds none inside it is asked alone. No
-        zone asked: the whole map's findings, in no zone."""
+        """Each asked zone's findings, its answer to the text and to the zone alone (the text may seed out of the zone),
+        merged with how each lies in every asked zone. No zone asked: the whole map's findings, in no zone."""
         if not body.focus:
-            return [{k: v for k, v in it.items() if k != "inside"} | {"zones": {}} for it in ask_graph(body.question, None, body.period)]
-        by_zone = {}
+            return [it | {"places": {}} for it in ask_graph(graph_text(body.question), None, body.period)[:MAX_INSIGHTS]]
+        by_zone: dict[str, list[dict[str, Any]]] = {}
         for z in body.focus:
-            found = ask_graph(body.question, zones[z], body.period)
-            if not any(f["inside"] for f in found):  # the text pulled the seeds out of the zone: the zone alone, if it holds any
-                alone = ask_graph("", zones[z], body.period)
-                found = alone if any(f["inside"] for f in alone) else found
-            by_zone[z] = found
-        return merge_findings(by_zone)
+            found: dict[str, dict[str, Any]] = {}
+            for text in dict.fromkeys((graph_text(body.question), "")):
+                for it in ask_graph(text, zones[z], body.period):
+                    found.setdefault(it["pattern_id"], it)
+            by_zone[z] = list(found.values())
+        ids = sorted({it["pattern_id"] for found in by_zone.values() for it in found})
+        ask = {"zones": [{"id": z, "polygon": zones[z]} for z in body.focus], "pattern_ids": ids}
+        places = _checked(http.post(f"{settings.ads_graph_url}/api/geo/places", json=ask), "sig_failed", "SIG places").json() if ids else {}
+        return merge_findings(by_zone, places)
 
     def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
         """The picked tables, each with what the graph service tells of it and its rows per zone, and the zones' files (none

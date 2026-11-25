@@ -57,12 +57,16 @@ function chainLine(chain, items) {
   return `<div class="chain" title="Та сама картина на детальніших і ширших рівнях мапи"><span class="e">масштаб</span>${parts.join('<span class="e">→</span>')}</div>`;
 }
 
+function areaTitle(p) {  // the fit's meaning and its numbers: the raw ratio, as the fit reads it
+  return `${TERMS[`fit_${p.fit}`][1]}. ${Math.round(p.share * 100)}% її подій у зоні; ${Math.round(p.cover * 100)}% подій зони; частота ×${p.ratio.toFixed(1)} від мапи`;
+}
+
 function botCard(turn) {
   const qa = turn.qa;
   const ev = qa.view.evidence || {};
   const items = ev.items || [];
   const keyTo = Object.fromEntries(items.map((i) => [i.key, i.pattern_id]));
-  const area = ev.area || null;  // an asked map zone: item key -> place, 0 outside
+  const area = ev.area || null;  // an asked map zone: item key -> {overlap, share, cover, ratio, lift, fit}
   const chains = Object.fromEntries((ev.scale_chains || []).filter((c) => c.up.length || c.down.length).map((c) => [c.pattern_id, c]));
   const forged = (ev.datasets || []).filter((d) => d.integrity === "mismatch").map((d) => d.dataset_id);
   const llm = qa.llm || {};
@@ -94,7 +98,7 @@ function botCard(turn) {
     return `<div class="ev" data-i="${i}" tabindex="0" role="button"><div class="ev-head"><span class="ev-key">${esc(it.key)}</span><span class="role ${esc(it.role)}">${esc(word(reached(it)))}</span>` +
       (it.transversal_only ? `<span class="role cross">${esc(word("transversal_only"))}</span>` : "") + layerChip(it.provenance.dataset_id) +
       (it.also && it.also.length ? `<span class="role" title="Та сама знахідка на іншому рівні цього завантаження">також ${esc(it.also.join(", "))}</span>` : "") +
-      (area && it.key in area ? `<span class="role" title="Її комірки мапи проти зони з питання">${area[it.key] ? "у виділеній зоні" : "поза виділеною зоною"}</span>` : "") +
+      (area && it.key in area ? `<span class="role" title="${esc(areaTitle(area[it.key]))}">${esc(word(`fit_${area[it.key].fit}`))}</span>` : "") +
       (it.scale !== "insufficient" && TERMS[`scale_${it.scale}`] ? `<span class="role">${term(`scale_${it.scale}`)}</span>` : "") +
       (it.time && it.time.words ? `<span class="role" title="${esc(TERMS.trend[1])}">${esc(it.time.words)}</span>` : "") + `</div>` +
       `<div class="ev-scope">${esc(it.reading.where)}</div><div class="ev-what">${esc(it.reading.what)}</div>` +
