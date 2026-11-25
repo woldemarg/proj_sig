@@ -336,6 +336,8 @@ def test_the_places_of_findings_in_drawn_zones_are_a_questions(engine, points_cs
         assert {p["fit"] for p in found.json()["Z1"].values()} & {"inside", "concentrated"}  # the planted cluster lies in it
         twice = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": hot}] * 2, "pattern_ids": ids})
         assert twice.status_code == 400 and twice.json()["code"] == "invalid_options"
+        boxed = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": {"bbox": [0, 0, 1, 1]}}], "pattern_ids": ids})
+        assert boxed.status_code == 400 and "Polygon" in boxed.json()["detail"]  # a drawn zone, as the exports read it
         engine.problem = "workspace was built with another representation"
         refused = client.post("/api/geo/places", json={"zones": [{"id": "Z1", "polygon": hot}], "pattern_ids": ids})
         assert refused.status_code == 409 and refused.json()["code"] == "workspace_degraded"

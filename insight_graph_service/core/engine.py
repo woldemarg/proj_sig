@@ -256,6 +256,9 @@ class Engine:
         pattern of a level the zone does not weigh is left out (``POST /api/geo/places``)."""
         if len({z for z, _ in zones}) != len(zones):
             raise PipelineError("invalid_options", "two zones share an id")
+        for _, g in zones:  # a drawn zone, as the zone exports read it
+            if g.get("type") != "Polygon":
+                raise PipelineError("invalid_options", f"a drawn zone is a GeoJSON Polygon, not {g.get('type')!r}")
         state, wanted = self.committed(), set(pattern_ids)
         return {z: {pid: p for pid, p in (self.place_scores(state, geometry=g) or {}).items() if pid in wanted} for z, g in zones}
 

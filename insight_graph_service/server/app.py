@@ -97,9 +97,12 @@ class PlacesIn(BaseModel):
     pattern_ids: list[str] = Field(min_length=1, max_length=500)  # the findings to place; one a zone does not weigh is left out
 
 
-class ZonesIn(BaseModel):
-    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone
+class ZoneCellsIn(BaseModel):
+    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone (zone_rows), no cell (zone_cells)
     resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
+
+
+class ZonesIn(ZoneCellsIn):
     layer: str | None = None  # a layer link run's context layer, by name, instead of the dataset's rows
 
 
@@ -400,6 +403,10 @@ def create_app(engine: Engine) -> FastAPI:
     def geo_places(body: PlacesIn) -> dict[str, dict[str, dict[str, Any]]]:
         found = engine.places([(z.id, z.polygon) for z in body.zones], body.pattern_ids)
         return {z: {pid: asdict(p) for pid, p in here.items()} for z, here in found.items()}
+
+    @app.post("/api/geo/{dataset_id}/zone_cells")
+    def geo_zone_cells(dataset_id: str, body: ZoneCellsIn) -> Response:
+        return Response(engine.maps().zone_cells(dataset_id, [(z.id, z.polygon) for z in body.zones], body.resolution), media_type="text/csv")
 
     @app.get("/api/geo/{dataset_id}/patterns/{pattern_id}")
     def geo_pattern(dataset_id: str, pattern_id: str, rings: bool = False, start: str = "", end: str = "") -> dict[str, Any]:
