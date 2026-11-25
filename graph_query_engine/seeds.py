@@ -14,7 +14,7 @@ from graph_query_engine.graph import DualGraph
 from graph_query_engine.ports import QueryEncoder
 from graph_query_engine.question import ParsedQuery
 from graph_query_engine.temporal import recency, time_score
-from insight_contracts import ZONE_FITS, Insight, ZonePlace
+from insight_contracts import ZONE_OWN, Insight, ZonePlace
 from insight_contracts.text import humanize
 
 SEED_TOP_K = 3
@@ -145,7 +145,7 @@ def resolve_seeds(
                 None if place_scores is None else place.overlap if (place := place_scores.get(pid)) else 0.0,
                 time_score(graph.trajectories[pid], query.when) if query.when and pid in graph.trajectories else None,
                 fresh(pid),
-                alone and place is not None and place.fit in ZONE_FITS[:2],
+                alone and place is not None and place.fit in ZONE_OWN,
             )
             for pid, ins in graph.insights.items()
             if not graph.tampered(pid) and pid not in hidden  # a tampered or hidden pattern never starts a walk

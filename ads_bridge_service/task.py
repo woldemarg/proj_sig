@@ -15,7 +15,7 @@ ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
 FIT_RANK = {"inside": 0, "concentrated": 1, "map-wide": 2, None: 3, "few": 4, "elsewhere": 5}  # None: a level the zone does not weigh
-ZONE_OWN = ("inside", "concentrated")  # the fits that make an insight the zone's own
+ZONE_OWN = ("inside", "concentrated")  # the fits that make an insight the zone's own: insight_contracts.ZONE_OWN, copied (no import)
 
 SIG_TERMS = (
     "points = events in the cell; share_<column>_<value> = share of the cell's events with that value; count_<column>_<value> = "
