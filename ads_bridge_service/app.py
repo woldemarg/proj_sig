@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, model_validator
 from ads_bridge_service.settings import AdsSettings
 from ads_bridge_service.task import (
     METADATA_MD,
+    ZONE_CELLS_FILE,
     ZONES_FILE,
     ZONES_MD,
     build_domain_md,
@@ -186,23 +187,32 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             by_zone[z] = found
         return merge_findings(by_zone)
 
-    def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], bytes]:
-        """The picked tables, each with what the graph service tells of it and its rows per zone, and the zones file: which
-        rows each zone of the conversation holds, the layers' cells at the base table's resolution, one column to join on."""
+    def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+        """The picked tables, each with what the graph service tells of it and its rows per zone, and the zones' files (none
+        without a zone): which rows each zone of the conversation holds and every cell of each, at the base table's
+        resolution, the layers' cells too: one column to join on."""
         zones = [{"id": z.id, "polygon": z.polygon} for z in body.zones]
         tables, lines = [], ["zone_id,table,row_id,aoi_zone"]
         for t in name_tables([t.model_dump() for t in body.tables]):
-            url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/zone_rows"  # one path segment, whatever the id holds
-            ask = {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}
-            resp = _checked(http.post(url, json=ask), "sig_failed", f"SIG zones of {t['filename']}")
+            resp = graph_csv(t, "zone_rows", {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}, ZONES_HEADER)
             tables.append(t | json.loads(resp.headers["x-zones"]))
-            head, *rows = resp.text.splitlines()
-            if head != ZONES_HEADER:
-                raise StageError("sig_failed", f"SIG zones of {t['filename']}: a CSV headed {head[:80]!r}, not {ZONES_HEADER}")
-            for line in rows:  # an id, a number and a word, no quoting
+            for line in resp.text.splitlines()[1:]:  # an id, a number and a word, no quoting
                 zone, _, rest = line.partition(",")
                 lines.append(f"{zone},{t['file']},{rest}")
-        return tables, ("\n".join(lines) + "\n").encode("utf-8")
+        if not zones:
+            return tables, {}
+        base = tables[0]
+        cells = graph_csv(base, "zone_cells", {"zones": zones, "resolution": base["cells_at"]}, f"zone_id,h3_r{base['cells_at']}")
+        return tables, {ZONES_FILE: ("\n".join(lines) + "\n").encode("utf-8"), ZONE_CELLS_FILE: cells.content}
+
+    def graph_csv(t: dict[str, Any], export: str, ask: dict[str, Any], header: str) -> httpx.Response:
+        """One of the graph service's zone exports of a table, checked to be the CSV it names (``header``)."""
+        url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/{export}"  # one path segment, whatever the id holds
+        resp = _checked(http.post(url, json=ask), "sig_failed", f"SIG {export} of {t['filename']}")
+        head = (resp.text.splitlines() or [""])[0]  # pandas ends a line with the host's separator
+        if head != header:
+            raise StageError("sig_failed", f"SIG {export} of {t['filename']}: a CSV headed {head[:80]!r}, not {header}")
+        return resp
 
     def table_docs(tables: list[dict[str, Any]]) -> bytes:
         """The metadata documents of the tables (a layer's points have none of their own), as ``metadata.md``."""
@@ -330,8 +340,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
-            files = {ZONES_FILE: placed} if zones else {}  # a conversation without a zone has no zones file
-            files |= {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8"), METADATA_MD: docs}
+            files = placed | {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8"), METADATA_MD: docs}
             upload(job["session_id"], tables, files)
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)

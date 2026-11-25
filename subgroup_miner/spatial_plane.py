@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``zone_places``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``zone_overlap``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``drawn_zone_cells``, ``zone_places``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -387,8 +387,6 @@ CELL_PARENTS = 2  # the coarser cell columns of an exported table, beside its ce
 def _in_polygon(lon: np.ndarray, lat: np.ndarray, polygon: dict[str, Any]) -> np.ndarray:
     """Which points a GeoJSON Polygon holds: an even-odd ray cast over its rings (a hole takes its points out), each
     longitude taken around the ring's first so a ring across 180° stays whole."""
-    if polygon.get("type") != "Polygon":
-        raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {polygon.get('type')!r}")
     inside = np.zeros(len(lon), dtype=bool)
     try:
         for ring in polygon["coordinates"]:
@@ -429,13 +427,21 @@ def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str,
     return columns
 
 
+def drawn_zone_cells(polygon: dict[str, Any], resolution: int) -> frozenset[str]:
+    """A drawn zone's cells at ``resolution``: those whose centres its polygon holds (``geometry_to_cells``). A drawn zone is a
+    GeoJSON Polygon; the other shapes a question's zone may be are refused, so every export of a zone reads the same one."""
+    if polygon.get("type") != "Polygon":
+        raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {polygon.get('type')!r}")
+    return geometry_to_cells(polygon, resolution)
+
+
 def zone_places(lat: np.ndarray, lon: np.ndarray, cell: np.ndarray, resolution: int, polygon: dict[str, Any]) -> tuple[np.ndarray, int]:
     """Each point's place against a drawn zone -> (places, the zone's cell count): ``inside`` the polygon, its edges
     straight in degrees; ``adjacent``, outside it in a zone cell or one of its ``ZONE_RING`` neighbours; ``far``; and
     ``unlocated`` without a valid point, in no place. ``cell``: each point's cell at ``resolution`` (``point_cells``); the
-    zone's cells are ``geometry_to_cells``'s, as a question reads it."""
+    zone's cells are ``drawn_zone_cells``'s."""
+    zone = drawn_zone_cells(polygon, resolution)
     inside = np.isfinite(lat) & np.isfinite(lon) & _in_polygon(lon, lat, polygon)
-    zone = geometry_to_cells(polygon, resolution)
     near = set().union(*(h3.grid_disk(c, ZONE_RING) for c in zone))
     outside = np.where(cell == "", "unlocated", np.where(np.isin(cell, list(near)), "adjacent", "far"))
     return np.where(inside, "inside", outside), len(zone)

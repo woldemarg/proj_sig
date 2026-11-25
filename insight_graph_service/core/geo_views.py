@@ -34,6 +34,8 @@ from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
     cell_boundary,
     cell_centres,
+    cell_column_names,
+    drawn_zone_cells,
     event_regions,
     footprint,
     geometry_to_cells,
@@ -238,14 +240,31 @@ def geo_zone_rows(
     """Which of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) holds, by the ``row_id`` of ``geo_table_rows``
     at the same ``resolution`` (``ingestion.zone_rows``), per zone its rows per place and its cells, and what
     ``geo_table_rows`` tells of the table: a reader that holds the table already reads the zones alone."""
-    if len({z for z, _ in zones}) != len(zones):
-        raise PipelineError("invalid_options", "two zones share an id")
+    _check_ids(zones)
     table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
         data, counts = zone_rows(*reading, resolution, zones)
     except (SpatialError, IngestionError) as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
     return data, counts | table
+
+
+def geo_zone_cells(ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
+    """Every cell of each drawn zone at the ``resolution`` ``geo_zone_rows`` reads the zones at, with rows or without: CSV
+    ``zone_id,h3_r<resolution>``, the cells it counts as ``zone_cells`` (``drawn_zone_cells``: those whose centres the
+    polygon holds, a drawn zone being a Polygon), what a reader divides a zone's per-cell figures by and draws rings around."""
+    _check_ids(zones)
+    _, _, resolution = _export_reading(ws, dataset_id, resolution)
+    try:
+        lines = [f"zone_id,{cell_column_names(resolution)[0]}", *(f"{z},{c}" for z, p in zones for c in sorted(drawn_zone_cells(p, resolution)))]
+    except SpatialError as exc:
+        raise PipelineError("invalid_options", str(exc)) from exc
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _check_ids(zones: list[tuple[str, dict[str, Any]]]) -> None:
+    if len({z for z, _ in zones}) != len(zones):
+        raise PipelineError("invalid_options", "two zones share an id")
 
 
 def point_times(times: Any) -> np.ndarray | None:
@@ -874,6 +893,9 @@ class MapReads(NamedTuple):
         self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
     ) -> tuple[bytes, dict[str, Any]]:
         return geo_zone_rows(self.ws, dataset_id, zones, resolution, layer)
+
+    def zone_cells(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
+        return geo_zone_cells(self.ws, dataset_id, zones, resolution)
 
     def overlay(self, dataset_id: str, datasets: tuple[str, ...] = ()) -> dict[str, Any]:
         return geo_overlay(self.ws, self.graph, dataset_id, self.thresholds, datasets)

@@ -10,6 +10,7 @@ from typing import Any
 MAX_INSIGHTS = 10  # the graph's evidence holds about ten; a question about several zones shares them
 MIN_ZONE_INSIGHTS = 3  # a zone's share of them, however many zones the question names
 ZONES_FILE = "zones.csv"  # which rows each zone of the conversation holds, by table and row_id
+ZONE_CELLS_FILE = "zone_cells.csv"  # every cell of each zone of the conversation, with rows or without
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
@@ -47,7 +48,17 @@ def build_guidance(zoned: bool) -> str:
     return (
         "\n\nGuidance:\n- Answer the question with your own computations on the tables."
         + (
-            " Where the question points to it, compare inside vs adjacent vs far at the same level (rows per cell for counts, shares for categories)."
+            "\n- Comparison groups: the question defines them. A group is a set of cells and the rows in them. The zone is its inside rows "
+            "over all its cells (df_zone_cells). Any other group the question names is built the same way, from cells: a belt of a stated "
+            "distance or number of rings around the zone, another area or the rest of the map, or a split within the zone (its cells with "
+            "against without layer points, one period against another); its rows are found by their cell. A belt's cells are generated with "
+            "h3 -- h3.grid_disk(cell, k) around the zone's cells, k the asked number of rings or, for a distance, enough rings to reach past it "
+            "before the cells are kept by the distance between cell centres, the zone's cells left out --, never taken from the tables, which "
+            "hold only the cells with rows. A group's figures per cell or per km² "
+            "divide by all its cells, a cell without rows counting 0, "
+            "and its km² is the sum of h3.cell_area(cell, unit='km^2') over them. SIG's ready label adjacent is one ring of cells around the "
+            "zone: it is the comparison only when the question asks about the neighbouring cells or names no comparison of its own. Compare "
+            "groups at the same level (rows per cell or per km² for counts, shares for categories)."
             if zoned
             else ""
         )
@@ -62,7 +73,7 @@ def build_guidance(zoned: bool) -> str:
             if zoned
             else ""
         )
-        + f"\n- Report figures for groups of cells ({'inside, adjacent, far; ' if zoned else ''}with and without layer points), not tables of raw cell ids."
+        + f"\n- Report figures for groups of cells ({'the zone and its comparison groups; ' if zoned else ''}with and without layer points), not tables of raw cell ids."
         + (" A question about several zones gives each zone's figures side by side." if zoned else "")
         + "\n- Describe differences as shifts and ratios, not causes; proximity is not causation."
     )
@@ -279,7 +290,11 @@ def _zones_text(base: dict[str, Any], tables: list[dict[str, Any]]) -> str:
         "aoi_zone with 'far'. df_zones lists this question's tables only "
         f"({', '.join(t['file'] for t in tables)}); a table an earlier question sent is not placed in the zones. "
         "Zones may overlap: a row can be in several. A point in the same cell as a zone is not inside it. A zone's own figures are its "
-        "inside rows only; adjacent and far rows are comparison groups, never part of the zone's own figures."
+        "inside rows only; adjacent (one ring of cells around the zone) and far are SIG's default comparison groups, never part of the "
+        "zone's own figures; a comparison the question defines itself replaces them (see the guidance). "
+        f"df_zone_cells ({ZONE_CELLS_FILE}) lists every h3_r{base['cells_at']} cell of each zone (zone_id, h3_r{base['cells_at']}: the "
+        "cells whose centre the polygon holds), cells without rows included: the zone's cells, for its own figures and for every group built "
+        "around it (see the guidance)."
     )
 
 
@@ -312,8 +327,10 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                 [
                     "- row_id: a row's number in its table, the key df_zones joins on.",
                     f"- {ZONES_FILE}: zone_id, table, row_id, aoi_zone; aoi_zone inside (the point lies inside the polygon, point-in-polygon, its "
-                    "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours); a row with a point "
+                    "edges straight in degrees) | adjacent (outside the polygon, in a zone cell or one of its six neighbours: one ring of cells wide); a row with a point "
                     f"not listed is far, a row without one (an empty h3 cell, NaN in pandas) is in no group, never far. It lists the tables {', '.join(t['file'] for t in tables)} only.",
+                    f"- {ZONE_CELLS_FILE}: zone_id, h3_r{tables[0]['cells_at']}; every cell of each zone whose centre the polygon holds, a cell "
+                    "without rows included (it counts 0).",
                 ]
                 if zones
                 else ["- No zone is drawn in this conversation: the questions are about the whole map."]
