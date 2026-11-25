@@ -17,9 +17,11 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.testclient import TestClient
 
+from ads_bridge_service import task
 from ads_bridge_service.app import _PERIODS, create_app, error_code
 from ads_bridge_service.settings import AdsSettings
 from ads_bridge_service.task import build_metadata_md, name_tables
+from insight_contracts import ZONE_FITS, ZONE_OWN
 from insight_contracts.wording import PERIOD
 
 POLYGON = {"type": "Polygon", "coordinates": [[[30.0, 50.0], [30.2, 50.0], [30.2, 50.1], [30.0, 50.1], [30.0, 50.0]]]}
@@ -440,11 +442,13 @@ def test_a_question_needs_no_zone():
         assert "Comparison groups" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
 
 
-def test_the_bridge_strips_the_periods_the_graph_reads():
-    """The bridge's copy of ``wording.PERIOD`` finds what the graph would read as a period: a question of periods alone
-    has no words for the graph, which is not asked about it (its words go as written, ``period_only``)."""
+def test_the_bridges_copies_of_the_kernel_agree_with_it():
+    """The bridge imports nothing of the repository, so it keeps copies. Its ``wording.PERIOD`` finds what the graph would
+    read as a period: a question of periods alone has no words for the graph, which is not asked about it (its words go
+    as written, ``period_only``). Its zone fits are the kernel's: the zone's own the same pair, every ranked fit one."""
     samples = "2031-W13, 2031-q1, Q1 2031, 2031-03-24 10:00, 2031-03; not 2019-20, x2031-03, 2031-03-24-1, 12031-03"
     assert [m.group(0) for m in _PERIODS.finditer(samples)] == [m.group(0) for m in PERIOD.finditer(samples)]
+    assert task.ZONE_OWN == ZONE_OWN == ZONE_FITS[:2] and set(task.FIT_RANK) - {None} <= set(ZONE_FITS)
 
 
 def test_a_failed_stage_is_recorded_on_the_job_with_its_code():

@@ -136,6 +136,7 @@ class GraphEdge:
 
 ZoneFit = Literal["inside", "concentrated", "map-wide", "few", "elsewhere", "outside"]
 ZONE_FITS: tuple[ZoneFit, ...] = get_args(ZoneFit)  # how a pattern lies in an asked zone, the zone's own first
+ZONE_OWN: tuple[ZoneFit, ...] = ("inside", "concentrated")  # the fits that make a pattern the asked zone's own (docs/07 §7.2)
 
 
 @dataclass(frozen=True)

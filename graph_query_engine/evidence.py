@@ -24,7 +24,7 @@ from graph_query_engine.question import ParsedQuery
 from graph_query_engine.temporal import core_age, time_facts, time_line
 from graph_query_engine.traversal import LATENT, PathStep, Retrieved, TraversalResult
 from graph_query_engine.vertical import ScaleChain, picture, rank_zones, restating, scale_chain
-from insight_contracts import ZONE_FITS, SpatialProvenance, ZonePlace, dataset_node_id, metric_node_id, wording
+from insight_contracts import ZONE_OWN, SpatialProvenance, ZonePlace, dataset_node_id, metric_node_id, wording
 from insight_contracts.text import (
     RELIABILITY,
     describe_covariance,
@@ -53,7 +53,6 @@ AREA_TAG = {  # an item of a level the zone weighed, by its ZonePlace.fit
     "elsewhere": " | mostly elsewhere than the asked area",
     "outside": " | outside the asked area",
 }
-IN_AREA = ZONE_FITS[:2]  # the fits that make a finding the asked area's own
 WEAKEST_FIRST = (5, 6, 2, 1)
 PLAIN_HEAD = {  # the PLAIN LANGUAGE heading: a geo item's rows are map cells, a table's are its own
     True: "rows are map cells built from point events; a subgroup is a set of map cells",
@@ -478,7 +477,7 @@ class Evidence:
             f"- регіон Z{n} (рівень {z['resolution']}): {''.join(f'[{keys[p]}]' for p in z['holds'])}" for n, z in enumerate(self.zones, start=1)
         ]
         if self.area is not None:
-            lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v.fit in IN_AREA) or 'жодного свідчення'}")
+            lines.append(f"- у виділеній зоні: {''.join(f'[{k}]' for k, v in self.area.items() if v.fit in ZONE_OWN) or 'жодного свідчення'}")
         if self.excluded:  # what the NOTEs say of integrity, for the answer without the model
             lines.append(f"- виключено, перевірку цілісності не пройдено (статистика не збігається з дайджестом запису): {', '.join(self.excluded)}")
         lines += [
