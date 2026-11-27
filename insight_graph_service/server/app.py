@@ -85,7 +85,7 @@ class SearchIn(BaseModel):
 
 
 class ZoneIn(BaseModel):
-    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,16}$")  # the zone's name in the rows: a CSV value as it is
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,16}$")  # the zone's name in the cell lists: a CSV value as it is
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
 
 

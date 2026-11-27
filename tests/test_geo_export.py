@@ -59,6 +59,10 @@ def test_a_datasets_rows_go_once_and_a_zone_is_its_cells(tmp_path, points_csv):
         assert lists["Z1"] == set(zone) and lists["Z1_ring"] == near - set(zone)
         assert lists["Z2"] == {busy} and lists["Z2_ring"] == set(h3.grid_ring(busy, 1))  # smaller than a cell: the cell under it, whole
         assert len(lists["Z3"]) == 1 and len(lists["Z3_ring"]) == 6  # cells without rows are listed too
+        # a drawn zone is its polygon alone: a member another kind of zone is read by changes nothing
+        circled = [{"id": "Z1", "polygon": shape | {"center": [0.0, 0.0], "radius_m": 10}}]
+        again = client.post(f"/api/geo/{ds}/zone_cells", json={"zones": circled}).text.splitlines()[1:]
+        assert {line.split(",")[1] for line in again if line.startswith("Z1,")} == set(zone)
 
         # how many rows each list holds: a row is in a zone when its cell is listed for it, never by its point against the polygon
         counted = client.post(f"/api/geo/{ds}/zone_counts", json={"zones": asked}).json()

@@ -197,14 +197,16 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/{export}"
 
     def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-        """The picked tables, each with what the graph service tells of it and how many of its rows each zone's cells hold,
+        """The picked tables, each with what the graph service tells of it and how many of its rows each asked zone's cells hold,
         and the zones' file (none without a zone): every cell of each zone of the conversation and of the ring around it,
         at the base table's resolution, every table's cell column: one column tells a row's zone in each of them."""
         zones = [{"id": z.id, "polygon": z.polygon} for z in body.zones]
         tables = []
         for t in name_tables([t.model_dump() for t in body.tables]):
-            ask = {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}
-            tables.append(t | _checked(http.post(geo_url(t, "zone_counts"), json=ask), "sig_failed", f"SIG zone counts of {t['filename']}").json())
+            ask = {"zones": [z for z in zones if z["id"] in body.focus], "resolution": t["cells_at"], "layer": t.get("layer")}
+            told = _checked(http.post(geo_url(t, "zone_counts"), json=ask), "sig_failed", f"SIG zone counts of {t['filename']}").json()
+            # its `resolution` is the export's, cells_at: the table keeps its own level (a layer's run grid), which the task compares the two by
+            tables.append(t | told | {"resolution": t["resolution"]})
         if not zones:
             return tables, {}
         base = tables[0]
@@ -341,7 +343,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
-            files = placed | {ZONES_MD: build_zones_md(zones, tables, sources).encode("utf-8"), METADATA_MD: docs}
+            files = placed | {ZONES_MD: build_zones_md(list(zones), tables, sources).encode("utf-8"), METADATA_MD: docs}
             upload(job["session_id"], tables, files)
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)

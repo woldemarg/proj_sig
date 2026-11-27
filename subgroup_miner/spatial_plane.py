@@ -1,7 +1,7 @@
 """The derived spatial plane of the committed geo patterns (docs/06_graph_and_storage.md §6.1): from each dataset's
 cells and its patterns' extents the regions, IN_REGION, PARENT_OF, CO_LOCATED and compactness (``derive_spatial``), a
 table level placed on the map by a geo level of its upload (``place_table``), and the map's geometry — a question's
-zone (``parse_zone``, ``geometry_to_cells``, ``points_in_zone``, ``zone_measures``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``drawn_zone_lists``), a
+zone (``parse_zone``, ``geometry_to_cells``, ``points_in_zone``, ``zone_measures``), a table's points in cells and against drawn zones (``point_cells``, ``cell_columns``, ``drawn_zones``, ``drawn_zone_lists``), a
 pattern's footprint, cell centres, boundaries and WKT.
 The ingest of points into cells, the neighbourhood statistics and the n_eff correction stay in ``spatial``.
 """
@@ -411,19 +411,27 @@ def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str,
     return columns
 
 
-def drawn_zone_lists(zones: list[tuple[str, dict[str, Any]]], resolution: int) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
-    """Drawn zones (id, GeoJSON Polygon) as cell lists at ``resolution``: id -> (the zone's cells, those whose centres its
-    polygon holds, ``geometry_to_cells``; its ring's, the ``ZONE_RING`` rings of cells around them, theirs left out). A row
-    is in a list when its cell is (``point_cells``), never by its point against the polygon: the one reading of a zone, as
-    ``points_in_zone`` reads a question's. The ring is named ``id + RING_SUFFIX``, so an id that repeats, or is another
-    zone's ring name, is refused; so is a shape that is no Polygon (a question's zone may be one) or that holds no cell."""
+def drawn_zones(zones: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
+    """Drawn zones (id, shape) as the polygons every reading of them takes: each a GeoJSON Polygon, its other members
+    dropped (``geometry_to_cells`` reads a ``center`` first; a question's zone may be one, a drawn zone never). An id that
+    repeats, or is another zone's ring name (``RING_SUFFIX``), is refused."""
     ids = [zone_id for zone_id, _ in zones]
     if len(set(ids) | {zone_id + RING_SUFFIX for zone_id in ids}) != 2 * len(ids):
         raise SpatialError("two zones share an id, or one is named as another's ring list")
+    for _, shape in zones:
+        if shape.get("type") != "Polygon":
+            raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {shape.get('type')!r}")
+    return [(zone_id, {"type": "Polygon", "coordinates": shape.get("coordinates")}) for zone_id, shape in zones]
+
+
+def drawn_zone_lists(zones: list[tuple[str, dict[str, Any]]], resolution: int) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
+    """Drawn zones (``drawn_zones``) as cell lists at ``resolution``: id -> (the zone's cells, those whose centres its
+    polygon holds, ``geometry_to_cells``; its ring's, the ``ZONE_RING`` rings of cells around them, theirs left out, named
+    ``id + RING_SUFFIX``). A row is in a list when its cell at ``resolution`` is (``point_cells``), never by its point
+    against the polygon: the rule ``points_in_zone`` reads a question's zone by, at the level of the table read. A zone
+    that holds no cell is refused."""
     lists = {}
-    for zone_id, polygon in zones:
-        if polygon.get("type") != "Polygon":
-            raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {polygon.get('type')!r}")
+    for zone_id, polygon in drawn_zones(zones):
         cells = geometry_to_cells(polygon, resolution)
         if not cells:
             raise SpatialError(f"zone {zone_id!r} holds no cell: its polygon has no vertex")

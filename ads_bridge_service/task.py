@@ -239,7 +239,7 @@ def _table_line(t: dict[str, Any]) -> str:
 def _zone_counts(t: dict[str, Any], zones: list[str]) -> str:
     """The table's rows in each asked zone's cell list and in its ring's, as the graph service counted them."""
     return "; ".join(
-        f"{z}: {c['cells']} cells, {c['rows']} rows; {z}{RING_SUFFIX}: {c['ring']['cells']} cells, {c['ring']['rows']} rows"
+        f"{z}: cells={c['cells']}, rows={c['rows']}; {z}{RING_SUFFIX}: cells={c['ring']['cells']}, rows={c['ring']['rows']}"
         for z in zones
         if (c := t["zones"].get(z))
     )
@@ -312,7 +312,7 @@ def _zones_text(base: dict[str, Any]) -> str:
     cell = f"h3_r{base['cells_at']}"
     return (
         f"\nZones: df_zone_cells ({ZONE_CELLS_FILE}) lists the cells of every zone of this conversation, one row per cell: zone_id, {cell}; "
-        f"a cell without rows is listed too. A row of a table is in a zone when its {cell} is listed for that zone; a row with an empty "
+        f"a cell without rows is listed too. A row of this question's tables is in a zone when its {cell} is listed for that zone; a row with an empty "
         f"{cell} (NaN once pandas reads the CSV) has no cell and is in no zone. Under zone_id <zone>{RING_SUFFIX} the file also lists the one "
         "ring of cells around each zone, the zone's own cells left out. Zones may overlap: a cell can be listed for several."
     )
@@ -325,7 +325,7 @@ def _zone_span(polygon: dict[str, Any]) -> tuple[int, str, str]:
     return len(ring) - 1, f"{min(lons):.4f}…{max(lons):.4f}", f"{min(lats):.4f}…{max(lats):.4f}"
 
 
-def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:
+def build_zones_md(zones: list[str], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:
     """ADS's domain knowledge for the conversation: a short English dictionary of the tables, the zones and the columns,
     declarative. ADS's guardrail reads every uploaded .md and its grounder keeps little of them, so nothing that belongs
     in the task (the question, the insights, the guidance) goes here."""
@@ -343,7 +343,7 @@ def build_zones_md(zones: dict[str, dict[str, Any]], tables: list[dict[str, Any]
                 [
                     "- row_id: a row's number in its table.",
                     f"- {ZONE_CELLS_FILE}: zone_id, h3_r{tables[0]['cells_at']}; one row per cell of a zone, a cell without rows included, and "
-                    f"under zone_id <zone>{RING_SUFFIX} per cell of the one ring of cells around it. A table's row is in a zone when its "
+                    f"under zone_id <zone>{RING_SUFFIX} per cell of the one ring of cells around it. A row of the tables above is in a zone when its "
                     f"h3_r{tables[0]['cells_at']} is listed for it; a row with an empty one (NaN in pandas) is in none.",
                 ]
                 if zones
@@ -395,8 +395,9 @@ def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: 
     ]
     membership = (
         f"Належність рядка до зони визначено детерміновано, без моделі: рядок у зоні, коли його комірка H3 рівня {res} є серед комірок "
-        "зони, тобто комірок, чиї центри лежать у намальованому полігоні{cells}; рядки без координат не належать жодній зоні. Сітка бере "
-        "комірки цілком, тож зону з кількох комірок вона окреслює грубо."
+        "зони, тобто комірок, чиї центри лежать у намальованому полігоні, а для полігона, меншого за комірку, комірок під його "
+        "вершинами{cells}; рядки без координат не належать жодній зоні. Сітка бере комірки цілком, тож зону з кількох комірок вона "
+        "окреслює грубо."
     )
     if not focus:
         scope = (
