@@ -381,8 +381,6 @@ def geometry_to_cells(geometry: dict[str, Any], resolution: int) -> frozenset[st
         raise SpatialError(str(exc) if isinstance(exc, SpatialError) else f"unreadable geometry: {type(exc).__name__}: {exc}") from exc
 
 
-ZONE_RING = 1  # the rings of cells around a drawn zone that make its ring list: the neighbourhood of the cell table
-RING_SUFFIX = "_ring"  # a zone's ring list is named by the zone's id and this
 CELL_PARENTS = 2  # the coarser cell columns of an exported table, beside its cells at the asked resolution
 
 
@@ -414,28 +412,26 @@ def cell_columns(lat: np.ndarray, lon: np.ndarray, resolution: int) -> dict[str,
 def drawn_zones(zones: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
     """Drawn zones (id, shape) as the polygons every reading of them takes: each a GeoJSON Polygon, its other members
     dropped (``geometry_to_cells`` reads a ``center`` first; a question's zone may be one, a drawn zone never). An id that
-    repeats, or is another zone's ring name (``RING_SUFFIX``), is refused."""
-    ids = [zone_id for zone_id, _ in zones]
-    if len(set(ids) | {zone_id + RING_SUFFIX for zone_id in ids}) != 2 * len(ids):
-        raise SpatialError("two zones share an id, or one is named as another's ring list")
+    repeats is refused."""
+    if len({zone_id for zone_id, _ in zones}) != len(zones):
+        raise SpatialError("two zones share an id")
     for _, shape in zones:
         if shape.get("type") != "Polygon":
             raise SpatialError(f"a drawn zone is a GeoJSON Polygon, not {shape.get('type')!r}")
     return [(zone_id, {"type": "Polygon", "coordinates": shape.get("coordinates")}) for zone_id, shape in zones]
 
 
-def drawn_zone_lists(zones: list[tuple[str, dict[str, Any]]], resolution: int) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
-    """Drawn zones (``drawn_zones``) as cell lists at ``resolution``: id -> (the zone's cells, those whose centres its
-    polygon holds, ``geometry_to_cells``; its ring's, the ``ZONE_RING`` rings of cells around them, theirs left out, named
-    ``id + RING_SUFFIX``). A row is in a list when its cell at ``resolution`` is (``point_cells``), never by its point
+def drawn_zone_lists(zones: list[tuple[str, dict[str, Any]]], resolution: int) -> dict[str, frozenset[str]]:
+    """Drawn zones (``drawn_zones``) as cell lists at ``resolution``: id -> the zone's cells, those whose centres its
+    polygon holds (``geometry_to_cells``), and nothing around them: what lies near a zone is its reader's to build from
+    the cells. A row is in a zone when its cell at ``resolution`` is listed for it (``point_cells``), never by its point
     against the polygon: the rule ``points_in_zone`` reads a question's zone by, at the level of the table read. A zone
     that holds no cell is refused."""
     lists = {}
     for zone_id, polygon in drawn_zones(zones):
-        cells = geometry_to_cells(polygon, resolution)
-        if not cells:
-            raise SpatialError(f"zone {zone_id!r} holds no cell: its polygon has no vertex")
-        lists[zone_id] = (cells, frozenset().union(*(h3.grid_disk(c, ZONE_RING) for c in cells)) - cells)
+        if not (cells := geometry_to_cells(polygon, resolution)):
+            raise SpatialError(f"zone {zone_id!r} holds no cell: its polygon is empty")
+        lists[zone_id] = cells
     return lists
 
 

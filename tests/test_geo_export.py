@@ -1,7 +1,6 @@
 """The graph service's geo exports (docs/08_interface.md §8.8): a geo dataset's rows with a ``row_id`` and their cells
-(``GET /api/geo/{dataset}/rows``), every cell of each drawn zone and of the ring around it
-(``POST /api/geo/{dataset}/zone_cells``) and how many of the rows each of those cell lists holds
-(``POST /api/geo/{dataset}/zone_counts``)."""
+(``GET /api/geo/{dataset}/rows``), every cell of each drawn zone (``POST /api/geo/{dataset}/zone_cells``) and how many
+of the rows each zone's cells hold (``POST /api/geo/{dataset}/zone_counts``)."""
 
 from __future__ import annotations
 
@@ -20,9 +19,9 @@ from insight_graph_service.server.app import create_app
 def test_a_datasets_rows_go_once_and_a_zone_is_its_cells(tmp_path, points_csv):
     """The rows carry a ``row_id`` and the cell columns. A drawn zone is its cells, those whose centres its polygon holds,
     and a row is in it when its cell is one of them: a polygon that is the cells' outline holds exactly their rows, one
-    smaller than a cell is that whole cell; the ring of cells around a zone is a list of its own; a cell without rows is
-    listed too; another level's cells place the rows by that level; a bad polygon, a repeated id or one that is another
-    zone's ring list, an unsafe id, a level no dataset has and an unknown dataset are refused."""
+    smaller than a cell is that whole cell; the file lists the zones and nothing around them; a cell without rows is
+    listed too; another level's cells place the rows by that level; a bad polygon, a repeated or unsafe id, a level no
+    dataset has and an unknown dataset are refused."""
     engine = make_engine(make_config(tmp_path / "ws", weight_by_events=False))
     assert [r["status"] for r in upload_levels(engine, points_csv, geo="auto@8,7")] == ["READY", "READY"]
     seed = engine.search("Where is load higher?").seeds[0].pattern_id
@@ -42,7 +41,7 @@ def test_a_datasets_rows_go_once_and_a_zone_is_its_cells(tmp_path, points_csv):
         def held(cells: set[str], frame: pd.DataFrame = rows, column: str = cell) -> int:
             return int(frame[column].isin(cells).sum())
 
-        # a zone is its cells: the outline's are the cells it was drawn around, the ring the cells around them, theirs left out
+        # a zone is its cells: the outline's are the cells it was drawn around, and the file lists zones alone
         busy = rows.loc[rows[cell].isin(zone), cell].mode()[0]  # a zone cell with points
         (la, lo), (va, vo) = h3.cell_to_latlng(busy), h3.cell_to_boundary(busy)[0]
         (ma, mo), d = ((la + va) / 2, (lo + vo) / 2), max(abs(va - la), abs(vo - lo)) / 20  # inside the cell, off its centre
@@ -53,12 +52,12 @@ def test_a_datasets_rows_go_once_and_a_zone_is_its_cells(tmp_path, points_csv):
         got = client.post(f"/api/geo/{ds}/zone_cells", json={"zones": asked})
         listed = pd.read_csv(io.BytesIO(got.content))
         lists = {z: set(g[cell]) for z, g in listed.groupby("zone_id")}
-        near = set().union(*(h3.grid_disk(c, 1) for c in zone))
         assert got.headers["content-type"].startswith("text/csv") and list(listed.columns) == ["zone_id", cell]
-        assert list(lists) == ["Z1", "Z1_ring", "Z2", "Z2_ring", "Z3", "Z3_ring"] and not listed.duplicated().any()
-        assert lists["Z1"] == set(zone) and lists["Z1_ring"] == near - set(zone)
-        assert lists["Z2"] == {busy} and lists["Z2_ring"] == set(h3.grid_ring(busy, 1))  # smaller than a cell: the cell under it, whole
-        assert len(lists["Z3"]) == 1 and len(lists["Z3_ring"]) == 6  # cells without rows are listed too
+        # every zone_id is a drawn zone: no list of the cells around one (a reader that takes the table for a territory gets the zones)
+        assert list(lists) == ["Z1", "Z2", "Z3"] and not listed.duplicated().any()
+        assert lists["Z1"] == set(zone)
+        assert lists["Z2"] == {busy}  # smaller than a cell: the cell under it, whole
+        assert len(lists["Z3"]) == 1  # a cell without rows is listed too
         # a drawn zone is its polygon alone: a member another kind of zone is read by changes nothing
         circled = [{"id": "Z1", "polygon": shape | {"center": [0.0, 0.0], "radius_m": 10}}]
         again = client.post(f"/api/geo/{ds}/zone_cells", json={"zones": circled}).text.splitlines()[1:]
@@ -70,28 +69,19 @@ def test_a_datasets_rows_go_once_and_a_zone_is_its_cells(tmp_path, points_csv):
         assert {k: counted[k] for k in ("columns", "upload_id", "filename", "time", "where")} == {
             k: table[k] for k in ("columns", "upload_id", "filename", "time", "where")
         }
-        assert counted["zones"] == {
-            z: {"cells": len(lists[z]), "rows": held(lists[z]), "ring": {"cells": len(lists[f"{z}_ring"]), "rows": held(lists[f"{z}_ring"])}}
-            for z in ("Z1", "Z2", "Z3")
-        }
-        z1 = counted["zones"]["Z1"]
-        assert (
-            0 < z1["rows"] < len(rows)
-            and z1["ring"]["rows"] > 0
-            and counted["zones"]["Z3"] == {"cells": 1, "rows": 0, "ring": {"cells": 6, "rows": 0}}
-        )
+        assert counted["zones"] == {z: {"cells": len(lists[z]), "rows": held(lists[z])} for z in ("Z1", "Z2", "Z3")}
+        assert 0 < counted["zones"]["Z1"]["rows"] < len(rows) and counted["zones"]["Z3"] == {"cells": 1, "rows": 0}
         assert counted["zones"]["Z2"]["rows"] == held({busy}) > 0  # every row of the cell, though the polygon covers a sliver of it
 
-        # refused on both exports: a shape that is no drawn zone, an id twice, an id that is another zone's ring list
+        # refused on both exports: a shape that is no drawn zone, an id twice
         multi = {"type": "MultiPolygon", "coordinates": [shape["coordinates"]]}  # the outline as a one-part MultiPolygon
         shapes = [
             {"zones": [{"id": "Z", "polygon": p}]}
             for p in ({"type": "Point", "coordinates": [0, 0]}, {"type": "Polygon", "coordinates": [[]]}, multi)
         ]
         twice = {"zones": [{"id": "Z", "polygon": shape}, {"id": "Z", "polygon": shape}]}
-        ring_named = {"zones": [{"id": "Z", "polygon": shape}, {"id": "Z_ring", "polygon": empty}]}
         for export in ("zone_cells", "zone_counts"):
-            for refused in (*shapes, twice, ring_named, {"zones": asked, "resolution": 12}):  # 12: no dataset's level
+            for refused in (*shapes, twice, {"zones": asked, "resolution": 12}):  # 12: no dataset's level
                 assert client.post(f"/api/geo/{ds}/{export}", json=refused).json()["code"] == "invalid_options", (export, refused)
             assert client.post(f"/api/geo/{ds}/{export}", json={"zones": [{"id": "a,b", "polygon": shape}]}).status_code == 422
             assert client.post(f"/api/geo/ds-unknown/{export}", json={"zones": []}).json()["code"] == "unknown_dataset"

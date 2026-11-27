@@ -417,15 +417,14 @@ def zone_counts(
     zones: list[tuple[str, dict[str, Any]]],
 ) -> dict[str, Any]:
     """How many rows of a stored file each drawn zone holds at ``resolution``, by cell (``drawn_zone_lists``: a row is in a
-    zone, or in its ring, when its cell is listed for it): per zone ``{cells, rows, ring: {cells, rows}}``; ``unlocated``
-    the rows without a cell, in no list; ``total`` and ``columns`` are ``table_rows``'s."""
+    zone when its cell is listed for it): per zone ``{cells, rows}``; ``unlocated`` the rows without a cell, in no zone;
+    ``total`` and ``columns`` are ``table_rows``'s."""
     frame = _export_frame(path, where, resolution)
     per_cell = pd.Series(point_cells(*_export_points(frame, locator, window), resolution), dtype=object).value_counts()
-
-    def held(cells: frozenset[str]) -> dict[str, int]:
-        return {"cells": len(cells), "rows": int(per_cell.reindex(list(cells)).sum())}
-
-    counts = {zone_id: held(own) | {"ring": held(ring)} for zone_id, (own, ring) in drawn_zone_lists(zones, resolution).items()}
+    counts = {
+        zone_id: {"cells": len(cells), "rows": int(per_cell.reindex(list(cells)).sum())}
+        for zone_id, cells in drawn_zone_lists(zones, resolution).items()
+    }
     table = {"total": len(frame), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
     return table | {"unlocated": int(per_cell.get("", 0)), "zones": counts}
 

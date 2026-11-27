@@ -9,8 +9,7 @@ from typing import Any
 
 MAX_INSIGHTS = 10  # the graph's evidence holds about ten; a question about several zones shares them
 MIN_ZONE_INSIGHTS = 3  # a zone's share of them, however many zones the question names
-ZONE_CELLS_FILE = "zone_cells.csv"  # every cell of each zone of the conversation and of the ring around it, with rows or without
-RING_SUFFIX = "_ring"  # a zone's ring is listed under its id and this: subgroup_miner.spatial_plane.RING_SUFFIX, copied (no import)
+ZONE_CELLS_FILE = "zone_cells.csv"  # every cell of each zone of the conversation, with rows or without; sent when the question asks a zone
 ZONES_MD = "zones.md"  # ADS's domain knowledge: the tables and the zones
 METADATA_MD = "metadata.md"  # ADS's domain knowledge: the tables' columns as their uploader's documents describe them
 CRED_RANK = {1: 0, 2: 1, 6: 2, 5: 3}  # credibility, best first: confirmed, unconfirmed, no other source, contradicted
@@ -237,12 +236,8 @@ def _table_line(t: dict[str, Any]) -> str:
 
 
 def _zone_counts(t: dict[str, Any], zones: list[str]) -> str:
-    """The table's rows in each asked zone's cell list and in its ring's, as the graph service counted them."""
-    return "; ".join(
-        f"{z}: cells={c['cells']}, rows={c['rows']}; {z}{RING_SUFFIX}: cells={c['ring']['cells']}, rows={c['ring']['rows']}"
-        for z in zones
-        if (c := t["zones"].get(z))
-    )
+    """The table's rows in each asked zone's cells, as the graph service counted them."""
+    return "; ".join(f"{z}: cells={c['cells']}, rows={c['rows']}" for z in zones if (c := t["zones"].get(z)))
 
 
 def build_query_parts(
@@ -250,7 +245,8 @@ def build_query_parts(
 ) -> list[dict[str, str]]:
     """The ADS task, part by part, as the console shows it: the insight primer, the frame naming the question's zones,
     the user's words, the tables with their geo columns, the zones' cell lists and their counts, the insights as computed results,
-    and the guidance. ``zones``: every zone of the conversation, ``focus`` the question's. The frame is English (ADS's own
+    and the guidance. ``zones``: every zone of the conversation, ``focus`` the question's; with none asked the task is the
+    whole map's and says nothing of a zone (no zones' file goes with it). The frame is English (ADS's own
     prose is; Cyrillic costs its budgets more), the question stays verbatim. ``tables`` without counts and ``findings``
     None are the preview before the ask. Joined, the parts are the query."""
     base, layers = tables[0], tables[1:]
@@ -277,22 +273,20 @@ def build_query_parts(
         f"\nGeo columns: row_id numbers a table's rows; {cells} are H3 cell ids (strings) in every table; a coarser id is the parent of "
         "the finer one; group by them, never edit them."
     )
-    if zones:
+    if focus:
         data += _zones_text(base)
-    if others := [z for z in zones if z not in focus]:
-        data += f"\nThe conversation's other zones ({', '.join(others)}) are listed in df_zone_cells too, for questions that name them."
-    if "zones" in base and focus:
-        data += f"\nZone lists (main table rows): {_zone_counts(base, focus)}. Rows without a cell: {base.get('unlocated', 0)}."
+        if others := [z for z in zones if z not in focus]:
+            data += f"\nThe conversation's other zones ({', '.join(others)}) are listed in df_zone_cells too, for questions that name them."
+        if "zones" in base:
+            data += f"\nZone lists (main table rows): {_zone_counts(base, focus)}. Rows without a cell: {base.get('unlocated', 0)}."
     if findings is None:
         blocks = "(after the ask)"
     else:
         blocks = "\n\n".join(insight_blocks(findings, base)) or f"SIG has no insights for {'these zones' if focus else 'this question'}."
         if findings and len(focus) > 1:
             blocks = zones_summary(findings) + "\n\n" + blocks
-    if not focus and zones:  # the conversation's zones stay in df_zone_cells: a question may still name one
-        frame = "No zone is ticked for this question: analyse the whole map (every row of the tables), unless the question names a zone of df_zone_cells: "
-    elif not focus:
-        frame = "Analyse the whole map (every row of the tables; no zone is drawn): "
+    if not focus:
+        frame = "Analyse the whole map (every row of the tables): "
     elif len(focus) == 1:
         frame = f"Analyse the area of interest (AOI) {focus[0]}: "
     else:
@@ -313,8 +307,8 @@ def _zones_text(base: dict[str, Any]) -> str:
     return (
         f"\nZones: df_zone_cells ({ZONE_CELLS_FILE}) lists the cells of every zone of this conversation, one row per cell: zone_id, {cell}; "
         f"a cell without rows is listed too. A row of this question's tables is in a zone when its {cell} is listed for that zone; a row with an empty "
-        f"{cell} (NaN once pandas reads the CSV) has no cell and is in no zone. Under zone_id <zone>{RING_SUFFIX} the file also lists the one "
-        "ring of cells around each zone, the zone's own cells left out. Zones may overlap: a cell can be listed for several."
+        f"{cell} (NaN once pandas reads the CSV) has no cell and is in no zone. Zones may overlap: a cell can be listed for several. The zones "
+        "are areas of the map, not its bounds: the map is every row of the tables, in a zone or in none."
     )
 
 
@@ -327,8 +321,9 @@ def _zone_span(polygon: dict[str, Any]) -> tuple[int, str, str]:
 
 def build_zones_md(zones: list[str], tables: list[dict[str, Any]], files: dict[str, list[str]]) -> str:
     """ADS's domain knowledge for the conversation: a short English dictionary of the tables, the zones and the columns,
-    declarative. ADS's guardrail reads every uploaded .md and its grounder keeps little of them, so nothing that belongs
-    in the task (the question, the insights, the guidance) goes here."""
+    declarative. ``zones``: those of the zones' file, none when it does not go (a whole-map question). ADS's guardrail
+    reads every uploaded .md and its grounder keeps little of them, so nothing that belongs in the task (the question,
+    the insights, the guidance) goes here."""
     sources = "; ".join(f"{name}: {', '.join(keys)}" for name, keys in files.items()) or "none in this answer"
     return "\n".join(
         [
@@ -342,12 +337,12 @@ def build_zones_md(zones: list[str], tables: list[dict[str, Any]], files: dict[s
             *(
                 [
                     "- row_id: a row's number in its table.",
-                    f"- {ZONE_CELLS_FILE}: zone_id, h3_r{tables[0]['cells_at']}; one row per cell of a zone, a cell without rows included, and "
-                    f"under zone_id <zone>{RING_SUFFIX} per cell of the one ring of cells around it. A row of the tables above is in a zone when its "
-                    f"h3_r{tables[0]['cells_at']} is listed for it; a row with an empty one (NaN in pandas) is in none.",
+                    f"- {ZONE_CELLS_FILE}: zone_id, h3_r{tables[0]['cells_at']}; one row per cell of a zone, a cell without rows included. "
+                    f"A row of the tables above is in a zone when its h3_r{tables[0]['cells_at']} is listed for it; a row with an empty one "
+                    "(NaN in pandas) is in none.",
                 ]
                 if zones
-                else ["- No zone is drawn in this conversation: the questions are about the whole map."]
+                else ["- No zone is asked: the question is about the whole map."]
             ),
             "- SIG's cells: one row of SIG's table = one cell with its events; shares and medians per cell exist for cells with enough events.",
             f"- SIG's terms: {SIG_TERMS}; credibility 1 confirmed by another source, 2 not confirmed, 5 contradicted, 6 no other source.",
@@ -393,24 +388,12 @@ def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: 
         *by_file,
         "",
     ]
-    membership = (
-        f"Належність рядка до зони визначено детерміновано, без моделі: рядок у зоні, коли його комірка H3 рівня {res} є серед комірок "
-        "зони, тобто комірок, чиї центри лежать у намальованому полігоні, а для полігона, меншого за комірку, комірок під його "
-        "вершинами{cells}; рядки без координат не належать жодній зоні. Сітка бере комірки цілком, тож зону з кількох комірок вона "
-        "окреслює грубо."
-    )
     if not focus:
-        scope = (
-            f"- Жодну зону не позначено: питання стосується всіх рядків таблиць, якщо воно не називає зону розмови ({', '.join(zones)}). "
-            + membership.format(cells="")
-            if zones
-            else "- Зону не задано: питання стосується всіх рядків таблиць."
-        )
         return "\n".join(
             [
                 "# Уся мапа: методика",
                 "",
-                scope,
+                "- Зону не задано: питання стосується всіх рядків таблиць.",
                 "- Питання передано в SIG без зони. Ретривер SIG знайшов у графі знахідки, що стосуються питання, по всій мапі; ADS отримав їх "
                 "як встановлені факти.",
                 "",
@@ -429,7 +412,10 @@ def build_domain_md(zones: dict[str, dict[str, Any]], focus: list[str], tables: 
             "",
             "- Зони задав користувач як полігони на мапі.",
             *zone_lines,
-            "- " + membership.format(cells=f" (комірок у зоні: {', '.join(f'{z} {tables[0]["zones"][z]["cells"]}' for z in focus)})"),
+            f"- Належність рядка до зони визначено детерміновано, без моделі: рядок у зоні, коли його комірка H3 рівня {res} є серед комірок "
+            "зони, тобто комірок, чиї центри лежать у намальованому полігоні, а для полігона, меншого за комірку, комірок під його "
+            f"вершинами (комірок у зоні: {', '.join(f'{z} {tables[0]["zones"][z]["cells"]}' for z in focus)}); рядки без координат не "
+            "належать жодній зоні. Сітка бере комірки цілком, тож зону з кількох комірок вона окреслює грубо.",
             "- Кожну зону передано в SIG як цей полігон разом із питанням користувача (або без нього, якщо відповідь із питанням не мала "
             "знахідок у зоні). Граф прочитав її за тим самим правилом, як комірки H3 свого найдрібнішого гео-рівня, чиї центри лежать у "
             f"полігоні; коли цей рівень інший, ніж рівень {res} таблиць, межа зони у знахідках і в таблицях може різнитися. Від цих комірок ретривер SIG увійшов у граф, "

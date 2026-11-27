@@ -53,6 +53,8 @@ MAX_FOCUS = 5  # the zones one question may compare
 MAX_ZONES = 50  # the zones a conversation may hold (the graph service's MAX_EXPORT_ZONES)
 SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # ADS's: a uuid4, a path segment as it is
 ZONE_ID = r"^[A-Za-z0-9_-]{1,16}$"  # the graph service's zone ids
+# the zones' files a session may hold: the cell lists, and the row stamps of a conversation opened before a zone was its cells
+ZONE_FILES = (ZONE_CELLS_FILE, "zones.csv")
 # the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD): what is left without them
 # tells whether the question has words for the graph (the bridge imports nothing of the repository)
 _PERIODS = re.compile(r"(?<![\w-])(?:\d{4}-W\d{2}|\d{4}-Q[1-4]|Q[1-4]\s+\d{4}|\d{4}-\d{2}(?:-\d{2})?)(?![\d-])", re.I)
@@ -198,8 +200,9 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
 
     def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
         """The picked tables, each with what the graph service tells of it and how many of its rows each asked zone's cells hold,
-        and the zones' file (none without a zone): every cell of each zone of the conversation and of the ring around it,
-        at the base table's resolution, every table's cell column: one column tells a row's zone in each of them."""
+        and the zones' file: every cell of each zone of the conversation at the base table's resolution, every table's
+        cell column, so one column tells a row's zone in each of them. No file when the question asks no zone: a table
+        that lists cells would be the one such table of the job, and its reader takes that for the territory."""
         zones = [{"id": z.id, "polygon": z.polygon} for z in body.zones]
         tables = []
         for t in name_tables([t.model_dump() for t in body.tables]):
@@ -207,7 +210,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
             told = _checked(http.post(geo_url(t, "zone_counts"), json=ask), "sig_failed", f"SIG zone counts of {t['filename']}").json()
             # its `resolution` is the export's, cells_at: the table keeps its own level (a layer's run grid), which the task compares the two by
             tables.append(t | told | {"resolution": t["resolution"]})
-        if not zones:
+        if not body.focus:
             return tables, {}
         base = tables[0]
         ask = {"zones": zones, "resolution": base["cells_at"]}
@@ -250,8 +253,14 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         return {"session_id": sid, "kept": kept, "closed": True}
 
     def upload(sid: str, tables: list[dict[str, Any]], files: dict[str, bytes]) -> None:
-        """The tables the session lacks, read from the graph service, and ``files`` (the zones, replacing their last copy)."""
+        """The tables the session lacks, read from the graph service, and ``files`` (the zones, replacing their last copy).
+        A zones' file the session holds and this question does not send is deleted first: the task describes none."""
         held, sent = session_files(sid), {}
+        for name in ZONE_FILES:
+            if name in held and name not in files:
+                _checked(
+                    http.post(f"{settings.ads_url}/sessions/{sid}/sources/delete", json={"path": held[name]}), "ads_failed", f"ADS delete {name}"
+                )
         for t in tables:
             if t["file"] not in held:
                 url = geo_url(t, "rows")
@@ -343,7 +352,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
                 job["session_id"] = _checked(http.post(f"{settings.ads_url}/sessions"), "ads_failed", "ADS session").json()["session_id"]
                 publish(job)  # the console keeps the session for the conversation's next question
             check(job)
-            files = placed | {ZONES_MD: build_zones_md(list(zones), tables, sources).encode("utf-8"), METADATA_MD: docs}
+            files = placed | {ZONES_MD: build_zones_md(list(zones) if placed else [], tables, sources).encode("utf-8"), METADATA_MD: docs}
             upload(job["session_id"], tables, files)
             job["ads_report"] = run_ads(job, job["session_id"], job["ads_query"])
             check(job)

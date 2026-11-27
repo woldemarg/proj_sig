@@ -89,7 +89,7 @@ class ZoneIn(BaseModel):
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
 
 
-MAX_EXPORT_ZONES = 50  # the zones one export reads: each costs its cells and its ring's
+MAX_EXPORT_ZONES = 50  # the zones one export reads: each costs its cells
 
 
 class PlacesIn(BaseModel):

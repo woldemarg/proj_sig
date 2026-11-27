@@ -32,7 +32,6 @@ from subgroup_miner.context import points_near
 from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_counts
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
-    RING_SUFFIX,
     cell_boundary,
     cell_centres,
     cell_column_names,
@@ -231,7 +230,7 @@ def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None
 def geo_zone_counts(
     ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
 ) -> dict[str, Any]:
-    """How many of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) and its ring hold at ``resolution``, by cell
+    """How many of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) holds at ``resolution``, by cell
     (``ingestion.zone_counts``), and what ``geo_table_rows`` tells of the table: the counts a reader states beside the
     zones' cell lists (``geo_zone_cells``)."""
     table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
@@ -243,16 +242,14 @@ def geo_zone_counts(
 
 def geo_zone_cells(ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
     """The drawn zones as cell lists at ``resolution`` (``drawn_zone_lists``), with rows or without: CSV
-    ``zone_id,h3_r<resolution>``, each zone's cells under its id and its ring's under ``<id>_ring``. A row of a table
+    ``zone_id,h3_r<resolution>``, each zone's cells under its id; every ``zone_id`` is a drawn zone. A row of a table
     exported at that resolution is in a zone when its cell is listed for it: no row is stamped and no polygon goes out."""
     _, _, resolution = _export_reading(ws, dataset_id, resolution)
     try:
         lists = drawn_zone_lists(zones, resolution)
     except SpatialError as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    lines = [f"zone_id,{cell_column_names(resolution)[0]}"]
-    for zone_id, (own, ring) in lists.items():
-        lines += [f"{zone_id},{c}" for c in sorted(own)] + [f"{zone_id}{RING_SUFFIX},{c}" for c in sorted(ring)]
+    lines = [f"zone_id,{cell_column_names(resolution)[0]}", *(f"{zone_id},{c}" for zone_id, cells in lists.items() for c in sorted(cells))]
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
