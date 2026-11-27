@@ -4,11 +4,11 @@
 # image sig/insight-graph:gpu); Qwen3 embeds on the GPU when the container has one, else on the CPU. Build context: the
 # repository root. Target `test` adds the whole test suite (scripts/compose_check.py).
 
-FROM ghcr.io/astral-sh/uv:0.11.17 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.10 AS uv
 
 # The exact versions of uv.lock into /venv; uv stays in this stage. The cache mount keeps the downloaded wheels
 # (≈ 2.4 GB for cu130) between builds, outside the image.
-FROM python:3.12.15-slim AS deps
+FROM python:3.15.1-slim AS deps
 ARG TORCH=cpu
 COPY --from=uv /uv /bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/venv UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_HTTP_TIMEOUT=600
@@ -17,7 +17,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --group graph --group ${TORCH}
 
-FROM python:3.12.15-slim AS runtime
+FROM python:3.15.1-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 # /data holds the workspace and the upload spool (a volume); /app/models the checkpoint (a volume filled by model-init)
