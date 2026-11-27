@@ -2,9 +2,9 @@
 # SIG LLM model broker: one OpenAI-compatible endpoint in front of the configured upstream model (docs/12_architecture.md §12.4).
 # Build context: the repository root (compose.yaml). Settings: GEMMA_* (compose reads them from .env).
 
-FROM ghcr.io/astral-sh/uv:0.11.17 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.10 AS uv
 
-FROM python:3.12.15-slim AS deps
+FROM python:3.15.1-slim AS deps
 COPY --from=uv /uv /bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/venv UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
@@ -12,7 +12,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --group broker
 
-FROM python:3.12.15-slim
+FROM python:3.15.1-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY --from=deps /venv /venv
