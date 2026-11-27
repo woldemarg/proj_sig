@@ -89,7 +89,7 @@ class ZoneIn(BaseModel):
     polygon: dict[str, Any]  # the drawn zone, a GeoJSON Polygon
 
 
-MAX_EXPORT_ZONES = 50  # the zones one zone_rows read places: each costs its cells and a line of X-Zones
+MAX_EXPORT_ZONES = 50  # the zones one export reads: each costs its cells and its ring's
 
 
 class PlacesIn(BaseModel):
@@ -98,7 +98,7 @@ class PlacesIn(BaseModel):
 
 
 class ZoneCellsIn(BaseModel):
-    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: the table's counts alone (zone_rows), no cell (zone_cells)
+    zones: list[ZoneIn] = Field(max_length=MAX_EXPORT_ZONES)  # none: what the table is, alone (zone_counts), no cell (zone_cells)
     resolution: int | None = Field(default=None, ge=0, le=15)  # the cells the zones are read at; None: the dataset's own
 
 
@@ -394,10 +394,9 @@ def create_app(engine: Engine) -> FastAPI:
         data, counts = engine.maps().table_rows(dataset_id, resolution, layer)
         return Response(data, media_type="text/csv", headers={"X-Rows": json.dumps(counts)})  # ASCII: a header's bytes
 
-    @app.post("/api/geo/{dataset_id}/zone_rows")
-    def geo_zone_rows(dataset_id: str, body: ZonesIn) -> Response:
-        data, counts = engine.maps().zone_rows(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
-        return Response(data, media_type="text/csv", headers={"X-Zones": json.dumps(counts)})
+    @app.post("/api/geo/{dataset_id}/zone_counts")
+    def geo_zone_counts(dataset_id: str, body: ZonesIn) -> dict[str, Any]:
+        return engine.maps().zone_counts(dataset_id, [(z.id, z.polygon) for z in body.zones], resolution=body.resolution, layer=body.layer)
 
     @app.post("/api/geo/places")
     def geo_places(body: PlacesIn) -> dict[str, dict[str, dict[str, Any]]]:

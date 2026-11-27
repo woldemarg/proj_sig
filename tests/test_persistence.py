@@ -354,7 +354,8 @@ def test_an_outdated_workspace_starts_degraded_and_reset_recovers(cfg, demo_csv,
         lambda: engine.maps().cells_pack("x"),
         lambda: engine.maps().period_counts("x", period),
         lambda: engine.maps().table_rows("x"),
-        lambda: engine.maps().zone_rows("x", []),
+        lambda: engine.maps().zone_counts("x", []),
+        lambda: engine.maps().zone_cells("x", []),
     )  # the map and its exports too
     for write in (lambda: engine.submit(demo_csv), lambda: engine.evidence("margin?"), lambda: engine.delete_dataset("x"), *reads):
         with pytest.raises(engine_mod.PipelineError, match="POST /api/reset") as refused:

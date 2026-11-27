@@ -32,7 +32,6 @@ from ads_bridge_service.task import (
     MAX_INSIGHTS,
     METADATA_MD,
     ZONE_CELLS_FILE,
-    ZONES_FILE,
     ZONES_MD,
     build_domain_md,
     build_metadata_md,
@@ -52,7 +51,6 @@ JOBS_KEPT = 20
 STATUS_RETRIES = 5  # failed reads of an ADS job's status in a row before it is given up
 MAX_FOCUS = 5  # the zones one question may compare
 MAX_ZONES = 50  # the zones a conversation may hold (the graph service's MAX_EXPORT_ZONES)
-ZONES_HEADER = "zone_id,row_id,aoi_zone"  # the graph service's zone_rows CSV
 SESSION_ID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # ADS's: a uuid4, a path segment as it is
 ZONE_ID = r"^[A-Za-z0-9_-]{1,16}$"  # the graph service's zone ids
 # the calendar periods the graph reads in a question's text (insight_contracts.wording.PERIOD): what is left without them
@@ -194,32 +192,28 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         places = _checked(http.post(f"{settings.ads_graph_url}/api/geo/places", json=ask), "sig_failed", "SIG places").json() if ids else {}
         return merge_findings(by_zone, places)
 
+    def geo_url(t: dict[str, Any], export: str) -> str:
+        """One of the graph service's exports of a table's dataset; the id is one path segment, whatever it holds."""
+        return f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/{export}"
+
     def place_tables(body: AskIn) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-        """The picked tables, each with what the graph service tells of it and its rows per zone, and the zones' files (none
-        without a zone): which rows each zone of the conversation holds and every cell of each, at the base table's
-        resolution, the layers' cells too: one column to join on."""
+        """The picked tables, each with what the graph service tells of it and how many of its rows each zone's cells hold,
+        and the zones' file (none without a zone): every cell of each zone of the conversation and of the ring around it,
+        at the base table's resolution, every table's cell column: one column tells a row's zone in each of them."""
         zones = [{"id": z.id, "polygon": z.polygon} for z in body.zones]
-        tables, lines = [], ["zone_id,table,row_id,aoi_zone"]
+        tables = []
         for t in name_tables([t.model_dump() for t in body.tables]):
-            resp = graph_csv(t, "zone_rows", {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}, ZONES_HEADER)
-            tables.append(t | json.loads(resp.headers["x-zones"]))
-            for line in resp.text.splitlines()[1:]:  # an id, a number and a word, no quoting
-                zone, _, rest = line.partition(",")
-                lines.append(f"{zone},{t['file']},{rest}")
+            ask = {"zones": zones, "resolution": t["cells_at"], "layer": t.get("layer")}
+            tables.append(t | _checked(http.post(geo_url(t, "zone_counts"), json=ask), "sig_failed", f"SIG zone counts of {t['filename']}").json())
         if not zones:
             return tables, {}
         base = tables[0]
-        cells = graph_csv(base, "zone_cells", {"zones": zones, "resolution": base["cells_at"]}, f"zone_id,h3_r{base['cells_at']}")
-        return tables, {ZONES_FILE: ("\n".join(lines) + "\n").encode("utf-8"), ZONE_CELLS_FILE: cells.content}
-
-    def graph_csv(t: dict[str, Any], export: str, ask: dict[str, Any], header: str) -> httpx.Response:
-        """One of the graph service's zone exports of a table, checked to be the CSV it names (``header``)."""
-        url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/{export}"  # one path segment, whatever the id holds
-        resp = _checked(http.post(url, json=ask), "sig_failed", f"SIG {export} of {t['filename']}")
-        head = (resp.text.splitlines() or [""])[0]  # pandas ends a line with the host's separator
-        if head != header:
-            raise StageError("sig_failed", f"SIG {export} of {t['filename']}: a CSV headed {head[:80]!r}, not {header}")
-        return resp
+        ask = {"zones": zones, "resolution": base["cells_at"]}
+        cells = _checked(http.post(geo_url(base, "zone_cells"), json=ask), "sig_failed", f"SIG zone cells of {base['filename']}")
+        head = (cells.text.splitlines() or [""])[0]
+        if head != f"zone_id,h3_r{base['cells_at']}":  # the file ADS is told about, not some other answer of the service
+            raise StageError("sig_failed", f"SIG zone cells of {base['filename']}: a CSV headed {head[:80]!r}")
+        return tables, {ZONE_CELLS_FILE: cells.content}
 
     def table_docs(tables: list[dict[str, Any]]) -> bytes:
         """The metadata documents of the tables (a layer's points have none of their own), as ``metadata.md``."""
@@ -258,7 +252,7 @@ def create_app(settings: AdsSettings | None = None) -> FastAPI:
         held, sent = session_files(sid), {}
         for t in tables:
             if t["file"] not in held:
-                url = f"{settings.ads_graph_url}/api/geo/{quote(t['dataset_id'], safe='')}/rows"
+                url = geo_url(t, "rows")
                 asked = {"resolution": t["cells_at"]} | ({"layer": t["layer"]} if t.get("layer") else {})
                 rows = _checked(http.get(url, params=asked), "sig_failed", f"SIG rows of {t['filename']}")
                 sent[t["file"]] = rows.content

@@ -29,13 +29,14 @@ from insight_graph_service.core.uploads import context_files, hidden_datasets, p
 from insight_graph_service.core.workspace import Workspace
 from subgroup_miner.config import MinerConfig
 from subgroup_miner.context import points_near
-from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_rows
+from subgroup_miner.ingestion import IngestionError, read_context, table_rows, zone_counts
 from subgroup_miner.spatial import SpatialError, compactness
 from subgroup_miner.spatial_plane import (
+    RING_SUFFIX,
     cell_boundary,
     cell_centres,
     cell_column_names,
-    drawn_zone_cells,
+    drawn_zone_lists,
     event_regions,
     footprint,
     geometry_to_cells,
@@ -218,7 +219,7 @@ def _export_reading(
 def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
     """A geo dataset's rows as CSV with a ``row_id`` and their cell columns of ``resolution`` (``ingestion.table_rows``),
     and what the reader must know of the table: what an analysis outside SIG reads; tables exported at one resolution share
-    their cell columns. It does not depend on a zone: ``geo_zone_rows`` places the rows."""
+    their cell columns. It does not depend on a zone: a zone is a cell list of its own (``geo_zone_cells``)."""
     table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
         data, counts = table_rows(*reading, resolution)
@@ -227,37 +228,32 @@ def geo_table_rows(ws: Workspace, dataset_id: str, resolution: int | None = None
     return data, counts | table
 
 
-def geo_zone_rows(
+def geo_zone_counts(
     ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
-) -> tuple[bytes, dict[str, Any]]:
-    """Which of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) holds, by the ``row_id`` of ``geo_table_rows``
-    at the same ``resolution`` (``ingestion.zone_rows``), per zone its rows per place and its cells, and what
-    ``geo_table_rows`` tells of the table: a reader that holds the table already reads the zones alone."""
-    _check_ids(zones)
+) -> dict[str, Any]:
+    """How many of a geo dataset's rows each drawn zone (id, GeoJSON Polygon) and its ring hold at ``resolution``, by cell
+    (``ingestion.zone_counts``), and what ``geo_table_rows`` tells of the table: the counts a reader states beside the
+    zones' cell lists (``geo_zone_cells``)."""
     table, reading, resolution = _export_reading(ws, dataset_id, resolution, layer)
     try:
-        data, counts = zone_rows(*reading, resolution, zones)
+        return zone_counts(*reading, resolution, zones) | table
     except (SpatialError, IngestionError) as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
-    return data, counts | table
 
 
 def geo_zone_cells(ws: Workspace, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
-    """Every cell of each drawn zone at the ``resolution`` ``geo_zone_rows`` reads the zones at, with rows or without: CSV
-    ``zone_id,h3_r<resolution>``, the cells it counts as ``zone_cells`` (``drawn_zone_cells``: those whose centres the
-    polygon holds, a drawn zone being a Polygon), what a reader divides a zone's per-cell figures by and draws rings around."""
-    _check_ids(zones)
+    """The drawn zones as cell lists at ``resolution`` (``drawn_zone_lists``), with rows or without: CSV
+    ``zone_id,h3_r<resolution>``, each zone's cells under its id and its ring's under ``<id>_ring``. A row of a table
+    exported at that resolution is in a zone when its cell is listed for it: no row is stamped and no polygon goes out."""
     _, _, resolution = _export_reading(ws, dataset_id, resolution)
     try:
-        lines = [f"zone_id,{cell_column_names(resolution)[0]}", *(f"{z},{c}" for z, p in zones for c in sorted(drawn_zone_cells(p, resolution)))]
+        lists = drawn_zone_lists(zones, resolution)
     except SpatialError as exc:
         raise PipelineError("invalid_options", str(exc)) from exc
+    lines = [f"zone_id,{cell_column_names(resolution)[0]}"]
+    for zone_id, (own, ring) in lists.items():
+        lines += [f"{zone_id},{c}" for c in sorted(own)] + [f"{zone_id}{RING_SUFFIX},{c}" for c in sorted(ring)]
     return ("\n".join(lines) + "\n").encode("utf-8")
-
-
-def _check_ids(zones: list[tuple[str, dict[str, Any]]]) -> None:
-    if len({z for z, _ in zones}) != len(zones):
-        raise PipelineError("invalid_options", "two zones share an id")
 
 
 def point_times(times: Any) -> np.ndarray | None:
@@ -882,10 +878,10 @@ class MapReads(NamedTuple):
     def table_rows(self, dataset_id: str, resolution: int | None = None, layer: str | None = None) -> tuple[bytes, dict[str, Any]]:
         return geo_table_rows(self.ws, dataset_id, resolution, layer)
 
-    def zone_rows(
+    def zone_counts(
         self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None, layer: str | None = None
-    ) -> tuple[bytes, dict[str, Any]]:
-        return geo_zone_rows(self.ws, dataset_id, zones, resolution, layer)
+    ) -> dict[str, Any]:
+        return geo_zone_counts(self.ws, dataset_id, zones, resolution, layer)
 
     def zone_cells(self, dataset_id: str, zones: list[tuple[str, dict[str, Any]]], resolution: int | None = None) -> bytes:
         return geo_zone_cells(self.ws, dataset_id, zones, resolution)
