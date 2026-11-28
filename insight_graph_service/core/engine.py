@@ -61,8 +61,8 @@ from subgroup_miner.ingestion import (
     resolve_grid,
 )
 from subgroup_miner.selection import select_insights
-from subgroup_miner.spatial import sac_summary
-from subgroup_miner.spatial_plane import GeoDataset, TableDataset, derive_spatial
+from subgroup_miner.spatial import SpatialError, sac_summary
+from subgroup_miner.spatial_plane import GeoDataset, TableDataset, derive_spatial, drawn_zones
 
 log = logging.getLogger(__name__)
 
@@ -254,11 +254,10 @@ class Engine:
     def places(self, zones: list[tuple[str, dict[str, Any]]], pattern_ids: list[str]) -> dict[str, dict[str, ZonePlace]]:
         """How each of ``pattern_ids`` lies in each drawn zone (id, GeoJSON), as a question with that zone reads it; a
         pattern of a level the zone does not weigh is left out (``POST /api/geo/places``)."""
-        if len({z for z, _ in zones}) != len(zones):
-            raise PipelineError("invalid_options", "two zones share an id")
-        for _, g in zones:  # a drawn zone, as the zone exports read it
-            if g.get("type") != "Polygon":
-                raise PipelineError("invalid_options", f"a drawn zone is a GeoJSON Polygon, not {g.get('type')!r}")
+        try:
+            zones = drawn_zones(zones)  # as the zone exports read them
+        except SpatialError as exc:
+            raise PipelineError("invalid_options", str(exc)) from exc
         state, wanted = self.committed(), set(pattern_ids)
         return {z: {pid: p for pid, p in (self.place_scores(state, geometry=g) or {}).items() if pid in wanted} for z, g in zones}
 

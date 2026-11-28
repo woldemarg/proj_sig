@@ -11,7 +11,7 @@ from typing import Any
 class AdsSettings:
     ads_url: str = "http://127.0.0.1:8000"  # the ADS orchestrator: sessions, datasets, jobs
     ads_llm_url: str = "http://127.0.0.1:8080"  # ADS's LLM gateway: the final report's model
-    ads_graph_url: str = "http://127.0.0.1:8765"  # the graph service: /api/geo/{dataset}/rows and /zone_rows give a table and its zones, /api/geo/places the findings' places
+    ads_graph_url: str = "http://127.0.0.1:8765"  # the graph service: /api/geo/{dataset}/rows, /zone_counts and /zone_cells give a table and the zones' cells, /api/geo/places the findings' places
     ads_narrator_url: str = "http://127.0.0.1:8765"  # the narrator: POST /api/chat/query gives the zone's evidence
     ads_job_timeout_s: float = 1200.0  # how long an ADS job may run
     ads_poll_s: float = 5.0  # between two reads of an ADS job's status

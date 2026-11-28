@@ -103,22 +103,21 @@ def upstream(
         if dataset_id not in ("ds-a", "ds-b"):
             return None
         base = dataset_id == "ds-a"  # the base: analysed at 8, with a time column; the layer: at 5, a filtered reading
-        meta = {"dataset_resolution": 8 if base else 5, "time": "seen_at" if base else None, "where": None if base else "kind=bar"}
-        return meta | {"total": 5, "resolution": 8, "columns": ["row_id", "h3_r8", "h3_r7", "h3_r6"]}
+        return {"dataset_resolution": 8 if base else 5, "time": "seen_at" if base else None, "where": None if base else "kind=bar", "total": 5}
 
     def unknown(dataset_id: str) -> JSONResponse:
         return JSONResponse({"detail": f"{dataset_id} is not a geo dataset", "code": "unknown_dataset"}, status_code=404)
 
-    @app.post("/api/geo/{dataset_id}/zone_rows")
-    def zone_rows(dataset_id: str, body: dict[str, Any]):
-        seen.setdefault("zone_rows", []).append((dataset_id, body))
+    @app.post("/api/geo/{dataset_id}/zone_counts")
+    def zone_counts(dataset_id: str, body: dict[str, Any]):
+        seen.setdefault("zone_counts", []).append((dataset_id, body))
         if (meta := table(dataset_id)) is None:
             return unknown(dataset_id)
         if body.get("layer"):  # a layer of an aligned run over one ring
             meta |= {"layer": body["layer"], "ring": 1, "window": ["2031-03-01", "2031-03-31"]}
-        zones = {z["id"]: {"inside": 3, "adjacent": 1, "far": 1, "zone_cells": 5} for z in body["zones"]}
-        rows = "".join(f"{z},0,inside\n{z},3,adjacent\n" for z in zones)
-        return Response(f"zone_id,row_id,aoi_zone\n{rows}", media_type="text/csv", headers={"X-Zones": json.dumps(meta | {"zones": zones})})
+        zones = {z["id"]: {"cells": 7, "rows": 3} for z in body["zones"]}
+        at = body["resolution"]  # the export's level, as asked: the graph service names it, not the table's own
+        return meta | {"resolution": at, "columns": ["row_id", *(f"h3_r{r}" for r in (at, at - 1, at - 2))], "unlocated": 2, "zones": zones}
 
     @app.post("/api/geo/{dataset_id}/zone_cells")
     def zone_cells(dataset_id: str, body: dict[str, Any]):
@@ -164,6 +163,7 @@ def upstream(
     @app.post("/sessions/{sid}/sources/delete")
     def delete(sid: str, body: dict[str, Any]):
         seen.setdefault("deleted", []).append(body["path"])
+        seen.get("files", {}).pop(body["path"].rsplit("/", 1)[-1], None)  # gone from the session's sources
         return {"deleted": True}
 
     @app.post("/sessions/{sid}/jobs")
@@ -263,10 +263,10 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             ("P-P2", "map-wide"),
             ("P-P4", None),
         ]
-        # every table's zones and rows at the base table's resolution: one cell column to join on
-        assert [(d, b["resolution"]) for d, b in seen["zone_rows"]] == [("ds-a", 8), ("ds-b", 8)] and seen["rows"] == [("ds-a", 8), ("ds-b", 8)]
-        assert seen["uploads"] == [*files, "zones.csv", "zone_cells.csv", "zones.md", "metadata.md"] and seen["files"][files[0]] == "rows of ds-a"
-        # every cell of the zones, empty ones too, once: the base table's resolution is every table's cell column
+        # every table's rows and counts at the base table's resolution: one cell column tells a row's zone in every table
+        assert [(d, b["resolution"]) for d, b in seen["zone_counts"]] == [("ds-a", 8), ("ds-b", 8)] and seen["rows"] == [("ds-a", 8), ("ds-b", 8)]
+        # the zones go as cell lists alone, once, from the base table: no row is stamped with its zone
+        assert seen["uploads"] == [*files, "zone_cells.csv", "zones.md", "metadata.md"] and seen["files"][files[0]] == "rows of ds-a"
         assert seen["zone_cells"] == [("ds-a", {"zones": ask["zones"], "resolution": 8})]
         assert seen["files"]["zone_cells.csv"].splitlines() == ["zone_id,h3_r8", "Z1,881f", "Z1,882f"]
         assert seen["files"]["metadata.md"].splitlines()[2:] == [
@@ -275,13 +275,14 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             "- seen_at (коли): the event's time",
             "- kind",
         ]
-        assert seen["files"]["zones.csv"].splitlines() == ["zone_id,table,row_id,aoi_zone"] + [
-            f"Z1,{f},{r}" for f in files for r in ("0,inside", "3,adjacent")
-        ]
         assert f"{files[0]} (events.csv)" in seen["files"]["zones.md"] and "events.csv: O1" in seen["files"]["zones.md"]
-        assert "Zone Z1: a polygon" in seen["files"]["zones.md"] and "SIG analysed this table at H3 resolution 5" in seen["files"]["zones.md"]
+        assert (
+            "- Zones of this conversation: Z1;" in seen["files"]["zones.md"]
+            and "SIG analysed this table at H3 resolution 5" in seen["files"]["zones.md"]
+        )
         query = seen["query"]
-        assert query == job["ads_query"] and ask["question"] in query and "Z1: inside=3, adjacent=1, far=1, no point=0, cells=5" in query
+        assert query == job["ads_query"] and ask["question"] in query
+        assert "Zone lists (main table rows): Z1: cells=7, rows=3. Rows without a cell: 2." in query
         assert "O1 · Z1: inside (90% of its events, 30% of the zone's events, x4.2 the map's rate)" in query
         assert "O2 · Z1: concentrated (40% of its events" in query and "established: points: strong increase" in query
         assert "O3 · Z1: map-wide (10% of its events, 5% of the zone's events, x1.0 the map's rate)" in query
@@ -289,22 +290,22 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert "O4 · Z1: place not measured" in query and "level: the table level of the base table's file" in query and query.count("  level: ") == 1
         assert "`map-wide` (in the zone at about the map's rate" in query and "Shared (" not in query  # one zone: nothing to share
         assert "bars.csv, only its rows where kind=bar, 5 rows" in query and "Time: seen_at in df_events_dsa_r8" in query
-        assert "h3_r8, h3_r7, h3_r6 are H3 cell ids" in query and "left-join them to the table on row_id" in query
-        # the comparison groups are the question's: adjacent is SIG's one-ring default, never the only surroundings offered
-        assert "Comparison groups: the question defines them" in query and "inside vs adjacent vs far" not in query
-        assert "adjacent is one ring of cells around the zone" in query and "(inside, adjacent, far;" not in query
-        assert "a split within the zone (its cells with against without layer points" in query  # a layer split stays in the zone
-        assert "df_zone_cells (zone_cells.csv) lists every h3_r8 cell of each zone" in query
-        # one definition of a group for every comparison: its cells and their rows, all its cells the denominator, km² from h3
-        assert "A group is a set of cells and the rows in them. The zone is its inside rows over all its cells (df_zone_cells)" in query
-        assert "divide by all its cells, a cell without rows counting 0" in query and "h3.cell_area(cell, unit='km^2')" in query
-        assert "never taken from the tables, which hold only the cells with rows" in query  # a belt's empty cells are generated
-        # the rings a belt needs are named: grid_disk's default is one ring, adjacent under another name (review MATH-2)
-        assert "h3.grid_disk(cell, k) around the zone's cells, k the asked number of rings or, for a distance, enough rings to reach past it" in query
+        assert "h3_r8, h3_r7, h3_r6 are H3 cell ids" in query
+        # the task describes the zones' file and teaches no method: a row is in a zone by its listed cell, and the file lists zones alone
+        assert "df_zone_cells (zone_cells.csv) lists the cells of every zone of this conversation, one row per cell: zone_id, h3_r8" in query
+        assert "A row of this question's tables is in a zone when its h3_r8 is listed for that zone" in query
+        assert "The zones are areas of the map, not its bounds: the map is every row of the tables, in a zone or in none." in query
         assert "- zone_cells.csv: zone_id, h3_r8;" in seen["files"]["zones.md"]
+        for gone in ("grid_disk", "cell_area", "Comparison groups", "adjacent", "aoi_zone", "df_zones", "zones.csv", "polygon", "left-join", "_ring"):
+            assert gone not in query and gone not in seen["files"]["zones.md"], gone  # no stamp, no polygon, no recipe
         assert job["ads_report"] == "ADS: 3 events plot" and "closed" not in seen  # no link into ADS's own workspace; the session stays
         assert job["joint_report"] == FINAL and "ADS: 3 events plot" in seen["prompt"] and "Словник термінів" in seen["prompt"]
-        assert "рівня H3 8 базового шару (Z1 5)" in seen["prompt"] and "найдрібнішого гео-рівня" in seen["prompt"]  # each reading of the zone named
+        # the final report's methodology: one rule, by cell, for the tables and for the graph's findings
+        assert "рядок у зоні, коли його комірка H3 рівня 8 є серед комірок зони" in seen["prompt"] and "(комірок у зоні: Z1 7)" in seen["prompt"]
+        assert "events.csv: 3 з 5 рядків у зоні" in seen["prompt"] and "найдрібнішого гео-рівня" in seen["prompt"]
+        assert "point-in-polygon" not in seen["prompt"] and "adjacent" not in seen["prompt"]
+        # what the grid does to a small zone is said to the reader of the report
+        assert "комірок під його вершинами" in seen["prompt"] and "зону з кількох комірок вона окреслює грубо" in seen["prompt"]
 
         # the next question of the conversation: the same session, the tables it holds not sent again, the zones replaced
         two = ask | {
@@ -314,12 +315,16 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
             "question": "Чим Z2 відрізняється?",
         }
         seen["docs"] = {}  # the document taken off between the questions: the copy ADS holds is replaced, not kept
+        seen["files"]["zones.csv"] = "row_id,zone_id\n"  # a conversation opened before a zone was its cells: row stamps of another rule
         job = finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])
         assert job["stage"] == "done" and job["session_id"] == SID and seen["sessions"] == 1 and "closed" not in seen
-        assert seen["uploads"][6:] == ["zones.csv", "zone_cells.csv", "zones.md", "metadata.md"] and len(seen["rows"]) == 2  # the tables went once
+        assert seen["uploads"][5:] == ["zone_cells.csv", "zones.md", "metadata.md"] and len(seen["rows"]) == 2  # the tables went once
         assert "No table of this question has a document" in seen["files"]["metadata.md"]
-        assert {line.split(",")[0] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"Z1", "Z2"} and "Zone Z2" in seen["files"]["zones.md"]
-        assert {line.split(",")[0] for line in seen["files"]["zone_cells.csv"].splitlines()[1:]} == {"Z1", "Z2"}  # every zone of the conversation
+        assert "- Zones of this conversation: Z1, Z2;" in seen["files"]["zones.md"]
+        # every zone of the conversation, and nothing else: no list of the cells around a zone
+        assert {line.split(",")[0] for line in seen["files"]["zone_cells.csv"].splitlines()[1:]} == {"Z1", "Z2"}
+        # the stamps this question does not send leave the session: the task names one rule, and one file holds it
+        assert seen.pop("deleted") == [f"/workspace/{SID}/zones.csv"] and "zones.csv" not in seen["files"]
         query = seen["query"]
         assert query.count("Compare the areas of interest Z2, Z1: ") == 1
         # each zone's own first (5 each), every finding placed in both zones; Z2's P1 is not Z1's P1
@@ -331,9 +336,12 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
         assert summary in query
         lone = ask | {"session_id": SID, "zones": two["zones"]}  # Z2 is the conversation's, the question is about Z1 alone
         assert (
-            "The conversation's other zones (Z2) are in df_zones too"
+            "The conversation's other zones (Z2) are listed in df_zone_cells too"
             in finished(client, client.post("/api/ads/jobs", json=lone).json()["job_id"])["ads_query"]
         )
+        # the counts are asked for the question's zone alone, the cell lists for every zone of the conversation
+        assert [z["id"] for z in seen["zone_counts"][-1][1]["zones"]] == ["Z1"]
+        assert [z["id"] for z in seen["zone_cells"][-1][1]["zones"]] == ["Z1", "Z2"]
         seen["busy"], sent, asked = True, len(seen["uploads"]), len(seen["chat"])  # the conversation's last question still runs in ADS
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["error"]["code"] == "ads_busy"
         assert (len(seen["uploads"]), len(seen["chat"])) == (sent, asked)  # refused before the graph is asked or a file replaced
@@ -358,7 +366,7 @@ def test_a_conversation_asks_ads_in_one_session_and_sends_a_table_once():
 
         # the conversation's end: its tables deleted from ADS, the session closed
         assert client.post(f"/api/ads/sessions/{SID}/close").json() == {"session_id": SID, "kept": [], "closed": True}
-        assert seen["closed"] == SID and sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in (*files, "zones.csv", "zone_cells.csv"))
+        assert seen["closed"] == SID and sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in (*files, "zone_cells.csv"))
         assert client.post("/api/ads/sessions/..%2Freset/close").status_code in (404, 422) and "reset" not in seen
 
         assert client.post("/api/ads/jobs", json=ask | {"question": " "}).status_code == 400
@@ -386,18 +394,24 @@ def test_a_layer_goes_as_a_context_table():
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and seen["rows"] == [("ds-a", 8), ("ds-a", 8, "bars")]
-        assert [b.get("layer") for _, b in seen["zone_rows"]] == [None, "bars"]
-        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_layer_r8.csv", "zones.csv", "zone_cells.csv", "zones.md", "metadata.md"]
-        assert [d for d, _ in seen["zone_cells"]] == ["ds-a"]  # the zones' cells are the base table's, never a layer's
-        assert {line.split(",")[1] for line in seen["files"]["zones.csv"].splitlines()[1:]} == {"events_dsa_r8.csv", "bars_dsa_layer_r8.csv"}
+        assert [b.get("layer") for _, b in seen["zone_counts"]] == [None, "bars"]
+        assert seen["uploads"] == ["events_dsa_r8.csv", "bars_dsa_layer_r8.csv", "zone_cells.csv", "zones.md", "metadata.md"]
+        # the zones' cells are the base table's, never a layer's: the layer's rows fall in a zone by the same cell column
+        assert [d for d, _ in seen["zone_cells"]] == ["ds-a"]
         query = job["ads_query"]
         assert "df_bars_dsa_layer_r8 (bars_dsa_layer_r8.csv: bars" in query
         assert "context_bars_band counts per cell with its six neighbours, only its points within 2031-03-01..2031-03-31" in query
         assert "is a context layer of the main table" in query and "bars_dsa_layer_r8.csv (bars): a context layer" in seen["files"]["zones.md"]
-        assert "an empty h3_r8 (NaN once pandas reads the CSV) has no point" in query and "NaN in pandas" in seen["files"]["zones.md"]
+        assert (
+            "an empty h3_r8 (NaN once pandas reads the CSV) has no cell and is in no zone" in query and "NaN in pandas" in seen["files"]["zones.md"]
+        )
         assert "the run's H3 resolution" not in query  # the layer's cells at the run's own level: nothing to say
-        coarse = client.post("/api/ads/preview", json={"question": "Q?", "tables": [TABLES[1], bars]}).json()["parts"][3]["text"]
-        assert "SIG counted them on the run's H3 resolution 8 grid; their h3 columns here are the main table's resolution 5" in coarse
+        # a layer its run counted on another grid than the base table's: the preview and the job's task both say so
+        note = "SIG counted them on the run's H3 resolution 8 grid; their h3 columns here are the main table's resolution 5"
+        coarse = {"question": "Q?", "tables": [TABLES[1], bars]}
+        assert note in client.post("/api/ads/preview", json=coarse).json()["parts"][3]["text"]
+        sent = finished(client, client.post("/api/ads/jobs", json=ask | coarse).json()["job_id"])
+        assert sent["stage"] == "done" and note in sent["ads_query"]  # the graph's answer names the export's level, never the layer's own
         same = name_tables(
             [
                 {"dataset_id": "ds-a", "filename": "crimes_2024_2025_robbery_x.csv", "resolution": 8},
@@ -411,35 +425,38 @@ def test_a_layer_goes_as_a_context_table():
 
 def test_a_question_needs_no_zone():
     """A question with no zone asks the graph about the whole map, sends no zones file and frames the task and the
-    final report's methodology as the whole map's; in a conversation with zones they stay for a question that names one."""
+    final report's methodology as the whole map's. So does one of a conversation with zones: the file an earlier
+    question left in the session is deleted, for the one table that lists cells is not the map."""
     seen: dict[str, Any] = {}
     ask = {"question": "Де найбільше подій?", "tables": TABLES[:1]}
     with serve(upstream(seen)) as url, TestClient(create_app(settings(url))) as client:
         job = finished(client, client.post("/api/ads/jobs", json=ask).json()["job_id"])
         assert job["stage"] == "done" and seen["chat"] == [{"question": ask["question"], "use_llm": False, "period_only": True}]  # no geometry
-        assert [b["zones"] for _, b in seen["zone_rows"]] == [[]] and seen["uploads"] == [
+        assert [b["zones"] for _, b in seen["zone_counts"]] == [[]] and seen["uploads"] == [
             "events_dsa_r8.csv",
             "zones.md",
             "metadata.md",
         ]  # no zones file
         assert "zone_cells" not in seen  # nor their cells
         query = job["ads_query"]
-        assert query.count("Analyse the whole map") == 1 and "df_zones" not in query and "O1 · in zone" not in query and "\nO1\n" in query
-        assert "`map-wide`" not in query and "Comparison groups" not in query and "how it lies in each zone" not in query  # no zone sentence
-        assert "No zone is drawn" in seen["files"]["zones.md"] and "# Уся мапа: методика" in seen["prompt"]
+        assert query.count("Analyse the whole map") == 1 and "df_zone_cells" not in query and "O1 · in zone" not in query and "\nO1\n" in query
+        assert "`map-wide`" not in query and "Zone lists" not in query and "how it lies in each zone" not in query  # no zone sentence
+        assert "- No zone is asked: the question is about the whole map." in seen["files"]["zones.md"] and "# Уся мапа: методика" in seen["prompt"]
         two = ask | {"session_id": SID, "question": "А по місяцях?"}  # a follow-up of a conversation without zones
         assert finished(client, client.post("/api/ads/jobs", json=two).json()["job_id"])["stage"] == "done" and seen["sessions"] == 1
         bare = ask | {"session_id": SID, "question": "Період: 2031-03-01 — 2031-03-31 (включно)\n\n2031-03"}  # no words for the graph
         job = finished(client, client.post("/api/ads/jobs", json=bare).json()["job_id"])
         assert job["stage"] == "done" and len(seen["chat"]) == 2 and "SIG has no insights for this question." in job["ads_query"]
-        kept = ask | {"session_id": SID, "zones": [{"id": "Z1", "polygon": POLYGON}], "question": "А в Z1?"}  # Z1 asked before, now unticked
+        kept = ask | {"session_id": SID, "zones": [{"id": "Z1", "polygon": POLYGON}]}
+        zoned = finished(client, client.post("/api/ads/jobs", json=kept | {"focus": ["Z1"]}).json()["job_id"])  # a question about Z1
+        assert zoned["stage"] == "done" and "zone_cells.csv" in seen["files"] and "deleted" not in seen
+        # the next one ticks no zone: the whole map again, as if no zone were drawn, and the session holds no table that lists cells
         job = finished(client, client.post("/api/ads/jobs", json=kept).json()["job_id"])
-        assert (
-            seen["uploads"][-4:] == ["zones.csv", "zone_cells.csv", "zones.md", "metadata.md"]
-            and "Zone Z1: a polygon drawn in this conversation" in seen["files"]["zones.md"]
-        )
-        assert "unless the question names a zone of df_zones" in job["ads_query"] and "other zones (Z1)" in job["ads_query"]
-        assert "Comparison groups" not in job["ads_query"] and "якщо воно не називає зону розмови (Z1)" in seen["prompt"]
+        assert job["stage"] == "done" and seen["uploads"][-2:] == ["zones.md", "metadata.md"] and len(seen["zone_cells"]) == 1
+        assert seen["deleted"] == [f"/workspace/{SID}/zone_cells.csv"] and "zone_cells.csv" not in seen["files"]
+        assert job["ads_query"] == query and "Analyse the whole map (every row of the tables): " in query
+        assert "No zone is asked" in seen["files"]["zones.md"] and "Zones of this conversation" not in seen["files"]["zones.md"]
+        assert "# Уся мапа: методика" in seen["prompt"] and "- Зону не задано: питання стосується всіх рядків таблиць." in seen["prompt"]
 
 
 def test_the_bridges_copies_of_the_kernel_agree_with_it():
@@ -470,7 +487,7 @@ def test_a_failed_stage_is_recorded_on_the_job_with_its_code():
         assert client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"] and client.post("/api/ads/jobs/nope/cancel").status_code == 404
         job = finished(client, job_id)
         assert (job["failed_stage"], job["error"]["code"]) == ("ads", "cancelled") and seen["cancelled"] == seen["closed"] == SID
-        assert sorted(seen["deleted"]) == sorted(f"/workspace/{SID}/{f}" for f in seen["files"] if f.endswith(".csv"))  # its tables gone
+        assert sorted(seen["deleted"]) == [f"/workspace/{SID}/{f}" for f in ("events_dsa_r8.csv", "zone_cells.csv")]  # its tables gone
         assert not client.post(f"/api/ads/jobs/{job_id}/cancel").json()["cancelled"]  # an ended job has nothing to stop
     seen, hold = {}, threading.Event()
     with serve(upstream(seen, hold=hold)) as url, TestClient(create_app(settings(url))) as client:  # it ends while the report is written
@@ -627,13 +644,12 @@ def test_the_console_asks_ads_about_a_drawn_zone(cfg, points_csv):
                 page.wait_for_timeout(500)  # a drawer would open after its node's read
                 assert page.evaluate("$('drawer').hidden && !S.threads.graph.length")
                 table = next(f for f in seen["files"] if f.startswith("points_"))
-                assert set(seen["files"]) == {table, "zones.csv", "zone_cells.csv", "zones.md", "metadata.md"} and seen["files"][
-                    "zones.csv"
-                ].startswith("zone_id,table,row_id,aoi_zone\n")
+                assert set(seen["files"]) == {table, "zone_cells.csv", "zones.md", "metadata.md"}  # no row stamps: the zone is its cells
                 cell = next(c for c in seen["files"][table].splitlines()[0].split(",") if c.startswith("h3_r"))  # the table's finest cell column
                 head, *listed = seen["files"]["zone_cells.csv"].splitlines()
-                assert head == f"zone_id,{cell}" and listed  # the drawn zone's cells, on the table's own cell column
-                assert seen["files"][table].splitlines()[0].startswith("row_id,")  # the graph service's rows, a row_id to join the zones on
+                # the drawn zone's cells alone, on the table's own cell column
+                assert head == f"zone_id,{cell}" and {line.split(",")[0] for line in listed} == {zone}
+                assert seen["files"][table].splitlines()[0].startswith("row_id,")  # the graph service's rows, numbered
                 page.fill("#question", "А по годинах?")  # the ADS tab's box: the conversation's next question, the same session
                 page.press("#question", "Enter")
                 page.wait_for_function("S.chat.length === 2 && S.chat.at(-1).ads.stage === 'done'", timeout=30000)

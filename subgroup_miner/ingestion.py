@@ -29,7 +29,7 @@ from subgroup_miner.spatial import (
     parse_times,
     select_levels,
 )
-from subgroup_miner.spatial_plane import cell_column_names, cell_columns, point_cells, zone_places
+from subgroup_miner.spatial_plane import cell_column_names, cell_columns, drawn_zone_lists, point_cells
 
 SUPPORTED_EXTENSIONS = {".csv", ".tsv", ".txt", ".parquet"}
 
@@ -370,7 +370,7 @@ def read_rows(path: Path, where: str | None = None) -> pd.DataFrame:
     return filter_rows(frame, where) if where else frame
 
 
-ROW_ID = "row_id"  # a row's position in its reading: what ``table_rows`` and ``zone_rows`` join on
+ROW_ID = "row_id"  # a row's position in its reading: the first column ``table_rows`` writes
 
 
 def _export_frame(path: Path, where: str | None, resolution: int) -> pd.DataFrame:
@@ -408,30 +408,25 @@ def table_rows(
     return out.to_csv(index=False).encode("utf-8"), {"total": len(out), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
 
 
-def zone_rows(
+def zone_counts(
     path: Path,
     locator: str,
     where: str | None,
     window: tuple[str, str | None, str, str] | None,
     resolution: int,
     zones: list[tuple[str, dict[str, Any]]],
-) -> tuple[bytes, dict[str, Any]]:
-    """Which rows of a stored file each drawn zone holds: CSV ``zone_id,row_id,aoi_zone`` of its ``inside`` and
-    ``adjacent`` rows (``zone_places``; a row not listed is ``far``, or ``unlocated`` when its cell is empty), ``row_id`` as
-    ``table_rows`` numbers them; and per zone its rows per place and its cell count at ``resolution``; ``total`` and
-    ``columns`` are ``table_rows``'s."""
+) -> dict[str, Any]:
+    """How many rows of a stored file each drawn zone holds at ``resolution``, by cell (``drawn_zone_lists``: a row is in a
+    zone when its cell is listed for it): per zone ``{cells, rows}``; ``unlocated`` the rows without a cell, in no zone;
+    ``total`` and ``columns`` are ``table_rows``'s."""
     frame = _export_frame(path, where, resolution)
-    lat, lon = _export_points(frame, locator, window)
-    cell = point_cells(lat, lon, resolution)
-    parts, counts = [], {}
-    for zone_id, polygon in zones:
-        place, cells = zone_places(lat, lon, cell, resolution, polygon)
-        near = np.flatnonzero(np.isin(place, ["inside", "adjacent"]))
-        parts.append(pd.DataFrame({"zone_id": zone_id, ROW_ID: near, "aoi_zone": place[near]}))
-        counts[zone_id] = {k: int((place == k).sum()) for k in ("inside", "adjacent", "far", "unlocated")} | {"zone_cells": cells}
+    per_cell = pd.Series(point_cells(*_export_points(frame, locator, window), resolution), dtype=object).value_counts()
+    counts = {
+        zone_id: {"cells": len(cells), "rows": int(per_cell.reindex(list(cells)).sum())}
+        for zone_id, cells in drawn_zone_lists(zones, resolution).items()
+    }
     table = {"total": len(frame), "resolution": resolution, "columns": [ROW_ID, *cell_column_names(resolution)]}
-    listed = pd.concat(parts) if parts else pd.DataFrame(columns=["zone_id", ROW_ID, "aoi_zone"])
-    return listed.to_csv(index=False).encode("utf-8"), table | {"zones": counts}
+    return table | {"unlocated": int(per_cell.get("", 0)), "zones": counts}
 
 
 def read_times(frame: pd.DataFrame, column: str, tz: str | None = None) -> pd.Series:
